@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake as SwarmFakeInstance;
+use Generator;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 
@@ -33,6 +34,16 @@ trait Runnable
     public function run(string $task): SwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->run($this, $task);
+    }
+
+    /**
+     * Stream the swarm, yielding step and token events for SSE.
+     *
+     * @return Generator<int, array<string, string>, mixed, void>
+     */
+    public function stream(string $task): Generator
+    {
+        return Container::getInstance()->make(SwarmRunner::class)->stream($this, $task);
     }
 
     /**

@@ -9,9 +9,11 @@ use BuiltByBerry\LaravelSwarm\Attributes\Timeout as TimeoutAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use Generator;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -70,6 +72,41 @@ class SwarmRunner
         };
 
         return $payload['response'];
+    }
+
+    /**
+     * Run the swarm sequentially, yielding step and token events for SSE streaming.
+     *
+     * Only sequential topology is supported. Parallel and hierarchical topologies
+     * do not have a streaming implementation yet.
+     *
+     * @return Generator<int, array<string, string>, mixed, void>
+     *
+     * @throws SwarmException if the swarm topology does not support streaming
+     */
+    public function stream(Swarm $swarm, string $task): Generator
+    {
+        $topology = $this->resolveTopology($swarm);
+
+        if ($topology !== Topology::Sequential) {
+            throw new SwarmException('Streaming is only supported for sequential swarms. '.$topology->value.' topology does not support streaming.');
+        }
+
+        $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
+        $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
+        $deadline = hrtime(true) + ($timeoutSeconds * 1_000_000_000);
+        $contextKey = $this->contextKey($swarm, $task);
+        $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
+
+        return $this->sequential->stream(
+            $swarm,
+            $task,
+            $deadline,
+            $maxAgentExecutions,
+            $contextKey,
+            $this->contextRepository(),
+            $contextTtl,
+        );
     }
 
     /**

@@ -8,8 +8,10 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use Generator;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Laravel\Ai\Responses\AgentResponse;
+use Laravel\Ai\Streaming\Events\TextDelta;
 
 class SequentialRunner
 {
@@ -66,6 +68,69 @@ class SequentialRunner
             ),
             'usage' => $mergedUsage,
         ];
+    }
+
+    /**
+     * Run each agent in order, yielding step and token events for SSE streaming.
+     *
+     * Intermediate agents run via ->prompt(). The final agent runs via ->stream(),
+     * emitting token events for each text delta. All agents emit step events with
+     * 'running' and 'done' statuses so callers can track pipeline progress.
+     *
+     * @param  float  $deadlineMonotonic  hrtime(true) deadline in nanoseconds
+     * @return Generator<int, array<string, string>, mixed, void>
+     */
+    public function stream(
+        Swarm $swarm,
+        string $task,
+        float $deadlineMonotonic,
+        int $maxAgentExecutions,
+        string $contextKey,
+        CacheRepository $cache,
+        int $contextTtlSeconds,
+    ): Generator {
+        $agents = array_slice($swarm->agents(), 0, $maxAgentExecutions);
+        $lastIndex = count($agents) - 1;
+        $input = $task;
+
+        foreach ($agents as $index => $agent) {
+            if (hrtime(true) >= $deadlineMonotonic) {
+                throw new SwarmTimeoutException('The swarm exceeded its configured timeout while streaming sequentially.');
+            }
+
+            $agentName = class_basename($agent::class);
+
+            yield ['event' => 'step', 'agent' => $agentName, 'status' => 'running'];
+
+            if ($index === $lastIndex) {
+                $stream = $agent->stream($input);
+                $output = '';
+
+                foreach ($stream as $event) {
+                    if ($event instanceof TextDelta) {
+                        $output .= $event->delta;
+                        yield ['event' => 'token', 'token' => $event->delta];
+                    }
+                }
+
+                $cache->put($contextKey, [
+                    'topology' => 'sequential',
+                    'last_output' => $output,
+                    'steps' => $index + 1,
+                ], $contextTtlSeconds);
+            } else {
+                $response = $agent->prompt($input);
+                $input = (string) $response;
+
+                $cache->put($contextKey, [
+                    'topology' => 'sequential',
+                    'last_output' => $input,
+                    'steps' => $index + 1,
+                ], $contextTtlSeconds);
+            }
+
+            yield ['event' => 'step', 'agent' => $agentName, 'status' => 'done'];
+        }
     }
 
     /**
