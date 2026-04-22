@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.1
+
+- Rewrote the package documentation around the Laravel-native public API with explicit `run()`, `queue()`, and `stream()` usage
+- Added the initial `CHANGELOG.md` and tightened extension-point contract comments and stub comments
+- Removed the hardcoded package version from `composer.json` so Git tags define releases cleanly
+- Fixed sequential swarm streaming after the execution-policy cleanup by removing a stale execution-mode reference
+- Preserved run context handling for queued swarm jobs after the public API simplification
+
 ## v0.1.0
 
 - Added `make:swarm` scaffolding for swarm classes in `App\Ai\Swarms`
