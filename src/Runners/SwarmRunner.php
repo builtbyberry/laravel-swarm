@@ -41,7 +41,7 @@ class SwarmRunner
         protected HierarchicalRunner $hierarchical,
     ) {}
 
-    public function run(Swarm $swarm, string $task): SwarmResponse
+    public function run(Swarm $swarm, string|RunContext $task): SwarmResponse
     {
         $topology = $this->resolveTopology($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
@@ -125,7 +125,6 @@ class SwarmRunner
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
-            'execution_mode' => $executionMode->value,
         ]);
 
         $state = new SwarmExecutionState(
