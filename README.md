@@ -1,6 +1,6 @@
 # Laravel Swarm
 
-Multi-agent swarm orchestration for [Laravel](https://laravel.com) on top of the official [Laravel AI](https://github.com/laravel/ai) package. Laravel Swarm coordinates multiple `Agent` instances into sequential, parallel, or hierarchical topologies with shared context, structured handoffs, and queue support.
+Multi-agent swarm orchestration for [Laravel](https://laravel.com) on top of the official [Laravel AI](https://github.com/laravel/ai) package. Laravel Swarm coordinates multiple `Agent` instances into sequential, parallel, or hierarchical topologies with rich responses, lifecycle events, persistence hooks, and queue support.
 
 - **Packagist:** `builtbyberry/laravel-swarm`
 - **Namespace:** `BuiltByBerry\LaravelSwarm`
@@ -61,7 +61,7 @@ class ContentPipeline implements Swarm
 }
 ```
 
-Run synchronously or dispatch to the queue:
+Run synchronously or queue explicitly:
 
 ```php
 $response = ContentPipeline::make()->run('Draft a blog outline about Laravel queues.');
@@ -89,6 +89,10 @@ ContentPipeline::fake(['first', 'second']);
 ContentPipeline::assertRan('first task');
 ContentPipeline::assertNeverQueued();
 ```
+
+### Responses and events
+
+Swarm runs return a `SwarmResponse` with the final output plus step details, artifacts, and metadata. Lifecycle events are dispatched for swarm start, step start, step completion, swarm completion, and failures so applications can observe runs without coupling to internal runtime objects.
 
 ## Configuration
 

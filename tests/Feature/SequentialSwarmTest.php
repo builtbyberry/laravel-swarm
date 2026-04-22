@@ -45,18 +45,12 @@ test('sequential swarm records usage from agent responses', function () {
 });
 
 test('sequential swarm exposes and persists generic context and artifacts', function () {
-    $response = FakeSequentialSwarm::make()->run([
-        'input' => 'original-task',
-        'data' => ['channel' => 'content'],
-        'metadata' => ['source' => 'feature-test'],
-    ]);
+    $response = FakeSequentialSwarm::make()->run('original-task');
 
     expect($response->context)->not->toBeNull();
     expect($response->metadata['run_id'])->toBeString();
     expect($response->artifacts)->toHaveCount(3);
     expect($response->artifacts[0]->name)->toBe('agent_output');
-    expect($response->context?->metadata['source'])->toBe('feature-test');
-    expect($response->context?->data['channel'])->toBe('content');
     expect($response->context?->data['last_output'])->toBe('editor-out');
 
     $runId = $response->metadata['run_id'];
@@ -64,7 +58,7 @@ test('sequential swarm exposes and persists generic context and artifacts', func
     $storedArtifacts = app(ArtifactRepository::class)->all($runId);
     $storedHistory = app(RunHistoryStore::class)->find($runId);
 
-    expect($storedContext['metadata']['source'])->toBe('feature-test');
+    expect($storedContext['metadata']['swarm_class'])->toBe(FakeSequentialSwarm::class);
     expect($storedArtifacts)->toHaveCount(3);
     expect($storedHistory['status'])->toBe('completed');
     expect($storedHistory['steps'])->toHaveCount(3);
@@ -76,8 +70,8 @@ test('sequential swarm dispatches lifecycle events', function () {
 
     $response = FakeSequentialSwarm::make()->run('event-task');
 
-    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->runId === $response->metadata['run_id']);
+    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->runId === $response->metadata['run_id'] && $event->input === 'event-task');
     Event::assertDispatchedTimes(SwarmStepStarted::class, 3);
-    Event::assertDispatchedTimes(SwarmStepCompleted::class, 3);
-    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $response->metadata['run_id']);
+    Event::assertDispatched(SwarmStepCompleted::class, fn (SwarmStepCompleted $event) => $event->agentClass === FakeResearcher::class && $event->artifacts !== []);
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $response->metadata['run_id'] && $event->output === 'editor-out');
 });
