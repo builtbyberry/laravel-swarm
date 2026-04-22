@@ -35,7 +35,7 @@ class SequentialRunner
                 index: $index,
                 agentClass: $agent::class,
                 input: $input,
-                context: $state->context,
+                metadata: $state->context->metadata,
             ));
 
             $response = $agent->prompt($input);
@@ -77,8 +77,11 @@ class SequentialRunner
                 runId: $state->context->runId,
                 swarmClass: $state->swarm::class,
                 index: $index,
-                step: $step,
-                context: $state->context,
+                agentClass: $agent::class,
+                input: $input,
+                output: $output,
+                metadata: $step->metadata,
+                artifacts: $step->artifacts,
             ));
         }
 
@@ -91,7 +94,6 @@ class SequentialRunner
             metadata: [
                 'run_id' => $state->context->runId,
                 'topology' => $state->topology,
-                'execution_mode' => $state->executionMode->value,
             ],
         );
     }
@@ -118,7 +120,7 @@ class SequentialRunner
                 index: $index,
                 agentClass: $agent::class,
                 input: $input,
-                context: $state->context,
+                metadata: $state->context->metadata,
             ));
 
             yield ['event' => 'step', 'agent' => $agentName, 'status' => 'running'];
@@ -161,8 +163,11 @@ class SequentialRunner
                     runId: $state->context->runId,
                     swarmClass: $state->swarm::class,
                     index: $index,
-                    step: $step,
-                    context: $state->context,
+                    agentClass: $agent::class,
+                    input: $input,
+                    output: $output,
+                    metadata: $step->metadata,
+                    artifacts: $step->artifacts,
                 ));
             } else {
                 $response = $agent->prompt($input);
@@ -195,8 +200,11 @@ class SequentialRunner
                     runId: $state->context->runId,
                     swarmClass: $state->swarm::class,
                     index: $index,
-                    step: $step,
-                    context: $state->context,
+                    agentClass: $agent::class,
+                    input: $input,
+                    output: $output,
+                    metadata: $step->metadata,
+                    artifacts: $step->artifacts,
                 ));
             }
 

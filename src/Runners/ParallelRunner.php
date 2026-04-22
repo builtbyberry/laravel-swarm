@@ -37,7 +37,7 @@ class ParallelRunner
                 index: $index,
                 agentClass: $agent::class,
                 input: $input,
-                context: $state->context,
+                metadata: $state->context->metadata,
             ));
 
             $callbacks[$index] = function () use ($agent, $input): array {
@@ -87,8 +87,11 @@ class ParallelRunner
                 runId: $state->context->runId,
                 swarmClass: $state->swarm::class,
                 index: $index,
-                step: $step,
-                context: $state->context,
+                agentClass: $row['class'],
+                input: $input,
+                output: $row['output'],
+                metadata: $step->metadata,
+                artifacts: $step->artifacts,
             ));
         }
 
@@ -115,7 +118,6 @@ class ParallelRunner
             metadata: [
                 'run_id' => $state->context->runId,
                 'topology' => $state->topology,
-                'execution_mode' => $state->executionMode->value,
             ],
         );
     }

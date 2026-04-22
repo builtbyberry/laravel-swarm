@@ -9,10 +9,8 @@ use BuiltByBerry\LaravelSwarm\Attributes\Timeout as TimeoutAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\ExecutionPolicyResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
-use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
@@ -36,7 +34,6 @@ class SwarmRunner
         protected ContextStore $contextStore,
         protected ArtifactRepository $artifactRepository,
         protected RunHistoryStore $historyStore,
-        protected ExecutionPolicyResolver $executionPolicyResolver,
         protected BusDispatcher $bus,
         protected Dispatcher $events,
         protected SequentialRunner $sequential,
@@ -44,10 +41,9 @@ class SwarmRunner
         protected HierarchicalRunner $hierarchical,
     ) {}
 
-    public function run(Swarm $swarm, string|array|RunContext $task): SwarmResponse
+    public function run(Swarm $swarm, string $task): SwarmResponse
     {
         $topology = $this->resolveTopology($swarm);
-        $executionMode = $this->resolveExecutionMode($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
@@ -55,13 +51,11 @@ class SwarmRunner
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
-            'execution_mode' => $executionMode->value,
         ]);
 
         $state = new SwarmExecutionState(
             swarm: $swarm,
             topology: $topology->value,
-            executionMode: $executionMode,
             deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
             maxAgentExecutions: $maxAgentExecutions,
             ttlSeconds: $contextTtl,
@@ -78,7 +72,8 @@ class SwarmRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $topology->value,
-            context: $context,
+            input: $context->input,
+            metadata: $context->metadata,
         ));
 
         try {
@@ -93,6 +88,7 @@ class SwarmRunner
                 runId: $context->runId,
                 swarmClass: $swarm::class,
                 exception: $exception,
+                metadata: $context->metadata,
             ));
 
             throw $exception;
@@ -103,7 +99,9 @@ class SwarmRunner
         $this->events->dispatch(new SwarmCompleted(
             runId: $context->runId,
             swarmClass: $swarm::class,
-            response: $response,
+            output: $response->output,
+            metadata: $response->metadata,
+            artifacts: $response->artifacts,
         ));
 
         return $response;
@@ -112,7 +110,7 @@ class SwarmRunner
     /**
      * @return Generator<int, array<string, string>, mixed, void>
      */
-    public function stream(Swarm $swarm, string|array|RunContext $task): Generator
+    public function stream(Swarm $swarm, string $task): Generator
     {
         $topology = $this->resolveTopology($swarm);
 
@@ -120,7 +118,6 @@ class SwarmRunner
             throw new SwarmException('Streaming is only supported for sequential swarms. '.$topology->value.' topology does not support streaming.');
         }
 
-        $executionMode = $this->resolveExecutionMode($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
@@ -134,7 +131,6 @@ class SwarmRunner
         $state = new SwarmExecutionState(
             swarm: $swarm,
             topology: $topology->value,
-            executionMode: $executionMode,
             deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
             maxAgentExecutions: $maxAgentExecutions,
             ttlSeconds: $contextTtl,
@@ -151,7 +147,8 @@ class SwarmRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $topology->value,
-            context: $context,
+            input: $context->input,
+            metadata: $context->metadata,
         ));
 
         return (function () use ($state, $context, $contextTtl, $swarm): Generator {
@@ -165,7 +162,6 @@ class SwarmRunner
                     metadata: [
                         'run_id' => $context->runId,
                         'topology' => $state->topology,
-                        'execution_mode' => $state->executionMode->value,
                     ],
                 );
 
@@ -174,7 +170,9 @@ class SwarmRunner
                 $this->events->dispatch(new SwarmCompleted(
                     runId: $context->runId,
                     swarmClass: $swarm::class,
-                    response: $response,
+                    output: $response->output,
+                    metadata: $response->metadata,
+                    artifacts: $response->artifacts,
                 ));
             } catch (\Throwable $exception) {
                 $this->historyStore->fail($context->runId, $exception, $contextTtl);
@@ -182,6 +180,7 @@ class SwarmRunner
                     runId: $context->runId,
                     swarmClass: $swarm::class,
                     exception: $exception,
+                    metadata: $context->metadata,
                 ));
 
                 throw $exception;
@@ -189,7 +188,7 @@ class SwarmRunner
         })();
     }
 
-    public function queue(Swarm $swarm, string|array|RunContext $task): QueuedSwarmResponse
+    public function queue(Swarm $swarm, string $task): QueuedSwarmResponse
     {
         $context = RunContext::from($task);
         $job = new InvokeSwarm($swarm, $context);
@@ -205,15 +204,6 @@ class SwarmRunner
         $this->bus->dispatch($job);
 
         return new QueuedSwarmResponse($job, $context->runId);
-    }
-
-    public function dispatch(Swarm $swarm, string|array|RunContext $task): SwarmResponse|QueuedSwarmResponse
-    {
-        return match ($this->resolveExecutionMode($swarm)) {
-            ExecutionMode::Sync => $this->run($swarm, $task),
-            ExecutionMode::Queued => $this->queue($swarm, $task),
-            ExecutionMode::Mixed => $this->dispatchMixed($swarm, $task),
-        };
     }
 
     public function resolveTopology(Swarm $swarm): Topology
@@ -250,21 +240,5 @@ class SwarmRunner
         }
 
         return (int) $this->config->get('swarm.max_agent_steps', 10);
-    }
-
-    public function resolveExecutionMode(Swarm $swarm): ExecutionMode
-    {
-        return $this->executionPolicyResolver->resolve($swarm);
-    }
-
-    protected function dispatchMixed(Swarm $swarm, string|array|RunContext $task): SwarmResponse|QueuedSwarmResponse
-    {
-        $queuedTopologies = (array) $this->config->get('swarm.execution.mixed_queue_topologies', [Topology::Parallel->value]);
-
-        if (in_array($this->resolveTopology($swarm)->value, $queuedTopologies, true)) {
-            return $this->queue($swarm, $task);
-        }
-
-        return $this->run($swarm, $task);
     }
 }

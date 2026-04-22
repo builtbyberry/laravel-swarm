@@ -21,7 +21,7 @@ class InvokeSwarm implements ShouldQueue
      */
     public function __construct(
         public Swarm $swarm,
-        public string|array|RunContext $task,
+        public string|RunContext $task,
     ) {}
 
     /**

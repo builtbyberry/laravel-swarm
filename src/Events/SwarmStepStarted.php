@@ -4,16 +4,17 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Events;
 
-use BuiltByBerry\LaravelSwarm\Support\RunContext;
-
 class SwarmStepStarted
 {
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
     public function __construct(
         public readonly string $runId,
         public readonly string $swarmClass,
         public readonly int $index,
         public readonly string $agentClass,
         public readonly string $input,
-        public readonly RunContext $context,
+        public readonly array $metadata = [],
     ) {}
 }

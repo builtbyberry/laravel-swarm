@@ -7,7 +7,6 @@ namespace BuiltByBerry\LaravelSwarm;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\ExecutionPolicyResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
@@ -16,7 +15,6 @@ use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
-use BuiltByBerry\LaravelSwarm\Support\DefaultExecutionPolicyResolver;
 use Illuminate\Support\ServiceProvider;
 
 class SwarmServiceProvider extends ServiceProvider
@@ -42,7 +40,6 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(ContextStore::class, CacheContextStore::class);
         $this->app->singleton(ArtifactRepository::class, CacheArtifactRepository::class);
         $this->app->singleton(RunHistoryStore::class, CacheRunHistoryStore::class);
-        $this->app->singleton(ExecutionPolicyResolver::class, DefaultExecutionPolicyResolver::class);
     }
 
     /**

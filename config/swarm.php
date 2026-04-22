@@ -2,18 +2,10 @@
 
 declare(strict_types=1);
 
-use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 
 return [
     'topology' => env('SWARM_TOPOLOGY', Topology::Sequential->value),
-
-    'execution' => [
-        'mode' => env('SWARM_EXECUTION_MODE', ExecutionMode::Sync->value),
-        'mixed_queue_topologies' => [
-            Topology::Parallel->value,
-        ],
-    ],
 
     'timeout' => (int) env('SWARM_TIMEOUT', 300),
 
