@@ -12,12 +12,7 @@ trait ResolvesSwarmCacheStore
 {
     protected function resolveCacheStore(CacheFactory $cacheFactory, ConfigRepository $config, string $configKey): CacheRepository
     {
-        $driver = (string) $config->get("swarm.{$configKey}.driver", 'cache');
         $store = $config->get("swarm.{$configKey}.store");
-
-        if ($driver === 'database') {
-            return $cacheFactory->store('database');
-        }
 
         return $store !== null && $store !== ''
             ? $cacheFactory->store((string) $store)

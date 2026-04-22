@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Added built-in database persistence for swarm context, artifacts, and run history
+- Added automatically loaded package migrations, with optional migration publishing for customization
+- Added a global `swarm.persistence.driver` config default with per-store persistence driver overrides
+- Documented and tested sequential streaming failure behavior, including failed run history persistence and re-thrown underlying exceptions
+- Replaced the hierarchical sequential placeholder with coordinator-driven routing via `route()`
+- Added explicit hierarchical errors for routed agent classes that are not returned from `agents()`
+
 ## v0.1.1
 
 - Rewrote the package documentation around the Laravel-native public API with explicit `run()`, `queue()`, and `stream()` usage

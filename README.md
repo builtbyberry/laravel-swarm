@@ -18,10 +18,22 @@ Laravel Swarm brings multi-agent orchestration to [Laravel](https://laravel.com)
 composer require builtbyberry/laravel-swarm
 ```
 
-Publish the package configuration:
+Laravel Swarm loads its package migrations automatically through the service provider, so the swarm tables are created during your normal migration flow:
+
+```bash
+php artisan migrate
+```
+
+Publish the package configuration if you want to customize defaults:
 
 ```bash
 php artisan vendor:publish --tag=swarm-config
+```
+
+If you want to customize the package migrations in your app, publish them explicitly:
+
+```bash
+php artisan vendor:publish --tag=swarm-migrations
 ```
 
 If you want to customize the generated stub in your app, publish it too:
@@ -133,12 +145,20 @@ ArticlePipeline::make()
 Use `stream()` when you want step and token events for server-sent events or other real-time updates:
 
 ```php
-foreach (ArticlePipeline::make()->stream('Draft a blog outline about Laravel queues.') as $event) {
-    // ['event' => 'step', ...] or ['event' => 'token', ...]
+try {
+    foreach (ArticlePipeline::make()->stream('Draft a blog outline about Laravel queues.') as $event) {
+        // ['event' => 'step', ...] or ['event' => 'token', ...]
+    }
+} catch (\Throwable $exception) {
+    //
 }
 ```
 
+Swarm streams emit `step` events for agent lifecycle progress and `token` events for streamed final-agent output.
+
 Streaming is currently supported for sequential swarms only.
+
+If the final streamed agent fails, the generator re-throws the underlying exception from that agent. Wrap the stream loop in `try/catch`; `SwarmFailed` is dispatched and run history is marked failed before the exception is re-thrown.
 
 ## Topologies
 
@@ -152,7 +172,64 @@ Agents run at the same time and each receives the original task.
 
 ### Hierarchical
 
-Hierarchical topology is available but currently routes through sequential execution. Full coordinator-based routing is planned for a future release.
+In a hierarchical swarm, the first agent acts as the coordinator and decides which downstream agents should run next.
+
+```php
+use App\Ai\Agents\PlannerAgent;
+use App\Ai\Agents\ResearchAgent;
+use App\Ai\Agents\WriterAgent;
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+#[Topology(TopologyEnum::Hierarchical)]
+class ArticlePlanningSwarm implements Swarm
+{
+    use Runnable;
+
+    public function agents(): array
+    {
+        return [
+            new PlannerAgent,
+            new ResearchAgent,
+            new WriterAgent,
+        ];
+    }
+
+    public function route(string $coordinatorOutput, array $agents, RunContext $context): array
+    {
+        return [
+            [
+                'agent_class' => ResearchAgent::class,
+                'input' => 'Research the claims in this plan and collect source notes: '.$coordinatorOutput,
+                'metadata' => ['stage' => 'research'],
+            ],
+            [
+                'agent_class' => WriterAgent::class,
+                'input' => 'Write the draft using this approved plan: '.$coordinatorOutput,
+                'metadata' => ['stage' => 'draft'],
+            ],
+        ];
+    }
+}
+```
+
+Route instructions may contain:
+
+- `agent` or `agent_class`
+- `input`
+- optional `metadata`
+
+Hierarchical behavior:
+
+- the first agent returned from `agents()` is the coordinator
+- workers are selected from the remaining agents returned by `agents()`
+- routed workers execute sequentially in the order returned by `route()`
+- an empty route completes successfully with the coordinator output
+- missing `route()` fails fast for hierarchical swarms
+- unknown routed classes throw an explicit exception naming the missing class
 
 ## Testing
 
@@ -180,10 +257,20 @@ Laravel Swarm stores its defaults in `config/swarm.php`, including:
 - default topology
 - timeout
 - max agent steps
+- global persistence driver
 - context persistence
 - artifact persistence
 - run history persistence
 - queue connection and queue name
+
+Persistence defaults support both cache-backed and durable database-backed storage:
+
+- `swarm.persistence.driver` sets the default persistence driver for all swarm stores
+- `swarm.context.driver`, `swarm.artifacts.driver`, and `swarm.history.driver` can override the global driver individually
+- `cache` uses the configured cache store and honors TTL settings
+- `database` stores durable run data in the package tables loaded by the service provider
+
+TTL settings apply to cache-backed persistence. Database-backed persistence is durable until your application deletes the records.
 
 ## Responses, Events, And Persistence
 
@@ -202,6 +289,14 @@ Laravel Swarm also dispatches lifecycle events for:
 - step completed
 - swarm completed
 - swarm failed
+
+Built-in persistence supports both cache and database drivers for:
+
+- run context
+- artifacts
+- run history
+
+The database driver stores these records in package-managed tables while preserving the same contract read shapes as the cache-backed stores.
 
 If you need to customize how swarm state is stored, bind your own implementations for the persistence contracts:
 
