@@ -2,10 +2,18 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use Illuminate\Support\Facades\Event;
 
 beforeEach(function () {
     FakeResearcher::fake(['research-out']);
@@ -34,4 +42,42 @@ test('sequential swarm records usage from agent responses', function () {
     $response = FakeSequentialSwarm::make()->run('usage-task');
 
     expect($response->usage)->toBeArray();
+});
+
+test('sequential swarm exposes and persists generic context and artifacts', function () {
+    $response = FakeSequentialSwarm::make()->run([
+        'input' => 'original-task',
+        'data' => ['channel' => 'content'],
+        'metadata' => ['source' => 'feature-test'],
+    ]);
+
+    expect($response->context)->not->toBeNull();
+    expect($response->metadata['run_id'])->toBeString();
+    expect($response->artifacts)->toHaveCount(3);
+    expect($response->artifacts[0]->name)->toBe('agent_output');
+    expect($response->context?->metadata['source'])->toBe('feature-test');
+    expect($response->context?->data['channel'])->toBe('content');
+    expect($response->context?->data['last_output'])->toBe('editor-out');
+
+    $runId = $response->metadata['run_id'];
+    $storedContext = app(ContextStore::class)->find($runId);
+    $storedArtifacts = app(ArtifactRepository::class)->all($runId);
+    $storedHistory = app(RunHistoryStore::class)->find($runId);
+
+    expect($storedContext['metadata']['source'])->toBe('feature-test');
+    expect($storedArtifacts)->toHaveCount(3);
+    expect($storedHistory['status'])->toBe('completed');
+    expect($storedHistory['steps'])->toHaveCount(3);
+    expect($storedHistory['output'])->toBe('editor-out');
+});
+
+test('sequential swarm dispatches lifecycle events', function () {
+    Event::fake();
+
+    $response = FakeSequentialSwarm::make()->run('event-task');
+
+    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->runId === $response->metadata['run_id']);
+    Event::assertDispatchedTimes(SwarmStepStarted::class, 3);
+    Event::assertDispatchedTimes(SwarmStepCompleted::class, 3);
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $response->metadata['run_id']);
 });

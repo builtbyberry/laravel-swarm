@@ -31,3 +31,12 @@ test('parallel swarm runs each agent with the original task', function () {
     expect((string) $response)->toContain('parallel-b');
     expect((string) $response)->toContain('parallel-c');
 });
+
+test('parallel swarm records artifacts and metadata', function () {
+    $response = FakeParallelSwarm::make()->run('shared-task');
+
+    expect($response->metadata['topology'])->toBe('parallel');
+    expect($response->artifacts)->toHaveCount(3);
+    expect($response->steps[0]->artifacts)->toHaveCount(1);
+    expect($response->steps[0]->artifacts[0]->name)->toBe('agent_output');
+});
