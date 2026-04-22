@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
 
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 
+// Stores and retrieves artifacts produced during a swarm run.
 interface ArtifactRepository
 {
     /**

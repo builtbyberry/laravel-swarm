@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Throwable;
 
+// Stores and retrieves swarm run history, including steps and completion state.
 interface RunHistoryStore
 {
     /**

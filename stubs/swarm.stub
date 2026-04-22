@@ -15,7 +15,7 @@ class {{ class }} implements Swarm
     use Runnable;
 
     /**
-     * Get the agents that make up this swarm.
+     * Get the agents for the swarm.
      */
     public function agents(): array
     {

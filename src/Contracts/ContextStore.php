@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
 
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
+// Stores and retrieves persisted swarm context by run identifier.
 interface ContextStore
 {
     public function put(RunContext $context, int $ttlSeconds): void;
