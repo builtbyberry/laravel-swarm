@@ -7,18 +7,19 @@ namespace BuiltByBerry\LaravelSwarm\Testing;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\FakePendingDispatch;
 
 class SwarmFake implements Swarm
 {
     /**
-     * @var array<int, string>
+     * @var array<int, string|array<string, mixed>|RunContext>
      */
     protected array $recorded = [];
 
     /**
-     * @var array<int, string>
+     * @var array<int, string|array<string, mixed>|RunContext>
      */
     protected array $recordedQueued = [];
 
@@ -42,23 +43,28 @@ class SwarmFake implements Swarm
     /**
      * Intercept a run call and record it.
      */
-    public function run(string $task): SwarmResponse
+    public function run(string|array|RunContext $task): SwarmResponse
     {
         $this->recorded[] = $task;
 
         $output = $this->resolveResponse($task);
+        $context = RunContext::from($task);
 
-        return new SwarmResponse(output: $output);
+        return new SwarmResponse(
+            output: $output,
+            context: $context,
+            metadata: ['run_id' => $context->runId],
+        );
     }
 
     /**
      * Intercept a queue call and record it.
      */
-    public function queue(string $task): QueuedSwarmResponse
+    public function queue(string|array|RunContext $task): QueuedSwarmResponse
     {
         $this->recordedQueued[] = $task;
 
-        return new QueuedSwarmResponse(new FakePendingDispatch);
+        return new QueuedSwarmResponse(new FakePendingDispatch, RunContext::from($task)->runId);
     }
 
     /**
@@ -128,10 +134,12 @@ class SwarmFake implements Swarm
     /**
      * Resolve the fake response for the given task.
      */
-    protected function resolveResponse(string $task): string
+    protected function resolveResponse(string|array|RunContext $task): string
     {
+        $normalizedTask = $task instanceof RunContext ? $task->prompt() : (is_array($task) ? json_encode($task) ?: serialize($task) : $task);
+
         if (is_callable($this->responses)) {
-            return ($this->responses)($task);
+            return ($this->responses)($normalizedTask);
         }
 
         if (is_array($this->responses) && $this->responses !== []) {

@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Laravel\Ai\Responses\AgentResponse;
 
 class ParallelRunner
@@ -18,31 +20,28 @@ class ParallelRunner
         protected ConcurrencyManager $concurrency,
     ) {}
 
-    /**
-     * Run all agents concurrently with the same initial task.
-     *
-     * @param  float  $deadlineMonotonic  hrtime(true) deadline in nanoseconds
-     * @return array{response: SwarmResponse, usage: array<string, int>}
-     */
-    public function run(
-        Swarm $swarm,
-        string $task,
-        float $deadlineMonotonic,
-        int $maxAgentExecutions,
-        string $contextKey,
-        CacheRepository $cache,
-        int $contextTtlSeconds,
-    ): array {
-        if (hrtime(true) >= $deadlineMonotonic) {
+    public function run(SwarmExecutionState $state): SwarmResponse
+    {
+        if (hrtime(true) >= $state->deadlineMonotonic) {
             throw new SwarmTimeoutException('The swarm exceeded its configured timeout before parallel execution began.');
         }
 
-        $agents = array_slice($swarm->agents(), 0, $maxAgentExecutions);
+        $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
+        $input = $state->context->prompt();
 
         $callbacks = [];
         foreach ($agents as $index => $agent) {
-            $callbacks[$index] = function () use ($agent, $task): array {
-                $response = $agent->prompt($task);
+            $state->events->dispatch(new SwarmStepStarted(
+                runId: $state->context->runId,
+                swarmClass: $state->swarm::class,
+                index: $index,
+                agentClass: $agent::class,
+                input: $input,
+                context: $state->context,
+            ));
+
+            $callbacks[$index] = function () use ($agent, $input): array {
+                $response = $agent->prompt($input);
 
                 return [
                     'output' => (string) $response,
@@ -52,12 +51,10 @@ class ParallelRunner
             };
         }
 
-        $driver = $this->concurrency->driver();
-
         /** @var array<int, array{output: string, usage: array<string, int>, class: string}> $results */
-        $results = $driver->run($callbacks);
+        $results = $this->concurrency->driver()->run($callbacks);
 
-        if (hrtime(true) >= $deadlineMonotonic) {
+        if (hrtime(true) >= $state->deadlineMonotonic) {
             throw new SwarmTimeoutException('The swarm exceeded its configured timeout after parallel execution.');
         }
 
@@ -67,32 +64,60 @@ class ParallelRunner
 
         foreach ($agents as $index => $agent) {
             $row = $results[$index] ?? ['output' => '', 'usage' => [], 'class' => $agent::class];
-            $steps[] = new SwarmStep(
+            $artifact = new SwarmArtifact(
+                name: 'agent_output',
+                content: $row['output'],
+                metadata: ['index' => $index, 'usage' => $row['usage']],
+                stepAgentClass: $row['class'],
+            );
+            $step = new SwarmStep(
                 agentClass: $row['class'],
-                input: $task,
+                input: $input,
                 output: $row['output'],
+                artifacts: [$artifact],
+                metadata: ['index' => $index, 'usage' => $row['usage']],
             );
 
-            $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
+            $steps[] = $step;
             $outputs[] = $row['output'];
+            $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
+            $state->context->addArtifact($artifact);
+            $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds);
+            $state->events->dispatch(new SwarmStepCompleted(
+                runId: $state->context->runId,
+                swarmClass: $state->swarm::class,
+                index: $index,
+                step: $step,
+                context: $state->context,
+            ));
         }
 
         $combined = implode("\n\n", $outputs);
 
-        $cache->put($contextKey, [
-            'topology' => 'parallel',
-            'last_output' => $combined,
-            'steps' => count($steps),
-        ], $contextTtlSeconds);
+        $state->context
+            ->mergeData([
+                'last_output' => $combined,
+                'steps' => count($steps),
+            ])
+            ->mergeMetadata([
+                'topology' => $state->topology,
+            ]);
 
-        return [
-            'response' => new SwarmResponse(
-                output: $combined,
-                steps: $steps,
-                usage: $mergedUsage,
-            ),
-            'usage' => $mergedUsage,
-        ];
+        $state->contextStore->put($state->context, $state->ttlSeconds);
+        $state->artifactRepository->storeMany($state->context->runId, $state->context->artifacts, $state->ttlSeconds);
+
+        return new SwarmResponse(
+            output: $combined,
+            steps: $steps,
+            usage: $mergedUsage,
+            context: $state->context,
+            artifacts: $state->context->artifacts,
+            metadata: [
+                'run_id' => $state->context->runId,
+                'topology' => $state->topology,
+                'execution_mode' => $state->executionMode->value,
+            ],
+        );
     }
 
     /**

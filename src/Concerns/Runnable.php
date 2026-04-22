@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Concerns;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake as SwarmFakeInstance;
 use Generator;
 use Illuminate\Container\Container;
@@ -31,7 +32,7 @@ trait Runnable
     /**
      * Run the swarm with the given task.
      */
-    public function run(string $task): SwarmResponse
+    public function run(string|array|RunContext $task): SwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->run($this, $task);
     }
@@ -41,7 +42,7 @@ trait Runnable
      *
      * @return Generator<int, array<string, string>, mixed, void>
      */
-    public function stream(string $task): Generator
+    public function stream(string|array|RunContext $task): Generator
     {
         return Container::getInstance()->make(SwarmRunner::class)->stream($this, $task);
     }
@@ -49,9 +50,17 @@ trait Runnable
     /**
      * Queue the swarm to run in the background.
      */
-    public function queue(string $task): QueuedSwarmResponse
+    public function queue(string|array|RunContext $task): QueuedSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->queue($this, $task);
+    }
+
+    /**
+     * Dispatch the swarm according to its configured execution policy.
+     */
+    public function dispatch(string|array|RunContext $task): SwarmResponse|QueuedSwarmResponse
+    {
+        return Container::getInstance()->make(SwarmRunner::class)->dispatch($this, $task);
     }
 
     /**

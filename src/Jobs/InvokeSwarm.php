@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Jobs;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\InvokesQueuedSwarmCallbacks;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -20,7 +21,7 @@ class InvokeSwarm implements ShouldQueue
      */
     public function __construct(
         public Swarm $swarm,
-        public string $task,
+        public string|array|RunContext $task,
     ) {}
 
     /**

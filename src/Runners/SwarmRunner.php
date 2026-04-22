@@ -7,84 +7,112 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 use BuiltByBerry\LaravelSwarm\Attributes\MaxAgentSteps as MaxAgentStepsAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Timeout as TimeoutAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
+use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ExecutionPolicyResolver;
+use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Generator;
-use Illuminate\Contracts\Cache\Factory as CacheFactory;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use ReflectionClass;
 
 class SwarmRunner
 {
     public function __construct(
         protected ConfigRepository $config,
-        protected CacheFactory $cacheFactory,
+        protected ContextStore $contextStore,
+        protected ArtifactRepository $artifactRepository,
+        protected RunHistoryStore $historyStore,
+        protected ExecutionPolicyResolver $executionPolicyResolver,
+        protected BusDispatcher $bus,
+        protected Dispatcher $events,
         protected SequentialRunner $sequential,
         protected ParallelRunner $parallel,
         protected HierarchicalRunner $hierarchical,
     ) {}
 
-    /**
-     * Run the swarm synchronously.
-     */
-    public function run(Swarm $swarm, string $task): SwarmResponse
+    public function run(Swarm $swarm, string|array|RunContext $task): SwarmResponse
     {
         $topology = $this->resolveTopology($swarm);
+        $executionMode = $this->resolveExecutionMode($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
-        $deadline = hrtime(true) + ($timeoutSeconds * 1_000_000_000);
-        $contextKey = $this->contextKey($swarm, $task);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
+        $context = RunContext::from($task);
+        $context->mergeMetadata([
+            'swarm_class' => $swarm::class,
+            'topology' => $topology->value,
+            'execution_mode' => $executionMode->value,
+        ]);
 
-        $payload = match ($topology) {
-            Topology::Sequential => $this->sequential->run(
-                $swarm,
-                $task,
-                $deadline,
-                $maxAgentExecutions,
-                $contextKey,
-                $this->contextRepository(),
-                $contextTtl,
-            ),
-            Topology::Parallel => $this->parallel->run(
-                $swarm,
-                $task,
-                $deadline,
-                $maxAgentExecutions,
-                $contextKey,
-                $this->contextRepository(),
-                $contextTtl,
-            ),
-            Topology::Hierarchical => $this->hierarchical->run(
-                $swarm,
-                $task,
-                $deadline,
-                $maxAgentExecutions,
-                $contextKey,
-                $this->contextRepository(),
-                $contextTtl,
-            ),
-        };
+        $state = new SwarmExecutionState(
+            swarm: $swarm,
+            topology: $topology->value,
+            executionMode: $executionMode,
+            deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
+            maxAgentExecutions: $maxAgentExecutions,
+            ttlSeconds: $contextTtl,
+            context: $context,
+            contextStore: $this->contextStore,
+            artifactRepository: $this->artifactRepository,
+            historyStore: $this->historyStore,
+            events: $this->events,
+        );
 
-        return $payload['response'];
+        $this->contextStore->put($context, $contextTtl);
+        $this->historyStore->start($context->runId, $swarm::class, $topology->value, $context, $context->metadata, $contextTtl);
+        $this->events->dispatch(new SwarmStarted(
+            runId: $context->runId,
+            swarmClass: $swarm::class,
+            topology: $topology->value,
+            context: $context,
+        ));
+
+        try {
+            $response = match ($topology) {
+                Topology::Sequential => $this->sequential->run($state),
+                Topology::Parallel => $this->parallel->run($state),
+                Topology::Hierarchical => $this->hierarchical->run($state),
+            };
+        } catch (\Throwable $exception) {
+            $this->historyStore->fail($context->runId, $exception, $contextTtl);
+            $this->events->dispatch(new SwarmFailed(
+                runId: $context->runId,
+                swarmClass: $swarm::class,
+                exception: $exception,
+            ));
+
+            throw $exception;
+        }
+
+        $this->contextStore->put($context, $contextTtl);
+        $this->historyStore->complete($context->runId, $response, $contextTtl);
+        $this->events->dispatch(new SwarmCompleted(
+            runId: $context->runId,
+            swarmClass: $swarm::class,
+            response: $response,
+        ));
+
+        return $response;
     }
 
     /**
-     * Run the swarm sequentially, yielding step and token events for SSE streaming.
-     *
-     * Only sequential topology is supported. Parallel and hierarchical topologies
-     * do not have a streaming implementation yet.
-     *
      * @return Generator<int, array<string, string>, mixed, void>
-     *
-     * @throws SwarmException if the swarm topology does not support streaming
      */
-    public function stream(Swarm $swarm, string $task): Generator
+    public function stream(Swarm $swarm, string|array|RunContext $task): Generator
     {
         $topology = $this->resolveTopology($swarm);
 
@@ -92,44 +120,102 @@ class SwarmRunner
             throw new SwarmException('Streaming is only supported for sequential swarms. '.$topology->value.' topology does not support streaming.');
         }
 
+        $executionMode = $this->resolveExecutionMode($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
-        $deadline = hrtime(true) + ($timeoutSeconds * 1_000_000_000);
-        $contextKey = $this->contextKey($swarm, $task);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
+        $context = RunContext::from($task);
+        $context->mergeMetadata([
+            'swarm_class' => $swarm::class,
+            'topology' => $topology->value,
+            'execution_mode' => $executionMode->value,
+        ]);
 
-        return $this->sequential->stream(
-            $swarm,
-            $task,
-            $deadline,
-            $maxAgentExecutions,
-            $contextKey,
-            $this->contextRepository(),
-            $contextTtl,
+        $state = new SwarmExecutionState(
+            swarm: $swarm,
+            topology: $topology->value,
+            executionMode: $executionMode,
+            deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
+            maxAgentExecutions: $maxAgentExecutions,
+            ttlSeconds: $contextTtl,
+            context: $context,
+            contextStore: $this->contextStore,
+            artifactRepository: $this->artifactRepository,
+            historyStore: $this->historyStore,
+            events: $this->events,
         );
+
+        $this->contextStore->put($context, $contextTtl);
+        $this->historyStore->start($context->runId, $swarm::class, $topology->value, $context, $context->metadata, $contextTtl);
+        $this->events->dispatch(new SwarmStarted(
+            runId: $context->runId,
+            swarmClass: $swarm::class,
+            topology: $topology->value,
+            context: $context,
+        ));
+
+        return (function () use ($state, $context, $contextTtl, $swarm): Generator {
+            try {
+                yield from $this->sequential->stream($state);
+
+                $response = new SwarmResponse(
+                    output: (string) ($context->data['last_output'] ?? $context->input),
+                    context: $context,
+                    artifacts: $context->artifacts,
+                    metadata: [
+                        'run_id' => $context->runId,
+                        'topology' => $state->topology,
+                        'execution_mode' => $state->executionMode->value,
+                    ],
+                );
+
+                $this->contextStore->put($context, $contextTtl);
+                $this->historyStore->complete($context->runId, $response, $contextTtl);
+                $this->events->dispatch(new SwarmCompleted(
+                    runId: $context->runId,
+                    swarmClass: $swarm::class,
+                    response: $response,
+                ));
+            } catch (\Throwable $exception) {
+                $this->historyStore->fail($context->runId, $exception, $contextTtl);
+                $this->events->dispatch(new SwarmFailed(
+                    runId: $context->runId,
+                    swarmClass: $swarm::class,
+                    exception: $exception,
+                ));
+
+                throw $exception;
+            }
+        })();
     }
 
-    /**
-     * Queue the swarm to run in the background.
-     */
-    public function queue(Swarm $swarm, string $task): QueuedSwarmResponse
+    public function queue(Swarm $swarm, string|array|RunContext $task): QueuedSwarmResponse
     {
-        $pending = InvokeSwarm::dispatch($swarm, $task);
+        $context = RunContext::from($task);
+        $job = new InvokeSwarm($swarm, $context);
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
-            $pending->onConnection($connection);
+            $job->onConnection($connection);
         }
 
         if ($name = $this->config->get('swarm.queue.name')) {
-            $pending->onQueue($name);
+            $job->onQueue($name);
         }
 
-        return new QueuedSwarmResponse($pending);
+        $this->bus->dispatch($job);
+
+        return new QueuedSwarmResponse($job, $context->runId);
     }
 
-    /**
-     * Resolve topology from the swarm attribute or configuration.
-     */
+    public function dispatch(Swarm $swarm, string|array|RunContext $task): SwarmResponse|QueuedSwarmResponse
+    {
+        return match ($this->resolveExecutionMode($swarm)) {
+            ExecutionMode::Sync => $this->run($swarm, $task),
+            ExecutionMode::Queued => $this->queue($swarm, $task),
+            ExecutionMode::Mixed => $this->dispatchMixed($swarm, $task),
+        };
+    }
+
     public function resolveTopology(Swarm $swarm): Topology
     {
         $reflection = new ReflectionClass($swarm);
@@ -142,9 +228,6 @@ class SwarmRunner
         return Topology::from((string) $this->config->get('swarm.topology', Topology::Sequential->value));
     }
 
-    /**
-     * Resolve the wall-clock timeout in seconds for the swarm run.
-     */
     public function resolveTimeoutSeconds(Swarm $swarm): int
     {
         $reflection = new ReflectionClass($swarm);
@@ -157,9 +240,6 @@ class SwarmRunner
         return (int) $this->config->get('swarm.timeout', 300);
     }
 
-    /**
-     * Resolve the maximum number of agent executions for a single swarm run.
-     */
     public function resolveMaxAgentExecutions(Swarm $swarm): int
     {
         $reflection = new ReflectionClass($swarm);
@@ -172,28 +252,19 @@ class SwarmRunner
         return (int) $this->config->get('swarm.max_agent_steps', 10);
     }
 
-    /**
-     * Build a cache key for optional shared swarm context.
-     */
-    protected function contextKey(Swarm $swarm, string $task): string
+    public function resolveExecutionMode(Swarm $swarm): ExecutionMode
     {
-        return 'swarm:context:'.sha1($swarm::class.'|'.$task.'|'.spl_object_id($swarm));
+        return $this->executionPolicyResolver->resolve($swarm);
     }
 
-    /**
-     * Resolve the cache repository used for swarm context persistence.
-     */
-    protected function contextRepository(): CacheRepository
+    protected function dispatchMixed(Swarm $swarm, string|array|RunContext $task): SwarmResponse|QueuedSwarmResponse
     {
-        $driver = (string) $this->config->get('swarm.context.driver', 'cache');
-        $store = $this->config->get('swarm.context.store');
+        $queuedTopologies = (array) $this->config->get('swarm.execution.mixed_queue_topologies', [Topology::Parallel->value]);
 
-        if ($driver === 'database') {
-            return $this->cacheFactory->store('database');
+        if (in_array($this->resolveTopology($swarm)->value, $queuedTopologies, true)) {
+            return $this->queue($swarm, $task);
         }
 
-        return $store !== null && $store !== ''
-            ? $this->cacheFactory->store((string) $store)
-            : $this->cacheFactory->store();
+        return $this->run($swarm, $task);
     }
 }

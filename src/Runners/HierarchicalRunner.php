@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 
 /**
  * Hierarchical topology: delegates to sequential execution until coordinator routing is implemented.
@@ -19,27 +18,8 @@ class HierarchicalRunner
         protected SequentialRunner $sequential,
     ) {}
 
-    /**
-     * @param  float  $deadlineMonotonic  hrtime(true) deadline in nanoseconds
-     * @return array{response: SwarmResponse, usage: array<string, int>}
-     */
-    public function run(
-        Swarm $swarm,
-        string $task,
-        float $deadlineMonotonic,
-        int $maxAgentExecutions,
-        string $contextKey,
-        CacheRepository $cache,
-        int $contextTtlSeconds,
-    ): array {
-        return $this->sequential->run(
-            $swarm,
-            $task,
-            $deadlineMonotonic,
-            $maxAgentExecutions,
-            $contextKey,
-            $cache,
-            $contextTtlSeconds,
-        );
+    public function run(SwarmExecutionState $state): SwarmResponse
+    {
+        return $this->sequential->run($state);
     }
 }
