@@ -12,6 +12,47 @@ Laravel Swarm brings multi-agent orchestration to [Laravel](https://laravel.com)
 - Laravel **13+**
 - `laravel/ai` **^0.6**
 
+## When To Use Laravel Swarm
+
+Laravel AI is already a strong fit when one agent can handle the full job, or when you want to compose multi-agent workflow patterns directly yourself. If you like working close to the primitives, Laravel AI gives you the building blocks to do that.
+
+Laravel Swarm is for the next step up: cases where that workflow should become a reusable, observable, application-level unit. It is a good fit when the real job looks like plan, research, write, review, or classify, route, respond, or run multiple specialists and keep the history of what happened.
+
+### Laravel AI vs Laravel Swarm
+
+Laravel's article, [Building Multi-Agent Workflows with the Laravel AI SDK](https://laravel.com/blog/building-multi-agent-workflows-with-the-laravel-ai-sdk), shows that Laravel AI already supports patterns like prompt chaining, routing, parallelization, orchestrator-workers, and evaluator-optimizer.
+
+That is the right mental model for Swarm too. Laravel AI gives you the ingredients. Laravel Swarm gives you a reusable workflow abstraction built from those ingredients.
+
+Both are valid choices. Laravel AI is great when you want to compose the workflow yourself from lower-level primitives. Laravel Swarm is great when you want that workflow to live as a reusable, first-class object in your app with a consistent `run()`, `queue()`, and `stream()` API, plus persistence, lifecycle events, and test helpers around it.
+
+If you prefer assembling those workflow patterns manually, the Laravel AI article is a good place to start. If you want to define the workflow once and reuse it as an application primitive, Swarm is the better fit.
+
+### Real-World Examples
+
+- `PlannerAgent -> ResearchAgent -> WriterAgent -> EditorAgent` for a content workflow where each handoff has a clear responsibility and you want the run history for later review.
+- `TriageAgent -> PolicyLookupAgent -> ResponseDraftAgent -> ReviewAgent` for support operations where repeatability and step-by-step visibility matter as much as the final answer.
+- `IntakeAgent -> ExtractionAgent -> RiskReviewAgent -> SummaryAgent` for compliance review where durable artifacts and auditability are part of the actual business requirement.
+- `CompanyResearchAgent -> ScoringAgent -> OutreachDraftAgent` for lead enrichment where each agent does a narrow job and the full workflow can be reused across campaigns.
+- `RequestIntakeAgent -> PlannerAgent -> SpecialistAgent(s) -> FinalResponseAgent` for internal operations where one request may branch into different specialists but still needs one consistent workflow definition.
+
+### Laravel Swarm Is A Good Fit When...
+
+- the same multi-step AI workflow runs repeatedly in production
+- one agent should plan and other agents should execute
+- you want workflow history, artifacts, or step-by-step visibility
+- you want one workflow definition that can run synchronously, on a queue, or as a stream
+- you do not want to rebuild orchestration wiring in every feature
+
+### Laravel Swarm May Be Unnecessary If...
+
+- one agent can do the whole job well
+- you are comfortable composing the workflow directly with Laravel AI primitives, as shown in the Laravel article
+- you do not need persistence, lifecycle events, or reusable workflow classes
+- the workflow is too small or too one-off to justify a swarm abstraction
+
+If your use case feels more like a reusable workflow than a single prompt, the rest of Laravel Swarm gives you three orchestration styles: sequential, parallel, and hierarchical.
+
 ## Installation
 
 ```bash
