@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -10,9 +11,13 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Jobs\NoOpQueuedJob;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Support\ResolvedSwarmOutput;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Support\UnboundQueuedDependency;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ContainerResolvedQueuedSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DependencyInjectedQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableQueuedSwarm;
 
 function preventQueuedSwarmRedispatch(object $response): void
 {
@@ -33,7 +38,11 @@ beforeEach(function () {
 });
 
 test('queued swarm jobs can execute with a preserved run context', function () {
-    $context = RunContext::from('queued-task', 'queued-run-id');
+    $context = RunContext::from([
+        'input' => 'queued-task',
+        'data' => ['draft_id' => 42],
+        'metadata' => ['tenant_id' => 'acme'],
+    ], 'queued-run-id');
     $job = new InvokeSwarm(FakeSequentialSwarm::class, $context);
 
     $job->handle(app(SwarmRunner::class));
@@ -41,6 +50,14 @@ test('queued swarm jobs can execute with a preserved run context', function () {
     FakeResearcher::assertPrompted('queued-task');
     FakeWriter::assertPrompted('research-out');
     FakeEditor::assertPrompted('writer-out');
+    expect($job->task->data)
+        ->toHaveKey('draft_id', 42)
+        ->toHaveKey('last_output', 'editor-out')
+        ->toHaveKey('steps', 3);
+    expect($job->task->metadata)
+        ->toHaveKey('tenant_id', 'acme')
+        ->toHaveKey('swarm_class', FakeSequentialSwarm::class)
+        ->toHaveKey('topology', 'sequential');
 });
 
 test('queued swarm completion callbacks run through the pending dispatch path', function () {
@@ -87,9 +104,12 @@ test('queued swarm failure callbacks run through the pending dispatch path', fun
 test('queued swarms resolve a fresh instance from the container when handled', function () {
     $state = (object) ['response' => null];
 
-    app()->instance(ContainerResolvedQueuedSwarm::class, new ContainerResolvedQueuedSwarm('resolved-output'));
+    $resolvedOutput = new ResolvedSwarmOutput;
+    $resolvedOutput->value = 'resolved-output';
 
-    $queued = (new ContainerResolvedQueuedSwarm('original-output'))
+    app()->instance(ResolvedSwarmOutput::class, $resolvedOutput);
+
+    $queued = DependencyInjectedQueuedSwarm::make()
         ->queue('queued-task')
         ->then(function (SwarmResponse $response) use ($state): void {
             $state->response = $response;
@@ -101,4 +121,28 @@ test('queued swarms resolve a fresh instance from the container when handled', f
 
     expect($state->response)->toBeInstanceOf(SwarmResponse::class);
     expect($state->response?->output)->toBe('resolved-output');
+});
+
+test('queue fails fast for swarms with runtime constructor state', function () {
+    expect(fn () => (new ContainerResolvedQueuedSwarm('runtime-output'))->queue('queued-task'))
+        ->toThrow(
+            NonQueueableSwarmException::class,
+            'Queued swarms must be container-resolvable workflow definitions. [BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ContainerResolvedQueuedSwarm] cannot be queued because constructor parameter [$output] uses [string] instead of a container dependency. Do not put per-execution state in the swarm constructor; pass it in the task or RunContext instead.',
+        );
+});
+
+test('queue fails fast when the swarm cannot be resolved from the container', function () {
+    $dependency = new class implements UnboundQueuedDependency {};
+
+    expect(fn () => (new UnresolvableQueuedSwarm($dependency))->queue('queued-task'))
+        ->toThrow(
+            NonQueueableSwarmException::class,
+            'Queued swarms must be container-resolvable workflow definitions. [BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableQueuedSwarm] could not be resolved from the container for queued execution. Underlying container error: Target [BuiltByBerry\LaravelSwarm\Tests\Fixtures\Support\UnboundQueuedDependency] is not instantiable while building [BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableQueuedSwarm].',
+        );
+});
+
+test('run still works for swarms with runtime constructor state', function () {
+    $response = (new ContainerResolvedQueuedSwarm('runtime-output'))->run('queued-task');
+
+    expect($response->output)->toBe('runtime-output');
 });

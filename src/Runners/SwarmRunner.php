@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
+use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
@@ -22,9 +23,15 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Generator;
+use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Events\Dispatcher;
 use ReflectionClass;
+use ReflectionIntersectionType;
+use ReflectionNamedType;
+use ReflectionParameter;
+use ReflectionUnionType;
 
 class SwarmRunner
 {
@@ -187,6 +194,9 @@ class SwarmRunner
 
     public function queue(Swarm $swarm, string $task): QueuedSwarmResponse
     {
+        $this->ensureQueueable($swarm);
+        $this->ensureContainerResolvable($swarm);
+
         $context = RunContext::from($task);
         $pendingDispatch = InvokeSwarm::dispatch($swarm::class, $context);
 
@@ -199,6 +209,78 @@ class SwarmRunner
         }
 
         return new QueuedSwarmResponse($pendingDispatch, $context->runId);
+    }
+
+    protected function ensureQueueable(Swarm $swarm): void
+    {
+        $swarmClass = $swarm::class;
+        $constructor = new ReflectionClass($swarmClass)->getConstructor();
+
+        if ($constructor === null) {
+            return;
+        }
+
+        foreach ($constructor->getParameters() as $parameter) {
+            if ($parameter->isOptional()) {
+                continue;
+            }
+
+            if ($this->isQueueSafeDependency($parameter)) {
+                continue;
+            }
+
+            $parameterType = $parameter->getType();
+            $parameterName = $parameter->getName();
+            $typeName = match (true) {
+                $parameterType instanceof ReflectionNamedType => $parameterType->getName(),
+                $parameterType instanceof ReflectionUnionType => implode('|', array_map(
+                    static fn (ReflectionNamedType $type): string => $type->getName(),
+                    $parameterType->getTypes(),
+                )),
+                $parameterType instanceof ReflectionIntersectionType => implode('&', array_map(
+                    static fn (ReflectionNamedType $type): string => $type->getName(),
+                    $parameterType->getTypes(),
+                )),
+                default => 'untyped',
+            };
+
+            throw new NonQueueableSwarmException(
+                "Queued swarms must be container-resolvable workflow definitions. [{$swarmClass}] ".
+                "cannot be queued because constructor parameter [\${$parameterName}] uses [{$typeName}] instead of a container dependency. ".
+                'Do not put per-execution state in the swarm constructor; pass it in the task or RunContext instead.',
+            );
+        }
+    }
+
+    protected function isQueueSafeDependency(ReflectionParameter $parameter): bool
+    {
+        $parameterType = $parameter->getType();
+
+        if (! $parameterType instanceof ReflectionNamedType) {
+            return false;
+        }
+
+        if ($parameterType->isBuiltin()) {
+            return false;
+        }
+
+        return class_exists($parameterType->getName()) || interface_exists($parameterType->getName());
+    }
+
+    protected function ensureContainerResolvable(Swarm $swarm): void
+    {
+        $swarmClass = $swarm::class;
+
+        try {
+            Container::getInstance()->make($swarmClass);
+        } catch (BindingResolutionException $exception) {
+            throw new NonQueueableSwarmException(
+                "Queued swarms must be container-resolvable workflow definitions. [{$swarmClass}] ".
+                'could not be resolved from the container for queued execution. '.
+                "Underlying container error: {$exception->getMessage()}",
+                previous: $exception,
+            );
+        }
     }
 
     public function resolveTopology(Swarm $swarm): Topology

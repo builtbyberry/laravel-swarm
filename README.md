@@ -187,6 +187,30 @@ ArticlePipeline::make()
 
 Like Laravel AI, the queued swarm response proxies the underlying pending dispatch, so you may continue chaining queue configuration methods such as `onConnection()` and `onQueue()` before the job is actually dispatched.
 
+Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. Treat swarm constructors as dependency injection only, not a place for per-run business state. `queue()` is the queue-safety boundary; `run()` and `stream()` may still operate on manually constructed instances.
+
+Pass dynamic execution data in the task payload, not the swarm constructor:
+
+```php
+ArticlePipeline::make()
+    ->queue(json_encode([
+        'draft_id' => 42,
+        'tenant_id' => 'acme',
+        'mode' => 'review',
+    ]));
+```
+
+Decode or interpret that task input inside the swarm or its agents as needed. Richer queued context is not yet a first-class public `queue()` API.
+
+What not to do:
+
+```php
+// Do not put per-execution state in a queued swarm constructor.
+(new ArticlePipeline($draftId))->queue('Review the draft');
+```
+
+If you call `queue()` on a swarm instance with runtime constructor state, or on a swarm class the container cannot resolve for queued execution, Laravel Swarm throws immediately with guidance before dispatching the job.
+
 ## Streaming A Swarm
 
 Use `stream()` when you want step and token events for server-sent events or other real-time updates:
