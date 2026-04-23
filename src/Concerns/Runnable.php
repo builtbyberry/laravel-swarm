@@ -25,6 +25,14 @@ trait Runnable
      */
     public static function make(mixed ...$arguments): mixed
     {
+        $resolved = Container::getInstance()->resolved(static::class)
+            ? Container::getInstance()->make(static::class)
+            : null;
+
+        if ($resolved instanceof SwarmFakeInstance) {
+            return $resolved;
+        }
+
         return match (true) {
             $arguments !== [] && ! array_is_list($arguments) => Container::getInstance()->makeWith(static::class, $arguments),
             $arguments !== [] => new static(...$arguments),

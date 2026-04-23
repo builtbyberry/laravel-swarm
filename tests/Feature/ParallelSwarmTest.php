@@ -2,10 +2,15 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use Illuminate\Support\Facades\Event;
 
 beforeEach(function () {
     FakeResearcher::fake(['parallel-a']);
@@ -39,4 +44,20 @@ test('parallel swarm records artifacts and metadata', function () {
     expect($response->artifacts)->toHaveCount(3);
     expect($response->steps[0]->artifacts)->toHaveCount(1);
     expect($response->steps[0]->artifacts[0]->name)->toBe('agent_output');
+});
+
+test('parallel swarm dispatches lifecycle events', function () {
+    Event::fake();
+
+    $response = FakeParallelSwarm::make()->run('shared-task');
+
+    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->runId === $response->metadata['run_id']
+        && $event->input === 'shared-task'
+        && $event->topology === 'parallel'
+        && $event->executionMode === 'run');
+    Event::assertDispatchedTimes(SwarmStepStarted::class, 3);
+    Event::assertDispatchedTimes(SwarmStepCompleted::class, 3);
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $response->metadata['run_id']
+        && $event->output === $response->output
+        && $event->metadata['topology'] === 'parallel');
 });

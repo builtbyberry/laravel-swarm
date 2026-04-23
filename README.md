@@ -187,9 +187,13 @@ ArticlePipeline::make()
 
 Like Laravel AI, the queued swarm response proxies the underlying pending dispatch, so you may continue chaining queue configuration methods such as `onConnection()` and `onQueue()` before the job is actually dispatched.
 
-Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. Treat swarm constructors as dependency injection only, not a place for per-run business state. `queue()` is the queue-safety boundary; `run()` and `stream()` may still operate on manually constructed instances. Because queued swarms are validated for container resolution before dispatch, constructors and DI setup should stay cheap and side-effect free in normal Laravel style.
+Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. `queue()` is the queue-safety boundary; `run()` and `stream()` may still operate on manually constructed instances.
 
-Pass dynamic execution data in the task payload, not the swarm constructor:
+For queued execution, treat the swarm as a stateless definition apart from container-injected dependencies. Runtime instance state is not preserved across the queue boundary, whether it comes from constructor arguments, setter calls, or public-property mutation before `queue()`. Pass dynamic execution data in the task payload instead.
+
+Because queued swarms are validated for container resolution before dispatch, constructors and DI setup should stay cheap and side-effect free in normal Laravel style.
+
+Pass dynamic execution data in the task payload, not on the swarm instance:
 
 ```php
 ArticlePipeline::make()
@@ -205,11 +209,11 @@ Decode or interpret that task input inside the swarm or its agents as needed. Ri
 What not to do:
 
 ```php
-// Do not put per-execution state in a queued swarm constructor.
+// Do not put per-execution state on a queued swarm instance.
 (new ArticlePipeline($draftId))->queue('Review the draft');
 ```
 
-If you call `queue()` on a swarm instance with runtime constructor state, or on a swarm class the container cannot resolve for queued execution, Laravel Swarm throws immediately with guidance before dispatching the job.
+If you call `queue()` on a swarm instance that relies on runtime constructor state, or on a swarm class the container cannot resolve for queued execution, Laravel Swarm throws immediately with guidance before dispatching the job. Even when queueing succeeds, any instance mutation applied before `queue()` is not replayed on the worker.
 
 ## Streaming A Swarm
 

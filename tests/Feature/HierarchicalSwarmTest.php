@@ -3,6 +3,10 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
@@ -14,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMissingRoute
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMultiRouteSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalSingleRouteSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalUnknownRouteSwarm;
+use Illuminate\Support\Facades\Event;
 
 beforeEach(function () {
     FakeResearcher::fake(['coordinator-out']);
@@ -91,4 +96,22 @@ test('hierarchical swarm persists routed step history metadata', function () {
     expect($history['steps'])->toHaveCount(3);
     expect($history['metadata']['coordinator_agent_class'])->toBe(FakeResearcher::class);
     expect($history['metadata']['routed_agent_classes'])->toBe([FakeEditor::class, FakeWriter::class]);
+});
+
+test('hierarchical swarm dispatches lifecycle events', function () {
+    Event::fake();
+
+    $response = FakeHierarchicalMultiRouteSwarm::make()->run('hierarchical-task');
+
+    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->runId === $response->metadata['run_id']
+        && $event->input === 'hierarchical-task'
+        && $event->topology === 'hierarchical'
+        && $event->executionMode === 'run');
+    Event::assertDispatchedTimes(SwarmStepStarted::class, 3);
+    Event::assertDispatchedTimes(SwarmStepCompleted::class, 3);
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $response->metadata['run_id']
+        && $event->output === 'writer-out'
+        && $event->metadata['coordinator_agent_class'] === FakeResearcher::class
+        && $event->metadata['routed_agent_classes'] === [FakeEditor::class, FakeWriter::class]
+        && $event->metadata['executed_steps'] === 3);
 });

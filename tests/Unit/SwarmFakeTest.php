@@ -19,6 +19,20 @@ test('fake intercepts run and queue calls', function () {
     EmptyRunnableSwarm::assertQueued('beta');
 });
 
+test('fake make returns the fake even when positional arguments are passed', function () {
+    $fake = EmptyRunnableSwarm::fake();
+
+    expect(EmptyRunnableSwarm::make('runtime-state'))->toBe($fake);
+});
+
+test('fake intercepts positional make run calls', function () {
+    EmptyRunnableSwarm::fake(['positional-output']);
+
+    expect((string) EmptyRunnableSwarm::make('runtime-state')->run('alpha'))->toBe('positional-output');
+
+    EmptyRunnableSwarm::assertRan('alpha');
+});
+
 test('fake intercepts stream calls', function () {
     EmptyRunnableSwarm::fake(['streamed-output']);
 
