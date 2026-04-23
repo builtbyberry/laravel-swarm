@@ -99,6 +99,7 @@ class SwarmRunner
             throw $exception;
         }
 
+        $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
         $this->contextStore->put($context, $contextTtl);
         $this->historyStore->complete($context->runId, $response, $contextTtl);
         $this->events->dispatch(new SwarmCompleted(
@@ -159,15 +160,12 @@ class SwarmRunner
             try {
                 yield from $this->sequential->stream($state);
 
-                $response = new SwarmResponse(
+                $response = $this->normalizeCompletionResponse(new SwarmResponse(
                     output: (string) ($context->data['last_output'] ?? $context->input),
                     context: $context,
                     artifacts: $context->artifacts,
-                    metadata: [
-                        'run_id' => $context->runId,
-                        'topology' => $state->topology,
-                    ],
-                );
+                    usage: is_array($context->metadata['usage'] ?? null) ? $context->metadata['usage'] : [],
+                ), $context, $state->topology);
 
                 $this->contextStore->put($context, $contextTtl);
                 $this->historyStore->complete($context->runId, $response, $contextTtl);
@@ -209,6 +207,25 @@ class SwarmRunner
         }
 
         return new QueuedSwarmResponse($pendingDispatch, $context->runId);
+    }
+
+    protected function normalizeCompletionResponse(SwarmResponse $response, RunContext $context, string $topology): SwarmResponse
+    {
+        return new SwarmResponse(
+            output: $response->output,
+            steps: $response->steps,
+            usage: $response->usage,
+            context: $context,
+            artifacts: $response->artifacts,
+            metadata: array_merge(
+                $context->metadata,
+                $response->metadata,
+                [
+                    'run_id' => $context->runId,
+                    'topology' => $topology,
+                ],
+            ),
+        );
     }
 
     protected function ensureQueueable(Swarm $swarm): void

@@ -32,6 +32,8 @@ test('sequential swarm stream yields ordered payloads and lifecycle events', fun
     Event::fake();
 
     $events = iterator_to_array(FakeSequentialSwarm::make()->stream('stream-task'));
+    $completedEvent = Event::dispatched(SwarmCompleted::class)->first()[0];
+    $history = app(RunHistoryStore::class)->find($completedEvent->runId);
 
     expect($events)->toBe([
         ['event' => 'step', 'agent' => 'FakeResearcher', 'status' => 'running'],
@@ -47,6 +49,12 @@ test('sequential swarm stream yields ordered payloads and lifecycle events', fun
     Event::assertDispatchedTimes(SwarmStepStarted::class, 3);
     Event::assertDispatchedTimes(SwarmStepCompleted::class, 3);
     Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->output === 'editor-out');
+    expect($completedEvent->metadata)
+        ->toHaveKey('swarm_class', FakeSequentialSwarm::class)
+        ->toHaveKey('last_agent', FakeEditor::class);
+    expect($completedEvent->metadata['usage'])->toBeArray();
+    expect($completedEvent->metadata['usage'])->not->toBe([]);
+    expect($history['usage'])->toBe($completedEvent->metadata['usage']);
 });
 
 test('sequential swarm stream marks history failed and dispatches failure when the final agent throws mid stream', function () {

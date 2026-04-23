@@ -105,6 +105,7 @@ class SequentialRunner
     {
         $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
         $lastIndex = count($agents) - 1;
+        $mergedUsage = [];
 
         foreach ($agents as $index => $agent) {
             if (hrtime(true) >= $state->deadlineMonotonic) {
@@ -155,6 +156,10 @@ class SequentialRunner
                         'last_output' => $output,
                         'steps' => $index + 1,
                     ])
+                    ->mergeMetadata([
+                        'topology' => $state->topology,
+                        'last_agent' => $agent::class,
+                    ])
                     ->addArtifact($artifact);
 
                 $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
@@ -173,6 +178,7 @@ class SequentialRunner
                 $response = $agent->prompt($input);
                 $output = (string) $response;
                 $usage = $this->usageFromResponse($response);
+                $mergedUsage = $this->mergeUsage($mergedUsage, $usage);
                 $artifact = new SwarmArtifact(
                     name: 'agent_output',
                     content: $output,
@@ -191,6 +197,10 @@ class SequentialRunner
                     ->mergeData([
                         'last_output' => $output,
                         'steps' => $index + 1,
+                    ])
+                    ->mergeMetadata([
+                        'topology' => $state->topology,
+                        'last_agent' => $agent::class,
                     ])
                     ->addArtifact($artifact);
 
@@ -212,6 +222,10 @@ class SequentialRunner
 
             yield ['event' => 'step', 'agent' => $agentName, 'status' => 'done'];
         }
+
+        $state->context->mergeMetadata([
+            'usage' => $mergedUsage,
+        ]);
     }
 
     /**

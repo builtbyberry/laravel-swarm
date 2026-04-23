@@ -75,3 +75,19 @@ test('sequential swarm dispatches lifecycle events', function () {
     Event::assertDispatched(SwarmStepCompleted::class, fn (SwarmStepCompleted $event) => $event->agentClass === FakeResearcher::class && $event->artifacts !== []);
     Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $response->metadata['run_id'] && $event->output === 'editor-out');
 });
+
+test('sequential swarm preserves accumulated metadata on completion', function () {
+    Event::fake();
+
+    $response = FakeSequentialSwarm::make()->run('metadata-task');
+    $storedHistory = app(RunHistoryStore::class)->find($response->metadata['run_id']);
+
+    expect($response->metadata)
+        ->toHaveKey('swarm_class', FakeSequentialSwarm::class)
+        ->toHaveKey('last_agent', FakeEditor::class);
+    expect($storedHistory['metadata'])
+        ->toHaveKey('swarm_class', FakeSequentialSwarm::class)
+        ->toHaveKey('last_agent', FakeEditor::class);
+
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->metadata['swarm_class'] === FakeSequentialSwarm::class && $event->metadata['last_agent'] === FakeEditor::class);
+});
