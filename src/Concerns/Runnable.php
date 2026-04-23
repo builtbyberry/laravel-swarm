@@ -15,7 +15,11 @@ use Illuminate\Testing\Assert as PHPUnit;
 trait Runnable
 {
     /**
-     * Create a new instance of the swarm, resolved from the container.
+     * Create a new swarm instance for sync or queued execution.
+     *
+     * When named arguments are provided, the swarm is resolved through the container.
+     * Positional arguments may create a direct instance for sync usage.
+     * Queueability is enforced by queue(), not by make() itself.
      *
      * @return static|SwarmFakeInstance
      */

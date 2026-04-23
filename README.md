@@ -187,7 +187,7 @@ ArticlePipeline::make()
 
 Like Laravel AI, the queued swarm response proxies the underlying pending dispatch, so you may continue chaining queue configuration methods such as `onConnection()` and `onQueue()` before the job is actually dispatched.
 
-Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. Treat swarm constructors as dependency injection only, not a place for per-run business state. `queue()` is the queue-safety boundary; `run()` and `stream()` may still operate on manually constructed instances.
+Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. Treat swarm constructors as dependency injection only, not a place for per-run business state. `queue()` is the queue-safety boundary; `run()` and `stream()` may still operate on manually constructed instances. Because queued swarms are validated for container resolution before dispatch, constructors and DI setup should stay cheap and side-effect free in normal Laravel style.
 
 Pass dynamic execution data in the task payload, not the swarm constructor:
 
