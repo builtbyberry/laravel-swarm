@@ -3,6 +3,10 @@
     "description": "Multi-agent swarm orchestration for Laravel, built on Laravel AI.",
     "keywords": ["laravel", "ai", "agents", "swarm", "orchestration"],
     "homepage": "https://github.com/builtbyberry/laravel-swarm",
+    "support": {
+        "issues": "https://github.com/builtbyberry/laravel-swarm/issues",
+        "source": "https://github.com/builtbyberry/laravel-swarm"
+    },
     "license": "MIT",
     "authors": [
         {

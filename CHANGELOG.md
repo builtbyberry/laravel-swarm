@@ -1,13 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.1.2
 
-- Added built-in database persistence for swarm context, artifacts, and run history
-- Added automatically loaded package migrations, with optional migration publishing for customization
-- Added a global `swarm.persistence.driver` config default with per-store persistence driver overrides
-- Documented and tested sequential streaming failure behavior, including failed run history persistence and re-thrown underlying exceptions
-- Replaced the hierarchical sequential placeholder with coordinator-driven routing via `route()`
-- Added explicit hierarchical errors for routed agent classes that are not returned from `agents()`
+- Added durable database-backed persistence for swarm context, artifacts, and run history
+- Added auto-loaded package migrations, optional migration publishing, and configurable persistence driver resolution with per-store overrides
+- Replaced the hierarchical placeholder with coordinator-driven `route()` execution and explicit routed-agent validation errors
+- Hardened queued swarm behavior around container resolution, callback fluency, queue-safe workflow definitions, and pending-dispatch chaining
+- Clarified and strengthened sequential streaming behavior, including failure handling, known usage preservation, and completion-state fidelity
+- Improved lifecycle observability with populated `SwarmStarted` execution modes and normalized completion metadata across run paths
+- Expanded feature and unit coverage for queueing, streaming, persistence, lifecycle events, hierarchical routing, and fake interception
+- Rewrote and expanded the README around workflow positioning, configuration, queue semantics, testing, and lifecycle behavior
 
 ## v0.1.1
 
