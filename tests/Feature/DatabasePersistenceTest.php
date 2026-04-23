@@ -10,7 +10,9 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schema;
 
 beforeEach(function () {
     config()->set('database.default', 'testing');
@@ -106,4 +108,64 @@ test('database run history store persists start step completion and failure payl
         'message' => 'stream failed',
         'class' => Exception::class,
     ]);
+});
+
+test('database persistence repositories honor overridden table names when matching tables exist', function () {
+    Schema::create('custom_swarm_contexts', function (Blueprint $table): void {
+        $table->string('run_id')->primary();
+        $table->text('input');
+        $table->json('data');
+        $table->json('metadata');
+        $table->json('artifacts');
+        $table->timestamps();
+    });
+
+    Schema::create('custom_swarm_artifacts', function (Blueprint $table): void {
+        $table->id();
+        $table->string('run_id')->index();
+        $table->string('name');
+        $table->longText('content');
+        $table->json('metadata');
+        $table->string('step_agent_class')->nullable();
+        $table->timestamps();
+    });
+
+    Schema::create('custom_swarm_histories', function (Blueprint $table): void {
+        $table->string('run_id')->primary();
+        $table->string('swarm_class');
+        $table->string('topology');
+        $table->string('status');
+        $table->json('context');
+        $table->json('metadata');
+        $table->json('steps');
+        $table->longText('output')->nullable();
+        $table->json('usage');
+        $table->json('error')->nullable();
+        $table->json('artifacts');
+        $table->timestamps();
+    });
+
+    config()->set('swarm.tables.contexts', 'custom_swarm_contexts');
+    config()->set('swarm.tables.artifacts', 'custom_swarm_artifacts');
+    config()->set('swarm.tables.history', 'custom_swarm_histories');
+
+    $contextStore = app(DatabaseContextStore::class);
+    $artifactRepository = app(DatabaseArtifactRepository::class);
+    $historyStore = app(DatabaseRunHistoryStore::class);
+    $context = RunContext::from('custom-table-task', 'custom-table-run');
+
+    $contextStore->put($context, 60);
+    $artifactRepository->storeMany('custom-table-run', [
+        new SwarmArtifact(
+            name: 'agent_output',
+            content: 'custom-artifact',
+            metadata: ['index' => 0],
+            stepAgentClass: FakeEditor::class,
+        ),
+    ], 60);
+    $historyStore->start('custom-table-run', 'ExampleSwarm', 'sequential', $context, ['run_id' => 'custom-table-run'], 60);
+
+    expect($contextStore->find('custom-table-run')['input'])->toBe('custom-table-task');
+    expect($artifactRepository->all('custom-table-run')[0]['content'])->toBe('custom-artifact');
+    expect($historyStore->find('custom-table-run')['status'])->toBe('running');
 });

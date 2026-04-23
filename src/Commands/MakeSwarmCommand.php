@@ -44,7 +44,9 @@ class MakeSwarmCommand extends GeneratorCommand
      */
     protected function resolveStubPath(): string
     {
-        return __DIR__.'/../../stubs/swarm.stub';
+        return file_exists($customPath = $this->laravel->basePath('stubs/swarm.stub'))
+            ? $customPath
+            : __DIR__.'/../../stubs/swarm.stub';
     }
 
     /**

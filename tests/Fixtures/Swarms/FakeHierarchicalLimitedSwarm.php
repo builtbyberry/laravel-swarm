@@ -43,4 +43,3 @@ class FakeHierarchicalLimitedSwarm implements Swarm
         ];
     }
 }
-

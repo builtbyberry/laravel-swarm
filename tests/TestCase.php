@@ -8,8 +8,8 @@ use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use Illuminate\Bus\BusServiceProvider;
 use Illuminate\Bus\Dispatcher;
 use Illuminate\Contracts\Bus\Dispatcher as DispatcherContract;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\Artisan;
 use Laravel\Ai\AiServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 

@@ -19,6 +19,18 @@ test('fake intercepts run and queue calls', function () {
     EmptyRunnableSwarm::assertQueued('beta');
 });
 
+test('fake intercepts stream calls', function () {
+    EmptyRunnableSwarm::fake(['streamed-output']);
+
+    $events = iterator_to_array(EmptyRunnableSwarm::make()->stream('stream-task'));
+
+    expect($events)->toBe([
+        ['event' => 'token', 'token' => 'streamed-output'],
+    ]);
+
+    EmptyRunnableSwarm::assertStreamed('stream-task');
+});
+
 test('array responses are consumed in order', function () {
     EmptyRunnableSwarm::fake(['first', 'second']);
 
@@ -82,4 +94,18 @@ test('assert never queued fails after a queue call', function () {
     EmptyRunnableSwarm::make()->queue('x');
 
     expect(fn () => EmptyRunnableSwarm::assertNeverQueued())->toThrow(AssertionFailedError::class);
+});
+
+test('assert never streamed passes when idle', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::assertNeverStreamed();
+});
+
+test('assert never streamed fails after a stream call', function () {
+    EmptyRunnableSwarm::fake();
+
+    iterator_to_array(EmptyRunnableSwarm::make()->stream('x'));
+
+    expect(fn () => EmptyRunnableSwarm::assertNeverStreamed())->toThrow(AssertionFailedError::class);
 });

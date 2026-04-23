@@ -11,7 +11,6 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
-use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Responses\AgentResponse;
@@ -163,7 +162,7 @@ class HierarchicalRunner
     }
 
     /**
-     * @param  array{agent?: Agent, agent_class?: class-string, input: string, metadata?: array<string, mixed>} $instruction
+     * @param  array{agent?: Agent, agent_class?: class-string, input: string, metadata?: array<string, mixed>}  $instruction
      * @param  array<int, Agent>  $agents
      */
     protected function resolveRoutedAgent(array $instruction, array $agents): Agent
@@ -219,4 +218,3 @@ class HierarchicalRunner
         return [];
     }
 }
-

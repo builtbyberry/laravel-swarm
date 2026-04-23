@@ -25,4 +25,3 @@ class FakeHierarchicalEmptySwarm implements Swarm
         return [];
     }
 }
-

@@ -8,21 +8,21 @@ use BuiltByBerry\LaravelSwarm\Attributes\Topology;
 use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
-use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FailingStreamEditor;
-use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
-use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\ConfigurableOutputAgent;
 
 #[Topology(TopologyEnum::Sequential)]
-class FakeStreamingFailureSwarm implements Swarm
+class ContainerResolvedQueuedSwarm implements Swarm
 {
     use Runnable;
+
+    public function __construct(
+        protected string $output,
+    ) {}
 
     public function agents(): array
     {
         return [
-            new FakeResearcher,
-            new FakeWriter,
-            new FailingStreamEditor,
+            new ConfigurableOutputAgent($this->output),
         ];
     }
 }

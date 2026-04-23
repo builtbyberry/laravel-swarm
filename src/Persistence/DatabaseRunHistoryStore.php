@@ -115,4 +115,3 @@ class DatabaseRunHistoryStore implements RunHistoryStore
         return $this->connection->table((string) $this->config->get('swarm.tables.history', 'swarm_run_histories'));
     }
 }
-

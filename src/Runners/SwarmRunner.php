@@ -22,7 +22,6 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Generator;
-use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use ReflectionClass;
@@ -34,7 +33,6 @@ class SwarmRunner
         protected ContextStore $contextStore,
         protected ArtifactRepository $artifactRepository,
         protected RunHistoryStore $historyStore,
-        protected BusDispatcher $bus,
         protected Dispatcher $events,
         protected SequentialRunner $sequential,
         protected ParallelRunner $parallel,
@@ -190,19 +188,17 @@ class SwarmRunner
     public function queue(Swarm $swarm, string $task): QueuedSwarmResponse
     {
         $context = RunContext::from($task);
-        $job = new InvokeSwarm($swarm, $context);
+        $pendingDispatch = InvokeSwarm::dispatch($swarm::class, $context);
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
-            $job->onConnection($connection);
+            $pendingDispatch->onConnection($connection);
         }
 
         if ($name = $this->config->get('swarm.queue.name')) {
-            $job->onQueue($name);
+            $pendingDispatch->onQueue($name);
         }
 
-        $this->bus->dispatch($job);
-
-        return new QueuedSwarmResponse($job, $context->runId);
+        return new QueuedSwarmResponse($pendingDispatch, $context->runId);
     }
 
     public function resolveTopology(Swarm $swarm): Topology

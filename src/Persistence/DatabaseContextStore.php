@@ -69,4 +69,3 @@ class DatabaseContextStore implements ContextStore
         return $this->connection->table((string) $this->config->get('swarm.tables.contexts', 'swarm_contexts'));
     }
 }
-

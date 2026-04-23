@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Testing;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use Generator;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\FakePendingDispatch;
 
@@ -21,6 +22,11 @@ class SwarmFake implements Swarm
      * @var array<int, string>
      */
     protected array $recordedQueued = [];
+
+    /**
+     * @var array<int, string>
+     */
+    protected array $recordedStreamed = [];
 
     /**
      * @param  class-string  $swarmClass
@@ -62,6 +68,22 @@ class SwarmFake implements Swarm
         $this->recordedQueued[] = $task;
 
         return new QueuedSwarmResponse(new FakePendingDispatch, 'fake-run-id');
+    }
+
+    /**
+     * Intercept a stream call and record it.
+     *
+     * @return Generator<int, array<string, string>, mixed, void>
+     */
+    public function stream(string $task): Generator
+    {
+        $this->recordedStreamed[] = $task;
+
+        $output = $this->resolveResponse($task);
+
+        return (function () use ($output): Generator {
+            yield ['event' => 'token', 'token' => $output];
+        })();
     }
 
     /**
@@ -125,6 +147,38 @@ class SwarmFake implements Swarm
         PHPUnit::assertEmpty(
             $this->recordedQueued,
             "The swarm [{$this->swarmClass}] was queued unexpectedly.",
+        );
+    }
+
+    /**
+     * Assert the swarm was streamed with the given task.
+     */
+    public function assertStreamed(string|callable $task): void
+    {
+        if (is_callable($task)) {
+            PHPUnit::assertTrue(
+                collect($this->recordedStreamed)->contains(fn ($recorded) => $task($recorded)),
+                "The swarm [{$this->swarmClass}] was not streamed with the expected task.",
+            );
+
+            return;
+        }
+
+        PHPUnit::assertContains(
+            $task,
+            $this->recordedStreamed,
+            "The swarm [{$this->swarmClass}] was not streamed with task: [{$task}].",
+        );
+    }
+
+    /**
+     * Assert the swarm was never streamed.
+     */
+    public function assertNeverStreamed(): void
+    {
+        PHPUnit::assertEmpty(
+            $this->recordedStreamed,
+            "The swarm [{$this->swarmClass}] was streamed unexpectedly.",
         );
     }
 

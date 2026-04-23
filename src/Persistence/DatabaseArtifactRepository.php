@@ -58,4 +58,3 @@ class DatabaseArtifactRepository implements ArtifactRepository
         return $this->connection->table((string) $this->config->get('swarm.tables.artifacts', 'swarm_artifacts'));
     }
 }
-

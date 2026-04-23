@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
@@ -60,7 +61,7 @@ test('sequential swarm stream marks history failed and dispatches failure when t
         }
 
         $this->fail('Expected the streamed swarm to throw.');
-    } catch (\RuntimeException $exception) {
+    } catch (RuntimeException $exception) {
         expect($exception->getMessage())->toBe('Final agent stream failed.');
     }
 
@@ -79,12 +80,12 @@ test('sequential swarm stream marks history failed and dispatches failure when t
     Event::assertNotDispatched(SwarmCompleted::class);
 
     $failedEvent = Event::dispatched(SwarmFailed::class)->first()[0];
-    $history = app(\BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore::class)->find($failedEvent->runId);
+    $history = app(RunHistoryStore::class)->find($failedEvent->runId);
 
     expect($history['status'])->toBe('failed');
     expect($history['error'])->toBe([
         'message' => 'Final agent stream failed.',
-        'class' => \RuntimeException::class,
+        'class' => RuntimeException::class,
     ]);
     expect($history['steps'])->toHaveCount(2);
 });

@@ -77,11 +77,15 @@ If you want to customize the package migrations in your app, publish them explic
 php artisan vendor:publish --tag=swarm-migrations
 ```
 
+The auto-loaded package migrations always create the default package table names. If you change `swarm.tables.*`, publish the migrations and update the table names there as well.
+
 If you want to customize the generated stub in your app, publish it too:
 
 ```bash
 php artisan vendor:publish --tag=swarm-stubs
 ```
+
+After publishing, `make:swarm` will prefer `stubs/swarm.stub` from your application before falling back to the package stub.
 
 ## Creating A Swarm
 
@@ -181,6 +185,8 @@ ArticlePipeline::make()
 
 `queue()` always queues. `run()` always runs synchronously.
 
+Like Laravel AI, the queued swarm response proxies the underlying pending dispatch, so you may continue chaining queue configuration methods such as `onConnection()` and `onQueue()` before the job is actually dispatched.
+
 ## Streaming A Swarm
 
 Use `stream()` when you want step and token events for server-sent events or other real-time updates:
@@ -200,6 +206,8 @@ Swarm streams emit `step` events for agent lifecycle progress and `token` events
 Streaming is currently supported for sequential swarms only.
 
 If the final streamed agent fails, the generator re-throws the underlying exception from that agent. Wrap the stream loop in `try/catch`; `SwarmFailed` is dispatched and run history is marked failed before the exception is re-thrown.
+
+`#[Timeout]` and `swarm.timeout` are best-effort orchestration deadlines. Laravel Swarm checks them before and between agent steps, but they do not hard-cancel an in-flight provider request or streamed response mid-call.
 
 ## Topologies
 
@@ -291,6 +299,16 @@ Fakes can also use a callback:
 ArticlePipeline::fake(fn (string $task) => 'handled: '.$task);
 ```
 
+Faked streams stay lightweight and deterministic:
+
+```php
+ArticlePipeline::fake(['streamed-output']);
+
+$events = iterator_to_array(ArticlePipeline::make()->stream('draft intro'));
+
+ArticlePipeline::assertStreamed('draft intro');
+```
+
 ## Configuration
 
 Laravel Swarm stores its defaults in `config/swarm.php`, including:
@@ -310,8 +328,11 @@ Persistence defaults support both cache-backed and durable database-backed stora
 - `swarm.context.driver`, `swarm.artifacts.driver`, and `swarm.history.driver` can override the global driver individually
 - `cache` uses the configured cache store and honors TTL settings
 - `database` stores durable run data in the package tables loaded by the service provider
+- `swarm.tables.*` changes the table names used by the database repositories at runtime; if you change them, publish and update the migrations too
 
 TTL settings apply to cache-backed persistence. Database-backed persistence is durable until your application deletes the records.
+
+Timeout settings are best-effort orchestration deadlines, not hard cancellation of in-flight provider calls.
 
 ## Responses, Events, And Persistence
 

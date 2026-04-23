@@ -133,4 +133,38 @@ trait Runnable
         /** @var SwarmFakeInstance $resolved */
         $resolved->assertNeverQueued();
     }
+
+    /**
+     * Assert the swarm was streamed with the given task.
+     */
+    public static function assertStreamed(string|callable $task): void
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            'The expected swarm was not faked before calling assertStreamed().',
+        );
+
+        /** @var SwarmFakeInstance $resolved */
+        $resolved->assertStreamed($task);
+    }
+
+    /**
+     * Assert the swarm was never streamed.
+     */
+    public static function assertNeverStreamed(): void
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            'The expected swarm was not faked before calling assertNeverStreamed().',
+        );
+
+        /** @var SwarmFakeInstance $resolved */
+        $resolved->assertNeverStreamed();
+    }
 }

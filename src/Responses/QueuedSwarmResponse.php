@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
 use Closure;
+use Illuminate\Foundation\Bus\PendingDispatch;
 use Laravel\Ai\FakePendingDispatch;
 
 class QueuedSwarmResponse
 {
     public function __construct(
-        protected mixed $dispatchable,
+        protected PendingDispatch $dispatchable,
         public readonly ?string $runId = null,
     ) {}
 
@@ -23,15 +24,7 @@ class QueuedSwarmResponse
             return $this;
         }
 
-        if (method_exists($this->dispatchable, 'getJob')) {
-            $this->dispatchable->getJob()->then($callback);
-
-            return $this;
-        }
-
-        if (method_exists($this->dispatchable, 'then')) {
-            $this->dispatchable->then($callback);
-        }
+        $this->dispatchable->getJob()->then($callback);
 
         return $this;
     }
@@ -45,15 +38,7 @@ class QueuedSwarmResponse
             return $this;
         }
 
-        if (method_exists($this->dispatchable, 'getJob')) {
-            $this->dispatchable->getJob()->catch($callback);
-
-            return $this;
-        }
-
-        if (method_exists($this->dispatchable, 'catch')) {
-            $this->dispatchable->catch($callback);
-        }
+        $this->dispatchable->getJob()->catch($callback);
 
         return $this;
     }
@@ -65,7 +50,7 @@ class QueuedSwarmResponse
      */
     public function __call(string $method, array $arguments): mixed
     {
-        if (! is_object($this->dispatchable) || ! method_exists($this->dispatchable, $method)) {
+        if (! method_exists($this->dispatchable, $method)) {
             throw new \BadMethodCallException("Method [{$method}] does not exist on the queued swarm response.");
         }
 

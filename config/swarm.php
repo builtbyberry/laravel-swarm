@@ -7,6 +7,8 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 return [
     'topology' => env('SWARM_TOPOLOGY', Topology::Sequential->value),
 
+    // Best-effort orchestration deadline checked before and between swarm steps.
+    // This does not hard-cancel an in-flight provider call.
     'timeout' => (int) env('SWARM_TIMEOUT', 300),
 
     'max_agent_steps' => (int) env('SWARM_MAX_AGENT_STEPS', 10),
@@ -39,6 +41,8 @@ return [
         'name' => env('SWARM_QUEUE'),
     ],
 
+    // These table names are honored by the database repositories at runtime.
+    // If you change them, publish and update the package migrations as well.
     'tables' => [
         'contexts' => env('SWARM_CONTEXTS_TABLE', 'swarm_contexts'),
         'artifacts' => env('SWARM_ARTIFACTS_TABLE', 'swarm_artifacts'),

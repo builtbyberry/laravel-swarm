@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Jobs;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\InvokesQueuedSwarmCallbacks;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -20,8 +21,8 @@ class InvokeSwarm implements ShouldQueue
      * Create a new job instance.
      */
     public function __construct(
-        public Swarm $swarm,
-        public string|RunContext $task,
+        public string $swarmClass,
+        public RunContext $task,
     ) {}
 
     /**
@@ -29,7 +30,13 @@ class InvokeSwarm implements ShouldQueue
      */
     public function handle(SwarmRunner $runner): void
     {
-        $this->withCallbacks(fn () => $runner->run($this->swarm, $this->task));
+        $swarm = app()->make($this->swarmClass);
+
+        if (! $swarm instanceof Swarm) {
+            throw new SwarmException("Unable to resolve queued swarm [{$this->swarmClass}] from the container.");
+        }
+
+        $this->withCallbacks(fn () => $runner->run($swarm, $this->task));
     }
 
     /**
@@ -37,6 +44,6 @@ class InvokeSwarm implements ShouldQueue
      */
     public function displayName(): string
     {
-        return $this->swarm::class;
+        return $this->swarmClass;
     }
 }

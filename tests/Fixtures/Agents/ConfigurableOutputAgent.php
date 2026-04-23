@@ -12,22 +12,25 @@ use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\Data\Usage;
 use Laravel\Ai\Responses\QueuedAgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
-use Laravel\Ai\Responses\TextResponse;
-use Laravel\Ai\Streaming\Events\TextDelta;
 use RuntimeException;
 use Stringable;
 
-class FailingStreamEditor implements Agent
+class ConfigurableOutputAgent implements Agent
 {
+    public function __construct(
+        protected string $output,
+    ) {}
+
     public function instructions(): Stringable|string
     {
-        return 'You are a failing stream editor.';
+        return 'You return a configured output.';
     }
 
     public function prompt(string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
-        return new TextResponse(
-            text: 'unused',
+        return new AgentResponse(
+            invocationId: 'configurable-output-agent',
+            text: $this->output,
             usage: new Usage,
             meta: new Meta('fake', 'test'),
         );
@@ -35,11 +38,7 @@ class FailingStreamEditor implements Agent
 
     public function stream(string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
-        return new StreamableAgentResponse('failing-stream-invocation', function (): \Generator {
-            yield new TextDelta('delta-1', 'message-1', 'partial', time());
-
-            throw new RuntimeException('Final agent stream failed.');
-        }, new Meta('fake', 'test'));
+        throw new RuntimeException('Streaming is not supported in this test fixture.');
     }
 
     public function queue(string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): QueuedAgentResponse

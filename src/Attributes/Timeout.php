@@ -10,7 +10,7 @@ use Attribute;
 final class Timeout
 {
     /**
-     * @param  int  $seconds  Wall-clock timeout for the entire swarm run.
+     * @param  int  $seconds  Best-effort orchestration deadline checked before and between swarm steps.
      */
     public function __construct(public int $seconds) {}
 }

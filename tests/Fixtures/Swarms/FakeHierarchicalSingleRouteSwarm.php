@@ -38,4 +38,3 @@ class FakeHierarchicalSingleRouteSwarm implements Swarm
         ];
     }
 }
-
