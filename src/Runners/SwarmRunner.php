@@ -35,6 +35,12 @@ use ReflectionUnionType;
 
 class SwarmRunner
 {
+    protected const EXECUTION_MODE_RUN = 'run';
+
+    protected const EXECUTION_MODE_STREAM = 'stream';
+
+    protected const EXECUTION_MODE_QUEUE = 'queue';
+
     public function __construct(
         protected ConfigRepository $config,
         protected ContextStore $contextStore,
@@ -47,6 +53,16 @@ class SwarmRunner
     ) {}
 
     public function run(Swarm $swarm, string|RunContext $task): SwarmResponse
+    {
+        return $this->runWithExecutionMode($swarm, $task, self::EXECUTION_MODE_RUN);
+    }
+
+    public function runQueued(Swarm $swarm, string|RunContext $task): SwarmResponse
+    {
+        return $this->runWithExecutionMode($swarm, $task, self::EXECUTION_MODE_QUEUE);
+    }
+
+    protected function runWithExecutionMode(Swarm $swarm, string|RunContext $task, string $executionMode): SwarmResponse
     {
         $topology = $this->resolveTopology($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
@@ -79,6 +95,7 @@ class SwarmRunner
             topology: $topology->value,
             input: $context->input,
             metadata: $context->metadata,
+            executionMode: $executionMode,
         ));
 
         try {
@@ -154,6 +171,7 @@ class SwarmRunner
             topology: $topology->value,
             input: $context->input,
             metadata: $context->metadata,
+            executionMode: self::EXECUTION_MODE_STREAM,
         ));
 
         return (function () use ($state, $context, $contextTtl, $swarm): Generator {

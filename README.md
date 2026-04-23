@@ -376,6 +376,8 @@ Laravel Swarm also dispatches lifecycle events for:
 - swarm completed
 - swarm failed
 
+`SwarmStarted` includes an `executionMode` payload so listeners can distinguish `run`, `stream`, and `queue` invocations.
+
 Built-in persistence supports both cache and database drivers for:
 
 - run context

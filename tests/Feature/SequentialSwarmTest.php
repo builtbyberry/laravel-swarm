@@ -70,7 +70,9 @@ test('sequential swarm dispatches lifecycle events', function () {
 
     $response = FakeSequentialSwarm::make()->run('event-task');
 
-    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->runId === $response->metadata['run_id'] && $event->input === 'event-task');
+    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->runId === $response->metadata['run_id']
+        && $event->input === 'event-task'
+        && $event->executionMode === 'run');
     Event::assertDispatchedTimes(SwarmStepStarted::class, 3);
     Event::assertDispatched(SwarmStepCompleted::class, fn (SwarmStepCompleted $event) => $event->agentClass === FakeResearcher::class && $event->artifacts !== []);
     Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $response->metadata['run_id'] && $event->output === 'editor-out');

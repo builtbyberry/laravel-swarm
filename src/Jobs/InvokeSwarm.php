@@ -36,7 +36,7 @@ class InvokeSwarm implements ShouldQueue
             throw new SwarmException("Unable to resolve queued swarm [{$this->swarmClass}] from the container.");
         }
 
-        $this->withCallbacks(fn () => $runner->run($swarm, $this->task));
+        $this->withCallbacks(fn () => $runner->runQueued($swarm, $this->task));
     }
 
     /**

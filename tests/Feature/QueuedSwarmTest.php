@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
@@ -19,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DependencyInjectedQueuedSwar
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableQueuedSwarm;
+use Illuminate\Support\Facades\Event;
 
 function preventQueuedSwarmRedispatch(object $response): void
 {
@@ -59,6 +61,18 @@ test('queued swarm jobs can execute with a preserved run context', function () {
         ->toHaveKey('tenant_id', 'acme')
         ->toHaveKey('swarm_class', FakeSequentialSwarm::class)
         ->toHaveKey('topology', 'sequential');
+});
+
+test('queued swarm dispatches started events with queue execution mode', function () {
+    Event::fake();
+
+    $queued = FakeSequentialSwarm::make()->queue('queued-task');
+    $job = $queued->getJob();
+    preventQueuedSwarmRedispatch($queued);
+    $job->handle(app(SwarmRunner::class));
+
+    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->input === 'queued-task'
+        && $event->executionMode === 'queue');
 });
 
 test('queued swarm completion callbacks run through the pending dispatch path', function () {

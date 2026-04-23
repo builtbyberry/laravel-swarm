@@ -45,7 +45,7 @@ test('sequential swarm stream yields ordered payloads and lifecycle events', fun
         ['event' => 'step', 'agent' => 'FakeEditor', 'status' => 'done'],
     ]);
 
-    Event::assertDispatched(SwarmStarted::class);
+    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->executionMode === 'stream');
     Event::assertDispatchedTimes(SwarmStepStarted::class, 3);
     Event::assertDispatchedTimes(SwarmStepCompleted::class, 3);
     Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->output === 'editor-out');
