@@ -25,7 +25,9 @@ test('fake intercepts stream calls', function () {
     $events = iterator_to_array(EmptyRunnableSwarm::make()->stream('stream-task'));
 
     expect($events)->toBe([
+        ['event' => 'step', 'agent' => 'SwarmFake', 'status' => 'running'],
         ['event' => 'token', 'token' => 'streamed-output'],
+        ['event' => 'step', 'agent' => 'SwarmFake', 'status' => 'done'],
     ]);
 
     EmptyRunnableSwarm::assertStreamed('stream-task');

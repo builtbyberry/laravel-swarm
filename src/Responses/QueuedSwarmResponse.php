@@ -54,6 +54,14 @@ class QueuedSwarmResponse
             throw new \BadMethodCallException("Method [{$method}] does not exist on the queued swarm response.");
         }
 
-        return $this->dispatchable->{$method}(...$arguments);
+        $result = $this->dispatchable->{$method}(...$arguments);
+
+        if ($result instanceof PendingDispatch) {
+            $this->dispatchable = $result;
+
+            return $this;
+        }
+
+        return $result;
     }
 }

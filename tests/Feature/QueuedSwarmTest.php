@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
+use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -75,6 +76,34 @@ test('queued swarm completion callbacks run through the pending dispatch path', 
 
     expect($state->response)->toBeInstanceOf(SwarmResponse::class);
     expect($state->response?->output)->toBe('editor-out');
+});
+
+test('queued swarm response preserves fluency after queue configuration methods', function () {
+    $state = (object) ['response' => null];
+
+    $queued = FakeSequentialSwarm::make()
+        ->queue('queued-task')
+        ->onQueue('swarm-testing')
+        ->then(function (SwarmResponse $response) use ($state): void {
+            $state->response = $response;
+        });
+
+    expect($queued)->toBeInstanceOf(QueuedSwarmResponse::class);
+    expect($queued->runId)->not->toBeNull();
+    expect($queued->getJob()->queue)->toBe('swarm-testing');
+
+    $job = $queued->getJob();
+    preventQueuedSwarmRedispatch($queued);
+    $job->handle(app(SwarmRunner::class));
+
+    expect($state->response)->toBeInstanceOf(SwarmResponse::class);
+    expect($state->response?->output)->toBe('editor-out');
+});
+
+test('queued swarm response returns raw values for non dispatch proxy methods', function () {
+    $queued = FakeSequentialSwarm::make()->queue('queued-task');
+
+    expect($queued->getJob())->toBeInstanceOf(InvokeSwarm::class);
 });
 
 test('queued swarm failure callbacks run through the pending dispatch path', function () {

@@ -82,7 +82,9 @@ class SwarmFake implements Swarm
         $output = $this->resolveResponse($task);
 
         return (function () use ($output): Generator {
+            yield ['event' => 'step', 'agent' => 'SwarmFake', 'status' => 'running'];
             yield ['event' => 'token', 'token' => $output];
+            yield ['event' => 'step', 'agent' => 'SwarmFake', 'status' => 'done'];
         })();
     }
 
