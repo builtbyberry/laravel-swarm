@@ -15,10 +15,12 @@ class SwarmStepCompleted
     public function __construct(
         public readonly string $runId,
         public readonly string $swarmClass,
+        public readonly string $topology,
         public readonly int $index,
         public readonly string $agentClass,
         public readonly string $input,
         public readonly string $output,
+        public readonly int $durationMs,
         public readonly array $metadata = [],
         public readonly array $artifacts = [],
     ) {}

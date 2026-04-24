@@ -18,6 +18,9 @@ use Illuminate\Contracts\Events\Dispatcher as EventDispatcher;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Ai\AiServiceProvider;
+use Laravel\Pulse\Pulse;
+use Laravel\Pulse\PulseServiceProvider;
+use Livewire\LivewireServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 abstract class TestCase extends Orchestra
@@ -49,11 +52,18 @@ abstract class TestCase extends Orchestra
      */
     protected function getPackageProviders($app): array
     {
-        return [
+        $providers = [
             BusServiceProvider::class,
             AiServiceProvider::class,
             SwarmServiceProvider::class,
         ];
+
+        if (class_exists(Pulse::class)) {
+            $providers[] = LivewireServiceProvider::class;
+            $providers[] = PulseServiceProvider::class;
+        }
+
+        return $providers;
     }
 
     /**
@@ -64,6 +74,7 @@ abstract class TestCase extends Orchestra
         $app->singleton(DispatcherContract::class, fn (Application $app): Dispatcher => new Dispatcher($app));
         $app['config']->set('concurrency.default', 'sync');
         $app['config']->set('cache.default', 'array');
+        $app['config']->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
         $app['config']->set('database.default', 'testing');
         $app['config']->set('database.connections.testing', [
             'driver' => 'sqlite',
@@ -71,11 +82,22 @@ abstract class TestCase extends Orchestra
             'prefix' => '',
             'foreign_key_constraints' => true,
         ]);
+        $app['config']->set('pulse.enabled', true);
+        $app['config']->set('pulse.storage.database.connection', 'testing');
+        $app['config']->set('pulse.ingest.driver', 'storage');
         $app['config']->set('swarm.persistence.driver', 'cache');
     }
 
     protected function defineDatabaseMigrations(): void
     {
         Artisan::call('migrate', ['--database' => 'testing']);
+
+        if (class_exists(Pulse::class)) {
+            Artisan::call('migrate', [
+                '--database' => 'testing',
+                '--path' => __DIR__.'/../vendor/laravel/pulse/database/migrations',
+                '--realpath' => true,
+            ]);
+        }
     }
 }

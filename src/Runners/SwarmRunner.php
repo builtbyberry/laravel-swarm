@@ -20,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Generator;
@@ -64,6 +65,7 @@ class SwarmRunner
 
     protected function runWithExecutionMode(Swarm $swarm, string|array|RunContext $task, string $executionMode): SwarmResponse
     {
+        $startedAt = MonotonicTime::now();
         $topology = $this->resolveTopology($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
@@ -109,7 +111,9 @@ class SwarmRunner
             $this->events->dispatch(new SwarmFailed(
                 runId: $context->runId,
                 swarmClass: $swarm::class,
+                topology: $topology->value,
                 exception: $exception,
+                durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                 metadata: $context->metadata,
             ));
 
@@ -122,7 +126,9 @@ class SwarmRunner
         $this->events->dispatch(new SwarmCompleted(
             runId: $context->runId,
             swarmClass: $swarm::class,
+            topology: $topology->value,
             output: $response->output,
+            durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $response->metadata,
             artifacts: $response->artifacts,
         ));
@@ -175,6 +181,8 @@ class SwarmRunner
         ));
 
         return (function () use ($state, $context, $contextTtl, $swarm): Generator {
+            $startedAt = MonotonicTime::now();
+
             try {
                 yield from $this->sequential->stream($state);
 
@@ -190,7 +198,9 @@ class SwarmRunner
                 $this->events->dispatch(new SwarmCompleted(
                     runId: $context->runId,
                     swarmClass: $swarm::class,
+                    topology: $state->topology,
                     output: $response->output,
+                    durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $response->metadata,
                     artifacts: $response->artifacts,
                 ));
@@ -199,7 +209,9 @@ class SwarmRunner
                 $this->events->dispatch(new SwarmFailed(
                     runId: $context->runId,
                     swarmClass: $swarm::class,
+                    topology: $state->topology,
                     exception: $exception,
+                    durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $context->metadata,
                 ));
 

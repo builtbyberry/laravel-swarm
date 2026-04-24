@@ -388,6 +388,7 @@ To customize how swarm state is stored, bind your own implementations against th
 - [Persistence And History](docs/persistence-and-history.md)
 - [Testing](docs/testing.md)
 - [Hierarchical Routing](docs/hierarchical-routing.md)
+- [Pulse](docs/pulse.md)
 
 ## Local Development
 

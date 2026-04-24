@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Generator;
 use Laravel\Ai\Responses\AgentResponse;
@@ -38,6 +39,7 @@ class SequentialRunner
                 metadata: $state->context->metadata,
             ));
 
+            $startedAt = MonotonicTime::now();
             $response = $agent->prompt($input);
             $output = (string) $response;
             $usage = $this->usageFromResponse($response);
@@ -76,10 +78,12 @@ class SequentialRunner
             $state->events->dispatch(new SwarmStepCompleted(
                 runId: $state->context->runId,
                 swarmClass: $state->swarm::class,
+                topology: $state->topology,
                 index: $index,
                 agentClass: $agent::class,
                 input: $input,
                 output: $output,
+                durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                 metadata: $step->metadata,
                 artifacts: $step->artifacts,
             ));
@@ -126,6 +130,8 @@ class SequentialRunner
 
             yield ['event' => 'step', 'agent' => $agentName, 'status' => 'running'];
 
+            $startedAt = MonotonicTime::now();
+
             if ($index === $lastIndex) {
                 $stream = $agent->stream($input);
                 $output = '';
@@ -167,10 +173,12 @@ class SequentialRunner
                 $state->events->dispatch(new SwarmStepCompleted(
                     runId: $state->context->runId,
                     swarmClass: $state->swarm::class,
+                    topology: $state->topology,
                     index: $index,
                     agentClass: $agent::class,
                     input: $input,
                     output: $output,
+                    durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $step->metadata,
                     artifacts: $step->artifacts,
                 ));
@@ -209,10 +217,12 @@ class SequentialRunner
                 $state->events->dispatch(new SwarmStepCompleted(
                     runId: $state->context->runId,
                     swarmClass: $state->swarm::class,
+                    topology: $state->topology,
                     index: $index,
                     agentClass: $agent::class,
                     input: $input,
                     output: $output,
+                    durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $step->metadata,
                     artifacts: $step->artifacts,
                 ));

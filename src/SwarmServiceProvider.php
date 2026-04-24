@@ -16,6 +16,8 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
+use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmSteps;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
@@ -25,6 +27,8 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Pulse\Pulse;
+use Livewire\LivewireManager;
 
 class SwarmServiceProvider extends ServiceProvider
 {
@@ -74,6 +78,15 @@ class SwarmServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+
+        if (class_exists(Pulse::class)) {
+            $this->loadViewsFrom(__DIR__.'/../resources/views', 'swarm');
+
+            $this->callAfterResolving('livewire', function (LivewireManager $livewire): void {
+                $livewire->component('swarm.runs', SwarmRuns::class);
+                $livewire->component('swarm.steps', SwarmSteps::class);
+            });
+        }
 
         if ($this->app->runningInConsole()) {
             $this->publishes([

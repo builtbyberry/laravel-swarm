@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Responses\AgentResponse;
@@ -116,6 +117,7 @@ class HierarchicalRunner
             metadata: $state->context->metadata,
         ));
 
+        $startedAt = MonotonicTime::now();
         $response = $agent->prompt($input);
         $output = (string) $response;
         $usage = $this->usageFromResponse($response);
@@ -150,10 +152,12 @@ class HierarchicalRunner
         $state->events->dispatch(new SwarmStepCompleted(
             runId: $state->context->runId,
             swarmClass: $state->swarm::class,
+            topology: $state->topology,
             index: $index,
             agentClass: $agent::class,
             input: $input,
             output: $output,
+            durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $step->metadata,
             artifacts: $step->artifacts,
         ));

@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Laravel\Ai\Responses\AgentResponse;
@@ -41,17 +42,19 @@ class ParallelRunner
             ));
 
             $callbacks[$index] = function () use ($agent, $input): array {
+                $startedAt = MonotonicTime::now();
                 $response = $agent->prompt($input);
 
                 return [
                     'output' => (string) $response,
                     'usage' => $response instanceof AgentResponse ? $response->usage->toArray() : [],
                     'class' => $agent::class,
+                    'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
                 ];
             };
         }
 
-        /** @var array<int, array{output: string, usage: array<string, int>, class: string}> $results */
+        /** @var array<int, array{output: string, usage: array<string, int>, class: string, duration_ms: int}> $results */
         $results = $this->concurrency->driver()->run($callbacks);
 
         if (hrtime(true) >= $state->deadlineMonotonic) {
@@ -63,7 +66,7 @@ class ParallelRunner
         $outputs = [];
 
         foreach ($agents as $index => $agent) {
-            $row = $results[$index] ?? ['output' => '', 'usage' => [], 'class' => $agent::class];
+            $row = $results[$index] ?? ['output' => '', 'usage' => [], 'class' => $agent::class, 'duration_ms' => 1];
             $artifact = new SwarmArtifact(
                 name: 'agent_output',
                 content: $row['output'],
@@ -86,10 +89,12 @@ class ParallelRunner
             $state->events->dispatch(new SwarmStepCompleted(
                 runId: $state->context->runId,
                 swarmClass: $state->swarm::class,
+                topology: $state->topology,
                 index: $index,
                 agentClass: $row['class'],
                 input: $input,
                 output: $row['output'],
+                durationMs: $row['duration_ms'],
                 metadata: $step->metadata,
                 artifacts: $step->artifacts,
             ));

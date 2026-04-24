@@ -14,7 +14,9 @@ class SwarmFailed
     public function __construct(
         public readonly string $runId,
         public readonly string $swarmClass,
+        public readonly string $topology,
         public readonly Throwable $exception,
+        public readonly int $durationMs,
         public readonly array $metadata = [],
     ) {}
 }
