@@ -31,7 +31,7 @@ class InvokeSwarm implements ShouldQueue
     public function handle(SwarmRunner $runner): void
     {
         $swarm = app()->make($this->swarmClass);
-        $context = RunContext::from($this->task);
+        $context = RunContext::fromPayload($this->task);
 
         if (! $swarm instanceof Swarm) {
             throw new SwarmException("Unable to resolve queued swarm [{$this->swarmClass}] from the container.");

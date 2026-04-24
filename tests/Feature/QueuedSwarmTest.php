@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -62,34 +63,32 @@ test('queued swarm jobs can execute with a preserved run context', function () {
 
 test('queued swarms serialize structured task arrays into queue-safe payloads', function () {
     $queued = FakeSequentialSwarm::make()->queue([
-        'input' => 'queued-task',
-        'data' => ['draft_id' => 42],
-        'metadata' => ['tenant_id' => 'acme'],
+        'draft_id' => 42,
+        'tenant_id' => 'acme',
     ]);
 
     $job = $queued->getJob();
 
     expect($job->task)
         ->toHaveKey('run_id')
-        ->toHaveKey('input', 'queued-task')
+        ->toHaveKey('input', '{"draft_id":42,"tenant_id":"acme"}')
         ->and($job->task['data'])
         ->toHaveKey('draft_id', 42)
-        ->and($job->task['metadata'])
         ->toHaveKey('tenant_id', 'acme');
+    expect($job->task['metadata'])->toBe([]);
 });
 
 test('queued structured task input survives worker reconstruction', function () {
     $queued = FakeSequentialSwarm::make()->queue([
-        'input' => 'queued-task',
-        'data' => ['draft_id' => 42],
-        'metadata' => ['tenant_id' => 'acme'],
+        'draft_id' => 42,
+        'tenant_id' => 'acme',
     ]);
 
     $job = $queued->getJob();
     preventQueuedSwarmRedispatch($queued);
     $job->handle(app(SwarmRunner::class));
 
-    FakeResearcher::assertPrompted('queued-task');
+    FakeResearcher::assertPrompted('{"draft_id":42,"tenant_id":"acme"}');
     FakeWriter::assertPrompted('research-out');
     FakeEditor::assertPrompted('writer-out');
 
@@ -97,10 +96,10 @@ test('queued structured task input survives worker reconstruction', function () 
 
     expect($history['context']['data'])
         ->toHaveKey('draft_id', 42)
+        ->toHaveKey('tenant_id', 'acme')
         ->toHaveKey('last_output', 'editor-out')
         ->toHaveKey('steps', 3);
     expect($history['context']['metadata'])
-        ->toHaveKey('tenant_id', 'acme')
         ->toHaveKey('swarm_class', FakeSequentialSwarm::class)
         ->toHaveKey('topology', 'sequential');
 });
@@ -119,6 +118,19 @@ test('queued swarms accept explicit run contexts', function () {
         ->toHaveKey('input', 'queued-task')
         ->and($job->task['data'])
         ->toHaveKey('draft_id', 42);
+});
+
+test('queued swarm reconstruction fails fast for malformed serialized payloads', function () {
+    $job = new InvokeSwarm(FakeSequentialSwarm::class, [
+        'run_id' => 'queued-run-id',
+        'input' => 'queued-task',
+        'data' => 'bad',
+        'metadata' => ['tenant_id' => 'acme'],
+        'artifacts' => [],
+    ]);
+
+    expect(fn () => $job->handle(app(SwarmRunner::class)))
+        ->toThrow(SwarmException::class, 'RunContext::fromPayload() expects [data] to be an array.');
 });
 
 test('queued swarm dispatches started events with queue execution mode', function () {

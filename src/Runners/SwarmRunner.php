@@ -68,7 +68,7 @@ class SwarmRunner
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
-        $context = RunContext::from($task);
+        $context = RunContext::fromTask($task);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
@@ -144,7 +144,7 @@ class SwarmRunner
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
-        $context = RunContext::from($task);
+        $context = RunContext::fromTask($task);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
@@ -213,7 +213,7 @@ class SwarmRunner
         $this->ensureQueueable($swarm);
         $this->ensureContainerResolvable($swarm);
 
-        $context = RunContext::from($task);
+        $context = RunContext::fromTask($task);
         $pendingDispatch = InvokeSwarm::dispatch($swarm::class, $context->toQueuePayload());
 
         if ($connection = $this->config->get('swarm.queue.connection')) {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 
 class RunContext
@@ -31,31 +32,48 @@ class RunContext
         }
 
         if (is_array($input)) {
-            if (self::isContextPayload($input)) {
-                $prompt = self::normalizePrompt($input['input'] ?? '');
-                $data = $input['data'] ?? [];
-                $metadata = $input['metadata'] ?? [];
+            self::assertExplicitContextPayload($input);
 
-                return new self(
-                    runId: (string) ($input['run_id'] ?? $runId ?? self::newRunId()),
-                    input: $prompt,
-                    data: is_array($data) ? $data : ['value' => $data],
-                    metadata: is_array($metadata) ? $metadata : ['value' => $metadata],
-                    artifacts: self::hydrateArtifacts($input['artifacts'] ?? []),
-                );
-            }
-
-            return new self(
-                runId: $runId ?? self::newRunId(),
-                input: self::normalizePrompt($input),
-                data: $input,
-            );
+            return self::fromValidatedPayload($input, $runId);
         }
 
         return new self(
             runId: $runId ?? self::newRunId(),
             input: self::normalizePrompt($input),
         );
+    }
+
+    /**
+     * @param  string|array<string, mixed>|self  $task
+     */
+    public static function fromTask(string|array|self $task): self
+    {
+        if ($task instanceof self) {
+            return $task;
+        }
+
+        if (is_array($task)) {
+            return new self(
+                runId: self::newRunId(),
+                input: self::normalizePrompt($task),
+                data: $task,
+            );
+        }
+
+        return new self(
+            runId: self::newRunId(),
+            input: self::normalizePrompt($task),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    public static function fromPayload(array $payload, ?string $runId = null): self
+    {
+        self::assertSerializedPayload($payload);
+
+        return self::fromValidatedPayload($payload, $runId);
     }
 
     public static function newRunId(): string
@@ -135,15 +153,71 @@ class RunContext
     }
 
     /**
-     * @param  array<string, mixed>  $input
+     * @param  array<string, mixed>  $payload
      */
-    protected static function isContextPayload(array $input): bool
+    protected static function fromValidatedPayload(array $payload, ?string $runId = null): self
     {
-        return array_key_exists('run_id', $input)
-            || array_key_exists('input', $input)
-            || array_key_exists('data', $input)
-            || array_key_exists('metadata', $input)
-            || array_key_exists('artifacts', $input);
+        return new self(
+            runId: (string) ($payload['run_id'] ?? $runId ?? self::newRunId()),
+            input: $payload['input'],
+            data: is_array($payload['data'] ?? null) ? $payload['data'] : [],
+            metadata: is_array($payload['metadata'] ?? null) ? $payload['metadata'] : [],
+            artifacts: self::hydrateArtifacts($payload['artifacts'] ?? []),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected static function assertExplicitContextPayload(array $payload): void
+    {
+        if (! array_key_exists('input', $payload)) {
+            throw new SwarmException('RunContext::from() expects an explicit context payload array containing an [input] key.');
+        }
+
+        if (! is_string($payload['input'])) {
+            throw new SwarmException('RunContext::from() expects input to be a string, ['.gettype($payload['input']).'] given. Use RunContext::fromTask() to pass structured arrays as task input.');
+        }
+
+        if (array_key_exists('data', $payload) && ! is_array($payload['data'])) {
+            throw new SwarmException('RunContext::from() expects [data] to be an array.');
+        }
+
+        if (array_key_exists('metadata', $payload) && ! is_array($payload['metadata'])) {
+            throw new SwarmException('RunContext::from() expects [metadata] to be an array.');
+        }
+
+        if (array_key_exists('artifacts', $payload) && ! is_array($payload['artifacts'])) {
+            throw new SwarmException('RunContext::from() expects [artifacts] to be an array.');
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected static function assertSerializedPayload(array $payload): void
+    {
+        foreach (['run_id', 'input', 'data', 'metadata', 'artifacts'] as $key) {
+            if (! array_key_exists($key, $payload)) {
+                throw new SwarmException('RunContext::fromPayload() expects serialized queue payload keys: [run_id, input, data, metadata, artifacts].');
+            }
+        }
+
+        if (! is_string($payload['input'])) {
+            throw new SwarmException('RunContext::fromPayload() expects input to be a string, ['.gettype($payload['input']).'] given.');
+        }
+
+        if (! is_array($payload['data'])) {
+            throw new SwarmException('RunContext::fromPayload() expects [data] to be an array.');
+        }
+
+        if (! is_array($payload['metadata'])) {
+            throw new SwarmException('RunContext::fromPayload() expects [metadata] to be an array.');
+        }
+
+        if (! is_array($payload['artifacts'])) {
+            throw new SwarmException('RunContext::fromPayload() expects [artifacts] to be an array.');
+        }
     }
 
     /**

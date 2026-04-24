@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Concerns;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
@@ -212,34 +213,38 @@ trait Runnable
             return;
         }
 
-        $query = $history->forSwarm(static::class);
-
-        if ($status !== null) {
-            $query = $query->withStatus($status);
-        }
-
-        $runs = $query->limit(100)->get();
-
         if (is_callable($run)) {
-            PHPUnit::assertTrue(
-                collect($runs)->contains(fn (array $record): bool => (bool) $run($record)),
-                'No persisted run for swarm ['.static::class.'] matched the expected assertion.',
-            );
+            foreach ($history->findMatching(static::class, $status) as $record) {
+                if ((bool) $run($record)) {
+                    return;
+                }
+            }
+
+            PHPUnit::assertTrue(false, 'No persisted run for swarm ['.static::class.'] matched the expected assertion.');
 
             return;
         }
 
         if (is_array($run)) {
-            PHPUnit::assertTrue(
-                collect($runs)->contains(fn (array $record): bool => self::matchesPersistedTaskContext($run, $record)),
-                'No persisted run for swarm ['.static::class.'] matched the expected task/context subset.',
-            );
+            foreach ($history->findMatching(static::class, $status, $run) as $record) {
+                if (PersistedRunContextMatcher::matchesRecord($run, $record)) {
+                    return;
+                }
+            }
+
+            PHPUnit::assertTrue(false, 'No persisted run for swarm ['.static::class.'] matched the expected task/context subset.');
 
             return;
         }
 
-        PHPUnit::assertNotEmpty(
-            $runs,
+        foreach ($history->findMatching(static::class, $status) as $record) {
+            if (is_array($record)) {
+                return;
+            }
+        }
+
+        PHPUnit::assertTrue(
+            false,
             'No persisted runs were found for swarm ['.static::class.']'.($status !== null ? " with status [{$status}]." : '.'),
         );
     }
@@ -269,52 +274,5 @@ trait Runnable
             $events,
             "The event [{$eventClass}] was not fired for swarm [".static::class.'].',
         );
-    }
-
-    /**
-     * @param  array<string, mixed>  $expected
-     * @param  array<string, mixed>  $record
-     */
-    protected static function matchesPersistedTaskContext(array $expected, array $record): bool
-    {
-        $taskContext = [
-            'input' => $record['context']['input'] ?? null,
-            'data' => is_array($record['context']['data'] ?? null) ? $record['context']['data'] : [],
-            'metadata' => is_array($record['context']['metadata'] ?? null) ? $record['context']['metadata'] : [],
-        ];
-
-        return self::arraySubsetMatches($expected, $taskContext)
-            || self::arraySubsetMatches($expected, $taskContext['data'])
-            || self::arraySubsetMatches($expected, $taskContext['metadata']);
-    }
-
-    /**
-     * @param  array<string, mixed>  $expected
-     */
-    protected static function arraySubsetMatches(array $expected, mixed $actual): bool
-    {
-        if (! is_array($actual)) {
-            return false;
-        }
-
-        foreach ($expected as $key => $value) {
-            if (! array_key_exists($key, $actual)) {
-                return false;
-            }
-
-            if (is_array($value)) {
-                if (! self::arraySubsetMatches($value, $actual[$key])) {
-                    return false;
-                }
-
-                continue;
-            }
-
-            if ($actual[$key] !== $value) {
-                return false;
-            }
-        }
-
-        return true;
     }
 }

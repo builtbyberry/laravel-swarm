@@ -18,6 +18,15 @@ class SwarmHistory
     }
 
     /**
+     * @param  array<string, mixed>|null  $contextSubset
+     * @return iterable<array<string, mixed>>
+     */
+    public function findMatching(string $swarmClass, ?string $status = null, ?array $contextSubset = null): iterable
+    {
+        return $this->historyStore->findMatching($swarmClass, $status, $contextSubset);
+    }
+
+    /**
      * @return array<int, array<string, mixed>>
      */
     public function latest(int $limit = 25): array

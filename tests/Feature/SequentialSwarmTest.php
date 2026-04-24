@@ -58,6 +58,19 @@ test('sequential swarm accepts structured array tasks', function () {
         ->toHaveKey('issue', 'Need help with a billing mismatch.');
 });
 
+test('sequential swarm preserves reserved-key arrays as task data', function () {
+    $response = FakeSequentialSwarm::make()->run([
+        'input' => 'Draft outline about Laravel queues',
+        'draft_id' => 42,
+        'audience' => 'intermediate developers',
+    ]);
+
+    expect($response->context?->data)
+        ->toHaveKey('input', 'Draft outline about Laravel queues')
+        ->toHaveKey('draft_id', 42)
+        ->toHaveKey('audience', 'intermediate developers');
+});
+
 test('sequential swarm accepts explicit run contexts', function () {
     $context = RunContext::from([
         'input' => 'Draft a response for the customer.',

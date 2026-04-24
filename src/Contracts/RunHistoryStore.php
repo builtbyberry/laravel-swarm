@@ -26,6 +26,12 @@ interface RunHistoryStore
     public function find(string $runId): ?array;
 
     /**
+     * @param  array<string, mixed>|null  $contextSubset
+     * @return iterable<array<string, mixed>>
+     */
+    public function findMatching(string $swarmClass, ?string $status, ?array $contextSubset): iterable;
+
+    /**
      * @return array<int, array<string, mixed>>
      */
     public function query(?string $swarmClass = null, ?string $status = null, int $limit = 25): array;

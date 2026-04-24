@@ -10,13 +10,22 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
+use PHPUnit\Framework\AssertionFailedError;
 
 beforeEach(function () {
     config()->set('database.default', 'testing');
+    config()->set('swarm.persistence.driver', 'database');
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
+
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+    FakeEditor::fake(['editor-out']);
 });
 
 test('database context store persists the same context shape as cache', function () {
@@ -172,4 +181,29 @@ test('database persistence repositories honor overridden table names when matchi
     expect($contextStore->find('custom-table-run')['input'])->toBe('custom-table-task');
     expect($artifactRepository->all('custom-table-run')[0]['content'])->toBe('custom-artifact');
     expect($historyStore->find('custom-table-run')['status'])->toBe('running');
+});
+
+test('database-backed assert persisted finds structured and callable matches beyond the latest 100 runs', function () {
+    foreach (range(1, 101) as $index) {
+        FakeSequentialSwarm::make()->run(['draft_id' => $index]);
+    }
+
+    expect(function (): void {
+        FakeSequentialSwarm::assertPersisted(['draft_id' => 101]);
+        FakeSequentialSwarm::assertPersisted(fn (array $run): bool => ($run['context']['data']['draft_id'] ?? null) === 101);
+    })->not->toThrow(AssertionFailedError::class);
+});
+
+test('database-backed assert persisted uses explicit input data and metadata matching rules', function () {
+    FakeSequentialSwarm::make()->run(RunContext::from([
+        'input' => 'Draft outline',
+        'data' => ['draft_id' => 42],
+        'metadata' => ['campaign' => 'content-calendar'],
+    ]));
+
+    expect(function (): void {
+        FakeSequentialSwarm::assertPersisted(['input' => 'Draft outline']);
+        FakeSequentialSwarm::assertPersisted(['draft_id' => 42]);
+        FakeSequentialSwarm::assertPersisted(['metadata' => ['campaign' => 'content-calendar']]);
+    })->not->toThrow(AssertionFailedError::class);
 });

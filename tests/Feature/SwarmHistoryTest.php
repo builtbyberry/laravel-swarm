@@ -110,8 +110,40 @@ test('assert persisted matches structured task context subsets', function () {
         'issue' => 'Need help with a billing mismatch.',
     ]);
 
-    FakeSequentialSwarm::assertPersisted(['ticket_id' => 'TKT-1234']);
-    FakeSequentialSwarm::assertPersisted(['customer_tier' => 'enterprise']);
+    expect(function (): void {
+        FakeSequentialSwarm::assertPersisted(['ticket_id' => 'TKT-1234']);
+        FakeSequentialSwarm::assertPersisted(['customer_tier' => 'enterprise']);
+    })->not->toThrow(AssertionFailedError::class);
+});
+
+test('assert persisted matches reserved-key task arrays in persisted context data', function () {
+    FakeSequentialSwarm::make()->run([
+        'input' => 'Draft outline about Laravel queues',
+        'draft_id' => 42,
+        'audience' => 'intermediate developers',
+    ]);
+
+    expect(function (): void {
+        FakeSequentialSwarm::assertPersisted(fn (array $run): bool => ($run['context']['data']['draft_id'] ?? null) === 42
+            && isset($run['context']['data']['audience']));
+    })->not->toThrow(AssertionFailedError::class);
+});
+
+test('assert persisted uses explicit input data and metadata matching rules', function () {
+    FakeSequentialSwarm::make()->run(RunContext::from([
+        'input' => 'Draft outline',
+        'data' => ['draft_id' => 42],
+        'metadata' => ['campaign' => 'content-calendar'],
+    ]));
+
+    expect(function (): void {
+        FakeSequentialSwarm::assertPersisted(['input' => 'Draft outline']);
+        FakeSequentialSwarm::assertPersisted(['draft_id' => 42]);
+        FakeSequentialSwarm::assertPersisted(['metadata' => ['campaign' => 'content-calendar']]);
+    })->not->toThrow(AssertionFailedError::class);
+
+    expect(fn () => FakeSequentialSwarm::assertPersisted(['campaign' => 'content-calendar']))
+        ->toThrow(AssertionFailedError::class);
 });
 
 test('assert persisted finds exact run ids beyond the latest 100 runs', function () {
@@ -140,6 +172,17 @@ test('assert persisted finds exact run ids beyond the latest 100 runs', function
     }
 
     FakeSequentialSwarm::assertPersisted($targetRunId, 'completed');
+});
+
+test('assert persisted finds structured array and callable matches beyond the latest 100 cache runs', function () {
+    foreach (range(1, 101) as $index) {
+        FakeSequentialSwarm::make()->run(['draft_id' => $index]);
+    }
+
+    expect(function (): void {
+        FakeSequentialSwarm::assertPersisted(['draft_id' => 101]);
+        FakeSequentialSwarm::assertPersisted(fn (array $run): bool => ($run['context']['data']['draft_id'] ?? null) === 101);
+    })->not->toThrow(AssertionFailedError::class);
 });
 
 test('assert persisted fails when the run belongs to a different swarm class', function () {

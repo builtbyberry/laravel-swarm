@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ResolvesSwarmCacheStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository;
@@ -94,6 +95,37 @@ class CacheRunHistoryStore implements RunHistoryStore
         $history = $this->store()->get($this->key($runId));
 
         return $history;
+    }
+
+    public function findMatching(string $swarmClass, ?string $status, ?array $contextSubset): iterable
+    {
+        $runIds = $this->store()->get($this->swarmIndexKey($swarmClass), []);
+
+        if (! is_array($runIds)) {
+            return;
+        }
+
+        foreach (array_reverse($runIds) as $runId) {
+            if (! is_string($runId)) {
+                continue;
+            }
+
+            $record = $this->find($runId);
+
+            if (! is_array($record)) {
+                continue;
+            }
+
+            if ($status !== null && ($record['status'] ?? null) !== $status) {
+                continue;
+            }
+
+            if ($contextSubset !== null && ! PersistedRunContextMatcher::matchesRecord($contextSubset, $record)) {
+                continue;
+            }
+
+            yield $record;
+        }
     }
 
     public function query(?string $swarmClass = null, ?string $status = null, int $limit = 25): array
