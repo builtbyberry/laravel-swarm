@@ -5,8 +5,10 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
+use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns as SwarmRunsCard;
 use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmRuns as SwarmRunsRecorder;
 use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmStepDurations;
+use BuiltByBerry\LaravelSwarm\Pulse\Support\SwarmPulseKey;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
@@ -17,6 +19,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMultiRouteSw
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStreamingFailureSwarm;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -151,8 +154,62 @@ test('pulse recorders store stable swarm entry keys', function () {
     expect(DB::table('pulse_aggregates')->where('type', 'swarm_run_duration')->pluck('key')->all())
         ->toContain('swarm_run_duration|'.FakeSequentialSwarm::class.'|sequential');
 
+    expect(DB::table('pulse_aggregates')->where('type', 'swarm_run_duration_total')->pluck('key')->all())
+        ->toContain(FakeSequentialSwarm::class);
+
+    expect(DB::table('pulse_aggregates')->where('type', 'swarm_run_total')->pluck('key')->all())
+        ->toContain(FakeSequentialSwarm::class);
+
     expect(DB::table('pulse_aggregates')->where('type', 'swarm_step_duration')->pluck('key')->all())
         ->toContain('swarm_step_duration|'.FakeSequentialSwarm::class.'|sequential|'.FakeWriter::class);
+});
+
+test('swarm runs card keeps per swarm metrics accurate when raw pulse keys exceed the old regrouping limit', function () {
+    $timestamp = now()->getTimestamp();
+
+    for ($i = 1; $i <= 600; $i++) {
+        PulseFacade::record('swarm_run_total', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
+        PulseFacade::record('swarm_topology_sequential', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
+        PulseFacade::record('swarm_run_duration_total', FakeSequentialSwarm::class, value: 10, timestamp: $timestamp)->avg()->count();
+        PulseFacade::record('swarm_run', SwarmPulseKey::runStatus(FakeSequentialSwarm::class, 'sequential', 'completed'), timestamp: $timestamp)->count()->onlyBuckets();
+        PulseFacade::record('swarm_run_duration', SwarmPulseKey::runDuration(FakeSequentialSwarm::class, 'sequential'), value: 10, timestamp: $timestamp)->avg()->count()->onlyBuckets();
+    }
+
+    PulseFacade::record('swarm_run_total', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
+    PulseFacade::record('swarm_run_failed', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
+    PulseFacade::record('swarm_topology_parallel', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
+    PulseFacade::record('swarm_run_duration_total', FakeSequentialSwarm::class, value: 1000, timestamp: $timestamp)->avg()->count();
+    PulseFacade::record('swarm_run', SwarmPulseKey::runStatus(FakeSequentialSwarm::class, 'parallel', 'failed'), timestamp: $timestamp)->count()->onlyBuckets();
+    PulseFacade::record('swarm_run_duration', SwarmPulseKey::runDuration(FakeSequentialSwarm::class, 'parallel'), value: 1000, timestamp: $timestamp)->avg()->count()->onlyBuckets();
+
+    for ($i = 1; $i <= 500; $i++) {
+        $swarmClass = "App\\Ai\\Swarms\\DistractorSwarm{$i}";
+
+        for ($count = 1; $count <= 2; $count++) {
+            PulseFacade::record('swarm_run', SwarmPulseKey::runStatus($swarmClass, 'sequential', 'completed'), timestamp: $timestamp)->count()->onlyBuckets();
+            PulseFacade::record('swarm_run_duration', SwarmPulseKey::runDuration($swarmClass, 'sequential'), value: 50, timestamp: $timestamp)->avg()->count()->onlyBuckets();
+        }
+    }
+
+    PulseFacade::ingest();
+
+    $card = new class extends SwarmRunsCard
+    {
+        public function snapshot(): Collection
+        {
+            return $this->resolveRuns();
+        }
+    };
+
+    $run = $card->snapshot()->firstWhere('swarmClass', FakeSequentialSwarm::class);
+
+    expect($run)->not()->toBeNull()
+        ->and($run->totalRuns)->toBe(601)
+        ->and($run->failures)->toBe(1)
+        ->and($run->failureRate)->toBe(0.2)
+        ->and($run->averageRunDurationMs)->toBe(12)
+        ->and($run->topologyMix->mapWithKeys(fn (object $topology) => [$topology->topology => $topology->count])->all())
+        ->toBe(['sequential' => 600, 'parallel' => 1]);
 });
 
 test('pulse cards render through the registered livewire aliases', function () {

@@ -28,8 +28,13 @@ class SwarmRuns
     {
         $timestamp = CarbonImmutable::now()->getTimestamp();
         $status = $event instanceof SwarmCompleted ? 'completed' : 'failed';
+        $topologyType = match ($event->topology) {
+            'parallel' => 'swarm_topology_parallel',
+            'hierarchical' => 'swarm_topology_hierarchical',
+            default => 'swarm_topology_sequential',
+        };
 
-        $this->pulse->lazy(function () use ($event, $status, $timestamp): void {
+        $this->pulse->lazy(function () use ($event, $status, $timestamp, $topologyType): void {
             $this->pulse->record(
                 type: 'swarm_run',
                 key: SwarmPulseKey::runStatus($event->swarmClass, $event->topology, $status),
@@ -37,11 +42,38 @@ class SwarmRuns
             )->count()->onlyBuckets();
 
             $this->pulse->record(
+                type: 'swarm_run_total',
+                key: $event->swarmClass,
+                timestamp: $timestamp,
+            )->count();
+
+            if ($status === 'failed') {
+                $this->pulse->record(
+                    type: 'swarm_run_failed',
+                    key: $event->swarmClass,
+                    timestamp: $timestamp,
+                )->count();
+            }
+
+            $this->pulse->record(
+                type: $topologyType,
+                key: $event->swarmClass,
+                timestamp: $timestamp,
+            )->count();
+
+            $this->pulse->record(
                 type: 'swarm_run_duration',
                 key: SwarmPulseKey::runDuration($event->swarmClass, $event->topology),
                 value: $event->durationMs,
                 timestamp: $timestamp,
             )->avg()->count()->onlyBuckets();
+
+            $this->pulse->record(
+                type: 'swarm_run_duration_total',
+                key: $event->swarmClass,
+                value: $event->durationMs,
+                timestamp: $timestamp,
+            )->avg()->count();
         });
     }
 }

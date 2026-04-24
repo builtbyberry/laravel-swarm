@@ -32,7 +32,7 @@ class SwarmStepDurations
                 key: SwarmPulseKey::stepDuration($event->swarmClass, $event->topology, $event->agentClass),
                 value: $event->durationMs,
                 timestamp: $timestamp,
-            )->avg()->count()->onlyBuckets();
+            )->avg()->count();
         });
     }
 }
