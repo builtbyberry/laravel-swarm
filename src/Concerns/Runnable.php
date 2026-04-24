@@ -7,6 +7,9 @@ namespace BuiltByBerry\LaravelSwarm\Concerns;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
+use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake as SwarmFakeInstance;
 use Generator;
 use Illuminate\Container\Container;
@@ -43,7 +46,7 @@ trait Runnable
     /**
      * Run the swarm with the given task.
      */
-    public function run(string $task): SwarmResponse
+    public function run(string|array|RunContext $task): SwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->run($this, $task);
     }
@@ -53,7 +56,7 @@ trait Runnable
      *
      * @return Generator<int, array<string, string>, mixed, void>
      */
-    public function stream(string $task): Generator
+    public function stream(string|array|RunContext $task): Generator
     {
         return Container::getInstance()->make(SwarmRunner::class)->stream($this, $task);
     }
@@ -61,7 +64,7 @@ trait Runnable
     /**
      * Queue the swarm to run in the background.
      */
-    public function queue(string $task): QueuedSwarmResponse
+    public function queue(string|array|RunContext $task): QueuedSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->queue($this, $task);
     }
@@ -81,7 +84,7 @@ trait Runnable
     /**
      * Assert the swarm was run with the given task.
      */
-    public static function assertRan(string|callable $task): void
+    public static function assertRan(string|array|callable $task): void
     {
         $resolved = Container::getInstance()->make(static::class);
 
@@ -115,7 +118,7 @@ trait Runnable
     /**
      * Assert the swarm was queued with the given task.
      */
-    public static function assertQueued(string|callable $task): void
+    public static function assertQueued(string|array|callable $task): void
     {
         $resolved = Container::getInstance()->make(static::class);
 
@@ -149,7 +152,7 @@ trait Runnable
     /**
      * Assert the swarm was streamed with the given task.
      */
-    public static function assertStreamed(string|callable $task): void
+    public static function assertStreamed(string|array|callable $task): void
     {
         $resolved = Container::getInstance()->make(static::class);
 
@@ -178,5 +181,140 @@ trait Runnable
 
         /** @var SwarmFakeInstance $resolved */
         $resolved->assertNeverStreamed();
+    }
+
+    public static function assertPersisted(string|array|callable|null $run = null, ?string $status = null): void
+    {
+        $history = Container::getInstance()->make(SwarmHistory::class);
+
+        if (is_string($run)) {
+            $record = $history->find($run);
+
+            PHPUnit::assertNotNull(
+                $record,
+                'No persisted run was found with run ID ['.$run.'].',
+            );
+
+            PHPUnit::assertSame(
+                static::class,
+                $record['swarm_class'] ?? null,
+                'The persisted run ['.$run.'] does not belong to swarm ['.static::class.'].',
+            );
+
+            if ($status !== null) {
+                PHPUnit::assertSame(
+                    $status,
+                    $record['status'] ?? null,
+                    'The persisted run ['.$run.'] for swarm ['.static::class.'] does not have status ['.$status.'].',
+                );
+            }
+
+            return;
+        }
+
+        $query = $history->forSwarm(static::class);
+
+        if ($status !== null) {
+            $query = $query->withStatus($status);
+        }
+
+        $runs = $query->limit(100)->get();
+
+        if (is_callable($run)) {
+            PHPUnit::assertTrue(
+                collect($runs)->contains(fn (array $record): bool => (bool) $run($record)),
+                'No persisted run for swarm ['.static::class.'] matched the expected assertion.',
+            );
+
+            return;
+        }
+
+        if (is_array($run)) {
+            PHPUnit::assertTrue(
+                collect($runs)->contains(fn (array $record): bool => self::matchesPersistedTaskContext($run, $record)),
+                'No persisted run for swarm ['.static::class.'] matched the expected task/context subset.',
+            );
+
+            return;
+        }
+
+        PHPUnit::assertNotEmpty(
+            $runs,
+            'No persisted runs were found for swarm ['.static::class.']'.($status !== null ? " with status [{$status}]." : '.'),
+        );
+    }
+
+    public static function assertEventFired(string $eventClass, ?callable $callback = null): void
+    {
+        /** @var SwarmEventRecorder $recorder */
+        $recorder = Container::getInstance()->make(SwarmEventRecorder::class);
+
+        PHPUnit::assertTrue(
+            $recorder->isActive(),
+            'Swarm event recording is only available in tests where the recorder has been activated.',
+        );
+
+        $events = $recorder->eventsFor(static::class, $eventClass);
+
+        if ($callback !== null) {
+            PHPUnit::assertTrue(
+                collect($events)->contains(fn (object $event): bool => (bool) $callback($event)),
+                "The event [{$eventClass}] was not fired for swarm [".static::class.'] with the expected payload.',
+            );
+
+            return;
+        }
+
+        PHPUnit::assertNotEmpty(
+            $events,
+            "The event [{$eventClass}] was not fired for swarm [".static::class.'].',
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $expected
+     * @param  array<string, mixed>  $record
+     */
+    protected static function matchesPersistedTaskContext(array $expected, array $record): bool
+    {
+        $taskContext = [
+            'input' => $record['context']['input'] ?? null,
+            'data' => is_array($record['context']['data'] ?? null) ? $record['context']['data'] : [],
+            'metadata' => is_array($record['context']['metadata'] ?? null) ? $record['context']['metadata'] : [],
+        ];
+
+        return self::arraySubsetMatches($expected, $taskContext)
+            || self::arraySubsetMatches($expected, $taskContext['data'])
+            || self::arraySubsetMatches($expected, $taskContext['metadata']);
+    }
+
+    /**
+     * @param  array<string, mixed>  $expected
+     */
+    protected static function arraySubsetMatches(array $expected, mixed $actual): bool
+    {
+        if (! is_array($actual)) {
+            return false;
+        }
+
+        foreach ($expected as $key => $value) {
+            if (! array_key_exists($key, $actual)) {
+                return false;
+            }
+
+            if (is_array($value)) {
+                if (! self::arraySubsetMatches($value, $actual[$key])) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if ($actual[$key] !== $value) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

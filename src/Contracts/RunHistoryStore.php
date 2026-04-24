@@ -24,4 +24,9 @@ interface RunHistoryStore
     public function fail(string $runId, Throwable $exception, int $ttlSeconds): void;
 
     public function find(string $runId): ?array;
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function query(?string $swarmClass = null, ?string $status = null, int $limit = 25): array;
 }

@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Support\Carbon;
 use Throwable;
 
 class CacheRunHistoryStore implements RunHistoryStore
@@ -25,6 +26,8 @@ class CacheRunHistoryStore implements RunHistoryStore
 
     public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void
     {
+        $timestamp = Carbon::now('UTC')->toIso8601String();
+
         $this->store()->put($this->key($runId), [
             'run_id' => $runId,
             'swarm_class' => $swarmClass,
@@ -37,7 +40,13 @@ class CacheRunHistoryStore implements RunHistoryStore
             'usage' => [],
             'error' => null,
             'artifacts' => [],
+            'started_at' => $timestamp,
+            'finished_at' => null,
+            'updated_at' => $timestamp,
         ], $ttlSeconds);
+
+        $this->appendToIndex($this->swarmIndexKey($swarmClass), $runId, $ttlSeconds);
+        $this->appendToIndex($this->latestIndexKey(), $runId, $ttlSeconds);
     }
 
     public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds): void
@@ -45,6 +54,7 @@ class CacheRunHistoryStore implements RunHistoryStore
         $history = $this->find($runId) ?? [];
         $history['steps'] ??= [];
         $history['steps'][] = $step->toArray();
+        $history['updated_at'] = Carbon::now('UTC')->toIso8601String();
 
         $this->store()->put($this->key($runId), $history, $ttlSeconds);
     }
@@ -58,6 +68,8 @@ class CacheRunHistoryStore implements RunHistoryStore
         $history['context'] = $response->context?->toArray();
         $history['artifacts'] = array_map(static fn ($artifact): array => $artifact->toArray(), $response->artifacts);
         $history['metadata'] = $response->metadata;
+        $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
+        $history['updated_at'] = $history['finished_at'];
 
         $this->store()->put($this->key($runId), $history, $ttlSeconds);
     }
@@ -70,6 +82,8 @@ class CacheRunHistoryStore implements RunHistoryStore
             'message' => $exception->getMessage(),
             'class' => $exception::class,
         ];
+        $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
+        $history['updated_at'] = $history['finished_at'];
 
         $this->store()->put($this->key($runId), $history, $ttlSeconds);
     }
@@ -82,9 +96,55 @@ class CacheRunHistoryStore implements RunHistoryStore
         return $history;
     }
 
+    public function query(?string $swarmClass = null, ?string $status = null, int $limit = 25): array
+    {
+        $runIds = $this->store()->get(
+            $swarmClass !== null ? $this->swarmIndexKey($swarmClass) : $this->latestIndexKey(),
+            [],
+        );
+
+        if (! is_array($runIds)) {
+            return [];
+        }
+
+        $records = collect(array_reverse($runIds))
+            ->map(fn (mixed $runId): ?array => is_string($runId) ? $this->find($runId) : null)
+            ->filter()
+            ->when($status !== null, fn ($collection) => $collection->where('status', $status))
+            ->take($limit)
+            ->values()
+            ->all();
+
+        /** @var array<int, array<string, mixed>> $records */
+        return $records;
+    }
+
     protected function key(string $runId): string
     {
         return (string) $this->config->get('swarm.history.prefix', 'swarm:history:').$runId;
+    }
+
+    protected function swarmIndexKey(string $swarmClass): string
+    {
+        return (string) $this->config->get('swarm.history.index_prefix', 'swarm:index:').$swarmClass;
+    }
+
+    protected function latestIndexKey(): string
+    {
+        return (string) $this->config->get('swarm.history.latest_prefix', 'swarm:index:latest');
+    }
+
+    protected function appendToIndex(string $key, string $runId, int $ttlSeconds): void
+    {
+        $index = $this->store()->get($key, []);
+
+        if (! is_array($index)) {
+            $index = [];
+        }
+
+        $index[] = $runId;
+
+        $this->store()->put($key, $index, $ttlSeconds);
     }
 
     protected function store(): Repository

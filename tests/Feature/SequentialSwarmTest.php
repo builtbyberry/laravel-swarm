@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
@@ -42,6 +43,33 @@ test('sequential swarm records usage from agent responses', function () {
     $response = FakeSequentialSwarm::make()->run('usage-task');
 
     expect($response->usage)->toBeArray();
+});
+
+test('sequential swarm accepts structured array tasks', function () {
+    $response = FakeSequentialSwarm::make()->run([
+        'ticket_id' => 'TKT-1234',
+        'customer_tier' => 'enterprise',
+        'issue' => 'Need help with a billing mismatch.',
+    ]);
+
+    expect($response->context?->data)
+        ->toHaveKey('ticket_id', 'TKT-1234')
+        ->toHaveKey('customer_tier', 'enterprise')
+        ->toHaveKey('issue', 'Need help with a billing mismatch.');
+});
+
+test('sequential swarm accepts explicit run contexts', function () {
+    $context = RunContext::from([
+        'input' => 'Draft a response for the customer.',
+        'data' => ['ticket_id' => 'TKT-1234'],
+        'metadata' => ['tenant_id' => 'acme'],
+    ], 'structured-run-id');
+
+    $response = FakeSequentialSwarm::make()->run($context);
+
+    expect($response->context?->runId)->toBe('structured-run-id');
+    expect($response->context?->data)->toHaveKey('ticket_id', 'TKT-1234');
+    expect($response->context?->metadata)->toHaveKey('tenant_id', 'acme');
 });
 
 test('sequential swarm exposes and persists generic context and artifacts', function () {

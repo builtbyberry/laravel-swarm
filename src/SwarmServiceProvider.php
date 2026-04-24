@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm;
 
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
@@ -18,6 +20,8 @@ use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
+use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
@@ -41,6 +45,8 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(HierarchicalRunner::class);
 
         $this->app->singleton(SwarmRunner::class);
+        $this->app->singleton(SwarmHistory::class);
+        $this->app->singleton(SwarmEventRecorder::class);
 
         $this->app->singleton(ContextStore::class, fn (Application $app): ContextStore => $this->resolvePersistenceStore(
             $app,
@@ -84,8 +90,11 @@ class SwarmServiceProvider extends ServiceProvider
 
             $this->commands([
                 MakeSwarmCommand::class,
+                SwarmStatusCommand::class,
+                SwarmHistoryCommand::class,
             ]);
         }
+
     }
 
     /**

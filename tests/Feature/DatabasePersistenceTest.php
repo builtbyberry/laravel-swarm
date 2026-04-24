@@ -108,6 +108,9 @@ test('database run history store persists start step completion and failure payl
         'message' => 'stream failed',
         'class' => Exception::class,
     ]);
+
+    expect($history->query(limit: 10)[0]['run_id'])->toBe('history-run-id');
+    expect($history->query(status: 'failed', limit: 10)[0]['status'])->toBe('failed');
 });
 
 test('database persistence repositories honor overridden table names when matching tables exist', function () {
@@ -142,6 +145,7 @@ test('database persistence repositories honor overridden table names when matchi
         $table->json('usage');
         $table->json('error')->nullable();
         $table->json('artifacts');
+        $table->timestamp('finished_at')->nullable();
         $table->timestamps();
     });
 

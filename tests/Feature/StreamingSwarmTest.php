@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
@@ -55,6 +56,26 @@ test('sequential swarm stream yields ordered payloads and lifecycle events', fun
     expect($completedEvent->metadata['usage'])->toBeArray();
     expect($completedEvent->metadata['usage'])->not->toBe([]);
     expect($history['usage'])->toBe($completedEvent->metadata['usage']);
+});
+
+test('sequential swarm stream accepts structured task input', function () {
+    $events = iterator_to_array(FakeSequentialSwarm::make()->stream([
+        'ticket_id' => 'TKT-1234',
+        'customer_tier' => 'enterprise',
+        'issue' => 'Need help with a billing mismatch.',
+    ]));
+
+    expect($events)->toContain(['event' => 'token', 'token' => 'editor-out']);
+});
+
+test('sequential swarm stream accepts explicit run contexts', function () {
+    $events = iterator_to_array(FakeSequentialSwarm::make()->stream(RunContext::from([
+        'input' => 'Draft a response for the customer.',
+        'data' => ['ticket_id' => 'TKT-1234'],
+        'metadata' => ['tenant_id' => 'acme'],
+    ], 'stream-run-id')));
+
+    expect($events)->toContain(['event' => 'token', 'token' => 'editor-out']);
 });
 
 test('sequential swarm stream marks history failed and dispatches failure when the final agent throws mid stream', function () {

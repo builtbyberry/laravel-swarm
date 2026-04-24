@@ -52,17 +52,17 @@ class SwarmRunner
         protected HierarchicalRunner $hierarchical,
     ) {}
 
-    public function run(Swarm $swarm, string|RunContext $task): SwarmResponse
+    public function run(Swarm $swarm, string|array|RunContext $task): SwarmResponse
     {
         return $this->runWithExecutionMode($swarm, $task, self::EXECUTION_MODE_RUN);
     }
 
-    public function runQueued(Swarm $swarm, string|RunContext $task): SwarmResponse
+    public function runQueued(Swarm $swarm, string|array|RunContext $task): SwarmResponse
     {
         return $this->runWithExecutionMode($swarm, $task, self::EXECUTION_MODE_QUEUE);
     }
 
-    protected function runWithExecutionMode(Swarm $swarm, string|RunContext $task, string $executionMode): SwarmResponse
+    protected function runWithExecutionMode(Swarm $swarm, string|array|RunContext $task, string $executionMode): SwarmResponse
     {
         $topology = $this->resolveTopology($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
@@ -133,7 +133,7 @@ class SwarmRunner
     /**
      * @return Generator<int, array<string, string>, mixed, void>
      */
-    public function stream(Swarm $swarm, string $task): Generator
+    public function stream(Swarm $swarm, string|array|RunContext $task): Generator
     {
         $topology = $this->resolveTopology($swarm);
 
@@ -208,13 +208,13 @@ class SwarmRunner
         })();
     }
 
-    public function queue(Swarm $swarm, string $task): QueuedSwarmResponse
+    public function queue(Swarm $swarm, string|array|RunContext $task): QueuedSwarmResponse
     {
         $this->ensureQueueable($swarm);
         $this->ensureContainerResolvable($swarm);
 
         $context = RunContext::from($task);
-        $pendingDispatch = InvokeSwarm::dispatch($swarm::class, $context);
+        $pendingDispatch = InvokeSwarm::dispatch($swarm::class, $context->toQueuePayload());
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
             $pendingDispatch->onConnection($connection);

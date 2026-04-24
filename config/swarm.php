@@ -34,6 +34,8 @@ return [
         'driver' => env('SWARM_HISTORY_DRIVER'),
         'store' => env('SWARM_HISTORY_STORE'),
         'prefix' => env('SWARM_HISTORY_PREFIX', 'swarm:history:'),
+        'index_prefix' => env('SWARM_HISTORY_INDEX_PREFIX', 'swarm:index:'),
+        'latest_prefix' => env('SWARM_HISTORY_LATEST_PREFIX', 'swarm:index:latest'),
     ],
 
     'queue' => [

@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Support\Carbon;
 use Throwable;
 
 class DatabaseRunHistoryStore implements RunHistoryStore
@@ -24,7 +25,7 @@ class DatabaseRunHistoryStore implements RunHistoryStore
 
     public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void
     {
-        $timestamp = now();
+        $timestamp = Carbon::now('UTC');
 
         $this->table()->updateOrInsert(
             ['run_id' => $runId],
@@ -65,6 +66,7 @@ class DatabaseRunHistoryStore implements RunHistoryStore
             'context' => $this->encodeJson($response->context?->toArray()),
             'artifacts' => $this->encodeJson(array_map(static fn ($artifact): array => $artifact->toArray(), $response->artifacts)),
             'metadata' => $this->encodeJson($response->metadata),
+            'finished_at' => Carbon::now('UTC'),
         ]);
     }
 
@@ -76,6 +78,7 @@ class DatabaseRunHistoryStore implements RunHistoryStore
                 'message' => $exception->getMessage(),
                 'class' => $exception::class,
             ]),
+            'finished_at' => Carbon::now('UTC'),
         ]);
     }
 
@@ -100,12 +103,47 @@ class DatabaseRunHistoryStore implements RunHistoryStore
             'usage' => $this->decodeJson($record->usage, []),
             'error' => $this->decodeJson($record->error, null),
             'artifacts' => $this->decodeJson($record->artifacts, []),
+            'started_at' => $record->created_at,
+            'finished_at' => $record->finished_at,
+            'updated_at' => $record->updated_at,
         ];
+    }
+
+    public function query(?string $swarmClass = null, ?string $status = null, int $limit = 25): array
+    {
+        $query = $this->table()->orderByDesc('created_at')->limit($limit);
+
+        if ($swarmClass !== null) {
+            $query->where('swarm_class', $swarmClass);
+        }
+
+        if ($status !== null) {
+            $query->where('status', $status);
+        }
+
+        return $query->get()
+            ->map(fn (object $record): array => [
+                'run_id' => $record->run_id,
+                'swarm_class' => $record->swarm_class,
+                'topology' => $record->topology,
+                'status' => $record->status,
+                'context' => $this->decodeJson($record->context, []),
+                'metadata' => $this->decodeJson($record->metadata, []),
+                'steps' => $this->decodeJson($record->steps, []),
+                'output' => $record->output,
+                'usage' => $this->decodeJson($record->usage, []),
+                'error' => $this->decodeJson($record->error, null),
+                'artifacts' => $this->decodeJson($record->artifacts, []),
+                'started_at' => $record->created_at,
+                'finished_at' => $record->finished_at,
+                'updated_at' => $record->updated_at,
+            ])
+            ->all();
     }
 
     protected function update(string $runId, array $values): void
     {
-        $values['updated_at'] = now();
+        $values['updated_at'] = Carbon::now('UTC');
 
         $this->table()->where('run_id', $runId)->update($values);
     }

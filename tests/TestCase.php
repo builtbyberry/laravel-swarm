@@ -4,10 +4,17 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests;
 
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
+use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use Illuminate\Bus\BusServiceProvider;
 use Illuminate\Bus\Dispatcher;
 use Illuminate\Contracts\Bus\Dispatcher as DispatcherContract;
+use Illuminate\Contracts\Events\Dispatcher as EventDispatcher;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Ai\AiServiceProvider;
@@ -15,6 +22,27 @@ use Orchestra\Testbench\TestCase as Orchestra;
 
 abstract class TestCase extends Orchestra
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $recorder = $this->app->make(SwarmEventRecorder::class);
+        $recorder->resetRecorder();
+        $recorder->activate();
+
+        $events = $this->app->make(EventDispatcher::class);
+
+        foreach ([
+            SwarmStarted::class,
+            SwarmStepStarted::class,
+            SwarmStepCompleted::class,
+            SwarmCompleted::class,
+            SwarmFailed::class,
+        ] as $eventClass) {
+            $events->listen($eventClass, fn (object $event) => $recorder->record($event));
+        }
+    }
+
     /**
      * @param  Application  $app
      * @return array<int, class-string>

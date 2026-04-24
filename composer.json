@@ -41,7 +41,8 @@
                 "BuiltByBerry\\LaravelSwarm\\SwarmServiceProvider"
             ],
             "aliases": {
-                "Swarm": "BuiltByBerry\\LaravelSwarm\\Facades\\Swarm"
+                "Swarm": "BuiltByBerry\\LaravelSwarm\\Facades\\Swarm",
+                "SwarmHistory": "BuiltByBerry\\LaravelSwarm\\Facades\\SwarmHistory"
             }
         }
     },

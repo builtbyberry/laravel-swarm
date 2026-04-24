@@ -87,6 +87,29 @@ php artisan vendor:publish --tag=swarm-stubs
 
 After publishing, `make:swarm` will prefer `stubs/swarm.stub` from your application before falling back to the package stub.
 
+## Inspecting Run History
+
+Use the built-in inspection commands to review persisted swarm runs:
+
+```bash
+php artisan swarm:status
+php artisan swarm:status --run-id=<run-id>
+php artisan swarm:history --swarm="App\\Ai\\Swarms\\ArticlePipeline" --status=completed --limit=10
+```
+
+If you need the same data in application code, use the `SwarmHistory` facade or service:
+
+```php
+use BuiltByBerry\LaravelSwarm\Facades\SwarmHistory;
+
+$run = SwarmHistory::find($runId);
+$latest = SwarmHistory::latest();
+$completed = SwarmHistory::forSwarm(App\Ai\Swarms\ArticlePipeline::class)
+    ->withStatus('completed')
+    ->limit(10)
+    ->get();
+```
+
 ## Creating A Swarm
 
 Generate a swarm class in `App\Ai\Swarms`:
@@ -162,6 +185,16 @@ $response->artifacts;
 $response->metadata;
 ```
 
+Structured task input is also first-class:
+
+```php
+$response = ArticlePipeline::make()->run([
+    'topic' => 'Laravel queues',
+    'audience' => 'intermediate developers',
+    'goal' => 'blog outline',
+]);
+```
+
 `SwarmResponse` can still be cast to a string:
 
 ```php
@@ -193,18 +226,20 @@ For queued execution, treat the swarm as a stateless definition apart from conta
 
 Because queued swarms are validated for container resolution before dispatch, constructors and DI setup should stay cheap and side-effect free in normal Laravel style.
 
-Pass dynamic execution data in the task payload, not on the swarm instance:
+Pass structured task data the same way you would with `run()`:
 
 ```php
 ArticlePipeline::make()
-    ->queue(json_encode([
-        'draft_id' => 42,
-        'tenant_id' => 'acme',
-        'mode' => 'review',
-    ]));
+    ->queue([
+        'topic' => 'Laravel queues',
+        'audience' => 'intermediate developers',
+        'goal' => 'blog outline',
+    ]);
 ```
 
-Decode or interpret that task input inside the swarm or its agents as needed. Richer queued context is not yet a first-class public `queue()` API.
+Queued structured payloads are serialized as plain queue-safe data and rebuilt into a `RunContext` on the worker. Do not rely on non-serializable values like closures or resource handles crossing the queue boundary.
+
+Use `RunContext` for queued execution only when you need explicit control over run metadata or run ID.
 
 What not to do:
 
@@ -221,8 +256,13 @@ Use `stream()` when you want step and token events for server-sent events or oth
 
 ```php
 try {
-    foreach (ArticlePipeline::make()->stream('Draft a blog outline about Laravel queues.') as $event) {
-        // ['event' => 'step', ...] or ['event' => 'token', ...]
+    foreach (ArticlePipeline::make()->stream([
+        'topic' => 'Laravel queues',
+        'audience' => 'intermediate developers',
+        'goal' => 'blog outline',
+    ]) as $event) {
+        // ['event' => 'step', 'agent' => 'WriterAgent', 'status' => 'running']
+        // or ['event' => 'token', 'token' => 'Drafting the outline...']
     }
 } catch (\Throwable $exception) {
     //
@@ -318,13 +358,14 @@ ArticlePipeline::fake(['first', 'second']);
 expect((string) ArticlePipeline::make()->run('draft intro'))->toBe('first');
 
 ArticlePipeline::assertRan('draft intro');
+ArticlePipeline::assertRan(['draft_id' => 42]);
 ArticlePipeline::assertNeverQueued();
 ```
 
 Fakes can also use a callback:
 
 ```php
-ArticlePipeline::fake(fn (string $task) => 'handled: '.$task);
+ArticlePipeline::fake(fn ($task) => 'handled');
 ```
 
 Faked streams stay lightweight and deterministic:
@@ -335,7 +376,26 @@ ArticlePipeline::fake(['streamed-output']);
 $events = iterator_to_array(ArticlePipeline::make()->stream('draft intro'));
 
 ArticlePipeline::assertStreamed('draft intro');
+ArticlePipeline::assertStreamed(['draft_id' => 42]);
 ```
+
+Array assertions use subset matching, so you only need to assert on the keys you care about.
+
+For test assertions against persisted history and lifecycle events, use:
+
+```php
+$response = ArticlePipeline::make()->run('draft intro');
+
+ArticlePipeline::assertPersisted($response->metadata['run_id'], 'completed');
+ArticlePipeline::assertPersisted(['draft_id' => 42]);
+ArticlePipeline::assertEventFired(
+    \BuiltByBerry\LaravelSwarm\Events\SwarmStarted::class,
+    fn ($event) => $event->runId === $response->metadata['run_id'],
+);
+```
+
+`assertEventFired()` is a testing helper. It records swarm lifecycle events only in tests where the package test recorder has been activated.
+`assertPersisted([...])` matches against the persisted task/context shape only: `input`, `data`, and `metadata`.
 
 ## Configuration
 
@@ -359,6 +419,8 @@ Persistence defaults support both cache-backed and durable database-backed stora
 - `swarm.tables.*` changes the table names used by the database repositories at runtime; if you change them, publish and update the migrations too
 
 TTL settings apply to cache-backed persistence. Database-backed persistence is durable until your application deletes the records.
+
+Cache-backed run history uses maintained indexes for `latest()` and filtered history reads. If a process is killed mid-run, a stale `running` entry may remain visible until the underlying cache record expires. Use the database driver when operators need stronger inspection accuracy.
 
 Timeout settings are best-effort orchestration deadlines, not hard cancellation of in-flight provider calls.
 
@@ -389,6 +451,18 @@ Built-in persistence supports both cache and database drivers for:
 - run history
 
 The database driver stores these records in package-managed tables while preserving the same contract read shapes as the cache-backed stores.
+
+Most applications will not need to construct a `RunContext` manually. If you do need explicit control over run IDs or metadata, you can pass one directly:
+
+```php
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+$response = ArticlePipeline::make()->run(RunContext::from([
+    'input' => 'Draft a blog outline about Laravel queues.',
+    'data' => ['topic' => 'Laravel queues'],
+    'metadata' => ['campaign' => 'content-calendar'],
+], 'article-outline-run'));
+```
 
 If you need to customize how swarm state is stored, bind your own implementations for the persistence contracts:
 

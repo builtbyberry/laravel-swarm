@@ -22,7 +22,7 @@ class InvokeSwarm implements ShouldQueue
      */
     public function __construct(
         public string $swarmClass,
-        public RunContext $task,
+        public array $task,
     ) {}
 
     /**
@@ -31,12 +31,13 @@ class InvokeSwarm implements ShouldQueue
     public function handle(SwarmRunner $runner): void
     {
         $swarm = app()->make($this->swarmClass);
+        $context = RunContext::from($this->task);
 
         if (! $swarm instanceof Swarm) {
             throw new SwarmException("Unable to resolve queued swarm [{$this->swarmClass}] from the container.");
         }
 
-        $this->withCallbacks(fn () => $runner->runQueued($swarm, $this->task));
+        $this->withCallbacks(fn () => $runner->runQueued($swarm, $context));
     }
 
     /**

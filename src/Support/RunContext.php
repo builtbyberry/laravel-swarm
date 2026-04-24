@@ -31,15 +31,24 @@ class RunContext
         }
 
         if (is_array($input)) {
-            $prompt = self::normalizePrompt($input['input'] ?? $input);
-            $data = $input['data'] ?? [];
-            $metadata = $input['metadata'] ?? [];
+            if (self::isContextPayload($input)) {
+                $prompt = self::normalizePrompt($input['input'] ?? '');
+                $data = $input['data'] ?? [];
+                $metadata = $input['metadata'] ?? [];
+
+                return new self(
+                    runId: (string) ($input['run_id'] ?? $runId ?? self::newRunId()),
+                    input: $prompt,
+                    data: is_array($data) ? $data : ['value' => $data],
+                    metadata: is_array($metadata) ? $metadata : ['value' => $metadata],
+                    artifacts: self::hydrateArtifacts($input['artifacts'] ?? []),
+                );
+            }
 
             return new self(
                 runId: $runId ?? self::newRunId(),
-                input: $prompt,
-                data: is_array($data) ? $data : ['value' => $data],
-                metadata: is_array($metadata) ? $metadata : ['value' => $metadata],
+                input: self::normalizePrompt($input),
+                data: $input,
             );
         }
 
@@ -104,6 +113,14 @@ class RunContext
     }
 
     /**
+     * @return array{run_id: string, input: string, data: array<string, mixed>, metadata: array<string, mixed>, artifacts: array<int, array{name: string, content: mixed, metadata: array<string, mixed>, step_agent_class: string|null}>}
+     */
+    public function toQueuePayload(): array
+    {
+        return $this->toArray();
+    }
+
+    /**
      * @param  string|array<string, mixed>  $input
      */
     protected static function normalizePrompt(string|array $input): string
@@ -115,5 +132,40 @@ class RunContext
         $encoded = json_encode($input);
 
         return $encoded !== false ? $encoded : serialize($input);
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     */
+    protected static function isContextPayload(array $input): bool
+    {
+        return array_key_exists('run_id', $input)
+            || array_key_exists('input', $input)
+            || array_key_exists('data', $input)
+            || array_key_exists('metadata', $input)
+            || array_key_exists('artifacts', $input);
+    }
+
+    /**
+     * @return array<int, SwarmArtifact>
+     */
+    protected static function hydrateArtifacts(mixed $artifacts): array
+    {
+        if (! is_array($artifacts)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(function (mixed $artifact): ?SwarmArtifact {
+            if (! is_array($artifact) || ! isset($artifact['name'])) {
+                return null;
+            }
+
+            return new SwarmArtifact(
+                name: (string) $artifact['name'],
+                content: $artifact['content'] ?? null,
+                metadata: is_array($artifact['metadata'] ?? null) ? $artifact['metadata'] : [],
+                stepAgentClass: isset($artifact['step_agent_class']) ? (string) $artifact['step_agent_class'] : null,
+            );
+        }, $artifacts)));
     }
 }
