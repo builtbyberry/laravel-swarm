@@ -8,10 +8,12 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -23,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Database\Schema\Builder;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -58,6 +61,34 @@ function ensureJobsTableExists(): void
         $table->unsignedInteger('available_at');
         $table->unsignedInteger('created_at');
     });
+}
+
+function stealDurableLease(string $runId, string $replacementToken = 'replacement-token'): void
+{
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'execution_token' => $replacementToken,
+            'leased_until' => now()->addMinutes(5),
+            'updated_at' => now(),
+        ]);
+}
+
+function expireDurableLease(string $runId): void
+{
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'leased_until' => now()->subSecond(),
+            'updated_at' => now(),
+        ]);
+}
+
+function dropColumnIfPresent(Builder $schema, string $table, string $column): void
+{
+    if ($schema->hasColumn($table, $column)) {
+        $schema->dropColumns($table, [$column]);
+    }
 }
 
 beforeEach(function () {
@@ -179,6 +210,180 @@ test('durable sequential swarms complete one step per job', function () {
         ->and($history['steps'])->toHaveCount(3);
 });
 
+test('durable workers stop cleanly when lease ownership is lost before context persistence', function () {
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+    $contextStore = app(ContextStore::class);
+
+    app()->instance(ContextStore::class, new class($contextStore, $runId) implements ContextStore
+    {
+        public function __construct(
+            protected ContextStore $inner,
+            protected string $runId,
+        ) {}
+
+        public function put(RunContext $context, int $ttlSeconds): void
+        {
+            stealDurableLease($this->runId);
+            $this->inner->put($context, $ttlSeconds);
+        }
+
+        public function find(string $runId): ?array
+        {
+            return $this->inner->find($runId);
+        }
+    });
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    Event::fake([SwarmCompleted::class]);
+
+    $manager = app(DurableSwarmManager::class);
+    $manager->advance($runId, 0);
+
+    $run = $manager->find($runId);
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($run['status'])->toBe('running')
+        ->and($run['next_step_index'])->toBe(0)
+        ->and($history['status'])->toBe('running')
+        ->and($history['steps'])->toHaveCount(1)
+        ->and(DB::table('swarm_artifacts')->where('run_id', $runId)->count())->toBe(0);
+
+    Event::assertNotDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $runId);
+    FakeWriter::assertNeverPrompted();
+});
+
+test('durable workers stop cleanly when the lease expires before context persistence', function () {
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+    $contextStore = app(ContextStore::class);
+
+    app()->instance(ContextStore::class, new class($contextStore, $runId) implements ContextStore
+    {
+        public function __construct(
+            protected ContextStore $inner,
+            protected string $runId,
+        ) {}
+
+        public function put(RunContext $context, int $ttlSeconds): void
+        {
+            expireDurableLease($this->runId);
+            $this->inner->put($context, $ttlSeconds);
+        }
+
+        public function find(string $runId): ?array
+        {
+            return $this->inner->find($runId);
+        }
+    });
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    Event::fake([SwarmCompleted::class]);
+
+    $manager = app(DurableSwarmManager::class);
+    $manager->advance($runId, 0);
+
+    $run = $manager->find($runId);
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($run['status'])->toBe('running')
+        ->and($run['next_step_index'])->toBe(0)
+        ->and($history['status'])->toBe('running')
+        ->and($history['steps'])->toHaveCount(1)
+        ->and(DB::table('swarm_artifacts')->where('run_id', $runId)->count())->toBe(0);
+
+    Event::assertNotDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $runId);
+    FakeWriter::assertNeverPrompted();
+});
+
+test('durable workers stop cleanly when lease ownership is lost before next step release', function () {
+    ensureJobsTableExists();
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+    $artifacts = app(ArtifactRepository::class);
+
+    app()->instance(ArtifactRepository::class, new class($artifacts, $runId) implements ArtifactRepository
+    {
+        public function __construct(
+            protected ArtifactRepository $inner,
+            protected string $runId,
+        ) {}
+
+        public function storeMany(string $runId, array $artifacts, int $ttlSeconds): void
+        {
+            $this->inner->storeMany($runId, $artifacts, $ttlSeconds);
+            stealDurableLease($this->runId);
+        }
+
+        public function all(string $runId): array
+        {
+            return $this->inner->all($runId);
+        }
+    });
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    Event::fake([SwarmCompleted::class]);
+
+    $manager = app(DurableSwarmManager::class);
+    $manager->advance($runId, 0);
+
+    $run = $manager->find($runId);
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($run['status'])->toBe('running')
+        ->and($run['next_step_index'])->toBe(0)
+        ->and($history['status'])->toBe('running')
+        ->and($history['steps'])->toHaveCount(1)
+        ->and(DB::table('jobs')->count())->toBe(0);
+
+    Event::assertNotDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $runId);
+    FakeWriter::assertNeverPrompted();
+});
+
+test('durable recovery lets a reclaimed owner complete after a stale worker becomes inert', function () {
+    $stolen = false;
+    $runId = null;
+
+    FakeResearcher::fake(function () use (&$stolen, &$runId) {
+        if (! $stolen && $runId !== null) {
+            stealDurableLease($runId);
+            $stolen = true;
+        }
+
+        return 'research-out';
+    });
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+    $manager->advance($runId, 0);
+
+    expect($manager->find($runId)['status'])->toBe('running');
+
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'status' => 'pending',
+            'execution_token' => null,
+            'leased_until' => null,
+            'updated_at' => now()->subMinutes(10),
+        ]);
+
+    Artisan::call('swarm:recover');
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and($history['status'])->toBe('completed')
+        ->and($history['steps'])->toHaveCount(3)
+        ->and($history['output'])->toBe('editor-out');
+});
+
 test('dispatch durable remains lazy until the response is released', function () {
     ensureJobsTableExists();
 
@@ -201,6 +406,75 @@ test('dispatch durable remains lazy until the response is released', function ()
 
     expect(DB::table('jobs')->count())->toBe(1)
         ->and(DB::table('jobs')->latest('id')->first())->not->toBeNull();
+});
+
+test('dispatch durable fails without leaving persisted state behind when the durable table is missing', function () {
+    Schema::drop('swarm_durable_runs');
+
+    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable('durable-task'))
+        ->toThrow(SwarmException::class, 'Database-backed durable swarms require the [swarm_durable_runs] table.');
+
+    expect(DB::table('swarm_run_histories')->count())->toBe(0)
+        ->and(DB::table('swarm_contexts')->count())->toBe(0)
+        ->and(DB::table('swarm_artifacts')->count())->toBe(0);
+});
+
+test('dispatch durable fails without leaving persisted state behind when the context table is missing', function () {
+    Schema::drop('swarm_contexts');
+
+    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable('durable-task'))
+        ->toThrow(SwarmException::class, 'Database-backed durable swarms require the [swarm_contexts] table.');
+
+    expect(DB::table('swarm_run_histories')->count())->toBe(0)
+        ->and(Schema::hasTable('swarm_durable_runs'))->toBeTrue()
+        ->and(DB::table('swarm_durable_runs')->count())->toBe(0)
+        ->and(DB::table('swarm_artifacts')->count())->toBe(0);
+});
+
+test('dispatch durable fails without leaving persisted state behind when the history table is missing', function () {
+    Schema::drop('swarm_run_histories');
+
+    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable('durable-task'))
+        ->toThrow(SwarmException::class, 'Database-backed durable swarms require the [swarm_run_histories] table.');
+
+    expect(Schema::hasTable('swarm_contexts'))->toBeTrue()
+        ->and(DB::table('swarm_contexts')->count())->toBe(0)
+        ->and(Schema::hasTable('swarm_durable_runs'))->toBeTrue()
+        ->and(DB::table('swarm_durable_runs')->count())->toBe(0)
+        ->and(DB::table('swarm_artifacts')->count())->toBe(0);
+});
+
+test('dispatch durable rolls startup writes back when a later startup write fails', function () {
+    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config')) extends DatabaseContextStore
+    {
+        public function put(RunContext $context, int $ttlSeconds): void
+        {
+            parent::put($context, $ttlSeconds);
+
+            throw new RuntimeException('Simulated context persistence failure after startup write.');
+        }
+    });
+    app()->forgetInstance(DurableSwarmManager::class);
+    app()->forgetInstance(SwarmRunner::class);
+
+    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable('durable-task'))
+        ->toThrow(RuntimeException::class, 'Simulated context persistence failure after startup write.');
+
+    expect(DB::table('swarm_durable_runs')->count())->toBe(0)
+        ->and(DB::table('swarm_run_histories')->count())->toBe(0)
+        ->and(DB::table('swarm_contexts')->count())->toBe(0)
+        ->and(DB::table('swarm_artifacts')->count())->toBe(0);
+});
+
+test('dispatch durable fails without leaving persisted state behind when required durable columns are missing', function () {
+    dropColumnIfPresent(Schema::getConnection()->getSchemaBuilder(), 'swarm_durable_runs', 'execution_token');
+
+    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable('durable-task'))
+        ->toThrow(SwarmException::class, 'Database-backed durable swarms require runtime columns on [swarm_durable_runs] for lease ownership and recovery.');
+
+    expect(DB::table('swarm_run_histories')->count())->toBe(0)
+        ->and(DB::table('swarm_contexts')->count())->toBe(0)
+        ->and(DB::table('swarm_artifacts')->count())->toBe(0);
 });
 
 test('durable pause resume and cancel commands update runtime state', function () {

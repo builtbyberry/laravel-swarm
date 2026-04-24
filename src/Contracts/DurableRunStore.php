@@ -16,7 +16,11 @@ interface DurableRunStore
      */
     public function find(string $runId): ?array;
 
+    public function assertReady(): void;
+
     public function acquireLease(string $runId, int $expectedStepIndex, int $stepTimeoutSeconds): ?string;
+
+    public function assertOwned(string $runId, string $executionToken): void;
 
     public function markRunning(string $runId, string $executionToken, int $currentStepIndex): void;
 

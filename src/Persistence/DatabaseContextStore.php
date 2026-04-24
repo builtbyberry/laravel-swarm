@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -64,6 +65,20 @@ class DatabaseContextStore implements ContextStore
             'metadata' => $this->decodeJson($record->metadata, []),
             'artifacts' => $this->decodeJson($record->artifacts, []),
         ];
+    }
+
+    public function assertReady(): void
+    {
+        $table = (string) $this->config->get('swarm.tables.contexts', 'swarm_contexts');
+        $schema = $this->connection->getSchemaBuilder();
+
+        if (! $schema->hasTable($table)) {
+            throw new SwarmException("Database-backed durable swarms require the [{$table}] table.");
+        }
+
+        if (! $schema->hasColumns($table, ['run_id', 'input', 'data', 'metadata', 'artifacts', 'created_at', 'updated_at', 'expires_at'])) {
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for persisted context state.");
+        }
     }
 
     protected function table()

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
@@ -53,6 +54,20 @@ class DatabaseArtifactRepository implements ArtifactRepository
                 'step_agent_class' => $record->step_agent_class,
             ])
             ->all();
+    }
+
+    public function assertReady(): void
+    {
+        $table = (string) $this->config->get('swarm.tables.artifacts', 'swarm_artifacts');
+        $schema = $this->connection->getSchemaBuilder();
+
+        if (! $schema->hasTable($table)) {
+            throw new SwarmException("Database-backed durable swarms require the [{$table}] table.");
+        }
+
+        if (! $schema->hasColumns($table, ['id', 'run_id', 'name', 'content', 'metadata', 'step_agent_class', 'created_at', 'updated_at', 'expires_at'])) {
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for artifact persistence.");
+        }
     }
 
     protected function table()

@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -155,7 +156,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     /**
      * @param  array<string, mixed>  $metadata
      */
-    public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished): void
+    public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
         $values = [
             'status' => $status,
@@ -169,7 +170,30 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             $values['finished_at'] = Carbon::now('UTC');
         }
 
-        $this->update($runId, $values);
+        if ($executionToken === null) {
+            $values['execution_token'] = null;
+            $values['leased_until'] = null;
+            $this->update($runId, $values);
+
+            return;
+        }
+
+        if ($status === 'running') {
+            $values['execution_token'] = $executionToken;
+            $values['leased_until'] = Carbon::now('UTC')->addSeconds($leaseSeconds ?? 0);
+            $this->update($runId, $values);
+
+            return;
+        }
+
+        $values['execution_token'] = null;
+        $values['leased_until'] = null;
+
+        $updated = $this->update($runId, $values, $executionToken, $leaseSeconds);
+
+        if ($updated === 0) {
+            throw new LostSwarmLeaseException("Durable swarm run [{$runId}] no longer owns the execution lease.");
+        }
     }
 
     public function find(string $runId): ?array
@@ -235,6 +259,8 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
 
         if ($executionToken !== null) {
             $query->where('execution_token', $executionToken);
+            $query->whereNotNull('leased_until');
+            $query->where('leased_until', '>=', $timestamp);
 
             if ($leaseSeconds !== null) {
                 $values['leased_until'] = $timestamp->copy()->addSeconds($leaseSeconds);
@@ -320,6 +346,38 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
 
         if (! $this->connection->getSchemaBuilder()->hasColumns($table, ['execution_token', 'leased_until'])) {
             throw new LostSwarmLeaseException('Database-backed queued swarms require [execution_token] and [leased_until] columns on the history table.');
+        }
+    }
+
+    public function assertReady(): void
+    {
+        $table = (string) $this->config->get('swarm.tables.history', 'swarm_run_histories');
+        $schema = $this->connection->getSchemaBuilder();
+
+        if (! $schema->hasTable($table)) {
+            throw new SwarmException("Database-backed durable swarms require the [{$table}] table.");
+        }
+
+        if (! $schema->hasColumns($table, [
+            'run_id',
+            'swarm_class',
+            'topology',
+            'status',
+            'context',
+            'metadata',
+            'steps',
+            'output',
+            'usage',
+            'error',
+            'artifacts',
+            'finished_at',
+            'created_at',
+            'updated_at',
+            'expires_at',
+            'execution_token',
+            'leased_until',
+        ])) {
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for persisted run history.");
         }
     }
 

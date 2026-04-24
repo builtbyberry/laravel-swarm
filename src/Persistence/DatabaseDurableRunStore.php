@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\ConnectionInterface;
@@ -58,6 +60,41 @@ class DatabaseDurableRunStore implements DurableRunStore
         ];
     }
 
+    public function assertReady(): void
+    {
+        $table = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+        $schema = $this->connection->getSchemaBuilder();
+
+        if (! $schema->hasTable($table)) {
+            throw new SwarmException("Database-backed durable swarms require the [{$table}] table.");
+        }
+
+        $requiredColumns = [
+            'run_id',
+            'swarm_class',
+            'topology',
+            'status',
+            'next_step_index',
+            'current_step_index',
+            'total_steps',
+            'timeout_at',
+            'step_timeout_seconds',
+            'execution_token',
+            'leased_until',
+            'pause_requested_at',
+            'cancel_requested_at',
+            'queue_connection',
+            'queue_name',
+            'finished_at',
+            'created_at',
+            'updated_at',
+        ];
+
+        if (! $schema->hasColumns($table, $requiredColumns)) {
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for lease ownership and recovery.");
+        }
+    }
+
     public function acquireLease(string $runId, int $expectedStepIndex, int $stepTimeoutSeconds): ?string
     {
         $token = RunContext::newRunId();
@@ -78,6 +115,22 @@ class DatabaseDurableRunStore implements DurableRunStore
             ]);
 
         return $acquired === 1 ? $token : null;
+    }
+
+    public function assertOwned(string $runId, string $executionToken): void
+    {
+        $now = Carbon::now('UTC');
+
+        $owned = $this->table()
+            ->where('run_id', $runId)
+            ->where('execution_token', $executionToken)
+            ->whereNotNull('leased_until')
+            ->where('leased_until', '>=', $now)
+            ->exists();
+
+        if (! $owned) {
+            throw new LostDurableLeaseException("Durable swarm run [{$runId}] no longer owns the execution lease.");
+        }
     }
 
     public function markRunning(string $runId, string $executionToken, int $currentStepIndex): void
@@ -243,12 +296,19 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     protected function guardedUpdate(string $runId, string $executionToken, array $values): void
     {
-        $values['updated_at'] = Carbon::now('UTC');
+        $now = Carbon::now('UTC');
+        $values['updated_at'] = $now;
 
-        $this->table()
+        $updated = $this->table()
             ->where('run_id', $runId)
             ->where('execution_token', $executionToken)
+            ->whereNotNull('leased_until')
+            ->where('leased_until', '>=', $now)
             ->update($values);
+
+        if ($updated === 0) {
+            throw new LostDurableLeaseException("Durable swarm run [{$runId}] no longer owns the execution lease.");
+        }
     }
 
     protected function table()

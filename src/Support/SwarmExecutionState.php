@@ -20,6 +20,7 @@ class SwarmExecutionState
         public readonly int $ttlSeconds,
         public readonly ?int $leaseSeconds,
         public readonly ?string $executionToken,
+        public readonly mixed $verifyOwnership,
         public readonly RunContext $context,
         public readonly ContextStore $contextStore,
         public readonly ArtifactRepository $artifactRepository,

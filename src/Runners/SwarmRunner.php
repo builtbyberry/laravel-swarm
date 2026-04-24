@@ -100,6 +100,7 @@ class SwarmRunner
             ttlSeconds: $contextTtl,
             leaseSeconds: $queueLeaseSeconds,
             executionToken: null,
+            verifyOwnership: null,
             context: $context,
             contextStore: $this->contextStore,
             artifactRepository: $this->artifactRepository,
@@ -130,6 +131,7 @@ class SwarmRunner
                 ttlSeconds: $contextTtl,
                 leaseSeconds: $queueLeaseSeconds,
                 executionToken: $acquisition->executionToken,
+                verifyOwnership: null,
                 context: $context,
                 contextStore: $this->contextStore,
                 artifactRepository: $this->artifactRepository,
@@ -223,6 +225,7 @@ class SwarmRunner
             ttlSeconds: $contextTtl,
             leaseSeconds: null,
             executionToken: null,
+            verifyOwnership: null,
             context: $context,
             contextStore: $this->contextStore,
             artifactRepository: $this->artifactRepository,
@@ -359,6 +362,11 @@ class SwarmRunner
             || ! $this->durableRuns instanceof DatabaseDurableRunStore) {
             throw new SwarmException('Durable execution requires database-backed swarm persistence and the durable runtime table.');
         }
+
+        $this->contextStore->assertReady();
+        $this->artifactRepository->assertReady();
+        $this->historyStore->assertReady();
+        $this->durableRuns->assertReady();
     }
 
     protected function databaseHistoryStore(): DatabaseRunHistoryStore

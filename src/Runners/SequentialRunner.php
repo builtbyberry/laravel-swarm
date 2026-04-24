@@ -243,9 +243,13 @@ class SequentialRunner
             ])
             ->addArtifact($artifact);
 
+        $this->verifyOwnership($state);
         $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
+        $this->verifyOwnership($state);
         $state->contextStore->put($state->context, $state->ttlSeconds);
+        $this->verifyOwnership($state);
         $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
+        $this->verifyOwnership($state);
         $state->events->dispatch(new SwarmStepCompleted(
             runId: $state->context->runId,
             swarmClass: $state->swarm::class,
@@ -260,6 +264,13 @@ class SequentialRunner
         ));
 
         return $step;
+    }
+
+    protected function verifyOwnership(SwarmExecutionState $state): void
+    {
+        if (is_callable($state->verifyOwnership)) {
+            ($state->verifyOwnership)();
+        }
     }
 
     /**
