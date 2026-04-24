@@ -15,6 +15,7 @@ class SwarmExecutionState
     public function __construct(
         public readonly Swarm $swarm,
         public readonly string $topology,
+        public readonly string $executionMode,
         public readonly float $deadlineMonotonic,
         public readonly int $maxAgentExecutions,
         public readonly int $ttlSeconds,

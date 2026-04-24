@@ -10,10 +10,11 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 
 #[Topology(TopologyEnum::Hierarchical)]
-class FakeHierarchicalMultiRouteSwarm implements Swarm
+class FakeHierarchicalFullSwarm implements Swarm
 {
     use Runnable;
 
@@ -23,6 +24,7 @@ class FakeHierarchicalMultiRouteSwarm implements Swarm
             new FakeHierarchicalCoordinator,
             new FakeWriter,
             new FakeEditor,
+            new FakeResearcher,
         ];
     }
 }

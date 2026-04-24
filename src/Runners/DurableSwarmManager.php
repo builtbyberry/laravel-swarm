@@ -292,6 +292,7 @@ class DurableSwarmManager
         $state = new SwarmExecutionState(
             swarm: $swarm,
             topology: $run['topology'],
+            executionMode: 'durable',
             deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
             maxAgentExecutions: (int) $run['total_steps'],
             ttlSeconds: $this->ttlSeconds(),

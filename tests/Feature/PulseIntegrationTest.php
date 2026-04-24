@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Pulse\Support\SwarmPulseKey;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Jobs\NoOpQueuedJob;
@@ -50,6 +51,22 @@ beforeEach(function () {
     ]);
 
     FakeResearcher::fake(['research-out']);
+    FakeHierarchicalCoordinator::fake([[
+        'start_at' => 'writer_node',
+        'nodes' => [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'editor_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-task',
+            ],
+        ],
+    ]]);
     FakeWriter::fake(['writer-out']);
     FakeEditor::fake(['editor-out']);
 

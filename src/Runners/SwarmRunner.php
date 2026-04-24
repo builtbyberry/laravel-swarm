@@ -95,6 +95,7 @@ class SwarmRunner
         $state = new SwarmExecutionState(
             swarm: $swarm,
             topology: $topology->value,
+            executionMode: $executionMode,
             deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
             maxAgentExecutions: $maxAgentExecutions,
             ttlSeconds: $contextTtl,
@@ -126,6 +127,7 @@ class SwarmRunner
             $state = new SwarmExecutionState(
                 swarm: $swarm,
                 topology: $topology->value,
+                executionMode: $executionMode,
                 deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
                 maxAgentExecutions: $maxAgentExecutions,
                 ttlSeconds: $contextTtl,
@@ -220,6 +222,7 @@ class SwarmRunner
         $state = new SwarmExecutionState(
             swarm: $swarm,
             topology: $topology->value,
+            executionMode: self::EXECUTION_MODE_STREAM,
             deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
             maxAgentExecutions: $maxAgentExecutions,
             ttlSeconds: $contextTtl,

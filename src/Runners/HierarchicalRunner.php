@@ -4,87 +4,98 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
-use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
-use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
-use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Routing\HierarchicalFinishNode;
+use BuiltByBerry\LaravelSwarm\Routing\HierarchicalParallelNode;
+use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
+use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
+use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
+use Illuminate\Concurrency\ConcurrencyManager;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Responses\AgentResponse;
 
 class HierarchicalRunner
 {
+    public function __construct(
+        protected HierarchicalRoutePlanner $planner,
+        protected ConcurrencyManager $concurrency,
+        protected SwarmStepRecorder $stepsRecorder,
+    ) {}
+
     public function run(SwarmExecutionState $state): SwarmResponse
     {
-        $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
+        $agents = $state->swarm->agents();
 
         if ($agents === []) {
             throw new SwarmException('Hierarchical swarms must define at least one agent.');
         }
 
-        if (! method_exists($state->swarm, 'route')) {
-            throw new SwarmException('Hierarchical swarms must define a route() method.');
-        }
-
         /** @var Agent $coordinator */
         $coordinator = array_shift($agents);
+        $this->planner->assertCoordinatorCanPlan($coordinator);
+        $workerMap = $this->workerMap($agents);
+
         $steps = [];
         $mergedUsage = [];
+        $executedNodeIds = [];
+        $executedAgentClasses = [];
+        $parallelGroups = [];
+        $nodeOutputs = [];
+        $nextIndex = 1;
 
         $coordinatorStep = $this->executeAgent(
             state: $state,
             agent: $coordinator,
             input: $state->context->input,
             index: 0,
+            metadata: ['node_role' => 'coordinator'],
         );
 
         $steps[] = $coordinatorStep;
         $mergedUsage = $this->mergeUsage($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
 
-        /** @var array<int, array{agent?: Agent, agent_class?: class-string, input: string, metadata?: array<string, mixed>}> $routes */
-        $routes = $state->swarm->route($coordinatorStep->output, $agents, $state->context);
-        $remainingExecutions = max($state->maxAgentExecutions - 1, 0);
-        $routes = array_slice($routes, 0, $remainingExecutions);
-        $routedClasses = [];
-        $lastOutput = $coordinatorStep->output;
+        $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorStep->output, $state->swarm::class);
+        $this->ensurePlanWithinExecutionBudget($state, $plan);
 
-        foreach ($routes as $offset => $instruction) {
-            $agent = $this->resolveRoutedAgent($instruction, $agents);
-            $routedClasses[] = $agent::class;
-
-            $step = $this->executeAgent(
-                state: $state,
-                agent: $agent,
-                input: (string) $instruction['input'],
-                index: $offset + 1,
-                metadata: is_array($instruction['metadata'] ?? null) ? $instruction['metadata'] : [],
-            );
-
-            $steps[] = $step;
-            $lastOutput = $step->output;
-            $mergedUsage = $this->mergeUsage($mergedUsage, (array) ($step->metadata['usage'] ?? []));
-        }
+        $finalOutput = $this->executePlan(
+            state: $state,
+            plan: $plan,
+            workerMap: $workerMap,
+            steps: $steps,
+            mergedUsage: $mergedUsage,
+            executedNodeIds: $executedNodeIds,
+            executedAgentClasses: $executedAgentClasses,
+            parallelGroups: $parallelGroups,
+            nodeOutputs: $nodeOutputs,
+            nextIndex: $nextIndex,
+        );
 
         $state->context
             ->mergeData([
-                'last_output' => $lastOutput,
+                'last_output' => $finalOutput,
                 'steps' => count($steps),
+                'hierarchical_node_outputs' => $nodeOutputs,
             ])
             ->mergeMetadata([
                 'topology' => $state->topology,
                 'coordinator_agent_class' => $coordinator::class,
-                'routed_agent_classes' => $routedClasses,
+                'route_plan_start' => $plan->startAt,
+                'executed_node_ids' => $executedNodeIds,
+                'executed_agent_classes' => $executedAgentClasses,
+                'parallel_groups' => $parallelGroups,
                 'executed_steps' => count($steps),
+                'execution_mode' => $state->executionMode,
             ]);
 
         $state->contextStore->put($state->context, $state->ttlSeconds);
 
         return new SwarmResponse(
-            output: $lastOutput,
+            output: $finalOutput,
             steps: $steps,
             usage: $mergedUsage,
             context: $state->context,
@@ -93,10 +104,242 @@ class HierarchicalRunner
                 'run_id' => $state->context->runId,
                 'topology' => $state->topology,
                 'coordinator_agent_class' => $coordinator::class,
-                'routed_agent_classes' => $routedClasses,
+                'route_plan_start' => $plan->startAt,
+                'executed_node_ids' => $executedNodeIds,
+                'executed_agent_classes' => $executedAgentClasses,
+                'parallel_groups' => $parallelGroups,
                 'executed_steps' => count($steps),
+                'execution_mode' => $state->executionMode,
             ],
         );
+    }
+
+    /**
+     * @param  array<class-string, Agent>  $workerMap
+     * @param  array<int, SwarmStep>  $steps
+     * @param  array<string, int>  $mergedUsage
+     * @param  array<int, string>  $executedNodeIds
+     * @param  array<int, string>  $executedAgentClasses
+     * @param  array<int, array{node_id: string, branches: array<int, string>}>  $parallelGroups
+     * @param  array<string, string>  $nodeOutputs
+     */
+    protected function executePlan(
+        SwarmExecutionState $state,
+        HierarchicalRoutePlan $plan,
+        array $workerMap,
+        array &$steps,
+        array &$mergedUsage,
+        array &$executedNodeIds,
+        array &$executedAgentClasses,
+        array &$parallelGroups,
+        array &$nodeOutputs,
+        int &$nextIndex,
+    ): string {
+        $currentNodeId = $plan->startAt;
+        $lastOutput = null;
+
+        while ($currentNodeId !== null) {
+            $node = $plan->node($currentNodeId);
+
+            $executedNodeIds[] = $node->id;
+
+            if ($node instanceof HierarchicalWorkerNode) {
+                $step = $this->executeAgent(
+                    state: $state,
+                    agent: $workerMap[$node->agentClass],
+                    input: $this->composePrompt($node->prompt, $node->withOutputs, $nodeOutputs, $node->id),
+                    index: $nextIndex,
+                    metadata: array_merge($node->metadata, ['node_id' => $node->id]),
+                );
+
+                $steps[] = $step;
+                $mergedUsage = $this->mergeUsage($mergedUsage, (array) ($step->metadata['usage'] ?? []));
+                $nodeOutputs[$node->id] = $step->output;
+                $executedAgentClasses[] = $step->agentClass;
+                $lastOutput = $step->output;
+                $nextIndex++;
+                $currentNodeId = $node->next;
+
+                continue;
+            }
+
+            if ($node instanceof HierarchicalParallelNode) {
+                $parallelGroups[] = ['node_id' => $node->id, 'branches' => $node->branches];
+
+                if ($state->executionMode === 'queue') {
+                    foreach ($node->branches as $branchNodeId) {
+                        /** @var HierarchicalWorkerNode $branch */
+                        $branch = $plan->node($branchNodeId);
+                        $step = $this->executeAgent(
+                            state: $state,
+                            agent: $workerMap[$branch->agentClass],
+                            input: $this->composePrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id),
+                            index: $nextIndex,
+                            metadata: array_merge($branch->metadata, [
+                                'node_id' => $branch->id,
+                                'parent_parallel_node_id' => $node->id,
+                            ]),
+                        );
+
+                        $steps[] = $step;
+                        $mergedUsage = $this->mergeUsage($mergedUsage, (array) ($step->metadata['usage'] ?? []));
+                        $nodeOutputs[$branch->id] = $step->output;
+                        $executedNodeIds[] = $branch->id;
+                        $executedAgentClasses[] = $step->agentClass;
+                        $lastOutput = $step->output;
+                        $nextIndex++;
+                    }
+                } else {
+                    $branchDefinitions = [];
+                    $callbacks = [];
+
+                    foreach ($node->branches as $branchNodeId) {
+                        /** @var HierarchicalWorkerNode $branch */
+                        $branch = $plan->node($branchNodeId);
+                        $worker = $workerMap[$branch->agentClass];
+                        $input = $this->composePrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
+
+                        $this->stepsRecorder->started($state, $nextIndex + count($branchDefinitions), $worker::class, $input);
+
+                        $branchDefinitions[$branchNodeId] = [
+                            'node' => $branch,
+                            'agent' => $worker,
+                            'input' => $input,
+                            'index' => $nextIndex + count($branchDefinitions),
+                        ];
+
+                        $callbacks[$branchNodeId] = function () use ($worker, $input): array {
+                            $startedAt = MonotonicTime::now();
+                            $response = $worker->prompt($input);
+
+                            return [
+                                'output' => (string) $response,
+                                'usage' => $response instanceof AgentResponse ? $response->usage->toArray() : [],
+                                'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                            ];
+                        };
+                    }
+
+                    /** @var array<string, array{output: string, usage: array<string, int>, duration_ms: int}> $results */
+                    $results = $this->concurrency->driver()->run($callbacks);
+
+                    foreach ($node->branches as $branchNodeId) {
+                        /** @var HierarchicalWorkerNode $branch */
+                        $branch = $branchDefinitions[$branchNodeId]['node'];
+                        $input = $branchDefinitions[$branchNodeId]['input'];
+                        $index = $branchDefinitions[$branchNodeId]['index'];
+                        $row = $results[$branchNodeId] ?? ['output' => '', 'usage' => [], 'duration_ms' => 1];
+
+                        $step = $this->stepsRecorder->completed(
+                            state: $state,
+                            index: $index,
+                            agentClass: $branch->agentClass,
+                            input: $input,
+                            output: $row['output'],
+                            usage: $row['usage'],
+                            durationMs: $row['duration_ms'],
+                            metadata: array_merge($branch->metadata, [
+                                'index' => $index,
+                                'usage' => $row['usage'],
+                                'node_id' => $branch->id,
+                                'parent_parallel_node_id' => $node->id,
+                            ]),
+                            updateContext: false,
+                            storeContext: false,
+                            includeUsageInMetadata: false,
+                        );
+
+                        $steps[] = $step;
+                        $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
+                        $nodeOutputs[$branch->id] = $step->output;
+                        $executedNodeIds[] = $branch->id;
+                        $executedAgentClasses[] = $step->agentClass;
+                        $lastOutput = $step->output;
+                    }
+
+                    $state->contextStore->put($state->context, $state->ttlSeconds);
+                    $nextIndex += count($node->branches);
+                }
+
+                $currentNodeId = $node->next;
+
+                continue;
+            }
+
+            /** @var HierarchicalFinishNode $node */
+            return $node->output ?? $this->resolveOutputFromNode($node, $nodeOutputs);
+        }
+
+        return $lastOutput ?? '';
+    }
+
+    protected function ensurePlanWithinExecutionBudget(SwarmExecutionState $state, HierarchicalRoutePlan $plan): void
+    {
+        $requiredExecutions = 1 + $plan->reachableWorkerCount();
+
+        if ($requiredExecutions <= $state->maxAgentExecutions) {
+            return;
+        }
+
+        throw new SwarmException(sprintf(
+            "%s: hierarchical route plan requires %d agent executions but the swarm allows %d. Increase #[MaxAgentSteps] or reduce the plan's worker nodes.",
+            $state->swarm::class,
+            $requiredExecutions,
+            $state->maxAgentExecutions,
+        ));
+    }
+
+    protected function resolveOutputFromNode(HierarchicalFinishNode $node, array $nodeOutputs): string
+    {
+        $sourceNodeId = $node->outputFrom;
+
+        if ($sourceNodeId === null) {
+            throw new SwarmException("Hierarchical finish node [{$node->id}] did not resolve a final output.");
+        }
+
+        if (! array_key_exists($sourceNodeId, $nodeOutputs)) {
+            throw new SwarmException("Hierarchical finish node [{$node->id}] cannot resolve output from unexecuted node [{$sourceNodeId}].");
+        }
+
+        return $nodeOutputs[$sourceNodeId];
+    }
+
+    /**
+     * @param  array<string, string>  $withOutputs
+     * @param  array<string, string>  $nodeOutputs
+     */
+    protected function composePrompt(string $prompt, array $withOutputs, array $nodeOutputs, string $nodeId): string
+    {
+        if ($withOutputs === []) {
+            return $prompt;
+        }
+
+        $sections = [];
+
+        foreach ($withOutputs as $alias => $sourceNodeId) {
+            if (! array_key_exists($sourceNodeId, $nodeOutputs)) {
+                throw new SwarmException("Hierarchical worker node [{$nodeId}] cannot resolve named output [{$alias}] from unexecuted node [{$sourceNodeId}].");
+            }
+
+            $sections[] = "[{$alias}]\n".$nodeOutputs[$sourceNodeId];
+        }
+
+        return rtrim($prompt)."\n\nNamed outputs:\n".implode("\n\n", $sections);
+    }
+
+    /**
+     * @param  array<int, Agent>  $workers
+     * @return array<class-string, Agent>
+     */
+    protected function workerMap(array $workers): array
+    {
+        $map = [];
+
+        foreach ($workers as $worker) {
+            $map[$worker::class] = $worker;
+        }
+
+        return $map;
     }
 
     /**
@@ -108,92 +351,23 @@ class HierarchicalRunner
             throw new SwarmTimeoutException('The swarm exceeded its configured timeout while running hierarchically.');
         }
 
-        $state->events->dispatch(new SwarmStepStarted(
-            runId: $state->context->runId,
-            swarmClass: $state->swarm::class,
-            index: $index,
-            agentClass: $agent::class,
-            input: $input,
-            metadata: $state->context->metadata,
-        ));
+        $this->stepsRecorder->started($state, $index, $agent::class, $input);
 
         $startedAt = MonotonicTime::now();
         $response = $agent->prompt($input);
         $output = (string) $response;
         $usage = $this->usageFromResponse($response);
-        $artifact = new SwarmArtifact(
-            name: 'agent_output',
-            content: $output,
-            metadata: array_merge(['index' => $index, 'usage' => $usage], $metadata),
-            stepAgentClass: $agent::class,
-        );
-        $step = new SwarmStep(
-            agentClass: $agent::class,
-            input: $input,
-            output: $output,
-            artifacts: [$artifact],
-            metadata: array_merge(['index' => $index, 'usage' => $usage], $metadata),
-        );
 
-        $state->context
-            ->mergeData([
-                'last_output' => $output,
-                'steps' => $index + 1,
-            ])
-            ->mergeMetadata([
-                'topology' => $state->topology,
-                'last_agent' => $agent::class,
-            ])
-            ->addArtifact($artifact);
-
-        $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
-        $state->contextStore->put($state->context, $state->ttlSeconds);
-        $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
-        $state->events->dispatch(new SwarmStepCompleted(
-            runId: $state->context->runId,
-            swarmClass: $state->swarm::class,
-            topology: $state->topology,
+        return $this->stepsRecorder->completed(
+            state: $state,
             index: $index,
             agentClass: $agent::class,
             input: $input,
             output: $output,
+            usage: $usage,
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-            metadata: $step->metadata,
-            artifacts: $step->artifacts,
-        ));
-
-        return $step;
-    }
-
-    /**
-     * @param  array{agent?: Agent, agent_class?: class-string, input: string, metadata?: array<string, mixed>}  $instruction
-     * @param  array<int, Agent>  $agents
-     */
-    protected function resolveRoutedAgent(array $instruction, array $agents): Agent
-    {
-        if (($instruction['agent'] ?? null) instanceof Agent) {
-            foreach ($agents as $agent) {
-                if ($agent === $instruction['agent']) {
-                    return $agent;
-                }
-            }
-
-            $class = $instruction['agent']::class;
-
-            throw new SwarmException("Hierarchical route references unknown agent class [{$class}]. Verify it is returned from agents().");
-        }
-
-        $class = $instruction['agent_class'] ?? null;
-
-        foreach ($agents as $agent) {
-            if ($class === $agent::class) {
-                return $agent;
-            }
-        }
-
-        $unknownClass = is_string($class) ? $class : 'unknown';
-
-        throw new SwarmException("Hierarchical route references unknown agent class [{$unknownClass}]. Verify it is returned from agents().");
+            metadata: $metadata,
+        );
     }
 
     /**

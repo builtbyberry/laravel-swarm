@@ -4,10 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
-use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
-use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
-use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -18,6 +15,10 @@ use Laravel\Ai\Streaming\Events\TextDelta;
 
 class SequentialRunner
 {
+    public function __construct(
+        protected SwarmStepRecorder $steps,
+    ) {}
+
     public function run(SwarmExecutionState $state): SwarmResponse
     {
         $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
@@ -65,14 +66,7 @@ class SequentialRunner
             $input = $state->context->prompt();
             $agentName = class_basename($agent::class);
 
-            $state->events->dispatch(new SwarmStepStarted(
-                runId: $state->context->runId,
-                swarmClass: $state->swarm::class,
-                index: $index,
-                agentClass: $agent::class,
-                input: $input,
-                metadata: $state->context->metadata,
-            ));
+            $this->steps->started($state, $index, $agent::class, $input);
 
             yield ['event' => 'step', 'agent' => $agentName, 'status' => 'running'];
 
@@ -89,92 +83,32 @@ class SequentialRunner
                     }
                 }
 
-                $artifact = new SwarmArtifact(
-                    name: 'agent_output',
-                    content: $output,
-                    metadata: ['index' => $index],
-                    stepAgentClass: $agent::class,
-                );
-                $step = new SwarmStep(
-                    agentClass: $agent::class,
-                    input: $input,
-                    output: $output,
-                    artifacts: [$artifact],
-                    metadata: ['index' => $index],
-                );
-
-                $state->context
-                    ->mergeData([
-                        'last_output' => $output,
-                        'steps' => $index + 1,
-                    ])
-                    ->mergeMetadata([
-                        'topology' => $state->topology,
-                        'last_agent' => $agent::class,
-                    ])
-                    ->addArtifact($artifact);
-
-                $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
-                $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
-                $state->events->dispatch(new SwarmStepCompleted(
-                    runId: $state->context->runId,
-                    swarmClass: $state->swarm::class,
-                    topology: $state->topology,
+                $this->steps->completed(
+                    state: $state,
                     index: $index,
                     agentClass: $agent::class,
                     input: $input,
                     output: $output,
+                    usage: [],
                     durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-                    metadata: $step->metadata,
-                    artifacts: $step->artifacts,
-                ));
+                    includeUsageInMetadata: false,
+                );
             } else {
                 $response = $agent->prompt($input);
                 $output = (string) $response;
                 $usage = $this->usageFromResponse($response);
                 $mergedUsage = $this->mergeUsage($mergedUsage, $usage);
-                $artifact = new SwarmArtifact(
-                    name: 'agent_output',
-                    content: $output,
-                    metadata: ['index' => $index, 'usage' => $usage],
-                    stepAgentClass: $agent::class,
-                );
-                $step = new SwarmStep(
-                    agentClass: $agent::class,
-                    input: $input,
-                    output: $output,
-                    artifacts: [$artifact],
-                    metadata: ['index' => $index, 'usage' => $usage],
-                );
 
-                $state->context
-                    ->mergeData([
-                        'last_output' => $output,
-                        'steps' => $index + 1,
-                    ])
-                    ->mergeMetadata([
-                        'topology' => $state->topology,
-                        'last_agent' => $agent::class,
-                    ])
-                    ->addArtifact($artifact);
-
-                $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
-                $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
-                $state->events->dispatch(new SwarmStepCompleted(
-                    runId: $state->context->runId,
-                    swarmClass: $state->swarm::class,
-                    topology: $state->topology,
+                $this->steps->completed(
+                    state: $state,
                     index: $index,
                     agentClass: $agent::class,
                     input: $input,
                     output: $output,
+                    usage: $usage,
                     durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-                    metadata: $step->metadata,
-                    artifacts: $step->artifacts,
-                ));
+                );
             }
-
-            $state->contextStore->put($state->context, $state->ttlSeconds);
 
             yield ['event' => 'step', 'agent' => $agentName, 'status' => 'done'];
         }
@@ -198,14 +132,7 @@ class SequentialRunner
         }
 
         $input = $state->context->prompt();
-        $state->events->dispatch(new SwarmStepStarted(
-            runId: $state->context->runId,
-            swarmClass: $state->swarm::class,
-            index: $index,
-            agentClass: $agent::class,
-            input: $input,
-            metadata: $state->context->metadata,
-        ));
+        $this->steps->started($state, $index, $agent::class, $input);
 
         $startedAt = MonotonicTime::now();
         $response = $agent->prompt($input);
@@ -216,61 +143,16 @@ class SequentialRunner
             $usage,
         );
 
-        $artifact = new SwarmArtifact(
-            name: 'agent_output',
-            content: $output,
-            metadata: ['index' => $index, 'usage' => $usage],
-            stepAgentClass: $agent::class,
-        );
-
-        $step = new SwarmStep(
-            agentClass: $agent::class,
-            input: $input,
-            output: $output,
-            artifacts: [$artifact],
-            metadata: ['index' => $index, 'usage' => $usage],
-        );
-
-        $state->context
-            ->mergeData([
-                'last_output' => $output,
-                'steps' => $index + 1,
-            ])
-            ->mergeMetadata([
-                'topology' => $state->topology,
-                'last_agent' => $agent::class,
-                'usage' => $mergedUsage,
-            ])
-            ->addArtifact($artifact);
-
-        $this->verifyOwnership($state);
-        $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
-        $this->verifyOwnership($state);
-        $state->contextStore->put($state->context, $state->ttlSeconds);
-        $this->verifyOwnership($state);
-        $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
-        $this->verifyOwnership($state);
-        $state->events->dispatch(new SwarmStepCompleted(
-            runId: $state->context->runId,
-            swarmClass: $state->swarm::class,
-            topology: $state->topology,
+        return $this->steps->completed(
+            state: $state,
             index: $index,
             agentClass: $agent::class,
             input: $input,
             output: $output,
+            usage: $usage,
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-            metadata: $step->metadata,
-            artifacts: $step->artifacts,
-        ));
-
-        return $step;
-    }
-
-    protected function verifyOwnership(SwarmExecutionState $state): void
-    {
-        if (is_callable($state->verifyOwnership)) {
-            ($state->verifyOwnership)();
-        }
+            contextUsage: $mergedUsage,
+        );
     }
 
     /**

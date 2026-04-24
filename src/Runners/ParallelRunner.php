@@ -4,12 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
-use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
-use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
-use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
-use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
@@ -19,6 +15,7 @@ class ParallelRunner
 {
     public function __construct(
         protected ConcurrencyManager $concurrency,
+        protected SwarmStepRecorder $stepsRecorder,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -32,14 +29,7 @@ class ParallelRunner
 
         $callbacks = [];
         foreach ($agents as $index => $agent) {
-            $state->events->dispatch(new SwarmStepStarted(
-                runId: $state->context->runId,
-                swarmClass: $state->swarm::class,
-                index: $index,
-                agentClass: $agent::class,
-                input: $input,
-                metadata: $state->context->metadata,
-            ));
+            $this->stepsRecorder->started($state, $index, $agent::class, $input);
 
             $callbacks[$index] = function () use ($agent, $input): array {
                 $startedAt = MonotonicTime::now();
@@ -67,37 +57,22 @@ class ParallelRunner
 
         foreach ($agents as $index => $agent) {
             $row = $results[$index] ?? ['output' => '', 'usage' => [], 'class' => $agent::class, 'duration_ms' => 1];
-            $artifact = new SwarmArtifact(
-                name: 'agent_output',
-                content: $row['output'],
-                metadata: ['index' => $index, 'usage' => $row['usage']],
-                stepAgentClass: $row['class'],
-            );
-            $step = new SwarmStep(
+            $step = $this->stepsRecorder->completed(
+                state: $state,
+                index: $index,
                 agentClass: $row['class'],
                 input: $input,
                 output: $row['output'],
-                artifacts: [$artifact],
-                metadata: ['index' => $index, 'usage' => $row['usage']],
+                usage: $row['usage'],
+                durationMs: $row['duration_ms'],
+                updateContext: false,
+                storeContext: false,
+                storeArtifacts: false,
             );
 
             $steps[] = $step;
             $outputs[] = $row['output'];
             $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
-            $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
-            $state->context->addArtifact($artifact);
-            $state->events->dispatch(new SwarmStepCompleted(
-                runId: $state->context->runId,
-                swarmClass: $state->swarm::class,
-                topology: $state->topology,
-                index: $index,
-                agentClass: $row['class'],
-                input: $input,
-                output: $row['output'],
-                durationMs: $row['duration_ms'],
-                metadata: $step->metadata,
-                artifacts: $step->artifacts,
-            ));
         }
 
         $combined = implode("\n\n", $outputs);

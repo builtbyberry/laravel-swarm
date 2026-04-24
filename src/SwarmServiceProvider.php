@@ -30,6 +30,7 @@ use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -55,6 +56,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(ParallelRunner::class);
 
         $this->app->singleton(HierarchicalRunner::class);
+        $this->app->singleton(SwarmStepRecorder::class);
 
         $this->app->singleton(SwarmRunner::class);
         $this->app->singleton(SwarmHistory::class);
