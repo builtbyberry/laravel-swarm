@@ -48,10 +48,11 @@ foreach (ArticlePipeline::make()->stream([
 ```
 
 Laravel Swarm stores array input as structured task data and makes it available
-through the run context during execution. In a hierarchical swarm, your
-`route()` method receives it via `$context->input` and `$context->data`. In
-sequential and parallel swarms, the array is serialized as the prompt each
-agent receives.
+through the run context during execution. In a hierarchical swarm, the
+coordinator still receives the serialized task as its prompt, and the run
+context remains available to the swarm runtime while it validates and executes
+the returned route plan. In sequential and parallel swarms, the array is
+serialized as the prompt each agent receives.
 
 ## Using Run Contexts
 

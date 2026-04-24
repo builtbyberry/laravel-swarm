@@ -383,53 +383,47 @@ Agents run at the same time and each receives the original task.
 
 ### Hierarchical
 
-In a hierarchical swarm, the first agent acts as the coordinator and decides which downstream agents should run next.
+In a hierarchical swarm, the first agent acts as the coordinator and returns a
+structured route plan. Laravel Swarm validates that plan as a DAG and then
+executes the selected worker nodes directly.
 
 ```php
-use App\Ai\Agents\PlannerAgent;
-use App\Ai\Agents\ResearchAgent;
-use App\Ai\Agents\WriterAgent;
+use App\Ai\Agents\DraftAgent;
+use App\Ai\Agents\PolicyAgent;
+use App\Ai\Agents\SupportCoordinator;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology;
 use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
-use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
 #[Topology(TopologyEnum::Hierarchical)]
-class ArticlePlanningSwarm implements Swarm
+class SupportRoutingSwarm implements Swarm
 {
     use Runnable;
 
     public function agents(): array
     {
         return [
-            new PlannerAgent,
-            new ResearchAgent,
-            new WriterAgent,
-        ];
-    }
-
-    public function route(string $coordinatorOutput, array $agents, RunContext $context): array
-    {
-        return [
-            [
-                'agent_class' => ResearchAgent::class,
-                'input' => 'Research the claims in this plan: '.$coordinatorOutput,
-                'metadata' => ['stage' => 'research'],
-            ],
-            [
-                'agent_class' => WriterAgent::class,
-                'input' => 'Write the draft using this approved plan: '.$coordinatorOutput,
-                'metadata' => ['stage' => 'draft'],
-            ],
+            new SupportCoordinator,
+            new PolicyAgent,
+            new DraftAgent,
         ];
     }
 }
 ```
 
-Route instructions may contain `agent` or `agent_class`, `input`, and optional `metadata`. An empty route completes successfully with the coordinator output. A missing `route()` method fails fast.
+The coordinator must implement Laravel AI structured output and return a plan
+with `start_at` and `nodes`. Worker nodes, parallel nodes, and finish nodes are
+supported. `run()` executes parallel groups concurrently; `queue()` executes
+parallel groups sequentially in declaration order in v1. Plans are still
+validated with parallel-safe dependency rules, so branch nodes cannot depend on
+sibling branch outputs. Parallel groups must define `next` and join into a
+subsequent node before the workflow can finish. `#[MaxAgentSteps]` counts the
+coordinator plus each reachable worker node and fails before worker execution
+when a plan exceeds the limit.
 
-For the coordinator / worker mental model and structured output guidance, see [Hierarchical Routing](docs/hierarchical-routing.md).
+For the full routing contract, plan shape, and validation rules, see
+[Hierarchical Routing](docs/hierarchical-routing.md).
 
 ## Testing
 

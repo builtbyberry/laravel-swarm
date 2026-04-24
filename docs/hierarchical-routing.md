@@ -1,35 +1,30 @@
 # Hierarchical Routing
 
-Hierarchical swarms use a coordinator / worker model.
+Hierarchical swarms use a coordinator-owned routing plan.
 
-The first agent acts as the coordinator. It looks at the task, decides what should happen next, and routes work to the remaining agents.
+The first agent returned by `agents()` is the coordinator. It must implement
+Laravel AI structured output and return the full route plan. Laravel Swarm then
+normalizes, validates, and executes that plan directly.
 
-This is useful when one agent should plan and other agents should execute.
+There is no `route()` callback anymore. The coordinator is the single source of
+truth for what should run next.
 
-## The Mental Model
+## Mental Model
 
-Think about a hierarchical swarm in two stages:
+Think about a hierarchical swarm in four phases:
 
-1. the coordinator decides what work should happen
-2. the workers carry out that work
+1. the coordinator reads the task
+2. the coordinator returns a structured route plan
+3. Laravel Swarm validates that plan as a DAG
+4. worker nodes execute in the validated order
 
-That is different from a sequential swarm, where every agent always runs in order, and from a parallel swarm, where every agent always receives the original task.
+Use a hierarchical swarm when routing is part of the workflow itself. If every
+agent should always run, sequential or parallel is usually simpler.
 
-## When To Use A Hierarchical Swarm
+## Coordinator Schema
 
-Choose a hierarchical swarm when:
-
-- one agent should inspect or classify the task first
-- only some downstream agents should run
-- routing decisions are part of the workflow itself
-
-If every agent should always run, sequential or parallel is usually a better fit.
-
-## A Real Example
-
-A support triage swarm is a natural fit for hierarchical routing. The coordinator reads the incoming request and decides whether it needs a billing specialist, a technical specialist, or a general response. Not every request needs every agent.
-
-The key design decision is making the coordinator use structured output rather than returning prose. Routing on free-form text is fragile — a coordinator that says "This looks like a billing issue with some technical aspects" is hard to parse reliably. Use `HasStructuredOutput` to enforce a predictable response shape instead:
+The coordinator must implement `HasStructuredOutput` and declare the top-level
+route-plan shape:
 
 ```php
 <?php
@@ -40,137 +35,298 @@ use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\HasStructuredOutput;
 use Laravel\Ai\Promptable;
-use Stringable;
 
-class TriageAgent implements Agent, HasStructuredOutput
+class TriageCoordinator implements Agent, HasStructuredOutput
 {
     use Promptable;
 
-    public function instructions(): Stringable|string
+    public function instructions(): string
     {
-        return 'You are a support request classifier. Read the incoming 
-                request and classify it as billing, technical, or general.';
+        return 'Plan the next workers for this support request.';
     }
 
     public function schema(JsonSchema $schema): array
     {
         return [
-            'category' => $schema->string()
-                ->enum(['billing', 'technical', 'general'])
-                ->required(),
+            'start_at' => $schema->string()->required(),
+            'nodes' => $schema->object()->required(),
         ];
     }
 }
 ```
 
-The schema enforces that the coordinator always returns a `category` field with one of the three allowed values. No prompt engineering required to make the output parseable.
+The normalized payload contract is:
 
-With a structured coordinator in place, the swarm and its routing logic stay clean:
+- `start_at`: the node id where execution begins
+- `nodes`: an object keyed by node id
+
+Node definitions use a `type` discriminator:
+
+- `worker`
+- `parallel`
+- `finish`
+
+## Node Types
+
+### Worker Nodes
+
+Worker nodes execute one of the swarm's non-coordinator agents.
+
+```json
+{
+  "type": "worker",
+  "agent": "App\\Ai\\Agents\\BillingResponder",
+  "prompt": "Draft the billing response.",
+  "with_outputs": {
+    "classification": "classify_node"
+  },
+  "metadata": {
+    "stage": "response"
+  },
+  "next": "finish_node"
+}
+```
+
+Fields:
+
+- `agent`: a worker agent class returned from `agents()`
+- `prompt`: the literal base prompt for that worker
+- `with_outputs`: optional alias-to-node-id map
+- `metadata`: optional step metadata
+- `next`: optional next node id
+
+### Parallel Nodes
+
+Parallel nodes reference worker-node ids and fan out execution.
+
+```json
+{
+  "type": "parallel",
+  "branches": ["billing_node", "policy_node"],
+  "next": "draft_node"
+}
+```
+
+Rules:
+
+- `branches` may only reference worker nodes
+- `next` is required in v1; every parallel group must join into a subsequent node before the workflow can finish
+- worker nodes used as branches may not define their own `next`
+- branch workers cannot depend on sibling branch outputs
+- in `run()`, branches execute concurrently
+- in `queue()`, branches execute sequentially in declaration order in v1
+
+### Finish Nodes
+
+Finish nodes stop execution and define the final swarm output.
+
+Literal finish:
+
+```json
+{
+  "type": "finish",
+  "output": "No follow-up is needed."
+}
+```
+
+Finish from a prior node:
+
+```json
+{
+  "type": "finish",
+  "output_from": "draft_node"
+}
+```
+
+A finish node must define exactly one of `output` or `output_from`.
+
+## Named Outputs
+
+Downstream worker nodes can pull prior node outputs explicitly with
+`with_outputs`.
+
+Example plan shape:
+
+```json
+{
+  "type": "worker",
+  "agent": "App\\Ai\\Agents\\DraftAgent",
+  "prompt": "Write the customer reply.",
+  "with_outputs": {
+    "classification": "classify_node",
+    "policy_notes": "policy_node"
+  }
+}
+```
+
+Laravel Swarm does not do template interpolation. Instead, it appends a
+deterministic `Named outputs:` block to the worker prompt:
+
+```text
+Write the customer reply.
+
+Named outputs:
+[classification]
+{output from classify_node}
+
+[policy_notes]
+{output from policy_node}
+```
+
+This keeps routing explicit and avoids a mini template language in the plan.
+
+`with_outputs` may only reference nodes that are guaranteed to have completed
+before the worker runs. A worker after a parallel group may reference any branch
+output from that completed group. A branch inside a parallel group may not
+reference another branch from the same group, even in `queue()` where v1
+executes those branches sequentially.
+
+## Example Swarm
 
 ```php
 <?php
 
 namespace App\Ai\Swarms;
 
-use App\Ai\Agents\BillingAgent;
-use App\Ai\Agents\GeneralResponseAgent;
-use App\Ai\Agents\TechnicalAgent;
-use App\Ai\Agents\TriageAgent;
+use App\Ai\Agents\BillingResponder;
+use App\Ai\Agents\PolicyResearcher;
+use App\Ai\Agents\ReplyEditor;
+use App\Ai\Agents\SupportCoordinator;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology;
 use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
-use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
 #[Topology(TopologyEnum::Hierarchical)]
-class SupportTriageSwarm implements Swarm
+class SupportRoutingSwarm implements Swarm
 {
     use Runnable;
 
     public function agents(): array
     {
         return [
-            new TriageAgent,
-            new BillingAgent,
-            new TechnicalAgent,
-            new GeneralResponseAgent,
-        ];
-    }
-
-    public function route(string $coordinatorOutput, array $agents, RunContext $context): array
-    {
-        $result = json_decode($coordinatorOutput, true);
-
-        $agentClass = match ($result['category']) {
-            'billing'   => BillingAgent::class,
-            'technical' => TechnicalAgent::class,
-            default     => GeneralResponseAgent::class,
-        };
-
-        return [
-            [
-                'agent_class' => $agentClass,
-                'input'       => $context->input,
-            ],
+            new SupportCoordinator,
+            new BillingResponder,
+            new PolicyResearcher,
+            new ReplyEditor,
         ];
     }
 }
 ```
 
-The coordinator returns a structured category. The `route()` method reads that output and sends work to exactly one specialist. `BillingAgent` and `TechnicalAgent` never run for a general request.
+Example coordinator output:
 
-## Structured Output In Coordinators
-
-The coordinator output passed to `route()` is a plain string — the serialized response from the coordinator agent. When your coordinator implements `HasStructuredOutput`, that string will be a JSON-encoded object matching your schema.
-
-Use `json_decode` to work with it in `route()`:
-
-```php
-$result = json_decode($coordinatorOutput, true);
+```json
+{
+  "start_at": "parallel_lookup",
+  "nodes": {
+    "parallel_lookup": {
+      "type": "parallel",
+      "branches": ["billing_node", "policy_node"],
+      "next": "editor_node"
+    },
+    "billing_node": {
+      "type": "worker",
+      "agent": "App\\Ai\\Agents\\BillingResponder",
+      "prompt": "Answer the billing part of this request."
+    },
+    "policy_node": {
+      "type": "worker",
+      "agent": "App\\Ai\\Agents\\PolicyResearcher",
+      "prompt": "Find the governing policy for this request."
+    },
+    "editor_node": {
+      "type": "worker",
+      "agent": "App\\Ai\\Agents\\ReplyEditor",
+      "prompt": "Write the final reply.",
+      "with_outputs": {
+        "billing_notes": "billing_node",
+        "policy_notes": "policy_node"
+      },
+      "next": "finish_node"
+    },
+    "finish_node": {
+      "type": "finish",
+      "output_from": "editor_node"
+    }
+  }
+}
 ```
 
-The `HasStructuredOutput` contract guarantees the shape matches your schema, so you can rely on the fields being present without defensive fallbacks.
+## Validation Rules
 
-If your coordinator does not use structured output, `route()` will receive whatever prose string the agent returned. Routing reliably on prose is difficult. Structured output is the recommended approach for any coordinator whose output drives branching logic.
+Laravel Swarm validates the route plan before any worker executes.
 
-## Defining Routes
+The plan must satisfy all of these:
 
-`route()` returns an array of worker instructions. Each instruction can contain:
+- `start_at` must exist in `nodes`
+- every referenced `next`, `branch`, and `output_from` node must exist
+- every worker `agent` must belong to the swarm's worker set
+- the coordinator cannot route to itself as a worker
+- the graph must be acyclic
+- unreachable nodes are rejected
+- finish nodes may not define `next`
+- parallel branches may only reference worker nodes
+- parallel nodes must define `next` in v1
+- worker nodes used as parallel branches may not define `next`
+- named outputs may only reference previously completed nodes
+- finish `output_from` may only reference a previously completed node
 
-- `agent` or `agent_class`
-- `input`
-- optional `metadata`
+Loops are intentionally unsupported in this release.
 
-Return multiple instructions to route to more than one worker sequentially:
+## Execution Modes
 
-```php
-return [
-    [
-        'agent_class' => ResearchAgent::class,
-        'input'       => 'Research this topic: ' . $context->input,
-        'metadata'    => ['stage' => 'research'],
-    ],
-    [
-        'agent_class' => WriterAgent::class,
-        'input'       => 'Write a draft based on the research.',
-        'metadata'    => ['stage' => 'draft'],
-    ],
-];
-```
+### `run()`
 
-## Routing Behavior
+- coordinator executes first
+- worker chains execute normally
+- parallel groups run concurrently
+- finish nodes stop execution immediately
 
-Laravel Swarm applies these rules:
+### `queue()`
 
-- the first agent returned by `agents()` is the coordinator
-- workers are selected from the remaining agents
-- routed workers execute sequentially in the order returned by `route()`
-- an empty route completes successfully with the coordinator output
-- a missing `route()` method fails fast for hierarchical swarms
-- unknown routed classes throw an explicit exception naming the missing class
+- the same validated plan is used
+- parallel groups execute sequentially in branch declaration order in v1
+- branch metadata and history still record the plan as a parallel group so the
+  runtime can evolve later without changing the plan contract
+- the plan is still validated with the same parallel-safe dependency rules as
+  `run()`
+
+### `dispatchDurable()`
+
+Durable execution remains sequential-only in this release. Hierarchical durable
+execution is intentionally deferred.
+
+## History And Metadata
+
+Hierarchical runs persist graph-aware metadata such as:
+
+- `coordinator_agent_class`
+- `route_plan_start`
+- `executed_node_ids`
+- `executed_agent_classes`
+- `parallel_groups`
+- `execution_mode`
+
+Each actual agent execution still becomes its own persisted step. Parallel
+branches include:
+
+- `node_id`
+- `parent_parallel_node_id`
+- any branch metadata from the plan
+
+## Step Limits
+
+`#[MaxAgentSteps]` counts the coordinator plus each reachable worker node.
+Parallel and finish nodes are control nodes and do not count by themselves.
+
+If a route plan requires more agent executions than the swarm allows, Laravel
+Swarm fails before any worker node executes. Increase `#[MaxAgentSteps]` or
+reduce the plan's worker nodes.
 
 ## Choosing Hierarchical Carefully
 
-Hierarchical routing adds more workflow semantics than sequential or parallel execution.
-
-Use it when the routing decision is part of the business logic — not simply when the workflow has multiple steps. If every agent should always run, sequential or parallel is a simpler and more predictable choice.
+Hierarchical routing is the right fit when the planner's decision is part of
+the business logic. If your real workflow is simply "run these agents in order"
+or "run these agents all at once," sequential or parallel stays easier to
+reason about.
