@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.3
+
+- Hardened lightweight queued swarm execution with lease-based retry recovery so duplicate deliveries do not strand or replay active database-backed runs
+- Prevented duplicate queued deliveries from replaying deprecated `then()` callbacks and tightened queued lifecycle behavior around lease-safe failure handling and event integrity
+- Added prune-based retention hardening across database-backed history, context, and artifact stores, including active-run protection and safe handling of custom configured table names
+- Improved database-backed queued install safety with clearer lease-column validation errors for partially migrated history tables
+- Expanded queueing and persistence coverage around retries, pruning, lease loss, custom table names, and schema validation failure modes
+- Updated the README and maintenance/persistence docs to clarify the lightweight queue contract, event-listener guidance, and database retention behavior
+
 ## v0.1.2
 
 - Added durable database-backed persistence for swarm context, artifacts, and run history

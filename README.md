@@ -211,7 +211,9 @@ ArticlePipeline::make()
 
 Queued `then()` and `catch()` callbacks remain available for compatibility, but they are now deprecated for real queued execution. Those closures are serialized into the queue payload, which can capture more application state than intended, fail serialization unexpectedly, or leak sensitive data into queue storage. Prefer Laravel event listeners for queued completion and failure handling.
 
-Queued swarms remain the lightweight execution path. They are designed for short-lived background runs, not durable multi-job workflow orchestration.
+Queued swarms remain the lightweight queue mode. One queued job represents one swarm run, and database-backed queued runs use lease-based ownership so duplicate deliveries do not replay work while an active worker still owns the run.
+
+This is the right fit for normal background swarm work in Laravel. It is not durable multi-job orchestration, and it is not intended to replace a workflow engine for very long-lived pipelines.
 
 Example using swarm lifecycle events instead of serialized closures:
 
@@ -245,6 +247,10 @@ Queued swarms are Laravel-native workflow definitions: the worker re-resolves th
 
 Because queued swarms are validated for container resolution before dispatch, constructors and DI setup should stay cheap and side-effect free in normal Laravel style.
 
+Database-backed queued runs are also prune-safe while active. A `running` run keeps its history, context, and artifact rows until it reaches a terminal state, even when their retention window has elapsed.
+
+The practical boundary to keep in mind is the same one Laravel developers already know from long-running queue jobs: a single queued run is still bounded by worker timeouts, queue visibility windows, deploy interrupts, and other normal job-lifecycle limits. If one provider call or one swarm run regularly stretches beyond that envelope, that is a sign the lightweight queue mode is no longer the right operational model for that workflow.
+
 Pass structured task data the same way you would with `run()`:
 
 ```php
@@ -269,7 +275,7 @@ If you call `queue()` on a swarm instance that relies on runtime constructor sta
 
 For more detail on structured queue payloads, see [Structured Input](docs/structured-input.md).
 
-For prune-based retention of database-backed swarm data, see [Maintenance](docs/maintenance.md).
+For database-backed retention, pruning, and active-run persistence behavior, see [Persistence And History](docs/persistence-and-history.md) and [Maintenance](docs/maintenance.md).
 
 ## Streaming A Swarm
 

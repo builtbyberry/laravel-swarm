@@ -99,8 +99,16 @@ create the swarm tables if you have not already done so.
 Database-backed history does not have the stale-index behavior described above.
 It is usually the better fit for production inspection and auditability.
 
+For queued runs, the database-backed history store uses lease-based ownership
+to guard against duplicate queue deliveries replaying the same swarm work while
+another worker still owns the run.
+
 Database TTL is prune-based retention. Expired rows remain queryable until you
 run the prune command described in [Maintenance](maintenance.md).
+
+While a run is still `running`, Laravel Swarm keeps the run coherent across
+history, context, and artifact storage. Active database-backed runs are not
+partially pruned out of one store while they are still in flight.
 
 ## Custom Table Names
 
