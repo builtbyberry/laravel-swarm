@@ -44,22 +44,25 @@ class SwarmRuns
             $this->pulse->record(
                 type: 'swarm_run_total',
                 key: $event->swarmClass,
+                value: 1,
                 timestamp: $timestamp,
-            )->count();
+            )->sum();
 
             if ($status === 'failed') {
                 $this->pulse->record(
                     type: 'swarm_run_failed',
                     key: $event->swarmClass,
+                    value: 1,
                     timestamp: $timestamp,
-                )->count();
+                )->sum();
             }
 
             $this->pulse->record(
                 type: $topologyType,
                 key: $event->swarmClass,
+                value: 1,
                 timestamp: $timestamp,
-            )->count();
+            )->sum();
 
             $this->pulse->record(
                 type: 'swarm_run_duration',
@@ -74,6 +77,20 @@ class SwarmRuns
                 value: $event->durationMs,
                 timestamp: $timestamp,
             )->avg()->count();
+
+            $this->pulse->record(
+                type: 'swarm_run_duration_total_ms',
+                key: $event->swarmClass,
+                value: $event->durationMs,
+                timestamp: $timestamp,
+            )->sum();
+
+            $this->pulse->record(
+                type: 'swarm_run_duration_samples',
+                key: $event->swarmClass,
+                value: 1,
+                timestamp: $timestamp,
+            )->sum();
         });
     }
 }

@@ -160,6 +160,12 @@ test('pulse recorders store stable swarm entry keys', function () {
     expect(DB::table('pulse_aggregates')->where('type', 'swarm_run_total')->pluck('key')->all())
         ->toContain(FakeSequentialSwarm::class);
 
+    expect(DB::table('pulse_aggregates')->where('type', 'swarm_run_duration_total_ms')->pluck('key')->all())
+        ->toContain(FakeSequentialSwarm::class);
+
+    expect(DB::table('pulse_aggregates')->where('type', 'swarm_run_duration_samples')->pluck('key')->all())
+        ->toContain(FakeSequentialSwarm::class);
+
     expect(DB::table('pulse_aggregates')->where('type', 'swarm_step_duration')->pluck('key')->all())
         ->toContain('swarm_step_duration|'.FakeSequentialSwarm::class.'|sequential|'.FakeWriter::class);
 });
@@ -168,17 +174,21 @@ test('swarm runs card keeps per swarm metrics accurate when raw pulse keys excee
     $timestamp = now()->getTimestamp();
 
     for ($i = 1; $i <= 600; $i++) {
-        PulseFacade::record('swarm_run_total', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
-        PulseFacade::record('swarm_topology_sequential', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
+        PulseFacade::record('swarm_run_total', FakeSequentialSwarm::class, value: 1, timestamp: $timestamp)->sum();
+        PulseFacade::record('swarm_topology_sequential', FakeSequentialSwarm::class, value: 1, timestamp: $timestamp)->sum();
         PulseFacade::record('swarm_run_duration_total', FakeSequentialSwarm::class, value: 10, timestamp: $timestamp)->avg()->count();
+        PulseFacade::record('swarm_run_duration_total_ms', FakeSequentialSwarm::class, value: 10, timestamp: $timestamp)->sum();
+        PulseFacade::record('swarm_run_duration_samples', FakeSequentialSwarm::class, value: 1, timestamp: $timestamp)->sum();
         PulseFacade::record('swarm_run', SwarmPulseKey::runStatus(FakeSequentialSwarm::class, 'sequential', 'completed'), timestamp: $timestamp)->count()->onlyBuckets();
         PulseFacade::record('swarm_run_duration', SwarmPulseKey::runDuration(FakeSequentialSwarm::class, 'sequential'), value: 10, timestamp: $timestamp)->avg()->count()->onlyBuckets();
     }
 
-    PulseFacade::record('swarm_run_total', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
-    PulseFacade::record('swarm_run_failed', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
-    PulseFacade::record('swarm_topology_parallel', FakeSequentialSwarm::class, timestamp: $timestamp)->count();
+    PulseFacade::record('swarm_run_total', FakeSequentialSwarm::class, value: 1, timestamp: $timestamp)->sum();
+    PulseFacade::record('swarm_run_failed', FakeSequentialSwarm::class, value: 1, timestamp: $timestamp)->sum();
+    PulseFacade::record('swarm_topology_parallel', FakeSequentialSwarm::class, value: 1, timestamp: $timestamp)->sum();
     PulseFacade::record('swarm_run_duration_total', FakeSequentialSwarm::class, value: 1000, timestamp: $timestamp)->avg()->count();
+    PulseFacade::record('swarm_run_duration_total_ms', FakeSequentialSwarm::class, value: 1000, timestamp: $timestamp)->sum();
+    PulseFacade::record('swarm_run_duration_samples', FakeSequentialSwarm::class, value: 1, timestamp: $timestamp)->sum();
     PulseFacade::record('swarm_run', SwarmPulseKey::runStatus(FakeSequentialSwarm::class, 'parallel', 'failed'), timestamp: $timestamp)->count()->onlyBuckets();
     PulseFacade::record('swarm_run_duration', SwarmPulseKey::runDuration(FakeSequentialSwarm::class, 'parallel'), value: 1000, timestamp: $timestamp)->avg()->count()->onlyBuckets();
 

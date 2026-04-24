@@ -42,13 +42,19 @@ class SwarmRuns extends Card
             'swarm_topology_sequential',
             'swarm_topology_parallel',
             'swarm_topology_hierarchical',
-        ], 'count', 'swarm_run_total', limit: 100)
+            'swarm_run_duration_total_ms',
+            'swarm_run_duration_samples',
+        ], 'sum', 'swarm_run_total', limit: 100)
             ->filter(fn (object $row): bool => is_string($row->key ?? null))
             ->map(function (object $row): object {
+                $durationTotalMs = (int) ($row->swarm_run_duration_total_ms ?? 0);
+                $durationSamples = (int) ($row->swarm_run_duration_samples ?? 0);
+
                 return (object) [
                     'swarmClass' => $row->key,
                     'totalRuns' => (int) ($row->swarm_run_total ?? 0),
                     'failures' => (int) ($row->swarm_run_failed ?? 0),
+                    'averageRunDurationMs' => $durationSamples === 0 ? 0 : (int) round($durationTotalMs / $durationSamples),
                     'topologyMix' => collect([
                         (object) ['topology' => 'sequential', 'count' => (int) ($row->swarm_topology_sequential ?? 0)],
                         (object) ['topology' => 'parallel', 'count' => (int) ($row->swarm_topology_parallel ?? 0)],
@@ -57,22 +63,14 @@ class SwarmRuns extends Card
                 ];
             });
 
-        $durations = $this->aggregate('swarm_run_duration_total', ['avg', 'count'], 'count', limit: 100)
-            ->filter(fn (object $row): bool => is_string($row->key ?? null))
-            ->keyBy('key');
-
         return $counts
-            ->map(function (object $swarm) use ($durations): object {
-                $duration = $durations->get($swarm->swarmClass);
-                $durationSamples = (int) ($duration->count ?? 0);
-                $averageRunDurationMs = $duration === null ? 0 : (int) round((float) $duration->avg);
-
+            ->map(function (object $swarm): object {
                 return (object) [
                     'swarmClass' => $swarm->swarmClass,
                     'totalRuns' => $swarm->totalRuns,
                     'failures' => $swarm->failures,
                     'failureRate' => $swarm->totalRuns === 0 ? 0.0 : round(($swarm->failures / $swarm->totalRuns) * 100, 1),
-                    'averageRunDurationMs' => $durationSamples === 0 ? 0 : $averageRunDurationMs,
+                    'averageRunDurationMs' => $swarm->averageRunDurationMs,
                     'topologyMix' => $swarm->topologyMix->sortByDesc('count')->values(),
                 ];
             })
