@@ -17,6 +17,14 @@ artifacts attached to the run.
 Persisted run history includes the swarm class, topology, status, steps,
 output, usage, and completion metadata.
 
+When output capture is enabled, Laravel Swarm also creates an automatic
+`agent_output` artifact for each completed agent step. That output can appear in
+several places: the step history, the final history output, the run context's
+artifact list, and the artifact repository table or cache entry. This
+duplication is intentional so each inspection surface is useful on its own, but
+teams with sensitive prompts or outputs should review the capture settings
+below before enabling production persistence.
+
 Run history also includes timing fields for inspection and duration
 calculations:
 
@@ -122,6 +130,46 @@ run the prune command described in [Maintenance](maintenance.md).
 While a run is still `running`, Laravel Swarm keeps the run coherent across
 history, context, and artifact storage. Active database-backed runs are not
 partially pruned out of one store while they are still in flight.
+
+Laravel Swarm always loads its package migrations through the service provider.
+The default swarm tables are created during normal application migrations even
+when your current persistence driver is `cache`. This keeps local and
+production migration behavior predictable. If you do not want the default table
+names, publish the migrations and update them to match `swarm.tables.*`.
+
+## Privacy And Data Capture
+
+Swarm prompts and outputs often contain customer text, documents, or other
+sensitive data. By default, Laravel Swarm captures inputs and outputs in
+lifecycle events, run history, and automatic step artifacts because that gives
+developers useful inspection data.
+
+You can disable input or output capture in `config/swarm.php`:
+
+```php
+'capture' => [
+    'inputs' => false,
+    'outputs' => false,
+],
+```
+
+Or with environment variables:
+
+```bash
+SWARM_CAPTURE_INPUTS=false
+SWARM_CAPTURE_OUTPUTS=false
+```
+
+When input capture is disabled, event payloads and persisted step history keep
+their normal shape but replace captured input fields with `[redacted]`.
+
+When output capture is disabled, event payloads and persisted step history keep
+their normal shape but replace captured output fields with `[redacted]`.
+Laravel Swarm also skips automatic `agent_output` artifact persistence.
+
+Capture settings do not change agent handoff behavior and do not change the
+`SwarmResponse` returned to the current PHP process. They control what Laravel
+Swarm emits and persists for later inspection.
 
 ## Custom Table Names
 

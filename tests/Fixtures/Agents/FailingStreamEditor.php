@@ -12,7 +12,6 @@ use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\Data\Usage;
 use Laravel\Ai\Responses\QueuedAgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
-use Laravel\Ai\Responses\TextResponse;
 use Laravel\Ai\Streaming\Events\TextDelta;
 use RuntimeException;
 use Stringable;
@@ -26,7 +25,8 @@ class FailingStreamEditor implements Agent
 
     public function prompt(string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
-        return new TextResponse(
+        return new AgentResponse(
+            invocationId: 'failing-stream-editor',
             text: 'unused',
             usage: new Usage,
             meta: new Meta('fake', 'test'),

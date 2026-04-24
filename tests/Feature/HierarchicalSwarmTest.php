@@ -16,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalCoordinatorOnlySwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalDuplicateWorkerSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalEmptySwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalLimitedSwarm;
@@ -402,7 +403,12 @@ test('unreachable nodes fail validation before budget checks', function () {
 
 test('hierarchical swarm requires at least one agent', function () {
     expect(fn () => FakeHierarchicalEmptySwarm::make()->run('hierarchical-task'))
-        ->toThrow(SwarmException::class, 'Hierarchical swarms must define at least one agent.');
+        ->toThrow(SwarmException::class, 'FakeHierarchicalEmptySwarm: swarm has no agents. Add at least one agent to agents().');
+});
+
+test('hierarchical swarm rejects duplicate worker classes', function () {
+    expect(fn () => FakeHierarchicalDuplicateWorkerSwarm::make()->run('hierarchical-task'))
+        ->toThrow(SwarmException::class, FakeHierarchicalDuplicateWorkerSwarm::class.': agents() contains duplicate agent class '.FakeWriter::class.'. Hierarchical worker classes must be unique.');
 });
 
 test('hierarchical swarm persists node ids and branch metadata to history', function () {

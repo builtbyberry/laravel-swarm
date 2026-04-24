@@ -50,7 +50,7 @@ class SwarmStatusCommand extends Command
             return 'n/a';
         }
 
-        $finishedAt = isset($run['finished_at']) && $run['finished_at'] !== null
+        $finishedAt = array_key_exists('finished_at', $run) && $run['finished_at'] !== null
             ? Carbon::parse($run['finished_at'], 'UTC')
             : Carbon::now('UTC');
 

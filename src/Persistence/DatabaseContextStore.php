@@ -10,14 +10,14 @@ use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Connection;
 
 class DatabaseContextStore implements ContextStore
 {
     use InteractsWithJsonColumns;
 
     public function __construct(
-        protected ConnectionInterface $connection,
+        protected Connection $connection,
         protected ConfigRepository $config,
     ) {}
 
@@ -36,17 +36,11 @@ class DatabaseContextStore implements ContextStore
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
         ];
 
-        $exists = $this->table()->where('run_id', $context->runId)->exists();
-
-        if ($exists) {
-            $this->table()->where('run_id', $context->runId)->update($payload);
-
-            return;
-        }
-
-        $payload['created_at'] = $payload['updated_at'];
-
-        $this->table()->insert($payload);
+        $this->table()->upsert(
+            [array_merge($payload, ['created_at' => $payload['updated_at']])],
+            ['run_id'],
+            ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at'],
+        );
     }
 
     public function find(string $runId): ?array

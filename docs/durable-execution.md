@@ -101,3 +101,28 @@ window.
 Durable execution requires the database-backed persistence stores and the
 durable runtime table. It is intentionally not available with cache-backed
 swarm persistence.
+
+Before dispatching durable runs in an application, configure database
+persistence and run the package migrations:
+
+```bash
+SWARM_PERSISTENCE_DRIVER=database
+
+php artisan migrate
+```
+
+Then run a queue worker for the connection and queue used by your durable swarm
+jobs:
+
+```bash
+php artisan queue:work
+```
+
+Finally, schedule recovery so checkpointed durable runs are supervised if a
+worker exits after saving state but before dispatching the next step:
+
+```php
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('swarm:recover')->everyFiveMinutes();
+```

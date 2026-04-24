@@ -65,6 +65,10 @@ Laravel Swarm loads its package migrations automatically through the service pro
 php artisan migrate
 ```
 
+The package migrations are always loaded and create the default swarm tables
+even when the current persistence driver is `cache`. If you want custom table
+names, publish the migrations and update them to match `swarm.tables.*`.
+
 Publish the package configuration if you want to customize defaults:
 
 ```bash

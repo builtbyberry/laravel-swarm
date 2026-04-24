@@ -9,9 +9,16 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 
 class SwarmStepRecorder
 {
+    protected const REDACTED = '[redacted]';
+
+    public function __construct(
+        protected ConfigRepository $config,
+    ) {}
+
     public function started(SwarmExecutionState $state, int $index, string $agentClass, string $input): void
     {
         $state->events->dispatch(new SwarmStepStarted(
@@ -19,7 +26,7 @@ class SwarmStepRecorder
             swarmClass: $state->swarm::class,
             index: $index,
             agentClass: $agentClass,
-            input: $input,
+            input: $this->capturedInput($input),
             metadata: $state->context->metadata,
         ));
     }
@@ -82,17 +89,19 @@ class SwarmStepRecorder
                 ->mergeMetadata($contextMetadata);
         }
 
-        $state->context->addArtifact($artifact);
+        if ($this->capturesOutputs()) {
+            $state->context->addArtifact($artifact);
+        }
 
         $this->verifyOwnership($state);
-        $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
+        $state->historyStore->recordStep($state->context->runId, $this->capturedStep($step), $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
 
         if ($storeContext) {
             $this->verifyOwnership($state);
             $state->contextStore->put($state->context, $state->ttlSeconds);
         }
 
-        if ($storeArtifacts) {
+        if ($storeArtifacts && $this->capturesOutputs()) {
             $this->verifyOwnership($state);
             $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
         }
@@ -104,14 +113,49 @@ class SwarmStepRecorder
             topology: $state->topology,
             index: $index,
             agentClass: $agentClass,
-            input: $input,
-            output: $output,
+            input: $this->capturedInput($input),
+            output: $this->capturedOutput($output),
             durationMs: $durationMs,
             metadata: $step->metadata,
-            artifacts: $step->artifacts,
+            artifacts: $this->capturesOutputs() ? $step->artifacts : [],
         ));
 
         return $step;
+    }
+
+    protected function capturedStep(SwarmStep $step): SwarmStep
+    {
+        if ($this->capturesInputs() && $this->capturesOutputs()) {
+            return $step;
+        }
+
+        return new SwarmStep(
+            agentClass: $step->agentClass,
+            input: $this->capturedInput($step->input),
+            output: $this->capturedOutput($step->output),
+            artifacts: $this->capturesOutputs() ? $step->artifacts : [],
+            metadata: $step->metadata,
+        );
+    }
+
+    protected function capturedInput(string $input): string
+    {
+        return $this->capturesInputs() ? $input : self::REDACTED;
+    }
+
+    protected function capturedOutput(string $output): string
+    {
+        return $this->capturesOutputs() ? $output : self::REDACTED;
+    }
+
+    protected function capturesInputs(): bool
+    {
+        return (bool) $this->config->get('swarm.capture.inputs', true);
+    }
+
+    protected function capturesOutputs(): bool
+    {
+        return (bool) $this->config->get('swarm.capture.outputs', true);
     }
 
     protected function verifyOwnership(SwarmExecutionState $state): void

@@ -50,6 +50,22 @@ test('database context store persists the same context shape as cache', function
 
     expect($store->find('context-run-id'))->toBe($context->toArray());
     expect(DB::table('swarm_contexts')->where('run_id', 'context-run-id')->value('expires_at'))->not->toBeNull();
+
+    $context->mergeMetadata(['updated' => true]);
+    $store->put($context, 120);
+
+    expect($store->find('context-run-id'))->toBe($context->toArray());
+    expect(DB::table('swarm_contexts')->where('run_id', 'context-run-id')->count())->toBe(1);
+});
+
+test('database context store persists long task inputs', function () {
+    $store = app(DatabaseContextStore::class);
+    $longInput = str_repeat('Laravel Swarm long prompt. ', 4000);
+    $context = RunContext::from($longInput, 'long-context-run-id');
+
+    $store->put($context, 60);
+
+    expect($store->find('long-context-run-id')['input'])->toBe($longInput);
 });
 
 test('database artifact repository persists explicit json payloads', function () {

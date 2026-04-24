@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyRunnableSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStreamingFailureSwarm;
@@ -125,5 +126,14 @@ test('non sequential swarms cannot be streamed', function () {
     expect($stream)->toThrow(
         SwarmException::class,
         'Streaming is only supported for sequential swarms. parallel topology does not support streaming.',
+    );
+});
+
+test('sequential swarm stream rejects empty agent lists', function () {
+    $stream = fn () => iterator_to_array(EmptyRunnableSwarm::make()->stream('stream-task'));
+
+    expect($stream)->toThrow(
+        SwarmException::class,
+        'EmptyRunnableSwarm: swarm has no agents. Add at least one agent to agents().',
     );
 });

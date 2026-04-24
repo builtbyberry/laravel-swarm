@@ -9,10 +9,12 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyRunnableSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Support\Facades\Event;
 
@@ -37,6 +39,11 @@ test('sequential swarm runs agents in order and threads outputs', function () {
     expect($response->steps[0]->output)->toBe('research-out');
 
     expect($response->steps[2]->output)->toBe('editor-out');
+});
+
+test('sequential swarm rejects empty agent lists', function () {
+    expect(fn () => EmptyRunnableSwarm::make()->run('original-task'))
+        ->toThrow(SwarmException::class, 'EmptyRunnableSwarm: swarm has no agents. Add at least one agent to agents().');
 });
 
 test('sequential swarm records usage from agent responses', function () {
@@ -133,4 +140,31 @@ test('sequential swarm preserves accumulated metadata on completion', function (
         ->toHaveKey('last_agent', FakeEditor::class);
 
     Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->metadata['swarm_class'] === FakeSequentialSwarm::class && $event->metadata['last_agent'] === FakeEditor::class);
+});
+
+test('capture flags redact event payloads and persisted automatic artifacts while preserving response output', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+    Event::fake();
+
+    $response = FakeSequentialSwarm::make()->run('sensitive-task');
+    $storedArtifacts = app(ArtifactRepository::class)->all($response->metadata['run_id']);
+    $storedHistory = app(RunHistoryStore::class)->find($response->metadata['run_id']);
+
+    expect($response->output)->toBe('editor-out');
+    expect($response->steps[0]->input)->toBe('sensitive-task');
+    expect($response->steps[0]->output)->toBe('research-out');
+    expect($storedArtifacts)->toBe([]);
+    expect($storedHistory['output'])->toBe('[redacted]');
+    expect($storedHistory['steps'][0]['input'])->toBe('[redacted]');
+    expect($storedHistory['steps'][0]['output'])->toBe('[redacted]');
+    expect($storedHistory['steps'][0]['artifacts'])->toBe([]);
+
+    Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event): bool => $event->input === '[redacted]');
+    Event::assertDispatched(SwarmStepStarted::class, fn (SwarmStepStarted $event): bool => $event->input === '[redacted]');
+    Event::assertDispatched(SwarmStepCompleted::class, fn (SwarmStepCompleted $event): bool => $event->input === '[redacted]'
+        && $event->output === '[redacted]'
+        && $event->artifacts === []);
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event): bool => $event->output === '[redacted]'
+        && $event->artifacts === []);
 });

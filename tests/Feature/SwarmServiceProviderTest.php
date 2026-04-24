@@ -107,3 +107,19 @@ test('per-store persistence driver overrides the global driver', function () {
     expect(app(ArtifactRepository::class))->toBeInstanceOf(DatabaseArtifactRepository::class);
     expect(app(RunHistoryStore::class))->toBeInstanceOf(DatabaseRunHistoryStore::class);
 });
+
+test('invalid global persistence driver fails clearly', function () {
+    config()->set('swarm.persistence.driver', 'databse');
+    app()->forgetInstance(ContextStore::class);
+
+    expect(fn () => app(ContextStore::class))
+        ->toThrow(InvalidArgumentException::class, 'Laravel Swarm: invalid persistence driver [databse]. Supported drivers: cache, database.');
+});
+
+test('invalid per-store persistence driver fails clearly', function () {
+    config()->set('swarm.context.driver', 'redis');
+    app()->forgetInstance(ContextStore::class);
+
+    expect(fn () => app(ContextStore::class))
+        ->toThrow(InvalidArgumentException::class, 'Laravel Swarm: invalid persistence driver [redis]. Supported drivers: cache, database.');
+});

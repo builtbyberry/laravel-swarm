@@ -143,6 +143,12 @@ class SwarmServiceProvider extends ServiceProvider
             $driver = $config->get('swarm.persistence.driver', 'cache');
         }
 
+        if (! in_array($driver, ['cache', 'database'], true)) {
+            throw new \InvalidArgumentException(
+                "Laravel Swarm: invalid persistence driver [{$driver}]. Supported drivers: cache, database.",
+            );
+        }
+
         return $app->make($driver === 'database' ? $databaseStore : $cacheStore);
     }
 }

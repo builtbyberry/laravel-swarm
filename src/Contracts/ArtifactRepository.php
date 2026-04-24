@@ -10,7 +10,7 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 interface ArtifactRepository
 {
     /**
-     * @param  array<int, SwarmArtifact>  $artifacts
+     * @param  array<int, SwarmArtifact|array<string, mixed>>  $artifacts
      */
     public function storeMany(string $runId, array $artifacts, int $ttlSeconds): void;
 

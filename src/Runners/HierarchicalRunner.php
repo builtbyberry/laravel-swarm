@@ -38,6 +38,7 @@ class HierarchicalRunner
         /** @var Agent $coordinator */
         $coordinator = array_shift($agents);
         $this->planner->assertCoordinatorCanPlan($coordinator);
+        $this->ensureUniqueWorkerClasses($state, $agents);
         $workerMap = $this->workerMap($agents);
 
         $steps = [];
@@ -340,6 +341,22 @@ class HierarchicalRunner
         }
 
         return $map;
+    }
+
+    /**
+     * @param  array<int, Agent>  $workers
+     */
+    protected function ensureUniqueWorkerClasses(SwarmExecutionState $state, array $workers): void
+    {
+        $seen = [];
+
+        foreach ($workers as $worker) {
+            if (isset($seen[$worker::class])) {
+                throw new SwarmException($state->swarm::class.': agents() contains duplicate agent class '.$worker::class.'. Hierarchical worker classes must be unique.');
+            }
+
+            $seen[$worker::class] = true;
+        }
     }
 
     /**

@@ -10,14 +10,14 @@ use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Connection;
 
 class DatabaseArtifactRepository implements ArtifactRepository
 {
     use InteractsWithJsonColumns;
 
     public function __construct(
-        protected ConnectionInterface $connection,
+        protected Connection $connection,
         protected ConfigRepository $config,
     ) {}
 

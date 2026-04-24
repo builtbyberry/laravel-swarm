@@ -16,7 +16,7 @@ use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
 use BuiltByBerry\LaravelSwarm\Support\QueuedRunAcquisition;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Throwable;
@@ -26,7 +26,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     use InteractsWithJsonColumns;
 
     public function __construct(
-        protected ConnectionInterface $connection,
+        protected Connection $connection,
         protected ConfigRepository $config,
     ) {}
 

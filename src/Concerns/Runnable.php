@@ -16,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Testing\SwarmFake as SwarmFakeInstance;
 use Generator;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
+use ReflectionClass;
 
 trait Runnable
 {
@@ -40,7 +41,7 @@ trait Runnable
 
         return match (true) {
             $arguments !== [] && ! array_is_list($arguments) => Container::getInstance()->makeWith(static::class, $arguments),
-            $arguments !== [] => new static(...$arguments),
+            $arguments !== [] => (new ReflectionClass(static::class))->newInstanceArgs($arguments),
             default => Container::getInstance()->make(static::class),
         };
     }
@@ -254,9 +255,7 @@ trait Runnable
                 }
             }
 
-            PHPUnit::assertTrue(false, 'No persisted run for swarm ['.static::class.'] matched the expected assertion.');
-
-            return;
+            PHPUnit::fail('No persisted run for swarm ['.static::class.'] matched the expected assertion.');
         }
 
         if (is_array($run)) {
@@ -266,9 +265,7 @@ trait Runnable
                 }
             }
 
-            PHPUnit::assertTrue(false, 'No persisted run for swarm ['.static::class.'] matched the expected task/context subset.');
-
-            return;
+            PHPUnit::fail('No persisted run for swarm ['.static::class.'] matched the expected task/context subset.');
         }
 
         foreach ($history->findMatching(static::class, $status) as $record) {
@@ -277,8 +274,7 @@ trait Runnable
             }
         }
 
-        PHPUnit::assertTrue(
-            false,
+        PHPUnit::fail(
             'No persisted runs were found for swarm ['.static::class.']'.($status !== null ? " with status [{$status}]." : '.'),
         );
     }

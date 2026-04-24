@@ -41,10 +41,13 @@ use ReflectionClass;
 use ReflectionIntersectionType;
 use ReflectionNamedType;
 use ReflectionParameter;
+use ReflectionType;
 use ReflectionUnionType;
 
 class SwarmRunner
 {
+    protected const REDACTED = '[redacted]';
+
     protected const EXECUTION_MODE_RUN = 'run';
 
     protected const EXECUTION_MODE_STREAM = 'stream';
@@ -80,6 +83,7 @@ class SwarmRunner
     {
         $startedAt = MonotonicTime::now();
         $topology = $this->resolveTopology($swarm);
+        $this->ensureSwarmHasAgents($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
@@ -149,7 +153,7 @@ class SwarmRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $topology->value,
-            input: $context->input,
+            input: $this->capturedInput($context->input),
             metadata: $context->metadata,
             executionMode: $executionMode,
         ));
@@ -184,15 +188,15 @@ class SwarmRunner
 
         $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
         $this->contextStore->put($context, $contextTtl);
-        $this->historyStore->complete($context->runId, $response, $contextTtl, $state->executionToken, $state->leaseSeconds);
+        $this->historyStore->complete($context->runId, $this->capturedResponse($response), $contextTtl, $state->executionToken, $state->leaseSeconds);
         $this->events->dispatch(new SwarmCompleted(
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $topology->value,
-            output: $response->output,
+            output: $this->capturedOutput($response->output),
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $response->metadata,
-            artifacts: $response->artifacts,
+            artifacts: $this->capturesOutputs() ? $response->artifacts : [],
             executionMode: $executionMode,
         ));
 
@@ -205,6 +209,7 @@ class SwarmRunner
     public function stream(Swarm $swarm, string|array|RunContext $task): Generator
     {
         $topology = $this->resolveTopology($swarm);
+        $this->ensureSwarmHasAgents($swarm);
 
         if ($topology !== Topology::Sequential) {
             throw new SwarmException('Streaming is only supported for sequential swarms. '.$topology->value.' topology does not support streaming.');
@@ -242,12 +247,12 @@ class SwarmRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $topology->value,
-            input: $context->input,
+            input: $this->capturedInput($context->input),
             metadata: $context->metadata,
             executionMode: self::EXECUTION_MODE_STREAM,
         ));
 
-        return (function () use ($state, $context, $contextTtl, $swarm): Generator {
+        yield from (function () use ($state, $context, $contextTtl, $swarm): Generator {
             $startedAt = MonotonicTime::now();
 
             try {
@@ -261,15 +266,15 @@ class SwarmRunner
                 ), $context, $state->topology);
 
                 $this->contextStore->put($context, $contextTtl);
-                $this->historyStore->complete($context->runId, $response, $contextTtl);
+                $this->historyStore->complete($context->runId, $this->capturedResponse($response), $contextTtl);
                 $this->events->dispatch(new SwarmCompleted(
                     runId: $context->runId,
                     swarmClass: $swarm::class,
                     topology: $state->topology,
-                    output: $response->output,
+                    output: $this->capturedOutput($response->output),
                     durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $response->metadata,
-                    artifacts: $response->artifacts,
+                    artifacts: $this->capturesOutputs() ? $response->artifacts : [],
                     executionMode: self::EXECUTION_MODE_STREAM,
                 ));
             } catch (\Throwable $exception) {
@@ -311,6 +316,7 @@ class SwarmRunner
     public function dispatchDurable(Swarm $swarm, string|array|RunContext $task): DurableSwarmResponse
     {
         $this->ensureDurableSupported($swarm);
+        $this->ensureSwarmHasAgents($swarm);
         $this->ensureQueueable($swarm);
         $this->ensureContainerResolvable($swarm);
         $this->ensureDatabaseDurableInfrastructure();
@@ -343,6 +349,42 @@ class SwarmRunner
         );
     }
 
+    protected function capturedResponse(SwarmResponse $response): SwarmResponse
+    {
+        if ($this->capturesInputs() && $this->capturesOutputs()) {
+            return $response;
+        }
+
+        return new SwarmResponse(
+            output: $this->capturedOutput($response->output),
+            steps: $response->steps,
+            usage: $response->usage,
+            context: $response->context,
+            artifacts: $this->capturesOutputs() ? $response->artifacts : [],
+            metadata: $response->metadata,
+        );
+    }
+
+    protected function capturedInput(string $input): string
+    {
+        return $this->capturesInputs() ? $input : self::REDACTED;
+    }
+
+    protected function capturedOutput(string $output): string
+    {
+        return $this->capturesOutputs() ? $output : self::REDACTED;
+    }
+
+    protected function capturesInputs(): bool
+    {
+        return (bool) $this->config->get('swarm.capture.inputs', true);
+    }
+
+    protected function capturesOutputs(): bool
+    {
+        return (bool) $this->config->get('swarm.capture.outputs', true);
+    }
+
     protected function resolveQueueLeaseSeconds(int $timeoutSeconds): int
     {
         return max($timeoutSeconds * 2, 300);
@@ -355,6 +397,15 @@ class SwarmRunner
         if ($topology !== Topology::Sequential) {
             throw new SwarmException('Durable execution is only supported for sequential swarms in this release.');
         }
+    }
+
+    protected function ensureSwarmHasAgents(Swarm $swarm): void
+    {
+        if ($swarm->agents() !== []) {
+            return;
+        }
+
+        throw new SwarmException(class_basename($swarm).': swarm has no agents. Add at least one agent to agents().');
     }
 
     protected function ensureDatabaseDurableInfrastructure(): void
@@ -404,11 +455,11 @@ class SwarmRunner
             $typeName = match (true) {
                 $parameterType instanceof ReflectionNamedType => $parameterType->getName(),
                 $parameterType instanceof ReflectionUnionType => implode('|', array_map(
-                    static fn (ReflectionNamedType $type): string => $type->getName(),
+                    fn (ReflectionType $type): string => $this->reflectionTypeName($type),
                     $parameterType->getTypes(),
                 )),
                 $parameterType instanceof ReflectionIntersectionType => implode('&', array_map(
-                    static fn (ReflectionNamedType $type): string => $type->getName(),
+                    fn (ReflectionType $type): string => $this->reflectionTypeName($type),
                     $parameterType->getTypes(),
                 )),
                 default => 'untyped',
@@ -435,6 +486,15 @@ class SwarmRunner
         }
 
         return class_exists($parameterType->getName()) || interface_exists($parameterType->getName());
+    }
+
+    protected function reflectionTypeName(ReflectionType $type): string
+    {
+        if ($type instanceof ReflectionNamedType) {
+            return $type->getName();
+        }
+
+        return (string) $type;
     }
 
     protected function ensureContainerResolvable(Swarm $swarm): void
@@ -474,7 +534,13 @@ class SwarmRunner
             return $attributes[0]->newInstance()->seconds;
         }
 
-        return (int) $this->config->get('swarm.timeout', 300);
+        $seconds = (int) $this->config->get('swarm.timeout', 300);
+
+        if ($seconds <= 0) {
+            throw new SwarmException('Swarm timeout must be a positive integer.');
+        }
+
+        return $seconds;
     }
 
     public function resolveMaxAgentExecutions(Swarm $swarm): int
@@ -486,6 +552,12 @@ class SwarmRunner
             return $attributes[0]->newInstance()->steps;
         }
 
-        return (int) $this->config->get('swarm.max_agent_steps', 10);
+        $steps = (int) $this->config->get('swarm.max_agent_steps', 10);
+
+        if ($steps <= 0) {
+            throw new SwarmException('Swarm max agent steps must be a positive integer.');
+        }
+
+        return $steps;
     }
 }

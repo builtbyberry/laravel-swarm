@@ -26,19 +26,13 @@ class SwarmSteps extends Card
     }
 
     /**
-     * @return Collection<int, object{
-     *     swarmClass: string,
-     *     topology: string,
-     *     agentClass: string,
-     *     averageDurationMs: int,
-     *     count: int
-     * }>
+     * @return Collection<int, mixed>
      */
     protected function resolveSteps(): Collection
     {
         return $this->aggregate('swarm_step_duration', ['avg', 'count'], 'avg', limit: 25)
-            ->filter(fn (object $row): bool => is_string($row->key ?? null))
-            ->map(function (object $row): object {
+            ->filter(fn ($row): bool => is_object($row) && is_string($row->key ?? null))
+            ->map(function ($row): object {
                 $parts = SwarmPulseKey::parseStepDuration($row->key);
 
                 return (object) [

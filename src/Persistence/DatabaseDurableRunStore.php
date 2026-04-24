@@ -9,13 +9,13 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 
 class DatabaseDurableRunStore implements DurableRunStore
 {
     public function __construct(
-        protected ConnectionInterface $connection,
+        protected Connection $connection,
         protected ConfigRepository $config,
     ) {}
 

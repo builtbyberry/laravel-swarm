@@ -26,13 +26,15 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
-use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Connection;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Carbon;
 use Throwable;
 
 class DurableSwarmManager
 {
+    protected const REDACTED = '[redacted]';
+
     protected mixed $afterStepCheckpointHook = null;
 
     public function __construct(
@@ -43,7 +45,7 @@ class DurableSwarmManager
         protected ArtifactRepository $artifactRepository,
         protected Dispatcher $events,
         protected SequentialRunner $sequential,
-        protected ConnectionInterface $connection,
+        protected Connection $connection,
     ) {}
 
     /**
@@ -282,7 +284,7 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                input: $context->input,
+                input: $this->capturedInput($context->input),
                 metadata: $context->metadata,
                 executionMode: 'durable',
             ));
@@ -385,7 +387,7 @@ class DurableSwarmManager
 
             try {
                 $this->durableRuns->markCompleted($runId, $token);
-                $this->historyStore->complete($runId, $response, $this->ttlSeconds(), $token, $stepLeaseSeconds);
+                $this->historyStore->complete($runId, $this->capturedResponse($response), $this->ttlSeconds(), $token, $stepLeaseSeconds);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -393,10 +395,10 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                output: $response->output,
+                output: $this->capturedOutput($response->output),
                 durationMs: $this->durationMillisecondsFor($runId),
                 metadata: $response->metadata,
-                artifacts: $response->artifacts,
+                artifacts: $this->capturesOutputs() ? $response->artifacts : [],
                 executionMode: 'durable',
             ));
 
@@ -450,6 +452,42 @@ class DurableSwarmManager
     protected function hasTimedOut(array $run): bool
     {
         return Carbon::parse($run['timeout_at'], 'UTC')->isPast();
+    }
+
+    protected function capturedResponse(SwarmResponse $response): SwarmResponse
+    {
+        if ($this->capturesInputs() && $this->capturesOutputs()) {
+            return $response;
+        }
+
+        return new SwarmResponse(
+            output: $this->capturedOutput($response->output),
+            steps: $response->steps,
+            usage: $response->usage,
+            context: $response->context,
+            artifacts: $this->capturesOutputs() ? $response->artifacts : [],
+            metadata: $response->metadata,
+        );
+    }
+
+    protected function capturedInput(string $input): string
+    {
+        return $this->capturesInputs() ? $input : self::REDACTED;
+    }
+
+    protected function capturedOutput(string $output): string
+    {
+        return $this->capturesOutputs() ? $output : self::REDACTED;
+    }
+
+    protected function capturesInputs(): bool
+    {
+        return (bool) $this->config->get('swarm.capture.inputs', true);
+    }
+
+    protected function capturesOutputs(): bool
+    {
+        return (bool) $this->config->get('swarm.capture.outputs', true);
     }
 
     protected function ttlSeconds(): int

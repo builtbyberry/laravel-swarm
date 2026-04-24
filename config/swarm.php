@@ -17,6 +17,11 @@ return [
         'driver' => env('SWARM_PERSISTENCE_DRIVER', 'cache'),
     ],
 
+    'capture' => [
+        'inputs' => env('SWARM_CAPTURE_INPUTS', true),
+        'outputs' => env('SWARM_CAPTURE_OUTPUTS', true),
+    ],
+
     'context' => [
         'driver' => env('SWARM_CONTEXT_DRIVER'),
         'ttl' => (int) env('SWARM_CONTEXT_TTL', 3600),

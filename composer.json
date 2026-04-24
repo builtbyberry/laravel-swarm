@@ -17,9 +17,11 @@
     ],
     "require": {
         "php": "^8.5",
-        "laravel/ai": "^0.6"
+        "laravel/ai": "^0.6",
+        "laravel/framework": "^13.0"
     },
     "require-dev": {
+        "larastan/larastan": "^3.0",
         "laravel/pint": "^1.0",
         "laravel/pulse": "^1.7",
         "orchestra/testbench": "^11.0",

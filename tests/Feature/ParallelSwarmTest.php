@@ -6,9 +6,11 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use Illuminate\Support\Facades\Event;
 
@@ -35,6 +37,11 @@ test('parallel swarm runs each agent with the original task', function () {
     expect((string) $response)->toContain('parallel-a');
     expect((string) $response)->toContain('parallel-b');
     expect((string) $response)->toContain('parallel-c');
+});
+
+test('parallel swarm rejects empty agent lists', function () {
+    expect(fn () => EmptyParallelSwarm::make()->run('shared-task'))
+        ->toThrow(SwarmException::class, 'EmptyParallelSwarm: swarm has no agents. Add at least one agent to agents().');
 });
 
 test('parallel swarm records artifacts and metadata', function () {
