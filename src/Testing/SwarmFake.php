@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Testing;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Generator;
+use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\FakePendingDispatch;
 
@@ -23,6 +26,11 @@ class SwarmFake implements Swarm
      * @var array<int, string|array<string, mixed>|RunContext>
      */
     protected array $recordedQueued = [];
+
+    /**
+     * @var array<int, string|array<string, mixed>|RunContext>
+     */
+    protected array $recordedDurable = [];
 
     /**
      * @var array<int, string|array<string, mixed>|RunContext>
@@ -69,6 +77,17 @@ class SwarmFake implements Swarm
         $this->recordedQueued[] = $task;
 
         return new QueuedSwarmResponse(new FakePendingDispatch, 'fake-run-id');
+    }
+
+    public function dispatchDurable(string|array|RunContext $task): DurableSwarmResponse
+    {
+        $this->recordedDurable[] = $task;
+
+        return new DurableSwarmResponse(
+            new FakePendingDispatch,
+            Container::getInstance()->make(DurableSwarmManager::class),
+            'fake-run-id',
+        );
     }
 
     /**
@@ -160,6 +179,37 @@ class SwarmFake implements Swarm
         PHPUnit::assertEmpty(
             $this->recordedQueued,
             "The swarm [{$this->swarmClass}] was queued unexpectedly.",
+        );
+    }
+
+    public function assertDispatchedDurably(string|array|callable $task): void
+    {
+        if (is_callable($task)) {
+            PHPUnit::assertTrue(
+                collect($this->recordedDurable)->contains(fn ($recorded) => $task($recorded)),
+                "The swarm [{$this->swarmClass}] was not durably dispatched with the expected task.",
+            );
+
+            return;
+        }
+
+        if (is_array($task)) {
+            PHPUnit::assertTrue(
+                collect($this->recordedDurable)->contains(fn ($recorded) => $this->matchesStructuredTask($task, $recorded)),
+                "The swarm [{$this->swarmClass}] was not durably dispatched with the expected structured task subset.",
+            );
+
+            return;
+        }
+
+        PHPUnit::assertContains($task, $this->recordedDurable, "The swarm [{$this->swarmClass}] was not durably dispatched with task: [{$task}].");
+    }
+
+    public function assertNeverDispatchedDurably(): void
+    {
+        PHPUnit::assertEmpty(
+            $this->recordedDurable,
+            "The swarm [{$this->swarmClass}] was durably dispatched unexpectedly.",
         );
     }
 

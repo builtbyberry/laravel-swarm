@@ -40,7 +40,21 @@ use Illuminate\Support\Facades\Schedule;
 Schedule::command('swarm:prune')->daily();
 ```
 
+If you are using durable execution, also schedule the recovery command
+frequently:
+
+```php
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('swarm:recover')->everyFiveMinutes();
+```
+
+`swarm:recover` is not a cleanup task like pruning. It is the safety net for
+durable runs that were checkpointed successfully but never dispatched their next
+step because a worker crashed or exited at the wrong moment.
+
 Prune-based retention is complementary to queue design, not a substitute for
 it. The built-in lightweight queue mode is a good fit for normal background
 jobs, but very long-running workflows may still outgrow the practical limits of
-a single queued job.
+a single queued job. For those workflows, use `dispatchDurable()` instead of
+stretching `queue()` beyond what one job should own.

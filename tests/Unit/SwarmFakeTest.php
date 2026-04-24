@@ -15,9 +15,11 @@ test('fake intercepts run and queue calls', function () {
 
     $swarm->run('alpha');
     $swarm->queue('beta');
+    $swarm->dispatchDurable('gamma');
 
     EmptyRunnableSwarm::assertRan('alpha');
     EmptyRunnableSwarm::assertQueued('beta');
+    EmptyRunnableSwarm::assertDispatchedDurably('gamma');
 });
 
 test('fake make returns the fake even when positional arguments are passed', function () {
@@ -156,6 +158,26 @@ test('assert never queued fails after a queue call', function () {
     EmptyRunnableSwarm::make()->queue('x');
 
     expect(fn () => EmptyRunnableSwarm::assertNeverQueued())->toThrow(AssertionFailedError::class);
+});
+
+test('assert durable dispatched supports array subset matching', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::make()->dispatchDurable([
+        'ticket_id' => 'TKT-1234',
+        'customer_tier' => 'enterprise',
+        'issue' => 'Need help with a billing mismatch.',
+    ]);
+
+    EmptyRunnableSwarm::assertDispatchedDurably(['ticket_id' => 'TKT-1234']);
+});
+
+test('assert never durably dispatched fails after a durable dispatch', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::make()->dispatchDurable('x');
+
+    expect(fn () => EmptyRunnableSwarm::assertNeverDispatchedDurably())->toThrow(AssertionFailedError::class);
 });
 
 test('assert never streamed passes when idle', function () {

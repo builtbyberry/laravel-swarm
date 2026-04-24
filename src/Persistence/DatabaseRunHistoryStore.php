@@ -152,6 +152,26 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         }
     }
 
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
+    public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished): void
+    {
+        $values = [
+            'status' => $status,
+            'context' => $this->encodeJson($context->toArray()),
+            'metadata' => $this->encodeJson($metadata),
+            'artifacts' => $this->encodeJson(array_map(static fn ($artifact): array => $artifact->toArray(), $context->artifacts)),
+            'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+        ];
+
+        if ($finished) {
+            $values['finished_at'] = Carbon::now('UTC');
+        }
+
+        $this->update($runId, $values);
+    }
+
     public function find(string $runId): ?array
     {
         /** @var object|null $record */

@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
@@ -20,6 +21,11 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -30,6 +36,7 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Foundation\Bus\PendingDispatch;
 use ReflectionClass;
 use ReflectionIntersectionType;
 use ReflectionNamedType;
@@ -44,15 +51,19 @@ class SwarmRunner
 
     protected const EXECUTION_MODE_QUEUE = 'queue';
 
+    protected const EXECUTION_MODE_DURABLE = 'durable';
+
     public function __construct(
         protected ConfigRepository $config,
         protected ContextStore $contextStore,
         protected ArtifactRepository $artifactRepository,
         protected RunHistoryStore $historyStore,
+        protected DurableRunStore $durableRuns,
         protected Dispatcher $events,
         protected SequentialRunner $sequential,
         protected ParallelRunner $parallel,
         protected HierarchicalRunner $hierarchical,
+        protected DurableSwarmManager $durable,
     ) {}
 
     public function run(Swarm $swarm, string|array|RunContext $task): SwarmResponse
@@ -161,6 +172,7 @@ class SwarmRunner
                 exception: $exception,
                 durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                 metadata: $context->metadata,
+                executionMode: $executionMode,
             ));
 
             throw $exception;
@@ -177,6 +189,7 @@ class SwarmRunner
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $response->metadata,
             artifacts: $response->artifacts,
+            executionMode: $executionMode,
         ));
 
         return $response;
@@ -251,6 +264,7 @@ class SwarmRunner
                     durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $response->metadata,
                     artifacts: $response->artifacts,
+                    executionMode: self::EXECUTION_MODE_STREAM,
                 ));
             } catch (\Throwable $exception) {
                 $this->historyStore->fail($context->runId, $exception, $contextTtl);
@@ -261,6 +275,7 @@ class SwarmRunner
                     exception: $exception,
                     durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $context->metadata,
+                    executionMode: self::EXECUTION_MODE_STREAM,
                 ));
 
                 throw $exception;
@@ -287,6 +302,22 @@ class SwarmRunner
         return new QueuedSwarmResponse($pendingDispatch, $context->runId);
     }
 
+    public function dispatchDurable(Swarm $swarm, string|array|RunContext $task): DurableSwarmResponse
+    {
+        $this->ensureDurableSupported($swarm);
+        $this->ensureQueueable($swarm);
+        $this->ensureContainerResolvable($swarm);
+        $this->ensureDatabaseDurableInfrastructure();
+
+        $topology = $this->resolveTopology($swarm);
+        $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
+        $totalSteps = min(count($swarm->agents()), $this->resolveMaxAgentExecutions($swarm));
+        $context = RunContext::fromTask($task);
+        $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps);
+
+        return new DurableSwarmResponse(new PendingDispatch($start->job), $this->durable, $start->runId);
+    }
+
     protected function normalizeCompletionResponse(SwarmResponse $response, RunContext $context, string $topology): SwarmResponse
     {
         return new SwarmResponse(
@@ -309,6 +340,34 @@ class SwarmRunner
     protected function resolveQueueLeaseSeconds(int $timeoutSeconds): int
     {
         return max($timeoutSeconds * 2, 300);
+    }
+
+    protected function ensureDurableSupported(Swarm $swarm): void
+    {
+        $topology = $this->resolveTopology($swarm);
+
+        if ($topology !== Topology::Sequential) {
+            throw new SwarmException('Durable execution is only supported for sequential swarms in this release.');
+        }
+    }
+
+    protected function ensureDatabaseDurableInfrastructure(): void
+    {
+        if (! $this->contextStore instanceof DatabaseContextStore
+            || ! $this->artifactRepository instanceof DatabaseArtifactRepository
+            || ! $this->historyStore instanceof DatabaseRunHistoryStore
+            || ! $this->durableRuns instanceof DatabaseDurableRunStore) {
+            throw new SwarmException('Durable execution requires database-backed swarm persistence and the durable runtime table.');
+        }
+    }
+
+    protected function databaseHistoryStore(): DatabaseRunHistoryStore
+    {
+        if (! $this->historyStore instanceof DatabaseRunHistoryStore) {
+            throw new SwarmException('Durable execution requires the database run history store.');
+        }
+
+        return $this->historyStore;
     }
 
     protected function ensureQueueable(Swarm $swarm): void

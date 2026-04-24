@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Concerns;
 
+use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -68,6 +69,11 @@ trait Runnable
     public function queue(string|array|RunContext $task): QueuedSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->queue($this, $task);
+    }
+
+    public function dispatchDurable(string|array|RunContext $task): DurableSwarmResponse
+    {
+        return Container::getInstance()->make(SwarmRunner::class)->dispatchDurable($this, $task);
     }
 
     /**
@@ -148,6 +154,34 @@ trait Runnable
 
         /** @var SwarmFakeInstance $resolved */
         $resolved->assertNeverQueued();
+    }
+
+    public static function assertDispatchedDurably(string|array|callable $task): void
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            'The expected swarm was not faked before calling assertDispatchedDurably().',
+        );
+
+        /** @var SwarmFakeInstance $resolved */
+        $resolved->assertDispatchedDurably($task);
+    }
+
+    public static function assertNeverDispatchedDurably(): void
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            'The expected swarm was not faked before calling assertNeverDispatchedDurably().',
+        );
+
+        /** @var SwarmFakeInstance $resolved */
+        $resolved->assertNeverDispatchedDurably();
     }
 
     /**

@@ -43,11 +43,23 @@ return [
         'name' => env('SWARM_QUEUE'),
     ],
 
+    'durable' => [
+        'step_timeout' => (int) env('SWARM_DURABLE_STEP_TIMEOUT', 300),
+        'queue' => [
+            'connection' => env('SWARM_DURABLE_QUEUE_CONNECTION'),
+            'name' => env('SWARM_DURABLE_QUEUE'),
+        ],
+        'recovery' => [
+            'grace_seconds' => (int) env('SWARM_DURABLE_RECOVERY_GRACE_SECONDS', 300),
+        ],
+    ],
+
     // These table names are honored by the database repositories at runtime.
     // If you change them, publish and update the package migrations as well.
     'tables' => [
         'contexts' => env('SWARM_CONTEXTS_TABLE', 'swarm_contexts'),
         'artifacts' => env('SWARM_ARTIFACTS_TABLE', 'swarm_artifacts'),
         'history' => env('SWARM_RUN_HISTORIES_TABLE', 'swarm_run_histories'),
+        'durable' => env('SWARM_DURABLE_RUNS_TABLE', 'swarm_durable_runs'),
     ],
 ];

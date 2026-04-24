@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests;
 
+use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
+use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
+use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
@@ -41,6 +44,9 @@ abstract class TestCase extends Orchestra
             SwarmStepCompleted::class,
             SwarmCompleted::class,
             SwarmFailed::class,
+            SwarmPaused::class,
+            SwarmResumed::class,
+            SwarmCancelled::class,
         ] as $eventClass) {
             $events->listen($eventClass, fn (object $event) => $recorder->record($event));
         }

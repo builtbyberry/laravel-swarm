@@ -27,6 +27,7 @@ You can assert against synchronous, queued, and streamed execution:
 ArticlePipeline::assertRan('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertQueued('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertStreamed('Draft a blog outline about Laravel queues.');
+ArticlePipeline::assertDispatchedDurably('Draft a blog outline about Laravel queues.');
 ```
 
 ## Asserting A Swarm Did Not Run
@@ -34,6 +35,7 @@ ArticlePipeline::assertStreamed('Draft a blog outline about Laravel queues.');
 ```php
 ArticlePipeline::assertNeverRan();
 ArticlePipeline::assertNeverQueued();
+ArticlePipeline::assertNeverDispatchedDurably();
 ```
 
 ## Asserting Structured Input
@@ -51,7 +53,8 @@ ArticlePipeline::make()->run([
 ArticlePipeline::assertRan(['draft_id' => 42]);
 ```
 
-The same pattern works for `assertQueued()` and `assertStreamed()`.
+The same pattern works for `assertQueued()`, `assertStreamed()`, and
+`assertDispatchedDurably()`.
 
 ## Using Callable Assertions
 

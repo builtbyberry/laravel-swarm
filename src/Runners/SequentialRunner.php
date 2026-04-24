@@ -29,64 +29,10 @@ class SequentialRunner
                 throw new SwarmTimeoutException('The swarm exceeded its configured timeout while running sequentially.');
             }
 
-            $input = $state->context->prompt();
-            $state->events->dispatch(new SwarmStepStarted(
-                runId: $state->context->runId,
-                swarmClass: $state->swarm::class,
-                index: $index,
-                agentClass: $agent::class,
-                input: $input,
-                metadata: $state->context->metadata,
-            ));
-
-            $startedAt = MonotonicTime::now();
-            $response = $agent->prompt($input);
-            $output = (string) $response;
-            $usage = $this->usageFromResponse($response);
-            $artifact = new SwarmArtifact(
-                name: 'agent_output',
-                content: $output,
-                metadata: ['index' => $index, 'usage' => $usage],
-                stepAgentClass: $agent::class,
-            );
-
-            $step = new SwarmStep(
-                agentClass: $agent::class,
-                input: $input,
-                output: $output,
-                artifacts: [$artifact],
-                metadata: ['index' => $index, 'usage' => $usage],
-            );
+            $step = $this->runSingleStep($state, $index);
 
             $steps[] = $step;
-            $mergedUsage = $this->mergeUsage($mergedUsage, $usage);
-
-            $state->context
-                ->mergeData([
-                    'last_output' => $output,
-                    'steps' => count($steps),
-                ])
-                ->mergeMetadata([
-                    'topology' => $state->topology,
-                    'last_agent' => $agent::class,
-                ])
-                ->addArtifact($artifact);
-
-            $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
-            $state->contextStore->put($state->context, $state->ttlSeconds);
-            $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
-            $state->events->dispatch(new SwarmStepCompleted(
-                runId: $state->context->runId,
-                swarmClass: $state->swarm::class,
-                topology: $state->topology,
-                index: $index,
-                agentClass: $agent::class,
-                input: $input,
-                output: $output,
-                durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-                metadata: $step->metadata,
-                artifacts: $step->artifacts,
-            ));
+            $mergedUsage = $this->mergeUsage($mergedUsage, is_array($step->metadata['usage'] ?? null) ? $step->metadata['usage'] : []);
         }
 
         return new SwarmResponse(
@@ -236,6 +182,84 @@ class SequentialRunner
         $state->context->mergeMetadata([
             'usage' => $mergedUsage,
         ]);
+    }
+
+    public function runSingleStep(SwarmExecutionState $state, int $index): SwarmStep
+    {
+        $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
+        $agent = $agents[$index] ?? null;
+
+        if ($agent === null) {
+            throw new SwarmTimeoutException("No sequential swarm agent exists at step index [{$index}].");
+        }
+
+        if (hrtime(true) >= $state->deadlineMonotonic) {
+            throw new SwarmTimeoutException('The swarm exceeded its configured timeout while running sequentially.');
+        }
+
+        $input = $state->context->prompt();
+        $state->events->dispatch(new SwarmStepStarted(
+            runId: $state->context->runId,
+            swarmClass: $state->swarm::class,
+            index: $index,
+            agentClass: $agent::class,
+            input: $input,
+            metadata: $state->context->metadata,
+        ));
+
+        $startedAt = MonotonicTime::now();
+        $response = $agent->prompt($input);
+        $output = (string) $response;
+        $usage = $this->usageFromResponse($response);
+        $mergedUsage = $this->mergeUsage(
+            is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [],
+            $usage,
+        );
+
+        $artifact = new SwarmArtifact(
+            name: 'agent_output',
+            content: $output,
+            metadata: ['index' => $index, 'usage' => $usage],
+            stepAgentClass: $agent::class,
+        );
+
+        $step = new SwarmStep(
+            agentClass: $agent::class,
+            input: $input,
+            output: $output,
+            artifacts: [$artifact],
+            metadata: ['index' => $index, 'usage' => $usage],
+        );
+
+        $state->context
+            ->mergeData([
+                'last_output' => $output,
+                'steps' => $index + 1,
+            ])
+            ->mergeMetadata([
+                'topology' => $state->topology,
+                'last_agent' => $agent::class,
+                'usage' => $mergedUsage,
+            ])
+            ->addArtifact($artifact);
+
+        $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
+        $state->contextStore->put($state->context, $state->ttlSeconds);
+        $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
+        $state->events->dispatch(new SwarmStepCompleted(
+            runId: $state->context->runId,
+            swarmClass: $state->swarm::class,
+            topology: $state->topology,
+            index: $index,
+            agentClass: $agent::class,
+            input: $input,
+            output: $output,
+            durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
+            metadata: $step->metadata,
+            artifacts: $step->artifacts,
+        ));
+
+        return $step;
     }
 
     /**

@@ -20,5 +20,6 @@ class SwarmCompleted
         public readonly int $durationMs,
         public readonly array $metadata = [],
         public readonly array $artifacts = [],
+        public readonly ?string $executionMode = null,
     ) {}
 }

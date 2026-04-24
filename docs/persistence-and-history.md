@@ -24,6 +24,10 @@ calculations:
 - `finished_at`
 - `updated_at`
 
+Durable runs continue to write to the same run history surface. That means
+inspection commands and `SwarmHistory` still work even when execution is
+checkpointed across many jobs.
+
 ## Inspecting Run History In Application Code
 
 Use the `SwarmHistory` facade or service when you want to query persisted runs:
@@ -78,6 +82,11 @@ Individual stores can override the global driver if needed:
 ],
 ```
 
+Per-store drivers should only be set when you intentionally want an override.
+If you published `config/swarm.php` from an older package version, verify that
+the `context`, `artifacts`, and `history` driver values are not hardcoded to
+`cache`, or they will override `swarm.persistence.driver`.
+
 ### Cache
 
 The cache driver is lightweight and works well when you want recent run
@@ -102,6 +111,10 @@ It is usually the better fit for production inspection and auditability.
 For queued runs, the database-backed history store uses lease-based ownership
 to guard against duplicate queue deliveries replaying the same swarm work while
 another worker still owns the run.
+
+Durable execution also requires the database driver. Durable runtime state is
+stored separately from run history, but the public inspection surface remains
+the same history, context, and artifact records.
 
 Database TTL is prune-based retention. Expired rows remain queryable until you
 run the prune command described in [Maintenance](maintenance.md).

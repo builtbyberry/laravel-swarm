@@ -5,20 +5,27 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm;
 
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmPauseCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPruneCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmRecoverCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmSteps;
+use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
@@ -52,6 +59,8 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(SwarmRunner::class);
         $this->app->singleton(SwarmHistory::class);
         $this->app->singleton(SwarmEventRecorder::class);
+        $this->app->singleton(DurableSwarmManager::class);
+        $this->app->singleton(DurableRunStore::class, DatabaseDurableRunStore::class);
 
         $this->app->singleton(ContextStore::class, fn (Application $app): ContextStore => $this->resolvePersistenceStore(
             $app,
@@ -107,6 +116,10 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmPruneCommand::class,
                 SwarmStatusCommand::class,
                 SwarmHistoryCommand::class,
+                SwarmPauseCommand::class,
+                SwarmResumeCommand::class,
+                SwarmCancelCommand::class,
+                SwarmRecoverCommand::class,
             ]);
         }
 
@@ -122,9 +135,11 @@ class SwarmServiceProvider extends ServiceProvider
     protected function resolvePersistenceStore(Application $app, string $configKey, string $cacheStore, string $databaseStore): object
     {
         $config = $app->make(ConfigRepository::class);
-        $driver = $config->get("swarm.{$configKey}.driver")
-            ?? $config->get('swarm.persistence.driver')
-            ?? 'cache';
+        $driver = $config->get("swarm.{$configKey}.driver");
+
+        if (blank($driver)) {
+            $driver = $config->get('swarm.persistence.driver', 'cache');
+        }
 
         return $app->make($driver === 'database' ? $databaseStore : $cacheStore);
     }

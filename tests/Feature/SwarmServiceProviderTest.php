@@ -3,17 +3,23 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmPauseCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPruneCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmRecoverCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
@@ -25,6 +31,7 @@ test('the swarm runner resolves from the container', function () {
     expect(app(ContextStore::class))->toBeInstanceOf(ContextStore::class);
     expect(app(ArtifactRepository::class))->toBeInstanceOf(ArtifactRepository::class);
     expect(app(RunHistoryStore::class))->toBeInstanceOf(RunHistoryStore::class);
+    expect(app(DurableRunStore::class))->toBeInstanceOf(DurableRunStore::class);
 });
 
 test('the swarm configuration is merged', function () {
@@ -42,6 +49,10 @@ test('the make swarm command is registered', function () {
     expect($commands['swarm:prune'])->toBeInstanceOf(SwarmPruneCommand::class);
     expect($commands['swarm:status'])->toBeInstanceOf(SwarmStatusCommand::class);
     expect($commands['swarm:history'])->toBeInstanceOf(SwarmHistoryCommand::class);
+    expect($commands['swarm:pause'])->toBeInstanceOf(SwarmPauseCommand::class);
+    expect($commands['swarm:resume'])->toBeInstanceOf(SwarmResumeCommand::class);
+    expect($commands['swarm:cancel'])->toBeInstanceOf(SwarmCancelCommand::class);
+    expect($commands['swarm:recover'])->toBeInstanceOf(SwarmRecoverCommand::class);
 });
 
 test('the container resolves cache persistence stores by default', function () {
@@ -63,6 +74,24 @@ test('the container resolves database persistence stores from the global driver'
     expect(app(ContextStore::class))->toBeInstanceOf(DatabaseContextStore::class);
     expect(app(ArtifactRepository::class))->toBeInstanceOf(DatabaseArtifactRepository::class);
     expect(app(RunHistoryStore::class))->toBeInstanceOf(DatabaseRunHistoryStore::class);
+});
+
+test('blank per-store persistence drivers fall back to the global driver', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.context.driver', '');
+    config()->set('swarm.artifacts.driver', '');
+    config()->set('swarm.history.driver', '');
+    app()->forgetInstance(ContextStore::class);
+    app()->forgetInstance(ArtifactRepository::class);
+    app()->forgetInstance(RunHistoryStore::class);
+
+    expect(app(ContextStore::class))->toBeInstanceOf(DatabaseContextStore::class);
+    expect(app(ArtifactRepository::class))->toBeInstanceOf(DatabaseArtifactRepository::class);
+    expect(app(RunHistoryStore::class))->toBeInstanceOf(DatabaseRunHistoryStore::class);
+});
+
+test('the container resolves the durable run store', function () {
+    expect(app(DurableRunStore::class))->toBeInstanceOf(DatabaseDurableRunStore::class);
 });
 
 test('per-store persistence driver overrides the global driver', function () {

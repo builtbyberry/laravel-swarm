@@ -24,7 +24,7 @@ Laravel's article, [Building Multi-Agent Workflows with the Laravel AI SDK](http
 
 That is the right mental model for Swarm too. Laravel AI gives you the ingredients. Laravel Swarm gives you a reusable workflow abstraction built from those ingredients.
 
-Both are valid choices. Laravel AI is great when you want to compose the workflow yourself from lower-level primitives. Laravel Swarm is great when you want that workflow to live as a reusable, first-class object in your app with a consistent `run()`, `queue()`, and `stream()` API, plus persistence, lifecycle events, and test helpers around it.
+Both are valid choices. Laravel AI is great when you want to compose the workflow yourself from lower-level primitives. Laravel Swarm is great when you want that workflow to live as a reusable, first-class object in your app with a consistent `run()`, `queue()`, `stream()`, and `dispatchDurable()` API, plus persistence, lifecycle events, and test helpers around it.
 
 If you prefer assembling those workflow patterns manually, the Laravel AI article is a good place to start. If you want to define the workflow once and reuse it as an application primitive, Swarm is the better fit.
 
@@ -70,6 +70,26 @@ Publish the package configuration if you want to customize defaults:
 ```bash
 php artisan vendor:publish --tag=swarm-config
 ```
+
+If you published `config/swarm.php` from an earlier version, review the
+per-store driver entries before relying on `SWARM_PERSISTENCE_DRIVER`.
+The current package config expects these overrides to be unset unless you
+intend to override the global driver:
+
+```php
+'context' => [
+    'driver' => env('SWARM_CONTEXT_DRIVER'),
+],
+'artifacts' => [
+    'driver' => env('SWARM_ARTIFACTS_DRIVER'),
+],
+'history' => [
+    'driver' => env('SWARM_HISTORY_DRIVER'),
+],
+```
+
+If an older published config hardcodes one of those values to `'cache'`, it
+will override the global persistence driver.
 
 If you want to customize the package migrations in your app, publish them explicitly:
 
@@ -277,6 +297,53 @@ For more detail on structured queue payloads, see [Structured Input](docs/struct
 
 For database-backed retention, pruning, and active-run persistence behavior, see [Persistence And History](docs/persistence-and-history.md) and [Maintenance](docs/maintenance.md).
 
+## Durable Execution
+
+Use `dispatchDurable()` when the workflow is too important or too long-lived
+for a single queue job:
+
+```php
+ArticlePipeline::make()->dispatchDurable([
+    'topic' => 'Laravel queues',
+    'audience' => 'intermediate developers',
+    'goal' => 'blog outline',
+]);
+```
+
+Durable runs are checkpointed and advance one sequential step per job. That
+means retries and recovery are step-scoped instead of replaying the whole
+swarm.
+
+This is intentionally a separate execution mode:
+
+- `queue()` is lightweight background execution
+- `dispatchDurable()` is checkpointed durable execution
+
+Durable execution is sequential-only in this release and requires
+database-backed swarm persistence.
+
+Durable responses do not support `then()` or `catch()`. Durable runs are
+event-driven. Listen to `SwarmCompleted` and `SwarmFailed` instead of
+serializing callbacks into the queue payload.
+
+`dispatchDurable()` still uses Laravel's pending-dispatch lifecycle. In Tinker
+or manual testing, holding onto the response can delay queue insertion until
+the response object is released:
+
+```php
+$response = ArticlePipeline::make()->dispatchDurable([
+    'topic' => 'Atomic lease test',
+]);
+
+$runId = $response->runId;
+
+unset($response);
+gc_collect_cycles();
+```
+
+For the durable runtime model, operator commands, and recovery scheduling, see
+[Durable Execution](docs/durable-execution.md).
+
 ## Streaming A Swarm
 
 Use `stream()` when you want step and token events for server-sent events or other real-time updates:
@@ -412,7 +479,7 @@ Timeout settings are best-effort orchestration deadlines, not hard cancellation 
 
 Every swarm run returns a `SwarmResponse` with `output`, `steps`, `usage`, `artifacts`, and `metadata`. The response casts to a string for simple use cases.
 
-Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted` includes an `executionMode` payload so listeners can distinguish `run`, `stream`, and `queue` invocations.
+Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted`, `SwarmCompleted`, and `SwarmFailed` include an `executionMode` payload so listeners can distinguish `run`, `stream`, `queue`, and `durable` invocations.
 
 Run context, artifacts, and run history are persisted automatically using the configured driver. The database driver stores records durably in package-managed tables. The cache driver is lighter and respects TTL settings.
 
@@ -424,6 +491,7 @@ To customize how swarm state is stored, bind your own implementations against th
 
 - [Structured Input](docs/structured-input.md)
 - [Persistence And History](docs/persistence-and-history.md)
+- [Durable Execution](docs/durable-execution.md)
 - [Testing](docs/testing.md)
 - [Hierarchical Routing](docs/hierarchical-routing.md)
 - [Pulse](docs/pulse.md)
