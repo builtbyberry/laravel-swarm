@@ -209,6 +209,36 @@ ArticlePipeline::make()
 
 `queue()` always queues. `run()` always runs synchronously.
 
+Queued `then()` and `catch()` callbacks remain available for compatibility, but they are now deprecated for real queued execution. Those closures are serialized into the queue payload, which can capture more application state than intended, fail serialization unexpectedly, or leak sensitive data into queue storage. Prefer Laravel event listeners for queued completion and failure handling.
+
+Queued swarms remain the lightweight execution path. They are designed for short-lived background runs, not durable multi-job workflow orchestration.
+
+Example using swarm lifecycle events instead of serialized closures:
+
+```php
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
+use Illuminate\Support\Facades\Event;
+
+Event::listen(SwarmCompleted::class, function (SwarmCompleted $event): void {
+    if ($event->swarmClass !== ArticlePipeline::class) {
+        return;
+    }
+
+    // Handle the completed queued run.
+});
+
+Event::listen(SwarmFailed::class, function (SwarmFailed $event): void {
+    if ($event->swarmClass !== ArticlePipeline::class) {
+        return;
+    }
+
+    report($event->exception);
+});
+
+ArticlePipeline::make()->queue('Draft a blog outline about Laravel queues.');
+```
+
 Like Laravel AI, the queued swarm response proxies the underlying pending dispatch, so you may continue chaining queue configuration methods such as `onConnection()` and `onQueue()` before the job is actually dispatched.
 
 Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. For queued execution, treat the swarm as a stateless definition apart from container-injected dependencies. Runtime instance state is not preserved across the queue boundary. Pass dynamic execution data in the task payload instead.
@@ -238,6 +268,8 @@ What not to do:
 If you call `queue()` on a swarm instance that relies on runtime constructor state, or on a swarm class the container cannot resolve for queued execution, Laravel Swarm throws immediately with guidance before dispatching the job.
 
 For more detail on structured queue payloads, see [Structured Input](docs/structured-input.md).
+
+For prune-based retention of database-backed swarm data, see [Maintenance](docs/maintenance.md).
 
 ## Streaming A Swarm
 

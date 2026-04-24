@@ -146,9 +146,9 @@ class HierarchicalRunner
             ])
             ->addArtifact($artifact);
 
+        $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
         $state->contextStore->put($state->context, $state->ttlSeconds);
         $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
-        $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds);
         $state->events->dispatch(new SwarmStepCompleted(
             runId: $state->context->runId,
             swarmClass: $state->swarm::class,

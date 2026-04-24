@@ -18,6 +18,8 @@ class SwarmExecutionState
         public readonly float $deadlineMonotonic,
         public readonly int $maxAgentExecutions,
         public readonly int $ttlSeconds,
+        public readonly ?int $leaseSeconds,
+        public readonly ?string $executionToken,
         public readonly RunContext $context,
         public readonly ContextStore $contextStore,
         public readonly ArtifactRepository $artifactRepository,

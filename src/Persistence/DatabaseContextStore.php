@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
+use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\ConnectionInterface;
@@ -31,6 +32,7 @@ class DatabaseContextStore implements ContextStore
                 $context->artifacts,
             )),
             'updated_at' => now(),
+            'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
         ];
 
         $exists = $this->table()->where('run_id', $context->runId)->exists();

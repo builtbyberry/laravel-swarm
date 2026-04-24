@@ -50,7 +50,7 @@ class CacheRunHistoryStore implements RunHistoryStore
         $this->appendToIndex($this->latestIndexKey(), $runId, $ttlSeconds);
     }
 
-    public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds): void
+    public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
         $history = $this->find($runId) ?? [];
         $history['steps'] ??= [];
@@ -60,7 +60,7 @@ class CacheRunHistoryStore implements RunHistoryStore
         $this->store()->put($this->key($runId), $history, $ttlSeconds);
     }
 
-    public function complete(string $runId, SwarmResponse $response, int $ttlSeconds): void
+    public function complete(string $runId, SwarmResponse $response, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
         $history = $this->find($runId) ?? [];
         $history['status'] = 'completed';
@@ -75,7 +75,7 @@ class CacheRunHistoryStore implements RunHistoryStore
         $this->store()->put($this->key($runId), $history, $ttlSeconds);
     }
 
-    public function fail(string $runId, Throwable $exception, int $ttlSeconds): void
+    public function fail(string $runId, Throwable $exception, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
         $history = $this->find($runId) ?? [];
         $history['status'] = 'failed';

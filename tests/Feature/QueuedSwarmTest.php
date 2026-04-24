@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
@@ -22,6 +23,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DependencyInjectedQueuedSwar
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableQueuedSwarm;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 
 function preventQueuedSwarmRedispatch(object $response): void
@@ -59,6 +62,197 @@ test('queued swarm jobs can execute with a preserved run context', function () {
         ->toHaveKey('draft_id', 42)
         ->and($job->task['metadata'])
         ->toHaveKey('tenant_id', 'acme');
+});
+
+test('queued swarm retries do not re-run completed database-backed executions', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+
+    $context = RunContext::from('queued-task', 'idempotent-run-id');
+    $job = new InvokeSwarm(FakeSequentialSwarm::class, $context->toQueuePayload());
+
+    $job->handle(app(SwarmRunner::class));
+    $stepsBeforeRetry = DB::table('swarm_run_histories')->where('run_id', 'idempotent-run-id')->value('steps');
+
+    FakeResearcher::assertPrompted('queued-task');
+    FakeWriter::assertPrompted('research-out');
+    FakeEditor::assertPrompted('writer-out');
+
+    FakeResearcher::fake(['retry-research']);
+    FakeWriter::fake(['retry-writer']);
+    FakeEditor::fake(['retry-editor']);
+
+    $job->handle(app(SwarmRunner::class));
+
+    expect(DB::table('swarm_run_histories')->where('run_id', 'idempotent-run-id')->value('status'))->toBe('completed');
+    expect(DB::table('swarm_run_histories')->where('run_id', 'idempotent-run-id')->value('steps'))->toBe($stepsBeforeRetry);
+
+    FakeResearcher::assertPrompted('queued-task');
+    FakeWriter::assertPrompted('research-out');
+    FakeEditor::assertPrompted('writer-out');
+});
+
+test('queued swarm duplicate completion does not replay deprecated then callbacks', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+
+    $state = (object) ['callbacks' => 0];
+    $context = RunContext::from('queued-task', 'duplicate-callback-run-id');
+
+    $job = (new InvokeSwarm(FakeSequentialSwarm::class, $context->toQueuePayload()))
+        ->then(function (SwarmResponse $response) use ($state): void {
+            expect($response->output)->toBe('editor-out');
+            $state->callbacks++;
+        });
+
+    $job->handle(app(SwarmRunner::class));
+    $job->handle(app(SwarmRunner::class));
+
+    expect($state->callbacks)->toBe(1);
+});
+
+test('queued swarm retries do not restart failed database-backed executions', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+
+    $context = RunContext::from('queued-task', 'failed-run-id');
+    $job = new InvokeSwarm(FailingQueuedSwarm::class, $context->toQueuePayload());
+
+    try {
+        $job->handle(app(SwarmRunner::class));
+        $this->fail('Expected the queued swarm to throw.');
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toBe('Queued swarm failed.');
+    }
+
+    $updatedAt = DB::table('swarm_run_histories')->where('run_id', 'failed-run-id')->value('updated_at');
+
+    $job->handle(app(SwarmRunner::class));
+
+    expect(DB::table('swarm_run_histories')->where('run_id', 'failed-run-id')->value('status'))->toBe('failed');
+    expect(DB::table('swarm_run_histories')->where('run_id', 'failed-run-id')->value('updated_at'))->toBe($updatedAt);
+});
+
+test('queued swarm retries do not run while another worker still holds the lease', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+
+    $context = RunContext::from('queued-task', 'leased-run-id');
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'leased-run-id',
+        'swarm_class' => FakeSequentialSwarm::class,
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode($context->toArray()),
+        'metadata' => json_encode(['swarm_class' => FakeSequentialSwarm::class, 'topology' => 'sequential']),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => null,
+        'expires_at' => now()->addHour(),
+        'execution_token' => 'active-token',
+        'leased_until' => now()->addMinutes(5),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $job = new InvokeSwarm(FakeSequentialSwarm::class, $context->toQueuePayload());
+    $job->handle(app(SwarmRunner::class));
+
+    FakeResearcher::assertNeverPrompted();
+    FakeWriter::assertNeverPrompted();
+    FakeEditor::assertNeverPrompted();
+});
+
+test('queued swarm retries can reclaim expired leases', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+
+    $context = RunContext::from('queued-task', 'expired-lease-run-id');
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'expired-lease-run-id',
+        'swarm_class' => FakeSequentialSwarm::class,
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode($context->toArray()),
+        'metadata' => json_encode(['swarm_class' => FakeSequentialSwarm::class, 'topology' => 'sequential']),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => null,
+        'expires_at' => now()->addHour(),
+        'execution_token' => 'expired-token',
+        'leased_until' => now()->subMinute(),
+        'created_at' => now()->subMinutes(10),
+        'updated_at' => now()->subMinutes(10),
+    ]);
+
+    $job = new InvokeSwarm(FakeSequentialSwarm::class, $context->toQueuePayload());
+    $job->handle(app(SwarmRunner::class));
+
+    expect(DB::table('swarm_run_histories')->where('run_id', 'expired-lease-run-id')->value('status'))->toBe('completed');
+    expect(DB::table('swarm_run_histories')->where('run_id', 'expired-lease-run-id')->value('execution_token'))->toBeNull();
+
+    FakeResearcher::assertPrompted('queued-task');
+    FakeWriter::assertPrompted('research-out');
+    FakeEditor::assertPrompted('writer-out');
+});
+
+test('queued swarm does not dispatch failed events after losing the lease', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+    Event::fake();
+
+    $context = RunContext::from('queued-task', 'lease-loss-run-id');
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'lease-loss-run-id',
+        'swarm_class' => FailingQueuedSwarm::class,
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode($context->toArray()),
+        'metadata' => json_encode(['swarm_class' => FailingQueuedSwarm::class, 'topology' => 'sequential']),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => null,
+        'expires_at' => now()->addHour(),
+        'execution_token' => 'active-token',
+        'leased_until' => now()->subMinute(),
+        'created_at' => now()->subMinutes(10),
+        'updated_at' => now()->subMinutes(10),
+    ]);
+
+    $job = new InvokeSwarm(FailingQueuedSwarm::class, $context->toQueuePayload());
+
+    try {
+        $job->handle(app(SwarmRunner::class));
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toBe('Queued swarm failed.');
+    }
+
+    DB::table('swarm_run_histories')
+        ->where('run_id', 'lease-loss-run-id')
+        ->update([
+            'execution_token' => 'replacement-token',
+            'leased_until' => now()->addMinutes(5),
+            'updated_at' => now(),
+        ]);
+
+    Event::fake();
+
+    $job = new InvokeSwarm(FailingQueuedSwarm::class, $context->toQueuePayload());
+    $job->handle(app(SwarmRunner::class));
+
+    Event::assertNotDispatched(SwarmFailed::class, fn ($event) => $event->runId === 'lease-loss-run-id');
 });
 
 test('queued swarms serialize structured task arrays into queue-safe payloads', function () {

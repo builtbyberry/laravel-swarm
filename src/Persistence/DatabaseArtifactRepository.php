@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
+use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\ConnectionInterface;
 
@@ -32,6 +33,7 @@ class DatabaseArtifactRepository implements ArtifactRepository
                 'content' => $this->encodeJson($payload['content'] ?? null),
                 'metadata' => $this->encodeJson($payload['metadata'] ?? []),
                 'step_agent_class' => $payload['step_agent_class'] ?? null,
+                'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
                 'created_at' => $timestamp,
                 'updated_at' => $timestamp,
             ]);

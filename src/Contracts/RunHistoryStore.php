@@ -17,11 +17,11 @@ interface RunHistoryStore
      */
     public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void;
 
-    public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds): void;
+    public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void;
 
-    public function complete(string $runId, SwarmResponse $response, int $ttlSeconds): void;
+    public function complete(string $runId, SwarmResponse $response, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void;
 
-    public function fail(string $runId, Throwable $exception, int $ttlSeconds): void;
+    public function fail(string $runId, Throwable $exception, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void;
 
     public function find(string $runId): ?array;
 

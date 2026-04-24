@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm;
 
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmPruneCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
@@ -103,6 +104,7 @@ class SwarmServiceProvider extends ServiceProvider
 
             $this->commands([
                 MakeSwarmCommand::class,
+                SwarmPruneCommand::class,
                 SwarmStatusCommand::class,
                 SwarmHistoryCommand::class,
             ]);

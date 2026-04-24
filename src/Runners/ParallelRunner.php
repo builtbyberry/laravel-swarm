@@ -84,8 +84,8 @@ class ParallelRunner
             $steps[] = $step;
             $outputs[] = $row['output'];
             $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
+            $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
             $state->context->addArtifact($artifact);
-            $state->historyStore->recordStep($state->context->runId, $step, $state->ttlSeconds);
             $state->events->dispatch(new SwarmStepCompleted(
                 runId: $state->context->runId,
                 swarmClass: $state->swarm::class,

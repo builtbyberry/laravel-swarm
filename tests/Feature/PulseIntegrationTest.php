@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmRuns as SwarmRunsRecorder;
 use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmStepDurations;
 use BuiltByBerry\LaravelSwarm\Pulse\Support\SwarmPulseKey;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
@@ -132,6 +133,53 @@ test('queued swarms include positive integer durations', function () {
 
     Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->topology === 'sequential'
         && $event->durationMs > 0);
+});
+
+test('queued swarms do not emit failed events after lease loss', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    Event::fake();
+
+    $context = RunContext::from('queued-task', 'pulse-lease-loss-run-id');
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'pulse-lease-loss-run-id',
+        'swarm_class' => FailingQueuedSwarm::class,
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode($context->toArray()),
+        'metadata' => json_encode(['swarm_class' => FailingQueuedSwarm::class, 'topology' => 'sequential']),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => null,
+        'expires_at' => now()->addHour(),
+        'execution_token' => 'expired-token',
+        'leased_until' => now()->subMinute(),
+        'created_at' => now()->subMinutes(10),
+        'updated_at' => now()->subMinutes(10),
+    ]);
+
+    try {
+        app(SwarmRunner::class)->runQueued(FailingQueuedSwarm::make(), $context);
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toBe('Queued swarm failed.');
+    }
+
+    DB::table('swarm_run_histories')
+        ->where('run_id', 'pulse-lease-loss-run-id')
+        ->update([
+            'execution_token' => 'replacement-token',
+            'leased_until' => now()->addMinutes(5),
+            'updated_at' => now(),
+        ]);
+
+    Event::fake();
+
+    app(SwarmRunner::class)->runQueued(FailingQueuedSwarm::make(), $context);
+
+    Event::assertNotDispatched(SwarmFailed::class, fn (SwarmFailed $event) => $event->runId === 'pulse-lease-loss-run-id');
 });
 
 test('failed swarm events include positive non zero integer durations', function () {

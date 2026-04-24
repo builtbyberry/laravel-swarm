@@ -17,6 +17,8 @@ class QueuedSwarmResponse
 
     /**
      * Register a callback to invoke when the swarm completes.
+     *
+     * @deprecated For queued swarms, prefer listening for SwarmCompleted events instead of serializing closures into the job payload.
      */
     public function then(Closure $callback): self
     {
@@ -31,6 +33,8 @@ class QueuedSwarmResponse
 
     /**
      * Register a callback to invoke if the swarm fails.
+     *
+     * @deprecated For queued swarms, prefer listening for SwarmFailed events instead of serializing closures into the job payload.
      */
     public function catch(Closure $callback): self
     {

@@ -28,6 +28,10 @@ trait InvokesQueuedSwarmCallbacks
     {
         $response = $action();
 
+        if ($response === null) {
+            return null;
+        }
+
         foreach ($this->thenCallbacks as $callback) {
             $callback($response);
         }

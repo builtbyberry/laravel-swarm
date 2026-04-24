@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmPruneCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
@@ -38,6 +39,7 @@ test('the make swarm command is registered', function () {
 
     expect(array_key_exists('make:swarm', $commands))->toBeTrue();
     expect($commands['make:swarm'])->toBeInstanceOf(MakeSwarmCommand::class);
+    expect($commands['swarm:prune'])->toBeInstanceOf(SwarmPruneCommand::class);
     expect($commands['swarm:status'])->toBeInstanceOf(SwarmStatusCommand::class);
     expect($commands['swarm:history'])->toBeInstanceOf(SwarmHistoryCommand::class);
 });

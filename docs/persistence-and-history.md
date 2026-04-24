@@ -99,6 +99,9 @@ create the swarm tables if you have not already done so.
 Database-backed history does not have the stale-index behavior described above.
 It is usually the better fit for production inspection and auditability.
 
+Database TTL is prune-based retention. Expired rows remain queryable until you
+run the prune command described in [Maintenance](maintenance.md).
+
 ## Custom Table Names
 
 If you change `swarm.tables.*`, Laravel Swarm will use those table names at

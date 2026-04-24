@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Attributes\MaxAgentSteps as MaxAgentStepsAttribute
 use BuiltByBerry\LaravelSwarm\Attributes\Timeout as TimeoutAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
@@ -15,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
+use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
@@ -58,18 +60,21 @@ class SwarmRunner
         return $this->runWithExecutionMode($swarm, $task, self::EXECUTION_MODE_RUN);
     }
 
-    public function runQueued(Swarm $swarm, string|array|RunContext $task): SwarmResponse
+    public function runQueued(Swarm $swarm, string|array|RunContext $task): ?SwarmResponse
     {
         return $this->runWithExecutionMode($swarm, $task, self::EXECUTION_MODE_QUEUE);
     }
 
-    protected function runWithExecutionMode(Swarm $swarm, string|array|RunContext $task, string $executionMode): SwarmResponse
+    protected function runWithExecutionMode(Swarm $swarm, string|array|RunContext $task, string $executionMode): ?SwarmResponse
     {
         $startedAt = MonotonicTime::now();
         $topology = $this->resolveTopology($swarm);
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
+        $queueLeaseSeconds = $executionMode === self::EXECUTION_MODE_QUEUE
+            ? $this->resolveQueueLeaseSeconds($timeoutSeconds)
+            : null;
         $context = RunContext::fromTask($task);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
@@ -82,6 +87,8 @@ class SwarmRunner
             deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
             maxAgentExecutions: $maxAgentExecutions,
             ttlSeconds: $contextTtl,
+            leaseSeconds: $queueLeaseSeconds,
+            executionToken: null,
             context: $context,
             contextStore: $this->contextStore,
             artifactRepository: $this->artifactRepository,
@@ -89,8 +96,40 @@ class SwarmRunner
             events: $this->events,
         );
 
+        if ($executionMode === self::EXECUTION_MODE_QUEUE && $this->historyStore instanceof ClaimsQueuedRunExecution) {
+            $acquisition = $this->historyStore->acquireQueuedRun(
+                $context->runId,
+                $swarm::class,
+                $topology->value,
+                $context,
+                $context->metadata,
+                $contextTtl,
+                $queueLeaseSeconds ?? $timeoutSeconds,
+            );
+
+            if (! $acquisition->acquired()) {
+                return null;
+            }
+
+            $state = new SwarmExecutionState(
+                swarm: $swarm,
+                topology: $topology->value,
+                deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
+                maxAgentExecutions: $maxAgentExecutions,
+                ttlSeconds: $contextTtl,
+                leaseSeconds: $queueLeaseSeconds,
+                executionToken: $acquisition->executionToken,
+                context: $context,
+                contextStore: $this->contextStore,
+                artifactRepository: $this->artifactRepository,
+                historyStore: $this->historyStore,
+                events: $this->events,
+            );
+        } else {
+            $this->historyStore->start($context->runId, $swarm::class, $topology->value, $context, $context->metadata, $contextTtl);
+        }
+
         $this->contextStore->put($context, $contextTtl);
-        $this->historyStore->start($context->runId, $swarm::class, $topology->value, $context, $context->metadata, $contextTtl);
         $this->events->dispatch(new SwarmStarted(
             runId: $context->runId,
             swarmClass: $swarm::class,
@@ -106,8 +145,15 @@ class SwarmRunner
                 Topology::Parallel => $this->parallel->run($state),
                 Topology::Hierarchical => $this->hierarchical->run($state),
             };
+        } catch (LostSwarmLeaseException) {
+            return null;
         } catch (\Throwable $exception) {
-            $this->historyStore->fail($context->runId, $exception, $contextTtl);
+            try {
+                $this->historyStore->fail($context->runId, $exception, $contextTtl, $state->executionToken, $state->leaseSeconds);
+            } catch (LostSwarmLeaseException) {
+                return null;
+            }
+
             $this->events->dispatch(new SwarmFailed(
                 runId: $context->runId,
                 swarmClass: $swarm::class,
@@ -122,7 +168,7 @@ class SwarmRunner
 
         $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
         $this->contextStore->put($context, $contextTtl);
-        $this->historyStore->complete($context->runId, $response, $contextTtl);
+        $this->historyStore->complete($context->runId, $response, $contextTtl, $state->executionToken, $state->leaseSeconds);
         $this->events->dispatch(new SwarmCompleted(
             runId: $context->runId,
             swarmClass: $swarm::class,
@@ -162,6 +208,8 @@ class SwarmRunner
             deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
             maxAgentExecutions: $maxAgentExecutions,
             ttlSeconds: $contextTtl,
+            leaseSeconds: null,
+            executionToken: null,
             context: $context,
             contextStore: $this->contextStore,
             artifactRepository: $this->artifactRepository,
@@ -256,6 +304,11 @@ class SwarmRunner
                 ],
             ),
         );
+    }
+
+    protected function resolveQueueLeaseSeconds(int $timeoutSeconds): int
+    {
+        return max($timeoutSeconds * 2, 300);
     }
 
     protected function ensureQueueable(Swarm $swarm): void
