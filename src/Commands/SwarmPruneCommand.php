@@ -21,6 +21,7 @@ class SwarmPruneCommand extends Command
     public function handle(ConnectionInterface $connection, ConfigRepository $config): int
     {
         $tables = [
+            'durable' => (string) $config->get('swarm.tables.durable', 'swarm_durable_runs'),
             'history' => (string) $config->get('swarm.tables.history', 'swarm_run_histories'),
             'contexts' => (string) $config->get('swarm.tables.contexts', 'swarm_contexts'),
             'artifacts' => (string) $config->get('swarm.tables.artifacts', 'swarm_artifacts'),
@@ -38,6 +39,10 @@ class SwarmPruneCommand extends Command
             $deleted['contexts'],
             $deleted['artifacts'],
         ));
+        $this->components->info(sprintf(
+            'Pruned %d durable runtime record(s).',
+            $deleted['durable'],
+        ));
 
         return self::SUCCESS;
     }
@@ -47,17 +52,26 @@ class SwarmPruneCommand extends Command
         $deleted = 0;
 
         while (true) {
-            $query = $connection->table($table)
-                ->where('expires_at', '<', now());
+            $query = $connection->table($table);
 
             if ($role === 'history') {
-                $query->whereIn('status', ['completed', 'failed']);
+                $query->where('expires_at', '<', now())
+                    ->whereIn('status', ['completed', 'failed', 'cancelled']);
+            } elseif ($role === 'durable') {
+                $query->whereIn('status', ['completed', 'failed', 'cancelled'])
+                    ->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                        $subquery->from($historyTable)
+                            ->select('run_id')
+                            ->where('expires_at', '<', now())
+                            ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                    });
             } else {
-                $query->whereNotIn('run_id', function ($subquery) use ($historyTable): void {
-                    $subquery->from($historyTable)
-                        ->select('run_id')
-                        ->where('status', 'running');
-                });
+                $query->where('expires_at', '<', now())
+                    ->whereNotIn('run_id', function ($subquery) use ($historyTable): void {
+                        $subquery->from($historyTable)
+                            ->select('run_id')
+                            ->whereIn('status', ['pending', 'running', 'paused']);
+                    });
             }
 
             $chunk = $query

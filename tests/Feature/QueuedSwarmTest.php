@@ -15,13 +15,18 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Jobs\NoOpQueuedJob;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Support\ResolvedSwarmOutput;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Support\UnboundQueuedDependency;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ConfigDrivenSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ContainerResolvedQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DependencyInjectedQueuedSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyRunnableSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalDuplicateWorkerSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableQueuedSwarm;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -43,6 +48,42 @@ beforeEach(function () {
     FakeResearcher::fake(['research-out']);
     FakeWriter::fake(['writer-out']);
     FakeEditor::fake(['editor-out']);
+});
+
+test('queue fails before dispatching empty swarms', function () {
+    expect(fn () => EmptyRunnableSwarm::make()->queue('queued-task'))
+        ->toThrow(SwarmException::class, 'EmptyRunnableSwarm: swarm has no agents. Add at least one agent to agents().');
+});
+
+test('queue fails before dispatching invalid topology config', function () {
+    config()->set('swarm.topology', 'pipeline');
+
+    expect(fn () => ConfigDrivenSequentialSwarm::make()->queue('queued-task'))
+        ->toThrow(SwarmException::class, 'Invalid swarm topology [pipeline]. Supported topologies: sequential, parallel, hierarchical.');
+});
+
+test('queue fails before dispatching invalid timeout config', function () {
+    config()->set('swarm.timeout', 0);
+
+    expect(fn () => FakeSequentialSwarm::make()->queue('queued-task'))
+        ->toThrow(SwarmException::class, 'Swarm timeout must be a positive integer.');
+});
+
+test('queue fails before dispatching invalid max step config', function () {
+    config()->set('swarm.max_agent_steps', 0);
+
+    expect(fn () => FakeSequentialSwarm::make()->queue('queued-task'))
+        ->toThrow(SwarmException::class, 'Swarm max agent steps must be a positive integer.');
+});
+
+test('queue fails before dispatching non container resolvable parallel agents', function () {
+    expect(fn () => UnresolvableParallelSwarm::make()->queue('queued-task'))
+        ->toThrow(SwarmException::class, UnresolvableParallelSwarm::class.': parallel agent ['.UnresolvableParallelAgent::class.'] must be container-resolvable because Laravel Concurrency serializes worker callbacks.');
+});
+
+test('queue fails before dispatching duplicate hierarchical worker classes', function () {
+    expect(fn () => FakeHierarchicalDuplicateWorkerSwarm::make()->queue('queued-task'))
+        ->toThrow(SwarmException::class, FakeHierarchicalDuplicateWorkerSwarm::class.': agents() contains duplicate agent class '.FakeWriter::class.'. Hierarchical worker classes must be unique.');
 });
 
 test('queued swarm jobs can execute with a preserved run context', function () {

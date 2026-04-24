@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -16,6 +17,8 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
+use Illuminate\Container\Container;
+use Illuminate\Contracts\Container\BindingResolutionException;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Responses\AgentResponse;
 
@@ -38,7 +41,7 @@ class HierarchicalRunner
         /** @var Agent $coordinator */
         $coordinator = array_shift($agents);
         $this->planner->assertCoordinatorCanPlan($coordinator);
-        $this->ensureUniqueWorkerClasses($state, $agents);
+        $this->ensureUniqueWorkerClasses($state->swarm::class, $agents);
         $workerMap = $this->workerMap($agents);
 
         $steps = [];
@@ -197,25 +200,31 @@ class HierarchicalRunner
                     foreach ($node->branches as $branchNodeId) {
                         /** @var HierarchicalWorkerNode $branch */
                         $branch = $plan->node($branchNodeId);
-                        $worker = $workerMap[$branch->agentClass];
+                        $this->resolveParallelWorker($state->swarm::class, $branch->agentClass);
                         $input = $this->composePrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
 
-                        $this->stepsRecorder->started($state, $nextIndex + count($branchDefinitions), $worker::class, $input);
+                        $this->stepsRecorder->started($state, $nextIndex + count($branchDefinitions), $branch->agentClass, $input);
 
                         $branchDefinitions[$branchNodeId] = [
                             'node' => $branch,
-                            'agent' => $worker,
                             'input' => $input,
                             'index' => $nextIndex + count($branchDefinitions),
                         ];
 
-                        $callbacks[$branchNodeId] = function () use ($worker, $input): array {
+                        $agentClass = $branch->agentClass;
+                        $callbacks[$branchNodeId] = function () use ($agentClass, $input): array {
+                            $worker = Container::getInstance()->make($agentClass);
+
+                            if (! $worker instanceof Agent) {
+                                throw new SwarmException("Hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
+                            }
+
                             $startedAt = MonotonicTime::now();
                             $response = $worker->prompt($input);
 
                             return [
                                 'output' => (string) $response,
-                                'usage' => $response instanceof AgentResponse ? $response->usage->toArray() : [],
+                                'usage' => $response->usage->toArray(),
                                 'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
                             ];
                         };
@@ -343,20 +352,53 @@ class HierarchicalRunner
         return $map;
     }
 
+    public function ensureUniqueWorkerClassesForSwarm(Swarm $swarm): void
+    {
+        $agents = $swarm->agents();
+
+        if ($agents === []) {
+            return;
+        }
+
+        array_shift($agents);
+        $this->ensureUniqueWorkerClasses($swarm::class, $agents);
+    }
+
     /**
      * @param  array<int, Agent>  $workers
      */
-    protected function ensureUniqueWorkerClasses(SwarmExecutionState $state, array $workers): void
+    protected function ensureUniqueWorkerClasses(string $swarmClass, array $workers): void
     {
         $seen = [];
 
         foreach ($workers as $worker) {
             if (isset($seen[$worker::class])) {
-                throw new SwarmException($state->swarm::class.': agents() contains duplicate agent class '.$worker::class.'. Hierarchical worker classes must be unique.');
+                throw new SwarmException($swarmClass.': agents() contains duplicate agent class '.$worker::class.'. Hierarchical worker classes must be unique.');
             }
 
             $seen[$worker::class] = true;
         }
+    }
+
+    /**
+     * @param  class-string<Agent>  $agentClass
+     */
+    protected function resolveParallelWorker(string $swarmClass, string $agentClass): Agent
+    {
+        try {
+            $worker = Container::getInstance()->make($agentClass);
+        } catch (BindingResolutionException $exception) {
+            throw new SwarmException(
+                "{$swarmClass}: hierarchical parallel worker [{$agentClass}] must be container-resolvable because Laravel Concurrency serializes worker callbacks.",
+                previous: $exception,
+            );
+        }
+
+        if (! $worker instanceof Agent) {
+            throw new SwarmException("{$swarmClass}: hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
+        }
+
+        return $worker;
     }
 
     /**

@@ -262,6 +262,7 @@ The plan must satisfy all of these:
 - `start_at` must exist in `nodes`
 - every referenced `next`, `branch`, and `output_from` node must exist
 - every worker `agent` must belong to the swarm's worker set
+- worker agent classes returned after the coordinator must be unique
 - the coordinator cannot route to itself as a worker
 - the graph must be acyclic
 - unreachable nodes are rejected

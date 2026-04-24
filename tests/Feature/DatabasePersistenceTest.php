@@ -91,6 +91,92 @@ test('database artifact repository persists explicit json payloads', function ()
     expect(DB::table('swarm_artifacts')->where('run_id', 'artifact-run-id')->value('expires_at'))->not->toBeNull();
 });
 
+test('prune removes cancelled history rows and terminal durable runtime rows', function () {
+    $expired = Carbon::now('UTC')->subMinute();
+    $future = Carbon::now('UTC')->addHour();
+
+    foreach ([
+        ['run_id' => 'cancelled-run', 'status' => 'cancelled', 'expires_at' => $expired],
+        ['run_id' => 'active-paused-run', 'status' => 'paused', 'expires_at' => $expired],
+        ['run_id' => 'future-cancelled-run', 'status' => 'cancelled', 'expires_at' => $future],
+    ] as $row) {
+        DB::table('swarm_run_histories')->insert([
+            'run_id' => $row['run_id'],
+            'swarm_class' => 'ExampleSwarm',
+            'topology' => 'sequential',
+            'status' => $row['status'],
+            'context' => json_encode([]),
+            'metadata' => json_encode([]),
+            'steps' => json_encode([]),
+            'output' => null,
+            'usage' => json_encode([]),
+            'error' => null,
+            'artifacts' => json_encode([]),
+            'finished_at' => $row['status'] === 'cancelled' ? $expired : null,
+            'expires_at' => $row['expires_at'],
+            'execution_token' => null,
+            'leased_until' => null,
+            'created_at' => $expired,
+            'updated_at' => $expired,
+        ]);
+
+        DB::table('swarm_contexts')->insert([
+            'run_id' => $row['run_id'],
+            'input' => 'input',
+            'data' => json_encode([]),
+            'metadata' => json_encode([]),
+            'artifacts' => json_encode([]),
+            'expires_at' => $expired,
+            'created_at' => $expired,
+            'updated_at' => $expired,
+        ]);
+
+        DB::table('swarm_artifacts')->insert([
+            'run_id' => $row['run_id'],
+            'name' => 'agent_output',
+            'content' => json_encode('output'),
+            'metadata' => json_encode([]),
+            'step_agent_class' => null,
+            'expires_at' => $expired,
+            'created_at' => $expired,
+            'updated_at' => $expired,
+        ]);
+
+        DB::table('swarm_durable_runs')->insert([
+            'run_id' => $row['run_id'],
+            'swarm_class' => 'ExampleSwarm',
+            'topology' => 'sequential',
+            'status' => $row['status'],
+            'next_step_index' => 0,
+            'current_step_index' => null,
+            'total_steps' => 1,
+            'timeout_at' => $future,
+            'step_timeout_seconds' => 300,
+            'execution_token' => null,
+            'leased_until' => null,
+            'pause_requested_at' => $row['status'] === 'paused' ? $expired : null,
+            'cancel_requested_at' => $row['status'] === 'cancelled' ? $expired : null,
+            'queue_connection' => null,
+            'queue_name' => null,
+            'finished_at' => $row['status'] === 'cancelled' ? $expired : null,
+            'created_at' => $expired,
+            'updated_at' => $expired,
+        ]);
+    }
+
+    Artisan::call('swarm:prune');
+
+    expect(DB::table('swarm_run_histories')->where('run_id', 'cancelled-run')->exists())->toBeFalse();
+    expect(DB::table('swarm_contexts')->where('run_id', 'cancelled-run')->exists())->toBeFalse();
+    expect(DB::table('swarm_artifacts')->where('run_id', 'cancelled-run')->exists())->toBeFalse();
+    expect(DB::table('swarm_durable_runs')->where('run_id', 'cancelled-run')->exists())->toBeFalse();
+    expect(DB::table('swarm_run_histories')->where('run_id', 'active-paused-run')->exists())->toBeTrue();
+    expect(DB::table('swarm_contexts')->where('run_id', 'active-paused-run')->exists())->toBeTrue();
+    expect(DB::table('swarm_artifacts')->where('run_id', 'active-paused-run')->exists())->toBeTrue();
+    expect(DB::table('swarm_durable_runs')->where('run_id', 'active-paused-run')->exists())->toBeTrue();
+    expect(DB::table('swarm_durable_runs')->where('run_id', 'future-cancelled-run')->exists())->toBeTrue();
+});
+
 test('database run history store persists start step completion and failure payloads', function () {
     $history = app(DatabaseRunHistoryStore::class);
     $context = RunContext::from('history-task', 'history-run-id');

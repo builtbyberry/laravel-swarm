@@ -54,6 +54,10 @@ context remains available to the swarm runtime while it validates and executes
 the returned route plan. In sequential and parallel swarms, the array is
 serialized as the prompt each agent receives.
 
+Array task input must be JSON-encodable plain data. Laravel Swarm rejects
+resources, closures, and other opaque runtime values instead of serializing PHP
+internals into the prompt.
+
 ## Using Run Contexts
 
 Use `RunContext` when you need more explicit control, such as setting the run

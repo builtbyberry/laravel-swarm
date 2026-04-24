@@ -124,6 +124,23 @@ test('dispatch durable accepts structured input and creates a durable run respon
         ->toHaveKey('tenant_id', 'acme');
 });
 
+test('durable capture redacts history while preserving active runtime context until terminal', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('sensitive-durable-task');
+    $runId = $response->runId;
+
+    expect(app(ContextStore::class)->find($runId)['input'])->toBe('sensitive-durable-task');
+    expect(app(SwarmHistory::class)->find($runId)['context']['input'])->toBe('[redacted]');
+
+    app(DurableSwarmManager::class)->pause($runId);
+    expect(app(ContextStore::class)->find($runId)['input'])->toBe('sensitive-durable-task');
+
+    app(DurableSwarmManager::class)->resume($runId);
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending');
+});
+
 test('durable manager start creates runtime state before the first job is pushed', function () {
     ensureJobsTableExists();
 
@@ -208,6 +225,28 @@ test('durable sequential swarms complete one step per job', function () {
         ->and($history['status'])->toBe('completed')
         ->and($history['output'])->toBe('editor-out')
         ->and($history['steps'])->toHaveCount(3);
+});
+
+test('durable terminal completion overwrites persisted context with redacted capture snapshot', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('sensitive-durable-task');
+    $runId = $response->runId;
+
+    (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class));
+    expect(app(ContextStore::class)->find($runId)['input'])->toBe('sensitive-durable-task');
+
+    (new AdvanceDurableSwarm($runId, 1))->handle(app(DurableSwarmManager::class));
+    (new AdvanceDurableSwarm($runId, 2))->handle(app(DurableSwarmManager::class));
+
+    $context = app(ContextStore::class)->find($runId);
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($context['input'])->toBe('[redacted]');
+    expect($context['data'])->toBe(['input' => '[redacted]']);
+    expect($history['output'])->toBe('[redacted]');
+    expect($history['context']['input'])->toBe('[redacted]');
 });
 
 test('durable workers stop cleanly when lease ownership is lost before context persistence', function () {

@@ -118,3 +118,17 @@ test('from task continues to accept structured arrays without throwing', functio
         'draft_id' => 42,
     ]))->not->toThrow(SwarmException::class);
 });
+
+test('from task rejects structured arrays that cannot be encoded as json', function () {
+    $handle = fopen('php://memory', 'r');
+
+    try {
+        expect(fn () => RunContext::fromTask([
+            'input' => $handle,
+        ]))->toThrow(SwarmException::class, 'Structured swarm task input must be JSON-encodable plain data.');
+    } finally {
+        if (is_resource($handle)) {
+            fclose($handle);
+        }
+    }
+});

@@ -10,8 +10,10 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableParallelSwarm;
 use Illuminate\Support\Facades\Event;
 
 beforeEach(function () {
@@ -42,6 +44,11 @@ test('parallel swarm runs each agent with the original task', function () {
 test('parallel swarm rejects empty agent lists', function () {
     expect(fn () => EmptyParallelSwarm::make()->run('shared-task'))
         ->toThrow(SwarmException::class, 'EmptyParallelSwarm: swarm has no agents. Add at least one agent to agents().');
+});
+
+test('parallel swarm agents must be container resolvable for concurrency workers', function () {
+    expect(fn () => UnresolvableParallelSwarm::make()->run('shared-task'))
+        ->toThrow(SwarmException::class, UnresolvableParallelSwarm::class.': parallel agent ['.UnresolvableParallelAgent::class.'] must be container-resolvable because Laravel Concurrency serializes worker callbacks.');
 });
 
 test('parallel swarm records artifacts and metadata', function () {

@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
-use Laravel\Ai\Responses\AgentResponse;
+use Illuminate\Container\Container;
+use Illuminate\Contracts\Container\BindingResolutionException;
+use Laravel\Ai\Contracts\Agent;
 
 class ParallelRunner
 {
@@ -26,19 +29,27 @@ class ParallelRunner
 
         $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
         $input = $state->context->prompt();
+        $this->ensureAgentsAreContainerResolvable($agents, $state->swarm::class);
 
         $callbacks = [];
         foreach ($agents as $index => $agent) {
-            $this->stepsRecorder->started($state, $index, $agent::class, $input);
+            $agentClass = $agent::class;
+            $this->stepsRecorder->started($state, $index, $agentClass, $input);
 
-            $callbacks[$index] = function () use ($agent, $input): array {
+            $callbacks[$index] = function () use ($agentClass, $input): array {
+                $agent = Container::getInstance()->make($agentClass);
+
+                if (! $agent instanceof Agent) {
+                    throw new SwarmException("Parallel swarm agent [{$agentClass}] must resolve to a Laravel AI agent.");
+                }
+
                 $startedAt = MonotonicTime::now();
                 $response = $agent->prompt($input);
 
                 return [
                     'output' => (string) $response,
-                    'usage' => $response instanceof AgentResponse ? $response->usage->toArray() : [],
-                    'class' => $agent::class,
+                    'usage' => $response->usage->toArray(),
+                    'class' => $agentClass,
                     'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
                 ];
             };
@@ -100,6 +111,29 @@ class ParallelRunner
                 'topology' => $state->topology,
             ],
         );
+    }
+
+    /**
+     * @param  array<int, object>  $agents
+     */
+    public function ensureAgentsAreContainerResolvable(array $agents, string $swarmClass): void
+    {
+        foreach ($agents as $agent) {
+            $agentClass = $agent::class;
+
+            try {
+                $resolved = Container::getInstance()->make($agentClass);
+            } catch (BindingResolutionException $exception) {
+                throw new SwarmException(
+                    "{$swarmClass}: parallel agent [{$agentClass}] must be container-resolvable because Laravel Concurrency serializes worker callbacks.",
+                    previous: $exception,
+                );
+            }
+
+            if (! $resolved instanceof Agent) {
+                throw new SwarmException("{$swarmClass}: parallel agent [{$agentClass}] must resolve to a Laravel AI agent.");
+            }
+        }
     }
 
     /**

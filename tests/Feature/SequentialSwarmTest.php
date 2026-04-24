@@ -156,9 +156,13 @@ test('capture flags redact event payloads and persisted automatic artifacts whil
     expect($response->steps[0]->output)->toBe('research-out');
     expect($storedArtifacts)->toBe([]);
     expect($storedHistory['output'])->toBe('[redacted]');
+    expect($storedHistory['context']['input'])->toBe('[redacted]');
+    expect($storedHistory['context']['data'])->toBe(['input' => '[redacted]']);
     expect($storedHistory['steps'][0]['input'])->toBe('[redacted]');
     expect($storedHistory['steps'][0]['output'])->toBe('[redacted]');
     expect($storedHistory['steps'][0]['artifacts'])->toBe([]);
+    expect(app(ContextStore::class)->find($response->metadata['run_id'])['input'])->toBe('[redacted]');
+    expect(app(ContextStore::class)->find($response->metadata['run_id'])['data'])->toBe(['input' => '[redacted]']);
 
     Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event): bool => $event->input === '[redacted]');
     Event::assertDispatched(SwarmStepStarted::class, fn (SwarmStepStarted $event): bool => $event->input === '[redacted]');

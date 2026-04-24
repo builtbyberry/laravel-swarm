@@ -162,14 +162,22 @@ SWARM_CAPTURE_OUTPUTS=false
 
 When input capture is disabled, event payloads and persisted step history keep
 their normal shape but replace captured input fields with `[redacted]`.
+Persisted run history also stores a redacted context snapshot, including the
+context `input` field and structured task data.
 
 When output capture is disabled, event payloads and persisted step history keep
 their normal shape but replace captured output fields with `[redacted]`.
-Laravel Swarm also skips automatic `agent_output` artifact persistence.
+Laravel Swarm also skips automatic `agent_output` artifact persistence and
+redacts terminal context output fields such as `last_output`.
 
 Capture settings do not change agent handoff behavior and do not change the
 `SwarmResponse` returned to the current PHP process. They control what Laravel
 Swarm emits and persists for later inspection.
+
+Queued and durable execution may keep raw context in the runtime context store
+while a run is active because workers need that state to continue the workflow.
+When a run reaches a terminal state, Laravel Swarm overwrites that context store
+entry with a redacted snapshot when capture is disabled.
 
 ## Custom Table Names
 

@@ -23,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
+use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use Illuminate\Support\Facades\Artisan;
 
 test('the swarm runner resolves from the container', function () {
@@ -53,6 +54,14 @@ test('the make swarm command is registered', function () {
     expect($commands['swarm:resume'])->toBeInstanceOf(SwarmResumeCommand::class);
     expect($commands['swarm:cancel'])->toBeInstanceOf(SwarmCancelCommand::class);
     expect($commands['swarm:recover'])->toBeInstanceOf(SwarmRecoverCommand::class);
+});
+
+test('package migrations are published through laravel migration publishing', function () {
+    $paths = SwarmServiceProvider::pathsToPublish(SwarmServiceProvider::class, 'swarm-migrations');
+    $migrationPath = realpath(__DIR__.'/../../database/migrations');
+
+    expect(array_map(realpath(...), array_keys($paths)))->toContain($migrationPath);
+    expect(array_values($paths))->toContain(database_path('migrations'));
 });
 
 test('the container resolves cache persistence stores by default', function () {

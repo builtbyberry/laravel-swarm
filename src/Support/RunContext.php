@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
+use JsonException;
 
 class RunContext
 {
@@ -147,9 +148,11 @@ class RunContext
             return $input;
         }
 
-        $encoded = json_encode($input);
-
-        return $encoded !== false ? $encoded : serialize($input);
+        try {
+            return json_encode($input, JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw new SwarmException('Structured swarm task input must be JSON-encodable plain data.', previous: $exception);
+        }
     }
 
     /**

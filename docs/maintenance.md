@@ -14,16 +14,17 @@ database tables:
 php artisan swarm:prune
 ```
 
-The command prunes the history, context, and artifact tables in bounded chunks
-to avoid long-running table locks on large datasets.
+The command prunes the history, context, artifact, and durable runtime tables in
+bounded chunks to avoid long-running table locks on large datasets.
 
-Laravel Swarm protects active runs across all three persistence stores. While a
-run is `running`, its history, context, and artifact rows are not pruned, even
-if their retention window has elapsed.
+Laravel Swarm protects active runs across persistence stores. While a run is
+`pending`, `running`, or `paused`, its history, context, artifact, and durable
+runtime rows are not pruned, even if their retention window has elapsed.
 
-History pruning only removes expired terminal rows (`completed` and `failed`).
-Context and artifact pruning skip rows that belong to runs still marked
-`running`.
+History pruning only removes expired terminal rows (`completed`, `failed`, and
+`cancelled`). Context and artifact pruning skip rows that belong to active runs.
+Durable runtime pruning removes terminal runtime rows once their matching
+history row is expired.
 
 If you override `swarm.tables.*`, the prune command respects those configured
 table roles directly. It does not rely on default table-name patterns to decide

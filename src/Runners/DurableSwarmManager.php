@@ -23,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
@@ -33,8 +34,6 @@ use Throwable;
 
 class DurableSwarmManager
 {
-    protected const REDACTED = '[redacted]';
-
     protected mixed $afterStepCheckpointHook = null;
 
     public function __construct(
@@ -46,6 +45,7 @@ class DurableSwarmManager
         protected Dispatcher $events,
         protected SequentialRunner $sequential,
         protected Connection $connection,
+        protected SwarmCapture $capture,
     ) {}
 
     /**
@@ -71,9 +71,9 @@ class DurableSwarmManager
                 'total_steps' => $totalSteps,
             ]);
 
-            $this->historyStore->start($context->runId, $swarm::class, $topology->value, $context, $context->metadata, $contextTtl);
+            $this->historyStore->start($context->runId, $swarm::class, $topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
             $this->contextStore->put($context, $contextTtl);
-            $this->historyStore->syncDurableState($context->runId, 'pending', $context, $context->metadata, $contextTtl, false);
+            $this->historyStore->syncDurableState($context->runId, 'pending', $this->capture->context($context), $context->metadata, $contextTtl, false);
 
             $this->durableRuns->create([
                 'run_id' => $context->runId,
@@ -118,7 +118,7 @@ class DurableSwarmManager
 
         if ($updated['status'] === 'paused') {
             $context = $this->loadContext($runId);
-            $this->historyStore->syncDurableState($runId, 'paused', $context, $context->metadata, $this->ttlSeconds(), false);
+            $this->historyStore->syncDurableState($runId, 'paused', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
             $this->events->dispatch(new SwarmPaused(
                 runId: $runId,
                 swarmClass: $updated['swarm_class'],
@@ -144,7 +144,7 @@ class DurableSwarmManager
         }
 
         $context = $this->loadContext($runId);
-        $this->historyStore->syncDurableState($runId, 'pending', $context, $context->metadata, $this->ttlSeconds(), false);
+        $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
         $this->events->dispatch(new SwarmResumed(
             runId: $runId,
             swarmClass: $run['swarm_class'],
@@ -174,7 +174,8 @@ class DurableSwarmManager
 
         if ($updated['status'] === 'cancelled') {
             $context = $this->loadContext($runId);
-            $this->historyStore->syncDurableState($runId, 'cancelled', $context, $context->metadata, $this->ttlSeconds(), true);
+            $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), true);
+            $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
             $this->events->dispatch(new SwarmCancelled(
                 runId: $runId,
                 swarmClass: $updated['swarm_class'],
@@ -234,6 +235,7 @@ class DurableSwarmManager
             try {
                 $this->durableRuns->markFailed($runId, $token);
                 $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $token, $stepLeaseSeconds);
+                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
             } catch (LostDurableLeaseException) {
                 return;
             }
@@ -253,7 +255,8 @@ class DurableSwarmManager
         if (($run['cancel_requested_at'] ?? null) !== null) {
             try {
                 $this->durableRuns->markCancelled($runId, $token);
-                $this->historyStore->syncDurableState($runId, 'cancelled', $context, $context->metadata, $this->ttlSeconds(), true);
+                $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), true);
+                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -276,7 +279,7 @@ class DurableSwarmManager
 
         $this->connection->transaction(function () use ($runId, $token, $expectedStepIndex, $context, $stepLeaseSeconds): void {
             $this->durableRuns->markRunning($runId, $token, $expectedStepIndex);
-            $this->historyStore->syncDurableState($runId, 'running', $context, $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
+            $this->historyStore->syncDurableState($runId, 'running', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
         });
 
         if ($expectedStepIndex === 0 && $run['current_step_index'] === null) {
@@ -284,7 +287,7 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                input: $this->capturedInput($context->input),
+                input: $this->capture->input($context->input),
                 metadata: $context->metadata,
                 executionMode: 'durable',
             ));
@@ -318,6 +321,7 @@ class DurableSwarmManager
             try {
                 $this->durableRuns->markFailed($runId, $token);
                 $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $token, $stepLeaseSeconds);
+                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -337,7 +341,8 @@ class DurableSwarmManager
         if (($run = $this->requireRun($runId)) && ($run['cancel_requested_at'] ?? null) !== null) {
             try {
                 $this->durableRuns->markCancelled($runId, $token);
-                $this->historyStore->syncDurableState($runId, 'cancelled', $context, $context->metadata, $this->ttlSeconds(), true);
+                $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), true);
+                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -355,7 +360,7 @@ class DurableSwarmManager
         if (($run['pause_requested_at'] ?? null) !== null) {
             try {
                 $this->durableRuns->markPaused($runId, $token);
-                $this->historyStore->syncDurableState($runId, 'paused', $context, $context->metadata, $this->ttlSeconds(), false);
+                $this->historyStore->syncDurableState($runId, 'paused', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -387,7 +392,8 @@ class DurableSwarmManager
 
             try {
                 $this->durableRuns->markCompleted($runId, $token);
-                $this->historyStore->complete($runId, $this->capturedResponse($response), $this->ttlSeconds(), $token, $stepLeaseSeconds);
+                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
+                $this->historyStore->complete($runId, $this->capture->response($response), $this->ttlSeconds(), $token, $stepLeaseSeconds);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -395,10 +401,10 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                output: $this->capturedOutput($response->output),
+                output: $this->capture->output($response->output),
                 durationMs: $this->durationMillisecondsFor($runId),
                 metadata: $response->metadata,
-                artifacts: $this->capturesOutputs() ? $response->artifacts : [],
+                artifacts: $this->capture->artifacts($response->artifacts),
                 executionMode: 'durable',
             ));
 
@@ -406,7 +412,7 @@ class DurableSwarmManager
         }
 
         try {
-            $this->historyStore->syncDurableState($runId, 'pending', $context, array_merge($context->metadata, [
+            $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), array_merge($context->metadata, [
                 'completed_steps' => $nextStepIndex,
                 'total_steps' => (int) $run['total_steps'],
             ]), $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
@@ -452,42 +458,6 @@ class DurableSwarmManager
     protected function hasTimedOut(array $run): bool
     {
         return Carbon::parse($run['timeout_at'], 'UTC')->isPast();
-    }
-
-    protected function capturedResponse(SwarmResponse $response): SwarmResponse
-    {
-        if ($this->capturesInputs() && $this->capturesOutputs()) {
-            return $response;
-        }
-
-        return new SwarmResponse(
-            output: $this->capturedOutput($response->output),
-            steps: $response->steps,
-            usage: $response->usage,
-            context: $response->context,
-            artifacts: $this->capturesOutputs() ? $response->artifacts : [],
-            metadata: $response->metadata,
-        );
-    }
-
-    protected function capturedInput(string $input): string
-    {
-        return $this->capturesInputs() ? $input : self::REDACTED;
-    }
-
-    protected function capturedOutput(string $output): string
-    {
-        return $this->capturesOutputs() ? $output : self::REDACTED;
-    }
-
-    protected function capturesInputs(): bool
-    {
-        return (bool) $this->config->get('swarm.capture.inputs', true);
-    }
-
-    protected function capturesOutputs(): bool
-    {
-        return (bool) $this->config->get('swarm.capture.outputs', true);
     }
 
     protected function ttlSeconds(): int

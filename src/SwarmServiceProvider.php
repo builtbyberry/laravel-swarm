@@ -105,7 +105,7 @@ class SwarmServiceProvider extends ServiceProvider
                 __DIR__.'/../config/swarm.php' => config_path('swarm.php'),
             ], 'swarm-config');
 
-            $this->publishes([
+            $this->publishesMigrations([
                 __DIR__.'/../database/migrations' => database_path('migrations'),
             ], 'swarm-migrations');
 

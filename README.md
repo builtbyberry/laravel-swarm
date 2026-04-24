@@ -68,6 +68,8 @@ php artisan migrate
 The package migrations are always loaded and create the default swarm tables
 even when the current persistence driver is `cache`. If you want custom table
 names, publish the migrations and update them to match `swarm.tables.*`.
+Published migrations use Laravel's package migration publishing flow, so their
+filenames receive fresh application migration timestamps.
 
 Publish the package configuration if you want to customize defaults:
 
@@ -221,27 +223,6 @@ Most applications will not need `RunContext` directly. For a deeper look at stri
 Use `queue()` when the swarm should run in the background:
 
 ```php
-ArticlePipeline::make()
-    ->queue('Draft a blog outline about Laravel queues.')
-    ->then(function (\BuiltByBerry\LaravelSwarm\Responses\SwarmResponse $response) {
-        //
-    })
-    ->catch(function (\Throwable $exception) {
-        //
-    });
-```
-
-`queue()` always queues. `run()` always runs synchronously.
-
-Queued `then()` and `catch()` callbacks remain available for compatibility, but they are now deprecated for real queued execution. Those closures are serialized into the queue payload, which can capture more application state than intended, fail serialization unexpectedly, or leak sensitive data into queue storage. Prefer Laravel event listeners for queued completion and failure handling.
-
-Queued swarms remain the lightweight queue mode. One queued job represents one swarm run, and database-backed queued runs use lease-based ownership so duplicate deliveries do not replay work while an active worker still owns the run.
-
-This is the right fit for normal background swarm work in Laravel. It is not durable multi-job orchestration, and it is not intended to replace a workflow engine for very long-lived pipelines.
-
-Example using swarm lifecycle events instead of serialized closures:
-
-```php
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use Illuminate\Support\Facades\Event;
@@ -265,11 +246,35 @@ Event::listen(SwarmFailed::class, function (SwarmFailed $event): void {
 ArticlePipeline::make()->queue('Draft a blog outline about Laravel queues.');
 ```
 
+`queue()` always queues. `run()` always runs synchronously.
+
+Queued swarms remain the lightweight queue mode. One queued job represents one swarm run, and database-backed queued runs use lease-based ownership so duplicate deliveries do not replay work while an active worker still owns the run.
+
+This is the right fit for normal background swarm work in Laravel. It is not durable multi-job orchestration, and it is not intended to replace a workflow engine for very long-lived pipelines.
+
+Queued `then()` and `catch()` callbacks remain available for compatibility, but
+they are deprecated for real queued execution. Those closures are serialized
+into the queue payload, which can capture more application state than intended,
+fail serialization unexpectedly, or leak sensitive data into queue storage.
+
+```php
+ArticlePipeline::make()
+    ->queue('Draft a blog outline about Laravel queues.')
+    ->then(function (\BuiltByBerry\LaravelSwarm\Responses\SwarmResponse $response) {
+        //
+    })
+    ->catch(function (\Throwable $exception) {
+        //
+    });
+```
+
 Like Laravel AI, the queued swarm response proxies the underlying pending dispatch, so you may continue chaining queue configuration methods such as `onConnection()` and `onQueue()` before the job is actually dispatched.
 
 Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. For queued execution, treat the swarm as a stateless definition apart from container-injected dependencies. Runtime instance state is not preserved across the queue boundary. Pass dynamic execution data in the task payload instead.
 
-Because queued swarms are validated for container resolution before dispatch, constructors and DI setup should stay cheap and side-effect free in normal Laravel style.
+Because queued swarms are validated for container resolution, topology, timeouts,
+step limits, and parallel worker safety before dispatch, constructors and DI
+setup should stay cheap and side-effect free in normal Laravel style.
 
 Database-backed queued runs are also prune-safe while active. A `running` run keeps its history, context, and artifact rows until it reaches a terminal state, even when their retention window has elapsed.
 
@@ -384,6 +389,9 @@ Agents run in order. Each agent receives the previous agent's output.
 ### Parallel
 
 Agents run at the same time and each receives the original task.
+Parallel agents must be stateless, container-resolvable Laravel AI agents
+because Laravel's concurrency workers serialize callbacks and resolve the agent
+class inside the worker process.
 
 ### Hierarchical
 
