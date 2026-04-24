@@ -16,7 +16,7 @@ Laravel Swarm brings multi-agent orchestration to [Laravel](https://laravel.com)
 
 Laravel AI is already a strong fit when one agent can handle the full job, or when you want to compose multi-agent workflow patterns directly yourself. If you like working close to the primitives, Laravel AI gives you the building blocks to do that.
 
-Laravel Swarm is for the next step up: cases where that workflow should become a reusable, observable, application-level unit. It is a good fit when the real job looks like plan, research, write, review, or classify, route, respond, or run multiple specialists and keep the history of what happened.
+Laravel Swarm is for the next step-up: cases where that workflow should become a reusable, observable, application-level unit. It is a good fit when the real job looks like plan, research, write, review, or classify, route, respond, or run multiple specialists and keep the history of what happened.
 
 ### Laravel AI vs Laravel Swarm
 
@@ -86,29 +86,6 @@ php artisan vendor:publish --tag=swarm-stubs
 ```
 
 After publishing, `make:swarm` will prefer `stubs/swarm.stub` from your application before falling back to the package stub.
-
-## Inspecting Run History
-
-Use the built-in inspection commands to review persisted swarm runs:
-
-```bash
-php artisan swarm:status
-php artisan swarm:status --run-id=<run-id>
-php artisan swarm:history --swarm="App\\Ai\\Swarms\\ArticlePipeline" --status=completed --limit=10
-```
-
-If you need the same data in application code, use the `SwarmHistory` facade or service:
-
-```php
-use BuiltByBerry\LaravelSwarm\Facades\SwarmHistory;
-
-$run = SwarmHistory::find($runId);
-$latest = SwarmHistory::latest();
-$completed = SwarmHistory::forSwarm(App\Ai\Swarms\ArticlePipeline::class)
-    ->withStatus('completed')
-    ->limit(10)
-    ->get();
-```
 
 ## Creating A Swarm
 
@@ -195,6 +172,20 @@ $response = ArticlePipeline::make()->run([
 ]);
 ```
 
+Use `RunContext` when you need explicit control over the run ID or metadata:
+
+```php
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+$response = ArticlePipeline::make()->run(RunContext::from([
+    'input' => 'Draft a blog outline about Laravel queues.',
+    'data' => ['topic' => 'Laravel queues'],
+    'metadata' => ['campaign' => 'content-calendar'],
+], 'article-outline-run'));
+```
+
+Most applications will not need `RunContext` directly. For a deeper look at strings, arrays, and `RunContext`, see [Structured Input](docs/structured-input.md).
+
 `SwarmResponse` can still be cast to a string:
 
 ```php
@@ -220,9 +211,7 @@ ArticlePipeline::make()
 
 Like Laravel AI, the queued swarm response proxies the underlying pending dispatch, so you may continue chaining queue configuration methods such as `onConnection()` and `onQueue()` before the job is actually dispatched.
 
-Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. `queue()` is the queue-safety boundary; `run()` and `stream()` may still operate on manually constructed instances.
-
-For queued execution, treat the swarm as a stateless definition apart from container-injected dependencies. Runtime instance state is not preserved across the queue boundary, whether it comes from constructor arguments, setter calls, or public-property mutation before `queue()`. Pass dynamic execution data in the task payload instead.
+Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. For queued execution, treat the swarm as a stateless definition apart from container-injected dependencies. Runtime instance state is not preserved across the queue boundary. Pass dynamic execution data in the task payload instead.
 
 Because queued swarms are validated for container resolution before dispatch, constructors and DI setup should stay cheap and side-effect free in normal Laravel style.
 
@@ -239,8 +228,6 @@ ArticlePipeline::make()
 
 Queued structured payloads are serialized as plain queue-safe data and rebuilt into a `RunContext` on the worker. Do not rely on non-serializable values like closures or resource handles crossing the queue boundary.
 
-Use `RunContext` for queued execution only when you need explicit control over run metadata or run ID.
-
 What not to do:
 
 ```php
@@ -248,7 +235,9 @@ What not to do:
 (new ArticlePipeline($draftId))->queue('Review the draft');
 ```
 
-If you call `queue()` on a swarm instance that relies on runtime constructor state, or on a swarm class the container cannot resolve for queued execution, Laravel Swarm throws immediately with guidance before dispatching the job. Even when queueing succeeds, any instance mutation applied before `queue()` is not replayed on the worker.
+If you call `queue()` on a swarm instance that relies on runtime constructor state, or on a swarm class the container cannot resolve for queued execution, Laravel Swarm throws immediately with guidance before dispatching the job.
+
+For more detail on structured queue payloads, see [Structured Input](docs/structured-input.md).
 
 ## Streaming A Swarm
 
@@ -320,7 +309,7 @@ class ArticlePlanningSwarm implements Swarm
         return [
             [
                 'agent_class' => ResearchAgent::class,
-                'input' => 'Research the claims in this plan and collect source notes: '.$coordinatorOutput,
+                'input' => 'Research the claims in this plan: '.$coordinatorOutput,
                 'metadata' => ['stage' => 'research'],
             ],
             [
@@ -333,20 +322,9 @@ class ArticlePlanningSwarm implements Swarm
 }
 ```
 
-Route instructions may contain:
+Route instructions may contain `agent` or `agent_class`, `input`, and optional `metadata`. An empty route completes successfully with the coordinator output. A missing `route()` method fails fast.
 
-- `agent` or `agent_class`
-- `input`
-- optional `metadata`
-
-Hierarchical behavior:
-
-- the first agent returned from `agents()` is the coordinator
-- workers are selected from the remaining agents returned by `agents()`
-- routed workers execute sequentially in the order returned by `route()`
-- an empty route completes successfully with the coordinator output
-- missing `route()` fails fast for hierarchical swarms
-- unknown routed classes throw an explicit exception naming the missing class
+For the coordinator / worker mental model and structured output guidance, see [Hierarchical Routing](docs/hierarchical-routing.md).
 
 ## Testing
 
@@ -376,110 +354,47 @@ ArticlePipeline::fake(['streamed-output']);
 $events = iterator_to_array(ArticlePipeline::make()->stream('draft intro'));
 
 ArticlePipeline::assertStreamed('draft intro');
-ArticlePipeline::assertStreamed(['draft_id' => 42]);
 ```
 
 Array assertions use subset matching, so you only need to assert on the keys you care about.
 
-For test assertions against persisted history and lifecycle events, use:
-
-```php
-$response = ArticlePipeline::make()->run('draft intro');
-
-ArticlePipeline::assertPersisted($response->metadata['run_id'], 'completed');
-ArticlePipeline::assertPersisted(['draft_id' => 42]);
-ArticlePipeline::assertEventFired(
-    \BuiltByBerry\LaravelSwarm\Events\SwarmStarted::class,
-    fn ($event) => $event->runId === $response->metadata['run_id'],
-);
-```
-
-`assertEventFired()` is a testing helper. It records swarm lifecycle events only in tests where the package test recorder has been activated.
-`assertPersisted([...])` matches against the persisted task/context shape only: `input`, `data`, and `metadata`.
+For test assertions against persisted history and lifecycle events, see [Testing](docs/testing.md).
 
 ## Configuration
 
-Laravel Swarm stores its defaults in `config/swarm.php`, including:
+Laravel Swarm stores its defaults in `config/swarm.php`, including topology, timeout, max agent steps, persistence drivers, and queue settings.
 
-- default topology
-- timeout
-- max agent steps
-- global persistence driver
-- context persistence
-- artifact persistence
-- run history persistence
-- queue connection and queue name
+`swarm.persistence.driver` sets the default persistence driver for all swarm stores. Individual stores can override it via `swarm.context.driver`, `swarm.artifacts.driver`, and `swarm.history.driver`. The `cache` driver is lightweight and respects TTL settings. The `database` driver stores records durably in package-managed tables.
 
-Persistence defaults support both cache-backed and durable database-backed storage:
-
-- `swarm.persistence.driver` sets the default persistence driver for all swarm stores
-- `swarm.context.driver`, `swarm.artifacts.driver`, and `swarm.history.driver` can override the global driver individually
-- `cache` uses the configured cache store and honors TTL settings
-- `database` stores durable run data in the package tables loaded by the service provider
-- `swarm.tables.*` changes the table names used by the database repositories at runtime; if you change them, publish and update the migrations too
-
-TTL settings apply to cache-backed persistence. Database-backed persistence is durable until your application deletes the records.
-
-Cache-backed run history uses maintained indexes for `latest()` and filtered history reads. If a process is killed mid-run, a stale `running` entry may remain visible until the underlying cache record expires. Use the database driver when operators need stronger inspection accuracy.
+`swarm.tables.*` changes the table names used by the database repositories at runtime. If you change them, publish and update the migrations too.
 
 Timeout settings are best-effort orchestration deadlines, not hard cancellation of in-flight provider calls.
 
 ## Responses, Events, And Persistence
 
-Swarm runs return a `SwarmResponse` with:
+Every swarm run returns a `SwarmResponse` with `output`, `steps`, `usage`, `artifacts`, and `metadata`. The response casts to a string for simple use cases.
 
-- `output`
-- `steps`
-- `usage`
-- `artifacts`
-- `metadata`
+Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted` includes an `executionMode` payload so listeners can distinguish `run`, `stream`, and `queue` invocations.
 
-Laravel Swarm also dispatches lifecycle events for:
+Run context, artifacts, and run history are persisted automatically using the configured driver. The database driver stores records durably in package-managed tables. The cache driver is lighter and respects TTL settings.
 
-- swarm started
-- step started
-- step completed
-- swarm completed
-- swarm failed
+For persistence drivers, history inspection, and the `SwarmHistory` facade and inspection commands, see [Persistence And History](docs/persistence-and-history.md).
 
-`SwarmStarted` includes an `executionMode` payload so listeners can distinguish `run`, `stream`, and `queue` invocations.
+To customize how swarm state is stored, bind your own implementations against the `ContextStore`, `ArtifactRepository`, or `RunHistoryStore` contracts. Most applications can use the package defaults.
 
-Built-in persistence supports both cache and database drivers for:
+## Documentation
 
-- run context
-- artifacts
-- run history
+- [Structured Input](docs/structured-input.md)
+- [Persistence And History](docs/persistence-and-history.md)
+- [Testing](docs/testing.md)
+- [Hierarchical Routing](docs/hierarchical-routing.md)
 
-The database driver stores these records in package-managed tables while preserving the same contract read shapes as the cache-backed stores.
-
-Most applications will not need to construct a `RunContext` manually. If you do need explicit control over run IDs or metadata, you can pass one directly:
-
-```php
-use BuiltByBerry\LaravelSwarm\Support\RunContext;
-
-$response = ArticlePipeline::make()->run(RunContext::from([
-    'input' => 'Draft a blog outline about Laravel queues.',
-    'data' => ['topic' => 'Laravel queues'],
-    'metadata' => ['campaign' => 'content-calendar'],
-], 'article-outline-run'));
-```
-
-If you need to customize how swarm state is stored, bind your own implementations for the persistence contracts:
-
-- `ContextStore`
-- `ArtifactRepository`
-- `RunHistoryStore`
-
-These are advanced extension points. Most applications can use the package defaults.
-
-## Local package scripts
+## Local Development
 
 From the package root:
 
 - `./bin/setup-package.sh` — `composer install`, Pint, Pest
 - `./bin/setup-dev.sh` — creates a sibling Laravel 13 app and path-requires this package (set `SWARM_DEV_APP_NAME` to override the directory name)
-
-## Development
 
 ```bash
 composer install
