@@ -139,3 +139,40 @@ use Illuminate\Support\Facades\Schedule;
 
 Schedule::command('swarm:recover')->everyFiveMinutes();
 ```
+
+Also schedule pruning so expired database persistence rows are removed:
+
+```php
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('swarm:prune')->daily();
+```
+
+## Production Setup Checklist
+
+Before using durable swarms in production, make the operational contract
+explicit:
+
+- use database-backed persistence and run the package migrations
+- put durable swarms on a dedicated queue when the workflow is important or
+  provider calls are slow
+- schedule `swarm:recover` every few minutes
+- schedule `swarm:prune` daily, or more often if retention windows are short
+- keep the queue worker timeout above the longest expected durable step
+- keep the queue connection `retry_after` above both the worker timeout and the
+  `swarm.durable.step_timeout` value
+- keep retention short for high-volume workflows
+- keep capture settings conservative when prompts, outputs, context, or
+  artifacts may contain regulated data
+
+For a narrow production pilot, prefer sequential durable swarms with
+lower-sensitivity data, a dedicated queue, short retention, and database growth
+monitoring from day one. Parallel and hierarchical swarms remain supported, but
+they have stricter container-resolution, concurrency, provider-rate-limit, and
+cost constraints.
+
+Durable recovery depends on the scheduler. If `swarm:recover` is not scheduled,
+a run can stay `running` after a worker crashes or exits between checkpointing a
+step and dispatching the next job. Manual recovery is possible with
+`php artisan swarm:recover`, but production durable workflows should not depend
+on a human noticing a stranded run.

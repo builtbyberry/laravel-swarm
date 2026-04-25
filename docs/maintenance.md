@@ -65,3 +65,24 @@ it. The built-in lightweight queue mode is a good fit for normal background
 jobs, but very long-running workflows may still outgrow the practical limits of
 a single queued job. For those workflows, use `dispatchDurable()` instead of
 stretching `queue()` beyond what one job should own.
+
+## Production Checklist
+
+For production database persistence:
+
+- schedule `swarm:prune`
+- schedule `swarm:recover` when using durable execution
+- use a dedicated queue for durable workflows that should not compete with
+  ordinary application jobs
+- set the queue worker timeout above the longest expected provider call for one
+  step
+- set the queue connection `retry_after` above the worker timeout and above
+  `swarm.durable.step_timeout`
+- keep retention windows short for high-volume or sensitive workflows
+- monitor database growth, artifact counts, and run latency after launch
+
+For a conservative enterprise pilot, start with one sequential durable workflow
+using lower-sensitivity data, a dedicated queue, short retention, and
+conservative capture settings. Do not begin with broad rollout across
+document-heavy or approval-critical workflows until storage growth, recovery
+behavior, and operator procedures have been proven in production-like use.
