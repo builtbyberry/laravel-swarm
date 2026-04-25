@@ -76,7 +76,7 @@ class DurableSwarmManager
             ]);
 
             $this->historyStore->start($context->runId, $swarm::class, $topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
-            $this->contextStore->put($context, $contextTtl);
+            $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
             $this->historyStore->syncDurableState($context->runId, 'pending', $this->capture->context($context), $context->metadata, $contextTtl, false);
 
             $this->durableRuns->create([
@@ -179,7 +179,7 @@ class DurableSwarmManager
         if ($updated['status'] === 'cancelled') {
             $context = $this->loadContext($runId);
             $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), true);
-            $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
+            $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             $this->events->dispatch(new SwarmCancelled(
                 runId: $runId,
                 swarmClass: $updated['swarm_class'],
@@ -240,7 +240,7 @@ class DurableSwarmManager
             try {
                 $this->durableRuns->markFailed($runId, $token);
                 $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $token, $stepLeaseSeconds);
-                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
+                $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             } catch (LostDurableLeaseException) {
                 return;
             }
@@ -262,7 +262,7 @@ class DurableSwarmManager
             try {
                 $this->durableRuns->markCancelled($runId, $token);
                 $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), true);
-                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
+                $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -327,7 +327,7 @@ class DurableSwarmManager
             try {
                 $this->durableRuns->markFailed($runId, $token);
                 $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $token, $stepLeaseSeconds);
-                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
+                $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -349,7 +349,7 @@ class DurableSwarmManager
             try {
                 $this->durableRuns->markCancelled($runId, $token);
                 $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), true);
-                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
+                $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -400,7 +400,7 @@ class DurableSwarmManager
             try {
                 $capturedResponse = $this->limits->response($this->capture->response($response));
                 $this->durableRuns->markCompleted($runId, $token);
-                $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
+                $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
                 $this->historyStore->complete($runId, $capturedResponse, $this->ttlSeconds(), $token, $stepLeaseSeconds);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;

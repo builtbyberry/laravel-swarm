@@ -169,6 +169,7 @@ You can disable input or output capture in `config/swarm.php`:
     'inputs' => false,
     'outputs' => false,
     'artifacts' => false,
+    'active_context' => true,
 ],
 ```
 
@@ -178,6 +179,7 @@ Or with environment variables:
 SWARM_CAPTURE_INPUTS=false
 SWARM_CAPTURE_OUTPUTS=false
 SWARM_CAPTURE_ARTIFACTS=false
+SWARM_CAPTURE_ACTIVE_CONTEXT=true
 ```
 
 When input capture is disabled, event payloads and persisted step history keep
@@ -199,6 +201,15 @@ Capture settings do not change agent handoff behavior and do not change the
 `SwarmResponse` returned to the current PHP process. They control what Laravel
 Swarm emits and persists for later inspection.
 
+`active_context` controls the runtime context store used while a swarm is in
+flight. When it is `false`, synchronous and streamed swarms store a redacted
+runtime context snapshot instead of raw task state. Queued and durable swarms
+require active runtime context persistence so workers can continue or recover
+the run; Laravel Swarm fails before dispatch if `active_context` is disabled for
+those modes. This setting is not encryption and it is not a replay mechanism.
+Use input/output/artifact capture settings to control terminal history and event
+capture.
+
 When either input or output capture is disabled, failed run history keeps the
 original exception class but stores `[redacted]` as the exception message.
 `SwarmFailed` events receive the same redacted exception message and expose the
@@ -206,10 +217,10 @@ original exception class on `exceptionClass`. The exception thrown back to the
 caller remains the original exception so application control flow and logs
 outside Laravel Swarm are not altered.
 
-Queued and durable execution may keep raw context in the runtime context store
-while a run is active because workers need that state to continue the workflow.
-When a run reaches a terminal state, Laravel Swarm overwrites that context store
-entry with a redacted snapshot when capture is disabled.
+Queued and durable execution keep raw context in the runtime context store while
+a run is active because workers need that state to continue the workflow. When a
+run reaches a terminal state, Laravel Swarm overwrites that context store entry
+with a redacted snapshot when capture is disabled.
 
 Capture flags cover prompts, outputs, automatic artifacts, terminal context
 snapshots, persisted failure messages, and failure event messages. They do not

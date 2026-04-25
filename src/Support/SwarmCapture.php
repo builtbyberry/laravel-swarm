@@ -77,6 +77,30 @@ class SwarmCapture
         );
     }
 
+    public function activeContext(RunContext $context): RunContext
+    {
+        if ($this->capturesActiveContext()) {
+            return $context;
+        }
+
+        return new RunContext(
+            runId: $context->runId,
+            input: self::REDACTED,
+            data: ['input' => self::REDACTED],
+            metadata: $context->metadata,
+            artifacts: [],
+        );
+    }
+
+    public function terminalContext(RunContext $context): RunContext
+    {
+        if (! $this->capturesActiveContext()) {
+            return $this->activeContext($context);
+        }
+
+        return $this->context($context);
+    }
+
     public function response(SwarmResponse $response): SwarmResponse
     {
         if ($this->capturesInputs() && $this->capturesOutputs() && $this->capturesArtifacts()) {
@@ -121,6 +145,11 @@ class SwarmCapture
     public function capturesArtifacts(): bool
     {
         return $this->capturesOutputs() && (bool) $this->config->get('swarm.capture.artifacts', true);
+    }
+
+    public function capturesActiveContext(): bool
+    {
+        return (bool) $this->config->get('swarm.capture.active_context', true);
     }
 
     public function capturesFailures(): bool

@@ -21,6 +21,7 @@ return [
         'inputs' => env('SWARM_CAPTURE_INPUTS', true),
         'outputs' => env('SWARM_CAPTURE_OUTPUTS', true),
         'artifacts' => env('SWARM_CAPTURE_ARTIFACTS', true),
+        'active_context' => env('SWARM_CAPTURE_ACTIVE_CONTEXT', true),
     ],
 
     'limits' => [

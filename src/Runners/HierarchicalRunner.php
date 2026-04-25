@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Container\Container;
@@ -28,6 +29,7 @@ class HierarchicalRunner
         protected HierarchicalRoutePlanner $planner,
         protected ConcurrencyManager $concurrency,
         protected SwarmStepRecorder $stepsRecorder,
+        protected SwarmCapture $capture,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -96,7 +98,7 @@ class HierarchicalRunner
                 'execution_mode' => $state->executionMode,
             ]);
 
-        $state->contextStore->put($state->context, $state->ttlSeconds);
+        $state->contextStore->put($this->capture->activeContext($state->context), $state->ttlSeconds);
 
         return new SwarmResponse(
             output: $finalOutput,
@@ -272,7 +274,7 @@ class HierarchicalRunner
                         $lastOutput = $step->output;
                     }
 
-                    $state->contextStore->put($state->context, $state->ttlSeconds);
+                    $state->contextStore->put($this->capture->activeContext($state->context), $state->ttlSeconds);
                     $nextIndex += count($node->branches);
                 }
 

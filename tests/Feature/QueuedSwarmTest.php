@@ -86,6 +86,13 @@ test('queue fails before dispatching duplicate hierarchical worker classes', fun
         ->toThrow(SwarmException::class, FakeHierarchicalDuplicateWorkerSwarm::class.': agents() contains duplicate agent class '.FakeWriter::class.'. Hierarchical worker classes must be unique.');
 });
 
+test('queue fails when active runtime context persistence is disabled', function () {
+    config()->set('swarm.capture.active_context', false);
+
+    expect(fn () => FakeSequentialSwarm::make()->queue('queued-task'))
+        ->toThrow(SwarmException::class, 'Queued and durable swarms require active runtime context persistence so workers can continue or recover the run.');
+});
+
 test('queued swarm jobs can execute with a preserved run context', function () {
     $context = RunContext::from([
         'input' => 'queued-task',

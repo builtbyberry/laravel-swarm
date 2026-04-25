@@ -110,7 +110,7 @@ class SwarmStepRecorder
 
         if ($storeContext) {
             $this->verifyOwnership($state);
-            $state->contextStore->put($state->context, $state->ttlSeconds);
+            $state->contextStore->put($this->capture->activeContext($state->context), $state->ttlSeconds);
         }
 
         if ($storeArtifacts && $this->capture->capturesArtifacts()) {

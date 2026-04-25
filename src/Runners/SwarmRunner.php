@@ -95,6 +95,7 @@ class SwarmRunner
             : null;
         $context = RunContext::fromTask($task);
         $this->limits->checkInput($context->input);
+        $this->ensureActiveContextCompatible($executionMode);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
@@ -152,7 +153,7 @@ class SwarmRunner
             $this->historyStore->start($context->runId, $swarm::class, $topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
         }
 
-        $this->contextStore->put($context, $contextTtl);
+        $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
         $this->events->dispatch(new SwarmStarted(
             runId: $context->runId,
             swarmClass: $swarm::class,
@@ -177,7 +178,7 @@ class SwarmRunner
                 return null;
             }
 
-            $this->contextStore->put($this->capture->context($context), $contextTtl);
+            $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
 
             $this->events->dispatch(new SwarmFailed(
                 runId: $context->runId,
@@ -195,7 +196,7 @@ class SwarmRunner
 
         $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
         $capturedResponse = $this->limits->response($this->capture->response($response));
-        $this->contextStore->put($this->capture->context($context), $contextTtl);
+        $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
         $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
         $this->events->dispatch(new SwarmCompleted(
             runId: $context->runId,
@@ -228,6 +229,7 @@ class SwarmRunner
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
         $context = RunContext::fromTask($task);
         $this->limits->checkInput($context->input);
+        $this->ensureActiveContextCompatible(self::EXECUTION_MODE_STREAM);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
@@ -250,7 +252,7 @@ class SwarmRunner
             events: $this->events,
         );
 
-        $this->contextStore->put($context, $contextTtl);
+        $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
         $this->historyStore->start($context->runId, $swarm::class, $topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
         $this->events->dispatch(new SwarmStarted(
             runId: $context->runId,
@@ -275,7 +277,7 @@ class SwarmRunner
                 ), $context, $state->topology);
 
                 $capturedResponse = $this->limits->response($this->capture->response($response));
-                $this->contextStore->put($this->capture->context($context), $contextTtl);
+                $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
                 $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
                 $this->events->dispatch(new SwarmCompleted(
                     runId: $context->runId,
@@ -289,7 +291,7 @@ class SwarmRunner
                 ));
             } catch (\Throwable $exception) {
                 $this->historyStore->fail($context->runId, $exception, $contextTtl);
-                $this->contextStore->put($this->capture->context($context), $contextTtl);
+                $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
                 $this->events->dispatch(new SwarmFailed(
                     runId: $context->runId,
                     swarmClass: $swarm::class,
@@ -314,6 +316,7 @@ class SwarmRunner
 
         $context = RunContext::fromTask($task);
         $this->limits->checkInput($context->input);
+        $this->ensureActiveContextCompatible(self::EXECUTION_MODE_QUEUE);
         $pendingDispatch = new PendingDispatch(new InvokeSwarm($swarm::class, $context->toQueuePayload()));
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
@@ -340,6 +343,7 @@ class SwarmRunner
         $totalSteps = min(count($swarm->agents()), $this->resolveMaxAgentExecutions($swarm));
         $context = RunContext::fromTask($task);
         $this->limits->checkInput($context->input);
+        $this->ensureActiveContextCompatible(self::EXECUTION_MODE_DURABLE);
         $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps);
 
         return new DurableSwarmResponse(new PendingDispatch($start->job), $this->durable, $start->runId);
@@ -367,6 +371,17 @@ class SwarmRunner
     protected function resolveQueueLeaseSeconds(int $timeoutSeconds): int
     {
         return max($timeoutSeconds * 2, 300);
+    }
+
+    protected function ensureActiveContextCompatible(string $executionMode): void
+    {
+        if ($this->capture->capturesActiveContext()) {
+            return;
+        }
+
+        if (in_array($executionMode, [self::EXECUTION_MODE_QUEUE, self::EXECUTION_MODE_DURABLE], true)) {
+            throw new SwarmException('Queued and durable swarms require active runtime context persistence so workers can continue or recover the run. Enable [swarm.capture.active_context] or use synchronous execution.');
+        }
     }
 
     protected function ensureDurableSupported(Swarm $swarm): void

@@ -245,6 +245,20 @@ test('output payload limits can truncate persisted and emitted output', function
         && $event->metadata['output_truncated'] === true);
 });
 
+test('active context capture can redact runtime context without redacting history capture', function () {
+    config()->set('swarm.capture.active_context', false);
+
+    $response = FakeSequentialSwarm::make()->run('active-context-task');
+    $storedContext = app(ContextStore::class)->find($response->metadata['run_id']);
+    $storedHistory = app(RunHistoryStore::class)->find($response->metadata['run_id']);
+
+    expect($storedContext['input'])->toBe('[redacted]');
+    expect($storedContext['data'])->toBe(['input' => '[redacted]']);
+    expect($storedContext['artifacts'])->toBe([]);
+    expect($storedHistory['context']['input'])->toBe('active-context-task');
+    expect($storedHistory['output'])->toBe('editor-out');
+});
+
 test('capture flags redact persisted failure messages and failure events while preserving thrown exception', function () {
     config()->set('swarm.capture.inputs', false);
     config()->set('swarm.capture.outputs', false);

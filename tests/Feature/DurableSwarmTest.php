@@ -193,6 +193,17 @@ test('dispatch durable fails clearly when persistence is not database backed', f
         ->toThrow(SwarmException::class, 'Durable execution requires database-backed swarm persistence and the durable runtime table.');
 });
 
+test('dispatch durable fails when active runtime context persistence is disabled', function () {
+    config()->set('swarm.capture.active_context', false);
+
+    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable('durable-task'))
+        ->toThrow(SwarmException::class, 'Queued and durable swarms require active runtime context persistence so workers can continue or recover the run.');
+
+    expect(DB::table('swarm_run_histories')->count())->toBe(0)
+        ->and(DB::table('swarm_contexts')->count())->toBe(0)
+        ->and(DB::table('swarm_durable_runs')->count())->toBe(0);
+});
+
 test('dispatch durable rejects invalid step timeout before writing state', function (int $stepTimeout) {
     config()->set('swarm.durable.step_timeout', $stepTimeout);
 

@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Container\Container;
@@ -19,6 +20,7 @@ class ParallelRunner
     public function __construct(
         protected ConcurrencyManager $concurrency,
         protected SwarmStepRecorder $stepsRecorder,
+        protected SwarmCapture $capture,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -101,7 +103,7 @@ class ParallelRunner
                 'topology' => $state->topology,
             ]);
 
-        $state->contextStore->put($state->context, $state->ttlSeconds);
+        $state->contextStore->put($this->capture->activeContext($state->context), $state->ttlSeconds);
         $state->artifactRepository->storeMany($state->context->runId, $state->context->artifacts, $state->ttlSeconds);
 
         return new SwarmResponse(
