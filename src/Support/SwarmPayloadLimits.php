@@ -17,7 +17,7 @@ class SwarmPayloadLimits
 
     public function checkInput(string $input): void
     {
-        $this->check($input, 'input', $this->configuredBytes('max_input_bytes'));
+        $this->ensureWithinLimit($input, 'input', $this->configuredBytes('max_input_bytes'));
     }
 
     public function checkContextInput(RunContext $context): void
@@ -28,7 +28,7 @@ class SwarmPayloadLimits
             throw new SwarmException('Swarm input context payload must be plain data that can be encoded as JSON.', previous: $exception);
         }
 
-        $this->check($payload, 'input', $this->configuredBytes('max_input_bytes'));
+        $this->ensureWithinLimit($payload, 'input', $this->configuredBytes('max_input_bytes'));
     }
 
     public function output(string $output): PayloadLimitResult
@@ -93,6 +93,21 @@ class SwarmPayloadLimits
 
         if ($overflow !== 'fail') {
             throw new SwarmException("Invalid swarm payload overflow strategy [{$overflow}]. Supported strategies: fail, truncate.");
+        }
+
+        throw new SwarmException("Swarm {$kind} payload is {$bytes} bytes, which exceeds the configured {$limit} byte limit.");
+    }
+
+    protected function ensureWithinLimit(string $payload, string $kind, ?int $limit): void
+    {
+        if ($limit === null) {
+            return;
+        }
+
+        $bytes = strlen($payload);
+
+        if ($bytes <= $limit) {
+            return;
         }
 
         throw new SwarmException("Swarm {$kind} payload is {$bytes} bytes, which exceeds the configured {$limit} byte limit.");

@@ -206,6 +206,16 @@ test('input payload limits fail before agent execution', function () {
     FakeResearcher::assertNeverPrompted();
 });
 
+test('input payload limits fail even when overflow truncation is enabled', function () {
+    config()->set('swarm.limits.max_input_bytes', 5);
+    config()->set('swarm.limits.overflow', 'truncate');
+
+    expect(fn () => FakeSequentialSwarm::make()->run('too-large-input'))
+        ->toThrow(SwarmException::class, 'Swarm input payload is 15 bytes, which exceeds the configured 5 byte limit.');
+
+    FakeResearcher::assertNeverPrompted();
+});
+
 test('output payload limits fail before output persistence', function () {
     config()->set('swarm.limits.max_output_bytes', 5);
 

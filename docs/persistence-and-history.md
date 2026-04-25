@@ -251,14 +251,19 @@ explicit `RunContext` values in any execution mode, check the serialized runtime
 context payload so large data, metadata, or artifacts cannot bypass the
 configured input limit.
 
+Input limits always fail before execution when the configured size is exceeded.
+Laravel Swarm does not truncate task input or runtime context before handing it
+to agents.
+
 Output limits apply to captured output surfaces. If output capture is disabled,
 output limit checks do not run because Laravel Swarm persists and emits
 `[redacted]` instead of the provider output.
 
 The default limit values are `null`, which keeps existing behavior. When a
-limit is configured, the default overflow strategy is `fail`. Truncation is
-opt-in and adds metadata such as `output_truncated`, `output_original_bytes`,
-and `output_stored_bytes` to the persisted step or completion record.
+limit is configured, the default output overflow strategy is `fail`.
+Truncation is opt-in for captured output only and adds metadata such as
+`output_truncated`, `output_original_bytes`, and `output_stored_bytes` to the
+persisted step or completion record.
 
 Payload limits are storage and event guardrails. They do not hard-cancel an
 in-flight provider request, limit third-party SDK buffering, or cap the

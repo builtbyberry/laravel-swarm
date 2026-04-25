@@ -105,6 +105,19 @@ test('queue rejects explicit run contexts that exceed configured input payload l
         ->toThrow(SwarmException::class, 'Swarm input payload is');
 });
 
+test('queue rejects oversized explicit run contexts even when overflow truncation is enabled', function () {
+    config()->set('swarm.limits.max_input_bytes', 80);
+    config()->set('swarm.limits.overflow', 'truncate');
+
+    $context = RunContext::from([
+        'input' => 'tiny',
+        'data' => ['large' => str_repeat('x', 120)],
+    ], 'oversized-truncated-queued-context-run-id');
+
+    expect(fn () => FakeSequentialSwarm::make()->queue($context))
+        ->toThrow(SwarmException::class, 'Swarm input payload is');
+});
+
 test('queued swarm jobs can execute with a preserved run context', function () {
     $context = RunContext::from([
         'input' => 'queued-task',
