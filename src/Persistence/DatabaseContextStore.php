@@ -23,15 +23,13 @@ class DatabaseContextStore implements ContextStore
 
     public function put(RunContext $context, int $ttlSeconds): void
     {
+        $contextPayload = $context->toArray();
         $payload = [
-            'run_id' => $context->runId,
-            'input' => $context->input,
-            'data' => $this->encodeJson($context->data),
-            'metadata' => $this->encodeJson($context->metadata),
-            'artifacts' => $this->encodeJson(array_map(
-                static fn ($artifact): array => $artifact->toArray(),
-                $context->artifacts,
-            )),
+            'run_id' => $contextPayload['run_id'],
+            'input' => $contextPayload['input'],
+            'data' => $this->encodeJson($contextPayload['data']),
+            'metadata' => $this->encodeJson($contextPayload['metadata']),
+            'artifacts' => $this->encodeJson($contextPayload['artifacts']),
             'updated_at' => now(),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
         ];

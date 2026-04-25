@@ -236,3 +236,35 @@ test('from payload rejects invalid serialized artifact content', function () {
         ],
     ]))->toThrow(SwarmException::class, 'Swarm plain data value [RunContext payload.artifacts.0.content] must be a string, integer, float, boolean, null, or array of plain data.');
 });
+
+test('from payload rejects non array serialized artifact metadata', function () {
+    expect(fn () => RunContext::fromPayload([
+        'run_id' => 'queued-run-id',
+        'input' => 'Draft outline',
+        'data' => [],
+        'metadata' => [],
+        'artifacts' => [
+            ['name' => 'manual', 'content' => 'content', 'metadata' => 'bad', 'step_agent_class' => null],
+        ],
+    ]))->toThrow(SwarmException::class, 'Swarm artifact metadata [RunContext payload.artifacts.0.metadata] must be an array.');
+});
+
+test('from payload normalizes serialized artifact defaults and ignores unknown keys', function () {
+    $context = RunContext::fromPayload([
+        'run_id' => 'queued-run-id',
+        'input' => 'Draft outline',
+        'data' => [],
+        'metadata' => [],
+        'artifacts' => [
+            ['name' => 'manual', 'ignored' => 'value'],
+        ],
+    ]);
+
+    expect($context->artifacts)->toHaveCount(1);
+    expect($context->artifacts[0]->toArray())->toBe([
+        'name' => 'manual',
+        'content' => null,
+        'metadata' => [],
+        'step_agent_class' => null,
+    ]);
+});

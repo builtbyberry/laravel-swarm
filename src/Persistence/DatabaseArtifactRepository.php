@@ -7,9 +7,8 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
-use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
+use BuiltByBerry\LaravelSwarm\Support\ArtifactPayload;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
-use BuiltByBerry\LaravelSwarm\Support\PlainData;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 
@@ -25,25 +24,18 @@ class DatabaseArtifactRepository implements ArtifactRepository
     public function storeMany(string $runId, array $artifacts, int $ttlSeconds): void
     {
         $timestamp = now();
+        $normalized = [];
 
-        foreach ($artifacts as $artifact) {
-            $payload = $artifact instanceof SwarmArtifact ? $artifact->toArray() : (array) $artifact;
-            if (! array_key_exists('name', $payload) || ! is_string($payload['name'])) {
-                throw new SwarmException('Swarm artifact payload [artifact.name] must be a string.');
-            }
+        foreach ($artifacts as $index => $artifact) {
+            $normalized[] = ArtifactPayload::normalize($artifact, "artifact.{$index}");
+        }
 
-            if (array_key_exists('step_agent_class', $payload) && $payload['step_agent_class'] !== null && ! is_string($payload['step_agent_class'])) {
-                throw new SwarmException('Swarm artifact payload [artifact.step_agent_class] must be a string or null.');
-            }
-
-            $content = PlainData::value($payload['content'] ?? null, 'artifact.content');
-            $metadata = PlainData::array(is_array($payload['metadata'] ?? null) ? $payload['metadata'] : [], 'artifact.metadata');
-
+        foreach ($normalized as $payload) {
             $this->table()->insert([
                 'run_id' => $runId,
                 'name' => $payload['name'],
-                'content' => $this->encodeJson($content),
-                'metadata' => $this->encodeJson($metadata),
+                'content' => $this->encodeJson($payload['content']),
+                'metadata' => $this->encodeJson($payload['metadata']),
                 'step_agent_class' => $payload['step_agent_class'] ?? null,
                 'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
                 'created_at' => $timestamp,

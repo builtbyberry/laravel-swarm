@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
@@ -21,6 +22,11 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\AssertionFailedError;
+
+class DatabaseInvalidPayloadValue
+{
+    public string $value = 'sensitive';
+}
 
 beforeEach(function () {
     config()->set('database.default', 'testing');
@@ -66,6 +72,48 @@ test('database context store persists long task inputs', function () {
     $store->put($context, 60);
 
     expect($store->find('long-context-run-id')['input'])->toBe($longInput);
+});
+
+test('database context store rejects invalid context data before persistence', function () {
+    $store = app(DatabaseContextStore::class);
+    $context = new RunContext('invalid-context-data-run-id', 'database-task', data: ['bad' => new DatabaseInvalidPayloadValue]);
+
+    expect(fn () => $store->put($context, 60))
+        ->toThrow(SwarmException::class, 'Swarm plain data value [RunContext.data.bad] must be a string, integer, float, boolean, null, or array of plain data.');
+
+    expect(DB::table('swarm_contexts')->where('run_id', 'invalid-context-data-run-id')->exists())->toBeFalse();
+});
+
+test('database context store rejects invalid context metadata before persistence', function () {
+    $store = app(DatabaseContextStore::class);
+    $context = new RunContext('invalid-context-metadata-run-id', 'database-task', metadata: ['bad' => new DatabaseInvalidPayloadValue]);
+
+    expect(fn () => $store->put($context, 60))
+        ->toThrow(SwarmException::class, 'Swarm plain data value [RunContext.metadata.bad] must be a string, integer, float, boolean, null, or array of plain data.');
+
+    expect(DB::table('swarm_contexts')->where('run_id', 'invalid-context-metadata-run-id')->exists())->toBeFalse();
+});
+
+test('database context store rejects invalid artifact content before persistence', function () {
+    $store = app(DatabaseContextStore::class);
+    $context = new RunContext('invalid-context-artifact-content-run-id', 'database-task');
+    $context->addArtifact(new SwarmArtifact('manual', new DatabaseInvalidPayloadValue));
+
+    expect(fn () => $store->put($context, 60))
+        ->toThrow(SwarmException::class, 'Swarm plain data value [RunContext.artifacts.0.content] must be a string, integer, float, boolean, null, or array of plain data.');
+
+    expect(DB::table('swarm_contexts')->where('run_id', 'invalid-context-artifact-content-run-id')->exists())->toBeFalse();
+});
+
+test('database context store rejects invalid artifact metadata before persistence', function () {
+    $store = app(DatabaseContextStore::class);
+    $context = new RunContext('invalid-context-artifact-metadata-run-id', 'database-task');
+    $context->addArtifact(new SwarmArtifact('manual', 'content', ['bad' => new DatabaseInvalidPayloadValue]));
+
+    expect(fn () => $store->put($context, 60))
+        ->toThrow(SwarmException::class, 'Swarm plain data value [RunContext.artifacts.0.metadata.bad] must be a string, integer, float, boolean, null, or array of plain data.');
+
+    expect(DB::table('swarm_contexts')->where('run_id', 'invalid-context-artifact-metadata-run-id')->exists())->toBeFalse();
 });
 
 test('database artifact repository persists explicit json payloads', function () {

@@ -252,18 +252,20 @@ class RunContext
             return [];
         }
 
-        return array_values(array_filter(array_map(function (mixed $artifact): ?SwarmArtifact {
-            if (! is_array($artifact) || ! isset($artifact['name'])) {
-                return null;
-            }
+        $hydrated = [];
 
-            return new SwarmArtifact(
-                name: (string) $artifact['name'],
-                content: PlainData::value($artifact['content'] ?? null, 'artifacts.content'),
-                metadata: is_array($artifact['metadata'] ?? null) ? PlainData::array($artifact['metadata'], 'artifacts.metadata') : [],
-                stepAgentClass: isset($artifact['step_agent_class']) ? (string) $artifact['step_agent_class'] : null,
+        foreach ($artifacts as $index => $artifact) {
+            $payload = ArtifactPayload::normalize($artifact, "artifacts.{$index}");
+
+            $hydrated[] = new SwarmArtifact(
+                name: $payload['name'],
+                content: $payload['content'],
+                metadata: $payload['metadata'],
+                stepAgentClass: $payload['step_agent_class'],
             );
-        }, $artifacts)));
+        }
+
+        return $hydrated;
     }
 
     /**
@@ -283,25 +285,7 @@ class RunContext
     protected static function validateArtifactsPayload(array $artifacts, string $path): void
     {
         foreach ($artifacts as $index => $artifact) {
-            if (! is_array($artifact)) {
-                throw new SwarmException("Swarm artifact payload [{$path}.{$index}] must be an array.");
-            }
-
-            if (! array_key_exists('name', $artifact) || ! is_string($artifact['name'])) {
-                throw new SwarmException("Swarm artifact payload [{$path}.{$index}.name] must be a string.");
-            }
-
-            PlainData::value($artifact['content'] ?? null, "{$path}.{$index}.content");
-
-            if (array_key_exists('metadata', $artifact) && ! is_array($artifact['metadata'])) {
-                throw new SwarmException("Swarm artifact metadata [{$path}.{$index}.metadata] must be an array.");
-            }
-
-            PlainData::array($artifact['metadata'] ?? [], "{$path}.{$index}.metadata");
-
-            if (array_key_exists('step_agent_class', $artifact) && $artifact['step_agent_class'] !== null && ! is_string($artifact['step_agent_class'])) {
-                throw new SwarmException("Swarm artifact payload [{$path}.{$index}.step_agent_class] must be a string or null.");
-            }
+            ArtifactPayload::normalize($artifact, "{$path}.{$index}");
         }
     }
 }
