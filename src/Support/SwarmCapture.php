@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Throwable;
 
 class SwarmCapture
 {
@@ -25,6 +27,16 @@ class SwarmCapture
     public function output(string $output): string
     {
         return $this->capturesOutputs() ? $output : self::REDACTED;
+    }
+
+    public function failureMessage(Throwable $exception): string
+    {
+        return $this->capturesFailures() ? $exception->getMessage() : self::REDACTED;
+    }
+
+    public function failureException(Throwable $exception): Throwable
+    {
+        return $this->capturesFailures() ? $exception : new SwarmException(self::REDACTED);
     }
 
     /**
@@ -104,5 +116,10 @@ class SwarmCapture
     public function capturesOutputs(): bool
     {
         return (bool) $this->config->get('swarm.capture.outputs', true);
+    }
+
+    public function capturesFailures(): bool
+    {
+        return $this->capturesInputs() && $this->capturesOutputs();
     }
 }

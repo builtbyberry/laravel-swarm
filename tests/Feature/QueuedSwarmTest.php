@@ -174,6 +174,26 @@ test('queued swarm retries do not restart failed database-backed executions', fu
     expect(DB::table('swarm_run_histories')->where('run_id', 'failed-run-id')->value('updated_at'))->toBe($updatedAt);
 });
 
+test('queued database failures redact persisted messages when capture is disabled', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+
+    $context = RunContext::from('queued-task', 'redacted-failed-run-id');
+    $job = new InvokeSwarm(FailingQueuedSwarm::class, $context->toQueuePayload());
+
+    expect(fn () => $job->handle(app(SwarmRunner::class)))
+        ->toThrow(RuntimeException::class, 'Queued swarm failed.');
+
+    $error = json_decode((string) DB::table('swarm_run_histories')->where('run_id', 'redacted-failed-run-id')->value('error'), true);
+
+    expect($error)->toMatchArray([
+        'class' => RuntimeException::class,
+        'message' => '[redacted]',
+    ]);
+});
+
 test('queued swarm retries do not run while another worker still holds the lease', function () {
     config()->set('swarm.persistence.driver', 'database');
     Artisan::call('migrate:fresh', ['--database' => 'testing']);

@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
@@ -22,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Database\Schema\Blueprint;
@@ -191,6 +193,17 @@ test('dispatch durable fails clearly when persistence is not database backed', f
         ->toThrow(SwarmException::class, 'Durable execution requires database-backed swarm persistence and the durable runtime table.');
 });
 
+test('dispatch durable rejects invalid step timeout before writing state', function (int $stepTimeout) {
+    config()->set('swarm.durable.step_timeout', $stepTimeout);
+
+    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable('durable-task'))
+        ->toThrow(SwarmException::class, 'Durable swarm step timeout must be a positive integer.');
+
+    expect(DB::table('swarm_run_histories')->count())->toBe(0)
+        ->and(DB::table('swarm_contexts')->count())->toBe(0)
+        ->and(DB::table('swarm_durable_runs')->count())->toBe(0);
+})->with([0, -1]);
+
 test('durable sequential swarms complete one step per job', function () {
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
     $runId = $response->runId;
@@ -227,6 +240,20 @@ test('durable sequential swarms complete one step per job', function () {
         ->and($history['steps'])->toHaveCount(3);
 });
 
+test('durable advance rejects invalid persisted step timeout before lease acquisition', function () {
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update(['step_timeout_seconds' => 0]);
+
+    expect(fn () => app(DurableSwarmManager::class)->advance($runId, 0))
+        ->toThrow(SwarmException::class, 'Durable swarm step timeout must be a positive integer.');
+
+    expect(DB::table('swarm_durable_runs')->where('run_id', $runId)->value('execution_token'))->toBeNull();
+});
+
 test('durable terminal completion overwrites persisted context with redacted capture snapshot', function () {
     config()->set('swarm.capture.inputs', false);
     config()->set('swarm.capture.outputs', false);
@@ -247,6 +274,27 @@ test('durable terminal completion overwrites persisted context with redacted cap
     expect($context['data'])->toBe(['input' => '[redacted]']);
     expect($history['output'])->toBe('[redacted]');
     expect($history['context']['input'])->toBe('[redacted]');
+});
+
+test('durable failures redact persisted and event messages when capture is disabled', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+    Event::fake([SwarmFailed::class]);
+
+    $response = FailingQueuedSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+
+    expect(fn () => app(DurableSwarmManager::class)->advance($runId, 0))
+        ->toThrow(RuntimeException::class, 'Queued swarm failed.');
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($history['error'])->toMatchArray([
+        'class' => RuntimeException::class,
+        'message' => '[redacted]',
+    ]);
+    Event::assertDispatched(SwarmFailed::class, fn (SwarmFailed $event) => $event->runId === $runId
+        && $event->exception->getMessage() === '[redacted]');
 });
 
 test('durable workers stop cleanly when lease ownership is lost before context persistence', function () {

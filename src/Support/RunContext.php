@@ -54,10 +54,12 @@ class RunContext
         }
 
         if (is_array($task)) {
+            $data = PlainData::array($task, 'task');
+
             return new self(
                 runId: self::newRunId(),
-                input: self::normalizePrompt($task),
-                data: $task,
+                input: self::normalizePrompt($data),
+                data: $data,
             );
         }
 
@@ -119,7 +121,7 @@ class RunContext
      */
     public function toArray(): array
     {
-        return [
+        return self::validateSerializedPayload([
             'run_id' => $this->runId,
             'input' => $this->input,
             'data' => $this->data,
@@ -128,7 +130,7 @@ class RunContext
                 static fn (SwarmArtifact $artifact): array => $artifact->toArray(),
                 $this->artifacts,
             ),
-        ];
+        ], 'RunContext');
     }
 
     /**
@@ -136,7 +138,7 @@ class RunContext
      */
     public function toQueuePayload(): array
     {
-        return $this->toArray();
+        return self::validateSerializedPayload($this->toArray(), 'RunContext queue payload');
     }
 
     /**
@@ -151,7 +153,7 @@ class RunContext
         try {
             return json_encode($input, JSON_THROW_ON_ERROR);
         } catch (JsonException $exception) {
-            throw new SwarmException('Structured swarm task input must be JSON-encodable plain data.', previous: $exception);
+            throw new SwarmException('Structured swarm task input must be plain data that can be encoded as JSON.', previous: $exception);
         }
     }
 
@@ -163,8 +165,8 @@ class RunContext
         return new self(
             runId: (string) ($payload['run_id'] ?? $runId ?? self::newRunId()),
             input: $payload['input'],
-            data: is_array($payload['data'] ?? null) ? $payload['data'] : [],
-            metadata: is_array($payload['metadata'] ?? null) ? $payload['metadata'] : [],
+            data: is_array($payload['data'] ?? null) ? PlainData::array($payload['data'], 'data') : [],
+            metadata: is_array($payload['metadata'] ?? null) ? PlainData::array($payload['metadata'], 'metadata') : [],
             artifacts: self::hydrateArtifacts($payload['artifacts'] ?? []),
         );
     }
@@ -193,6 +195,18 @@ class RunContext
         if (array_key_exists('artifacts', $payload) && ! is_array($payload['artifacts'])) {
             throw new SwarmException('RunContext::from() expects [artifacts] to be an array.');
         }
+
+        if (array_key_exists('data', $payload)) {
+            PlainData::array($payload['data'], 'data');
+        }
+
+        if (array_key_exists('metadata', $payload)) {
+            PlainData::array($payload['metadata'], 'metadata');
+        }
+
+        if (array_key_exists('artifacts', $payload)) {
+            self::validateArtifactsPayload($payload['artifacts'], 'artifacts');
+        }
     }
 
     /**
@@ -204,6 +218,10 @@ class RunContext
             if (! array_key_exists($key, $payload)) {
                 throw new SwarmException('RunContext::fromPayload() expects serialized queue payload keys: [run_id, input, data, metadata, artifacts].');
             }
+        }
+
+        if (! is_string($payload['run_id'])) {
+            throw new SwarmException('RunContext::fromPayload() expects run_id to be a string, ['.gettype($payload['run_id']).'] given.');
         }
 
         if (! is_string($payload['input'])) {
@@ -221,6 +239,8 @@ class RunContext
         if (! is_array($payload['artifacts'])) {
             throw new SwarmException('RunContext::fromPayload() expects [artifacts] to be an array.');
         }
+
+        self::validateSerializedPayload($payload, 'RunContext payload');
     }
 
     /**
@@ -239,10 +259,49 @@ class RunContext
 
             return new SwarmArtifact(
                 name: (string) $artifact['name'],
-                content: $artifact['content'] ?? null,
-                metadata: is_array($artifact['metadata'] ?? null) ? $artifact['metadata'] : [],
+                content: PlainData::value($artifact['content'] ?? null, 'artifacts.content'),
+                metadata: is_array($artifact['metadata'] ?? null) ? PlainData::array($artifact['metadata'], 'artifacts.metadata') : [],
                 stepAgentClass: isset($artifact['step_agent_class']) ? (string) $artifact['step_agent_class'] : null,
             );
         }, $artifacts)));
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{run_id: string, input: string, data: array<string, mixed>, metadata: array<string, mixed>, artifacts: array<int, array{name: string, content: mixed, metadata: array<string, mixed>, step_agent_class: string|null}>}
+     */
+    protected static function validateSerializedPayload(array $payload, string $path): array
+    {
+        PlainData::array($payload['data'], $path.'.data');
+        PlainData::array($payload['metadata'], $path.'.metadata');
+        self::validateArtifactsPayload($payload['artifacts'], $path.'.artifacts');
+
+        /** @var array{run_id: string, input: string, data: array<string, mixed>, metadata: array<string, mixed>, artifacts: array<int, array{name: string, content: mixed, metadata: array<string, mixed>, step_agent_class: string|null}>} $payload */
+        return $payload;
+    }
+
+    protected static function validateArtifactsPayload(array $artifacts, string $path): void
+    {
+        foreach ($artifacts as $index => $artifact) {
+            if (! is_array($artifact)) {
+                throw new SwarmException("Swarm artifact payload [{$path}.{$index}] must be an array.");
+            }
+
+            if (! array_key_exists('name', $artifact) || ! is_string($artifact['name'])) {
+                throw new SwarmException("Swarm artifact payload [{$path}.{$index}.name] must be a string.");
+            }
+
+            PlainData::value($artifact['content'] ?? null, "{$path}.{$index}.content");
+
+            if (array_key_exists('metadata', $artifact) && ! is_array($artifact['metadata'])) {
+                throw new SwarmException("Swarm artifact metadata [{$path}.{$index}.metadata] must be an array.");
+            }
+
+            PlainData::array($artifact['metadata'] ?? [], "{$path}.{$index}.metadata");
+
+            if (array_key_exists('step_agent_class', $artifact) && $artifact['step_agent_class'] !== null && ! is_string($artifact['step_agent_class'])) {
+                throw new SwarmException("Swarm artifact payload [{$path}.{$index}.step_agent_class] must be a string or null.");
+            }
+        }
     }
 }

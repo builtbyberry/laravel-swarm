@@ -26,6 +26,12 @@ History pruning only removes expired terminal rows (`completed`, `failed`, and
 Durable runtime pruning removes terminal runtime rows once their matching
 history row is expired.
 
+`swarm:prune` is schema-aware. If the history table is missing, the command
+skips all pruning because active-run safety depends on history. If history
+exists but the context, artifact, or durable runtime table is missing, the
+command skips that table role and reports the skip while pruning the tables
+that are present.
+
 If you override `swarm.tables.*`, the prune command respects those configured
 table roles directly. It does not rely on default table-name patterns to decide
 which rows are safe to delete.

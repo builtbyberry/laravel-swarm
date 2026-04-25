@@ -84,7 +84,7 @@ class DurableSwarmManager
                 'current_step_index' => null,
                 'total_steps' => $totalSteps,
                 'timeout_at' => now('UTC')->addSeconds($timeoutSeconds),
-                'step_timeout_seconds' => (int) $this->config->get('swarm.durable.step_timeout', 300),
+                'step_timeout_seconds' => $this->resolveStepTimeoutSeconds(),
                 'execution_token' => null,
                 'leased_until' => null,
                 'pause_requested_at' => null,
@@ -220,7 +220,8 @@ class DurableSwarmManager
     public function advance(string $runId, int $expectedStepIndex): void
     {
         $run = $this->requireRun($runId);
-        $token = $this->durableRuns->acquireLease($runId, $expectedStepIndex, (int) $run['step_timeout_seconds']);
+        $stepLeaseSeconds = $this->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']);
+        $token = $this->durableRuns->acquireLease($runId, $expectedStepIndex, $stepLeaseSeconds);
 
         if ($token === null) {
             return;
@@ -228,7 +229,7 @@ class DurableSwarmManager
 
         $run = $this->requireRun($runId);
         $context = $this->loadContext($runId);
-        $stepLeaseSeconds = (int) $run['step_timeout_seconds'];
+        $stepLeaseSeconds = $this->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']);
 
         if ($this->hasTimedOut($run)) {
             $exception = new SwarmException("Durable swarm run [{$runId}] exceeded its configured timeout.");
@@ -243,7 +244,7 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                exception: $exception,
+                exception: $this->capture->failureException($exception),
                 durationMs: $this->durationMillisecondsFor($runId),
                 metadata: $context->metadata,
                 executionMode: 'durable',
@@ -329,7 +330,7 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                exception: $exception,
+                exception: $this->capture->failureException($exception),
                 durationMs: $this->durationMillisecondsFor($runId),
                 metadata: $context->metadata,
                 executionMode: 'durable',
@@ -463,6 +464,20 @@ class DurableSwarmManager
     protected function ttlSeconds(): int
     {
         return (int) $this->config->get('swarm.context.ttl', 3600);
+    }
+
+    protected function resolveStepTimeoutSeconds(): int
+    {
+        return $this->validateStepTimeoutSeconds((int) $this->config->get('swarm.durable.step_timeout', 300));
+    }
+
+    protected function validateStepTimeoutSeconds(int $seconds): int
+    {
+        if ($seconds <= 0) {
+            throw new SwarmException('Durable swarm step timeout must be a positive integer.');
+        }
+
+        return $seconds;
     }
 
     protected function durationMillisecondsFor(string $runId): int

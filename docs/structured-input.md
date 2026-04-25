@@ -54,9 +54,11 @@ context remains available to the swarm runtime while it validates and executes
 the returned route plan. In sequential and parallel swarms, the array is
 serialized as the prompt each agent receives.
 
-Array task input must be JSON-encodable plain data. Laravel Swarm rejects
+Array task input must be plain data only: strings, integers, floats, booleans,
+null, and arrays containing only those values. Laravel Swarm rejects objects
+including `JsonSerializable`, `Stringable`, public-property DTOs, enums,
 resources, closures, and other opaque runtime values instead of serializing PHP
-internals into the prompt.
+internals into the prompt or queue payload.
 
 ## Using Run Contexts
 
@@ -84,16 +86,18 @@ When you queue a swarm with an array or `RunContext`, Laravel Swarm serializes
 the task as plain queue-safe data and rebuilds the `RunContext` on the worker
 before execution.
 
-That means queued task payloads should contain normal serializable values:
+That means queued task payloads must contain plain data:
 
 - strings
 - integers
+- floats
 - arrays
 - booleans
 - null
 
-Do not rely on closures, open resources, or other opaque runtime values
-crossing the queue boundary.
+Do not rely on objects, enums, closures, open resources, or other opaque
+runtime values crossing the queue boundary. Explicit `RunContext` data,
+metadata, and artifact content follow the same plain-data rule.
 
 ## Choosing Between The Three
 

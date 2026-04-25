@@ -67,7 +67,11 @@ class ParallelRunner
         $outputs = [];
 
         foreach ($agents as $index => $agent) {
-            $row = $results[$index] ?? ['output' => '', 'usage' => [], 'class' => $agent::class, 'duration_ms' => 1];
+            if (! array_key_exists($index, $results)) {
+                throw new SwarmException($state->swarm::class.": parallel execution did not return a result for agent index [{$index}].");
+            }
+
+            $row = $results[$index];
             $step = $this->stepsRecorder->completed(
                 state: $state,
                 index: $index,

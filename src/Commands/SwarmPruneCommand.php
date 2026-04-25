@@ -6,7 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Connection;
 use Symfony\Component\Console\Attribute\AsCommand;
 
 #[AsCommand(name: 'swarm:prune')]
@@ -18,7 +18,7 @@ class SwarmPruneCommand extends Command
 
     protected const CHUNK_SIZE = 1000;
 
-    public function handle(ConnectionInterface $connection, ConfigRepository $config): int
+    public function handle(Connection $connection, ConfigRepository $config): int
     {
         $tables = [
             'durable' => (string) $config->get('swarm.tables.durable', 'swarm_durable_runs'),
@@ -28,8 +28,22 @@ class SwarmPruneCommand extends Command
         ];
 
         $deleted = [];
+        $schema = $connection->getSchemaBuilder();
+
+        if (! $schema->hasTable($tables['history'])) {
+            $this->components->warn("Skipping swarm pruning because history table [{$tables['history']}] does not exist. Run the Laravel Swarm migrations before pruning database persistence.");
+
+            return self::SUCCESS;
+        }
 
         foreach ($tables as $name => $table) {
+            if (! $schema->hasTable($table)) {
+                $deleted[$name] = 0;
+                $this->components->warn("Skipping {$name} pruning because table [{$table}] does not exist.");
+
+                continue;
+            }
+
             $deleted[$name] = $this->pruneTable($connection, $name, $table, $tables['history']);
         }
 
@@ -47,7 +61,7 @@ class SwarmPruneCommand extends Command
         return self::SUCCESS;
     }
 
-    protected function pruneTable(ConnectionInterface $connection, string $role, string $table, string $historyTable): int
+    protected function pruneTable(Connection $connection, string $role, string $table, string $historyTable): int
     {
         $deleted = 0;
 

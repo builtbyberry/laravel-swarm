@@ -23,6 +23,9 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalLimitedSwarm
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMissingStructuredCoordinatorSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMultiRouteSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalSingleRouteSwarm;
+use Illuminate\Concurrency\ConcurrencyManager;
+use Illuminate\Contracts\Concurrency\Driver;
+use Illuminate\Support\Defer\DeferredCallback;
 use Illuminate\Support\Facades\Event;
 
 function hierarchicalPlan(string $startAt, array $nodes): array
@@ -134,6 +137,54 @@ test('hierarchical swarm executes a valid parallel group followed by a join', fu
     ]);
     expect($response->steps[1]->metadata['parent_parallel_node_id'])->toBe('parallel_node');
     expect($response->steps[2]->metadata['parent_parallel_node_id'])->toBe('parallel_node');
+});
+
+test('hierarchical swarm fails when parallel branch results are missing', function () {
+    app()->instance(ConcurrencyManager::class, new class(app()) extends ConcurrencyManager
+    {
+        public function driver($name = null): Driver
+        {
+            return new class implements Driver
+            {
+                public function run(Closure|array $tasks): array
+                {
+                    return [];
+                }
+
+                public function defer(Closure|array $tasks): DeferredCallback
+                {
+                    throw new RuntimeException('Not supported.');
+                }
+            };
+        }
+    });
+
+    FakeHierarchicalCoordinator::fake([
+        hierarchicalPlan('parallel_node', [
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['writer_node', 'editor_node'],
+                'next' => 'finish_node',
+            ],
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-branch',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-branch',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'editor_node',
+            ],
+        ]),
+    ]);
+
+    expect(fn () => FakeHierarchicalFullSwarm::make()->run('hierarchical-task'))
+        ->toThrow(SwarmException::class, FakeHierarchicalFullSwarm::class.': hierarchical parallel execution did not return a result for branch node [writer_node].');
 });
 
 test('hierarchical swarm can finish without worker execution', function () {

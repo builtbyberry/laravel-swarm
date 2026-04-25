@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ResolvesSwarmCacheStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
+use BuiltByBerry\LaravelSwarm\Support\PlainData;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -25,7 +27,21 @@ class CacheArtifactRepository implements ArtifactRepository
         $stored = $this->all($runId);
 
         foreach ($artifacts as $artifact) {
-            $stored[] = $artifact instanceof SwarmArtifact ? $artifact->toArray() : (array) $artifact;
+            $payload = $artifact instanceof SwarmArtifact ? $artifact->toArray() : (array) $artifact;
+            if (! array_key_exists('name', $payload) || ! is_string($payload['name'])) {
+                throw new SwarmException('Swarm artifact payload [artifact.name] must be a string.');
+            }
+
+            if (array_key_exists('step_agent_class', $payload) && $payload['step_agent_class'] !== null && ! is_string($payload['step_agent_class'])) {
+                throw new SwarmException('Swarm artifact payload [artifact.step_agent_class] must be a string or null.');
+            }
+
+            $stored[] = [
+                'name' => $payload['name'],
+                'content' => PlainData::value($payload['content'] ?? null, 'artifact.content'),
+                'metadata' => PlainData::array(is_array($payload['metadata'] ?? null) ? $payload['metadata'] : [], 'artifact.metadata'),
+                'step_agent_class' => $payload['step_agent_class'] ?? null,
+            ];
         }
 
         $this->store()->put($this->key($runId), $stored, $ttlSeconds);

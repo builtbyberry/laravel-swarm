@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
 use BuiltByBerry\LaravelSwarm\Support\QueuedRunAcquisition;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
@@ -28,6 +29,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
+        protected SwarmCapture $capture,
     ) {}
 
     public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void
@@ -139,7 +141,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         $updated = $this->update($runId, [
             'status' => 'failed',
             'error' => $this->encodeJson([
-                'message' => $exception->getMessage(),
+                'message' => $this->capture->failureMessage($exception),
                 'class' => $exception::class,
             ]),
             'finished_at' => Carbon::now('UTC'),

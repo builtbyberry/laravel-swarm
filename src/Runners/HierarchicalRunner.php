@@ -238,7 +238,12 @@ class HierarchicalRunner
                         $branch = $branchDefinitions[$branchNodeId]['node'];
                         $input = $branchDefinitions[$branchNodeId]['input'];
                         $index = $branchDefinitions[$branchNodeId]['index'];
-                        $row = $results[$branchNodeId] ?? ['output' => '', 'usage' => [], 'duration_ms' => 1];
+
+                        if (! array_key_exists($branchNodeId, $results)) {
+                            throw new SwarmException($state->swarm::class.": hierarchical parallel execution did not return a result for branch node [{$branchNodeId}].");
+                        }
+
+                        $row = $results[$branchNodeId];
 
                         $step = $this->stepsRecorder->completed(
                             state: $state,

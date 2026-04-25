@@ -174,10 +174,21 @@ Capture settings do not change agent handoff behavior and do not change the
 `SwarmResponse` returned to the current PHP process. They control what Laravel
 Swarm emits and persists for later inspection.
 
+When either input or output capture is disabled, failed run history keeps the
+original exception class but stores `[redacted]` as the exception message.
+`SwarmFailed` events receive the same redacted exception message. The exception
+thrown back to the caller remains the original exception so application control
+flow and logs outside Laravel Swarm are not altered.
+
 Queued and durable execution may keep raw context in the runtime context store
 while a run is active because workers need that state to continue the workflow.
 When a run reaches a terminal state, Laravel Swarm overwrites that context store
 entry with a redacted snapshot when capture is disabled.
+
+Capture flags cover prompts, outputs, automatic artifacts, terminal context
+snapshots, persisted failure messages, and failure event messages. They do not
+redact developer-supplied metadata. Treat metadata as operational data only and
+do not put secrets, raw prompts, or provider payloads in it.
 
 ## Custom Table Names
 

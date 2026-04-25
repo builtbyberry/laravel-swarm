@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -23,6 +24,7 @@ class CacheRunHistoryStore implements RunHistoryStore
     public function __construct(
         protected CacheFactory $cacheFactory,
         protected ConfigRepository $config,
+        protected SwarmCapture $capture,
     ) {}
 
     public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void
@@ -80,7 +82,7 @@ class CacheRunHistoryStore implements RunHistoryStore
         $history = $this->find($runId) ?? [];
         $history['status'] = 'failed';
         $history['error'] = [
-            'message' => $exception->getMessage(),
+            'message' => $this->capture->failureMessage($exception),
             'class' => $exception::class,
         ];
         $history['finished_at'] = Carbon::now('UTC')->toIso8601String();

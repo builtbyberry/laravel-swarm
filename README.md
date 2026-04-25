@@ -291,7 +291,7 @@ ArticlePipeline::make()
     ]);
 ```
 
-Queued structured payloads are serialized as plain queue-safe data and rebuilt into a `RunContext` on the worker. Do not rely on non-serializable values like closures or resource handles crossing the queue boundary.
+Queued structured payloads are serialized as plain queue-safe data and rebuilt into a `RunContext` on the worker. Use strings, integers, floats, booleans, null, and arrays containing only those values. Do not rely on objects, enums, closures, resource handles, or other runtime values crossing the queue boundary.
 
 What not to do:
 

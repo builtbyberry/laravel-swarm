@@ -177,6 +177,113 @@ test('prune removes cancelled history rows and terminal durable runtime rows', f
     expect(DB::table('swarm_durable_runs')->where('run_id', 'future-cancelled-run')->exists())->toBeTrue();
 });
 
+test('swarm prune skips safely when package tables are missing', function () {
+    Schema::dropIfExists('swarm_artifacts');
+    Schema::dropIfExists('swarm_contexts');
+    Schema::dropIfExists('swarm_durable_runs');
+    Schema::dropIfExists('swarm_run_histories');
+
+    Artisan::call('swarm:prune');
+
+    expect(Artisan::output())->toContain('Skipping swarm pruning because history table [swarm_run_histories] does not exist.');
+});
+
+test('swarm prune does not delete supporting rows when history table is missing', function () {
+    $expired = Carbon::now('UTC')->subMinute();
+    $future = Carbon::now('UTC')->addHour();
+
+    Schema::dropIfExists('swarm_run_histories');
+
+    DB::table('swarm_contexts')->insert([
+        'run_id' => 'orphan-context',
+        'input' => 'input',
+        'data' => json_encode([]),
+        'metadata' => json_encode([]),
+        'artifacts' => json_encode([]),
+        'expires_at' => $expired,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+    DB::table('swarm_artifacts')->insert([
+        'run_id' => 'orphan-artifact',
+        'name' => 'agent_output',
+        'content' => json_encode('output'),
+        'metadata' => json_encode([]),
+        'step_agent_class' => null,
+        'expires_at' => $expired,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+    DB::table('swarm_durable_runs')->insert([
+        'run_id' => 'orphan-durable',
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'completed',
+        'next_step_index' => 1,
+        'current_step_index' => null,
+        'total_steps' => 1,
+        'timeout_at' => $future,
+        'step_timeout_seconds' => 300,
+        'execution_token' => null,
+        'leased_until' => null,
+        'pause_requested_at' => null,
+        'cancel_requested_at' => null,
+        'queue_connection' => null,
+        'queue_name' => null,
+        'finished_at' => $expired,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+
+    Artisan::call('swarm:prune');
+
+    expect(DB::table('swarm_contexts')->where('run_id', 'orphan-context')->exists())->toBeTrue();
+    expect(DB::table('swarm_artifacts')->where('run_id', 'orphan-artifact')->exists())->toBeTrue();
+    expect(DB::table('swarm_durable_runs')->where('run_id', 'orphan-durable')->exists())->toBeTrue();
+});
+
+test('swarm prune skips missing optional tables and prunes present tables', function () {
+    $expired = Carbon::now('UTC')->subMinute();
+
+    Schema::dropIfExists('swarm_contexts');
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'expired-history-with-missing-context',
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'completed',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => 'output',
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => $expired,
+        'expires_at' => $expired,
+        'execution_token' => null,
+        'leased_until' => null,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+    DB::table('swarm_artifacts')->insert([
+        'run_id' => 'expired-history-with-missing-context',
+        'name' => 'agent_output',
+        'content' => json_encode('output'),
+        'metadata' => json_encode([]),
+        'step_agent_class' => null,
+        'expires_at' => $expired,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+
+    Artisan::call('swarm:prune');
+
+    expect(Artisan::output())->toContain('Skipping contexts pruning because table [swarm_contexts] does not exist.');
+    expect(DB::table('swarm_run_histories')->where('run_id', 'expired-history-with-missing-context')->exists())->toBeFalse();
+    expect(DB::table('swarm_artifacts')->where('run_id', 'expired-history-with-missing-context')->exists())->toBeFalse();
+});
+
 test('database run history store persists start step completion and failure payloads', function () {
     $history = app(DatabaseRunHistoryStore::class);
     $context = RunContext::from('history-task', 'history-run-id');
@@ -231,6 +338,22 @@ test('database run history store persists start step completion and failure payl
 
     expect($history->query(limit: 10)[0]['run_id'])->toBe('history-run-id');
     expect($history->query(status: 'failed', limit: 10)[0]['status'])->toBe('failed');
+});
+
+test('database run history store redacts failure messages when capture is disabled', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+
+    $history = app(DatabaseRunHistoryStore::class);
+    $context = RunContext::from('history-task', 'redacted-failure-run-id');
+
+    $history->start('redacted-failure-run-id', 'ExampleSwarm', 'sequential', $context, [], 60);
+    $history->fail('redacted-failure-run-id', new Exception('sensitive provider payload'), 60);
+
+    expect($history->find('redacted-failure-run-id')['error'])->toBe([
+        'message' => '[redacted]',
+        'class' => Exception::class,
+    ]);
 });
 
 test('database persistence repositories honor overridden table names when matching tables exist', function () {

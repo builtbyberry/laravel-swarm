@@ -98,6 +98,13 @@ Durable execution keeps the existing swarm timeout as the overall workflow
 deadline. Each durable step job also uses a dedicated step timeout and lease
 window.
 
+Configure the per-step lease window with `SWARM_DURABLE_STEP_TIMEOUT`. The
+value must be a positive integer number of seconds:
+
+```bash
+SWARM_DURABLE_STEP_TIMEOUT=300
+```
+
 Durable execution requires the database-backed persistence stores and the
 durable runtime table. It is intentionally not available with cache-backed
 swarm persistence.

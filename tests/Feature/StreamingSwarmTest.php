@@ -120,6 +120,33 @@ test('sequential swarm stream marks history failed and dispatches failure when t
     expect($history['steps'])->toHaveCount(2);
 });
 
+test('sequential swarm stream redacts failure events and history when capture is disabled', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+    Event::fake();
+
+    $stream = FakeStreamingFailureSwarm::make()->stream('sensitive-stream-task');
+
+    try {
+        foreach ($stream as $event) {
+            //
+        }
+
+        $this->fail('Expected the streamed swarm to throw.');
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toBe('Final agent stream failed.');
+    }
+
+    $failedEvent = Event::dispatched(SwarmFailed::class)->first()[0];
+    $history = app(RunHistoryStore::class)->find($failedEvent->runId);
+
+    expect($failedEvent->exception->getMessage())->toBe('[redacted]');
+    expect($history['error'])->toBe([
+        'message' => '[redacted]',
+        'class' => RuntimeException::class,
+    ]);
+});
+
 test('non sequential swarms cannot be streamed', function () {
     $stream = fn () => iterator_to_array(FakeParallelSwarm::make()->stream('stream-task'));
 
