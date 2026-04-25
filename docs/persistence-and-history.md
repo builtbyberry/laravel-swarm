@@ -269,6 +269,35 @@ Payload limits are storage and event guardrails. They do not hard-cancel an
 in-flight provider request, limit third-party SDK buffering, or cap the
 temporary PHP memory used while an agent response is being produced.
 
+## Production Cost And Privacy Tradeoffs
+
+Database-backed history stores completed steps in a normalized table instead of
+rewriting one growing JSON document on every step. That reduces write
+amplification, but it does not make persistence free. A completed step can still
+write run history, the active context snapshot, and automatic artifacts.
+
+For cost-sensitive or regulated production workflows, start with automatic
+artifact capture disabled unless step-output artifacts are required for
+inspection:
+
+```php
+'capture' => [
+    'inputs' => false,
+    'outputs' => true,
+    'artifacts' => false,
+    'active_context' => true,
+],
+```
+
+Queued and durable execution persist active runtime context by design so workers
+can continue or recover a run. Terminal redaction can overwrite the context
+snapshot after completion, but it does not mean raw active runtime state was
+never stored while the run was in flight.
+
+Payload limits protect persisted history, context, artifacts, and lifecycle
+event payloads. They are not provider memory limits, token generation limits, or
+third-party SDK buffering controls.
+
 ## Custom Table Names
 
 If you change `swarm.tables.*`, Laravel Swarm will use those table names at

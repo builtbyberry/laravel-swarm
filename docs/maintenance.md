@@ -72,6 +72,8 @@ For production database persistence:
 
 - schedule `swarm:prune`
 - schedule `swarm:recover` when using durable execution
+- treat pruning and recovery as required operating discipline for
+  database-backed durable workflows, not optional cleanup
 - use a dedicated queue for durable workflows that should not compete with
   ordinary application jobs
 - set the queue worker timeout above the longest expected provider call for one
@@ -79,7 +81,10 @@ For production database persistence:
 - set the queue connection `retry_after` above the worker timeout and above
   `swarm.durable.step_timeout`
 - keep retention windows short for high-volume or sensitive workflows
-- monitor database growth, artifact counts, and run latency after launch
+- disable automatic artifact capture for cost-sensitive or regulated workflows
+  unless step-output artifacts are required for inspection
+- monitor run count, step count, artifact count, table growth, and run latency
+  after launch
 
 For a conservative enterprise pilot, start with one sequential durable workflow
 using lower-sensitivity data, a dedicated queue, short retention, and

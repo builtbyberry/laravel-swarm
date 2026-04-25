@@ -151,7 +151,9 @@ Schedule::command('swarm:prune')->daily();
 ## Production Setup Checklist
 
 Before using durable swarms in production, make the operational contract
-explicit:
+explicit. Durable sequential execution is the recommended default for an
+enterprise pilot because each step has a clear retry, recovery, and inspection
+boundary.
 
 - use database-backed persistence and run the package migrations
 - put durable swarms on a dedicated queue when the workflow is important or
@@ -164,16 +166,19 @@ explicit:
 - keep retention short for high-volume workflows
 - keep capture settings conservative when prompts, outputs, context, or
   artifacts may contain regulated data
+- disable automatic artifact capture unless step-output artifacts are required
+  for inspection
+- monitor run count, step count, artifact count, table growth, and per-run
+  latency from the first production run
 
 For a narrow production pilot, prefer sequential durable swarms with
 lower-sensitivity data, a dedicated queue, short retention, and database growth
-monitoring from day one. Parallel and hierarchical swarms remain supported, but
-they have stricter container-resolution, concurrency, provider-rate-limit, and
-cost constraints.
+monitoring from day one.
 
-This is also the recommended posture for an initial Rimsys Intelligence pilot:
-sequential durable execution, conservative capture settings, lower-sensitivity
-content, short retention, and database growth monitoring from the first run.
+Parallel and hierarchical swarms remain supported, but they carry higher
+provider-rate-limit, concurrency, and cost risk. Hierarchical queued execution
+also executes parallel groups sequentially in this release. Treat those modes as
+an explicit operational choice rather than the default enterprise rollout path.
 
 Durable recovery depends on the scheduler. If `swarm:recover` is not scheduled,
 a run can stay `running` after a worker crashes or exits between checkpointing a
