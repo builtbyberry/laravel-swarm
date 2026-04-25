@@ -36,6 +36,10 @@ If you prefer assembling those workflow patterns manually, the Laravel AI articl
 - `CompanyResearchAgent -> ScoringAgent -> OutreachDraftAgent` for lead enrichment where each agent does a narrow job and the full workflow can be reused across campaigns.
 - `RequestIntakeAgent -> PlannerAgent -> SpecialistAgent(s) -> FinalResponseAgent` for internal operations where one request may branch into different specialists but still needs one consistent workflow definition.
 
+See the [examples](examples/README.md) folder for copy-paste Laravel workflow
+examples covering sequential, parallel, hierarchical, queued, streamed,
+durable, testing, and privacy-sensitive swarms.
+
 ### Laravel Swarm Is A Good Fit When...
 
 - the same multi-step AI workflow runs repeatedly in production
