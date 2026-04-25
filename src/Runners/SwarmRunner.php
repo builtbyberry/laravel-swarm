@@ -94,7 +94,7 @@ class SwarmRunner
             ? $this->resolveQueueLeaseSeconds($timeoutSeconds)
             : null;
         $context = RunContext::fromTask($task);
-        $this->limits->checkInput($context->input);
+        $this->checkInputPayload($task, $context, $executionMode);
         $this->ensureActiveContextCompatible($executionMode);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
@@ -228,7 +228,7 @@ class SwarmRunner
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
         $context = RunContext::fromTask($task);
-        $this->limits->checkInput($context->input);
+        $this->checkInputPayload($task, $context, self::EXECUTION_MODE_STREAM);
         $this->ensureActiveContextCompatible(self::EXECUTION_MODE_STREAM);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
@@ -315,7 +315,7 @@ class SwarmRunner
         $this->ensureContainerResolvable($swarm);
 
         $context = RunContext::fromTask($task);
-        $this->limits->checkInput($context->input);
+        $this->checkInputPayload($task, $context, self::EXECUTION_MODE_QUEUE);
         $this->ensureActiveContextCompatible(self::EXECUTION_MODE_QUEUE);
         $pendingDispatch = new PendingDispatch(new InvokeSwarm($swarm::class, $context->toQueuePayload()));
 
@@ -342,7 +342,7 @@ class SwarmRunner
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $totalSteps = min(count($swarm->agents()), $this->resolveMaxAgentExecutions($swarm));
         $context = RunContext::fromTask($task);
-        $this->limits->checkInput($context->input);
+        $this->checkInputPayload($task, $context, self::EXECUTION_MODE_DURABLE);
         $this->ensureActiveContextCompatible(self::EXECUTION_MODE_DURABLE);
         $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps);
 
@@ -371,6 +371,17 @@ class SwarmRunner
     protected function resolveQueueLeaseSeconds(int $timeoutSeconds): int
     {
         return max($timeoutSeconds * 2, 300);
+    }
+
+    protected function checkInputPayload(string|array|RunContext $task, RunContext $context, string $executionMode): void
+    {
+        if ($task instanceof RunContext || in_array($executionMode, [self::EXECUTION_MODE_QUEUE, self::EXECUTION_MODE_DURABLE], true)) {
+            $this->limits->checkContextInput($context);
+
+            return;
+        }
+
+        $this->limits->checkInput($context->input);
     }
 
     protected function ensureActiveContextCompatible(string $executionMode): void

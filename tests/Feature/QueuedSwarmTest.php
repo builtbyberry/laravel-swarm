@@ -93,6 +93,18 @@ test('queue fails when active runtime context persistence is disabled', function
         ->toThrow(SwarmException::class, 'Queued and durable swarms require active runtime context persistence so workers can continue or recover the run.');
 });
 
+test('queue rejects explicit run contexts that exceed configured input payload limits', function () {
+    config()->set('swarm.limits.max_input_bytes', 80);
+
+    $context = RunContext::from([
+        'input' => 'tiny',
+        'data' => ['large' => str_repeat('x', 120)],
+    ], 'oversized-queued-context-run-id');
+
+    expect(fn () => FakeSequentialSwarm::make()->queue($context))
+        ->toThrow(SwarmException::class, 'Swarm input payload is');
+});
+
 test('queued swarm jobs can execute with a preserved run context', function () {
     $context = RunContext::from([
         'input' => 'queued-task',

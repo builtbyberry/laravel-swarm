@@ -234,8 +234,8 @@ do not put secrets, raw prompts, or provider payloads in it.
 
 ## Payload Limits
 
-Laravel Swarm can reject or truncate large captured payloads before they are
-written to history, artifacts, or lifecycle events:
+Laravel Swarm can reject or truncate large payloads before they are written to
+persisted context, history, artifacts, or lifecycle events:
 
 ```php
 'limits' => [
@@ -246,14 +246,23 @@ written to history, artifacts, or lifecycle events:
 ```
 
 Input limits are checked before `run()`, `queue()`, `stream()`, or
-`dispatchDurable()` starts execution. Output limits apply to captured output
-surfaces. If output capture is disabled, output limit checks do not run because
-Laravel Swarm persists and emits `[redacted]` instead of the provider output.
+`dispatchDurable()` starts execution. Queued and durable dispatches, and
+explicit `RunContext` values in any execution mode, check the serialized runtime
+context payload so large data, metadata, or artifacts cannot bypass the
+configured input limit.
+
+Output limits apply to captured output surfaces. If output capture is disabled,
+output limit checks do not run because Laravel Swarm persists and emits
+`[redacted]` instead of the provider output.
 
 The default limit values are `null`, which keeps existing behavior. When a
 limit is configured, the default overflow strategy is `fail`. Truncation is
 opt-in and adds metadata such as `output_truncated`, `output_original_bytes`,
 and `output_stored_bytes` to the persisted step or completion record.
+
+Payload limits are storage and event guardrails. They do not hard-cancel an
+in-flight provider request, limit third-party SDK buffering, or cap the
+temporary PHP memory used while an agent response is being produced.
 
 ## Custom Table Names
 

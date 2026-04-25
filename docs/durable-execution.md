@@ -171,6 +171,10 @@ monitoring from day one. Parallel and hierarchical swarms remain supported, but
 they have stricter container-resolution, concurrency, provider-rate-limit, and
 cost constraints.
 
+This is also the recommended posture for an initial Rimsys Intelligence pilot:
+sequential durable execution, conservative capture settings, lower-sensitivity
+content, short retention, and database growth monitoring from the first run.
+
 Durable recovery depends on the scheduler. If `swarm:recover` is not scheduled,
 a run can stay `running` after a worker crashes or exits between checkpointing a
 step and dispatching the next job. Manual recovery is possible with

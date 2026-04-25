@@ -240,9 +240,29 @@ test('output payload limits can truncate persisted and emitted output', function
     expect($history['metadata'])->toHaveKey('output_truncated', true);
 
     Event::assertDispatched(SwarmStepCompleted::class, fn (SwarmStepCompleted $event): bool => $event->output === 'research'
+        && $event->artifacts[0]->content === 'research'
         && $event->metadata['output_truncated'] === true);
     Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event): bool => $event->output === 'editor-o'
         && $event->metadata['output_truncated'] === true);
+});
+
+test('output payload truncation preserves valid utf8 text', function () {
+    config()->set('swarm.limits.max_output_bytes', 5);
+    config()->set('swarm.limits.overflow', 'truncate');
+    FakeResearcher::fake(['ééé']);
+    Event::fake();
+
+    $response = FakeSequentialSwarm::make()->run('utf8-truncate-task');
+    $history = app(RunHistoryStore::class)->find($response->metadata['run_id']);
+
+    expect($history['steps'][0]['output'])->toBe('éé');
+    expect(strlen($history['steps'][0]['output']))->toBe(4);
+    expect(preg_match('//u', $history['steps'][0]['output']))->toBe(1);
+
+    Event::assertDispatched(SwarmStepCompleted::class, fn (SwarmStepCompleted $event): bool => $event->output === 'éé'
+        && $event->artifacts[0]->content === 'éé'
+        && $event->metadata['output_original_bytes'] === 6
+        && $event->metadata['output_stored_bytes'] === 4);
 });
 
 test('active context capture can redact runtime context without redacting history capture', function () {

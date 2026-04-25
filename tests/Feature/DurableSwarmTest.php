@@ -204,6 +204,22 @@ test('dispatch durable fails when active runtime context persistence is disabled
         ->and(DB::table('swarm_durable_runs')->count())->toBe(0);
 });
 
+test('dispatch durable rejects explicit run contexts that exceed configured input payload limits before writing state', function () {
+    config()->set('swarm.limits.max_input_bytes', 80);
+
+    $context = RunContext::from([
+        'input' => 'tiny',
+        'metadata' => ['large' => str_repeat('x', 120)],
+    ], 'oversized-durable-context-run-id');
+
+    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable($context))
+        ->toThrow(SwarmException::class, 'Swarm input payload is');
+
+    expect(DB::table('swarm_run_histories')->count())->toBe(0)
+        ->and(DB::table('swarm_contexts')->count())->toBe(0)
+        ->and(DB::table('swarm_durable_runs')->count())->toBe(0);
+});
+
 test('dispatch durable rejects invalid step timeout before writing state', function (int $stepTimeout) {
     config()->set('swarm.durable.step_timeout', $stepTimeout);
 

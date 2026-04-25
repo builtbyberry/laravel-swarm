@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use JsonException;
 
 class SwarmPayloadLimits
 {
@@ -17,6 +18,17 @@ class SwarmPayloadLimits
     public function checkInput(string $input): void
     {
         $this->check($input, 'input', $this->configuredBytes('max_input_bytes'));
+    }
+
+    public function checkContextInput(RunContext $context): void
+    {
+        try {
+            $payload = json_encode($context->toQueuePayload(), JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw new SwarmException('Swarm input context payload must be plain data that can be encoded as JSON.', previous: $exception);
+        }
+
+        $this->check($payload, 'input', $this->configuredBytes('max_input_bytes'));
     }
 
     public function output(string $output): PayloadLimitResult
@@ -70,10 +82,12 @@ class SwarmPayloadLimits
         $overflow = (string) $this->config->get('swarm.limits.overflow', 'fail');
 
         if ($overflow === 'truncate') {
-            return new PayloadLimitResult(substr($payload, 0, $limit), [
+            $truncated = $this->truncateUtf8($payload, $limit);
+
+            return new PayloadLimitResult($truncated, [
                 "{$kind}_truncated" => true,
                 "{$kind}_original_bytes" => $bytes,
-                "{$kind}_stored_bytes" => $limit,
+                "{$kind}_stored_bytes" => strlen($truncated),
             ]);
         }
 
@@ -99,5 +113,20 @@ class SwarmPayloadLimits
         }
 
         return $bytes;
+    }
+
+    protected function truncateUtf8(string $payload, int $limit): string
+    {
+        if (function_exists('mb_strcut')) {
+            return mb_strcut($payload, 0, $limit, 'UTF-8');
+        }
+
+        $truncated = substr($payload, 0, $limit);
+
+        while ($truncated !== '' && preg_match('//u', $truncated) !== 1) {
+            $truncated = substr($truncated, 0, -1);
+        }
+
+        return $truncated;
     }
 }

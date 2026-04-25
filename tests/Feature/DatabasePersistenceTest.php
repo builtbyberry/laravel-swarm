@@ -16,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -421,6 +422,106 @@ test('database run history store reads legacy inline steps when normalized rows 
     ]);
 
     expect(app(DatabaseRunHistoryStore::class)->find('legacy-steps-run-id')['steps'])->toBe([$legacyStep]);
+});
+
+test('database run history store merges legacy inline steps with normalized step rows', function () {
+    $now = Carbon::now('UTC');
+    $legacyStep = [
+        'agent_class' => FakeResearcher::class,
+        'input' => 'legacy-input',
+        'output' => 'legacy-output',
+        'artifacts' => [],
+        'metadata' => ['index' => 0],
+    ];
+    $staleInlineStep = [
+        'agent_class' => FakeWriter::class,
+        'input' => 'stale-input',
+        'output' => 'stale-output',
+        'artifacts' => [],
+        'metadata' => ['index' => 1],
+    ];
+    $normalizedStep = [
+        'agent_class' => FakeEditor::class,
+        'input' => 'normalized-input',
+        'output' => 'normalized-output',
+        'artifacts' => [],
+        'metadata' => ['index' => 1],
+    ];
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'mixed-steps-run-id',
+        'swarm_class' => FakeSequentialSwarm::class,
+        'topology' => 'sequential',
+        'status' => 'completed',
+        'context' => json_encode(RunContext::from('legacy-input', 'mixed-steps-run-id')->toArray()),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([$legacyStep, $staleInlineStep]),
+        'output' => 'normalized-output',
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => $now,
+        'expires_at' => $now->copy()->addMinute(),
+        'execution_token' => null,
+        'leased_until' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    DB::table('swarm_run_steps')->insert([
+        'run_id' => 'mixed-steps-run-id',
+        'step_index' => 1,
+        'agent_class' => $normalizedStep['agent_class'],
+        'input' => $normalizedStep['input'],
+        'output' => $normalizedStep['output'],
+        'artifacts' => json_encode($normalizedStep['artifacts']),
+        'metadata' => json_encode($normalizedStep['metadata']),
+        'expires_at' => $now->copy()->addMinute(),
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    expect(app(DatabaseRunHistoryStore::class)->find('mixed-steps-run-id')['steps'])->toBe([
+        $legacyStep,
+        $normalizedStep,
+    ]);
+});
+
+test('database run history store rolls back history updates when normalized step insert fails', function () {
+    $history = app(DatabaseRunHistoryStore::class);
+    $context = RunContext::from('atomic-history-task', 'atomic-history-run-id');
+
+    $history->start('atomic-history-run-id', 'ExampleSwarm', 'sequential', $context, [], 60);
+    $history->recordStep('atomic-history-run-id', new SwarmStep(
+        agentClass: FakeEditor::class,
+        input: 'atomic-history-task',
+        output: 'first-output',
+        metadata: ['index' => 0],
+    ), 60);
+
+    $expiresAt = DB::table('swarm_run_histories')->where('run_id', 'atomic-history-run-id')->value('expires_at');
+
+    expect(fn () => $history->recordStep('atomic-history-run-id', new SwarmStep(
+        agentClass: FakeWriter::class,
+        input: 'atomic-history-task',
+        output: 'duplicate-index-output',
+        metadata: ['index' => 0],
+    ), 3600))->toThrow(QueryException::class);
+
+    expect(DB::table('swarm_run_histories')->where('run_id', 'atomic-history-run-id')->value('expires_at'))->toBe($expiresAt);
+    expect(DB::table('swarm_run_steps')->where('run_id', 'atomic-history-run-id')->count())->toBe(1);
+});
+
+test('database run history store requires explicit integer indexes for normalized steps', function () {
+    $history = app(DatabaseRunHistoryStore::class);
+    $context = RunContext::from('missing-index-task', 'missing-index-run-id');
+
+    $history->start('missing-index-run-id', 'ExampleSwarm', 'sequential', $context, [], 60);
+
+    expect(fn () => $history->recordStep('missing-index-run-id', new SwarmStep(
+        agentClass: FakeEditor::class,
+        input: 'missing-index-task',
+        output: 'first-output',
+    ), 60))->toThrow(SwarmException::class, 'Normalized database run history steps require an integer [index] metadata value.');
 });
 
 test('database run history store redacts failure messages when capture is disabled', function () {

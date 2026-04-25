@@ -103,15 +103,17 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
         if ($this->hasNormalizedStepTable()) {
-            $updated = $this->update($runId, [
-                'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
-            ], $executionToken, $leaseSeconds);
+            $this->connection->transaction(function () use ($runId, $step, $ttlSeconds, $executionToken, $leaseSeconds): void {
+                $updated = $this->update($runId, [
+                    'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+                ], $executionToken, $leaseSeconds);
 
-            if ($executionToken !== null && $updated === 0) {
-                throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
-            }
+                if ($executionToken !== null && $updated === 0) {
+                    throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
+                }
 
-            $this->stepTable()->insert($this->stepPayload($runId, $step, $ttlSeconds));
+                $this->stepTable()->insert($this->stepPayload($runId, $step, $ttlSeconds));
+            });
 
             return;
         }
@@ -298,11 +300,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
 
     protected function mapRecord(object $record): array
     {
-        $steps = $this->normalizedSteps($record->run_id);
-
-        if ($steps === []) {
-            $steps = $this->decodeJson($record->steps, []);
-        }
+        $steps = $this->stepsForRecord($record);
 
         return [
             'run_id' => $record->run_id,
@@ -474,6 +472,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             ->orderBy('id')
             ->get()
             ->map(fn (object $record): array => [
+                'step_index' => (int) $record->step_index,
                 'agent_class' => $record->agent_class,
                 'input' => $record->input,
                 'output' => $record->output,
@@ -490,11 +489,15 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     {
         $timestamp = Carbon::now('UTC');
         $payload = $step->toArray();
-        $stepIndex = $step->metadata['index'] ?? $this->nextStepIndex($runId);
+        $stepIndex = $step->metadata['index'] ?? null;
+
+        if (! is_int($stepIndex)) {
+            throw new SwarmException('Normalized database run history steps require an integer [index] metadata value.');
+        }
 
         return [
             'run_id' => $runId,
-            'step_index' => is_int($stepIndex) ? $stepIndex : $this->nextStepIndex($runId),
+            'step_index' => $stepIndex,
             'agent_class' => $payload['agent_class'],
             'input' => $payload['input'],
             'output' => $payload['output'],
@@ -506,8 +509,40 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         ];
     }
 
-    protected function nextStepIndex(string $runId): int
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    protected function stepsForRecord(object $record): array
     {
-        return (int) $this->stepTable()->where('run_id', $runId)->count();
+        $steps = [];
+
+        foreach ($this->decodeJson($record->steps, []) as $step) {
+            if (! is_array($step)) {
+                continue;
+            }
+
+            $steps[$this->stepSortIndex($step, count($steps))] = $step;
+        }
+
+        foreach ($this->normalizedSteps($record->run_id) as $step) {
+            $stepIndex = $step['step_index'];
+            unset($step['step_index']);
+
+            $steps[$stepIndex] = $step;
+        }
+
+        ksort($steps);
+
+        return array_values($steps);
+    }
+
+    /**
+     * @param  array<string, mixed>  $step
+     */
+    protected function stepSortIndex(array $step, int $fallback): int
+    {
+        $index = $step['metadata']['index'] ?? null;
+
+        return is_int($index) ? $index : $fallback;
     }
 }
