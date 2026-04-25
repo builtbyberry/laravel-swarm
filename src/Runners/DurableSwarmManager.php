@@ -248,6 +248,7 @@ class DurableSwarmManager
                 durationMs: $this->durationMillisecondsFor($runId),
                 metadata: $context->metadata,
                 executionMode: 'durable',
+                exceptionClass: $exception::class,
             ));
 
             return;
@@ -334,6 +335,7 @@ class DurableSwarmManager
                 durationMs: $this->durationMillisecondsFor($runId),
                 metadata: $context->metadata,
                 executionMode: 'durable',
+                exceptionClass: $exception::class,
             ));
 
             throw $exception;

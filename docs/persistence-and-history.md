@@ -168,6 +168,7 @@ You can disable input or output capture in `config/swarm.php`:
 'capture' => [
     'inputs' => false,
     'outputs' => false,
+    'artifacts' => false,
 ],
 ```
 
@@ -176,6 +177,7 @@ Or with environment variables:
 ```bash
 SWARM_CAPTURE_INPUTS=false
 SWARM_CAPTURE_OUTPUTS=false
+SWARM_CAPTURE_ARTIFACTS=false
 ```
 
 When input capture is disabled, event payloads and persisted step history keep
@@ -188,15 +190,21 @@ their normal shape but replace captured output fields with `[redacted]`.
 Laravel Swarm also skips automatic `agent_output` artifact persistence and
 redacts terminal context output fields such as `last_output`.
 
+When artifact capture is disabled, Laravel Swarm keeps captured input and output
+text according to the input/output capture settings, but skips automatic
+`agent_output` artifact persistence and omits artifact payloads from lifecycle
+events and persisted context snapshots.
+
 Capture settings do not change agent handoff behavior and do not change the
 `SwarmResponse` returned to the current PHP process. They control what Laravel
 Swarm emits and persists for later inspection.
 
 When either input or output capture is disabled, failed run history keeps the
 original exception class but stores `[redacted]` as the exception message.
-`SwarmFailed` events receive the same redacted exception message. The exception
-thrown back to the caller remains the original exception so application control
-flow and logs outside Laravel Swarm are not altered.
+`SwarmFailed` events receive the same redacted exception message and expose the
+original exception class on `exceptionClass`. The exception thrown back to the
+caller remains the original exception so application control flow and logs
+outside Laravel Swarm are not altered.
 
 Queued and durable execution may keep raw context in the runtime context store
 while a run is active because workers need that state to continue the workflow.

@@ -184,6 +184,7 @@ class SwarmRunner
                 durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                 metadata: $context->metadata,
                 executionMode: $executionMode,
+                exceptionClass: $exception::class,
             ));
 
             throw $exception;
@@ -291,6 +292,7 @@ class SwarmRunner
                     durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $context->metadata,
                     executionMode: self::EXECUTION_MODE_STREAM,
+                    exceptionClass: $exception::class,
                 ));
 
                 throw $exception;

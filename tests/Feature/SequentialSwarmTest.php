@@ -175,6 +175,28 @@ test('capture flags redact event payloads and persisted automatic artifacts whil
         && $event->artifacts === []);
 });
 
+test('artifact capture can be disabled independently from output capture', function () {
+    config()->set('swarm.capture.artifacts', false);
+    Event::fake();
+
+    $response = FakeSequentialSwarm::make()->run('artifact-sensitive-task');
+    $storedArtifacts = app(ArtifactRepository::class)->all($response->metadata['run_id']);
+    $storedHistory = app(RunHistoryStore::class)->find($response->metadata['run_id']);
+
+    expect($response->output)->toBe('editor-out');
+    expect($response->artifacts)->toBe([]);
+    expect($storedArtifacts)->toBe([]);
+    expect($storedHistory['output'])->toBe('editor-out');
+    expect($storedHistory['artifacts'])->toBe([]);
+    expect($storedHistory['steps'][0]['output'])->toBe('research-out');
+    expect($storedHistory['steps'][0]['artifacts'])->toBe([]);
+
+    Event::assertDispatched(SwarmStepCompleted::class, fn (SwarmStepCompleted $event): bool => $event->output === 'research-out'
+        && $event->artifacts === []);
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event): bool => $event->output === 'editor-out'
+        && $event->artifacts === []);
+});
+
 test('capture flags redact persisted failure messages and failure events while preserving thrown exception', function () {
     config()->set('swarm.capture.inputs', false);
     config()->set('swarm.capture.outputs', false);
@@ -191,6 +213,8 @@ test('capture flags redact persisted failure messages and failure events while p
     $history = app(RunHistoryStore::class)->find($failedEvent->runId);
 
     expect($failedEvent->exception->getMessage())->toBe('[redacted]');
+    expect($failedEvent->exception)->toBeInstanceOf(SwarmException::class);
+    expect($failedEvent->exceptionClass)->toBe(RuntimeException::class);
     expect($history['error'])->toBe([
         'message' => '[redacted]',
         'class' => RuntimeException::class,
@@ -210,6 +234,7 @@ test('capture enabled preserves persisted failure messages', function () {
     $failedEvent = Event::dispatched(SwarmFailed::class)->first()[0];
     $history = app(RunHistoryStore::class)->find($failedEvent->runId);
 
+    expect($failedEvent->exceptionClass)->toBe(RuntimeException::class);
     expect($history['error'])->toBe([
         'message' => 'Queued swarm failed.',
         'class' => RuntimeException::class,

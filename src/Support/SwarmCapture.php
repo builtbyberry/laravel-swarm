@@ -45,12 +45,12 @@ class SwarmCapture
      */
     public function artifacts(array $artifacts): array
     {
-        return $this->capturesOutputs() ? $artifacts : [];
+        return $this->capturesArtifacts() ? $artifacts : [];
     }
 
     public function context(RunContext $context): RunContext
     {
-        if ($this->capturesInputs() && $this->capturesOutputs()) {
+        if ($this->capturesInputs() && $this->capturesOutputs() && $this->capturesArtifacts()) {
             return $context;
         }
 
@@ -79,7 +79,7 @@ class SwarmCapture
 
     public function response(SwarmResponse $response): SwarmResponse
     {
-        if ($this->capturesInputs() && $this->capturesOutputs()) {
+        if ($this->capturesInputs() && $this->capturesOutputs() && $this->capturesArtifacts()) {
             return $response;
         }
 
@@ -95,7 +95,7 @@ class SwarmCapture
 
     public function step(SwarmStep $step): SwarmStep
     {
-        if ($this->capturesInputs() && $this->capturesOutputs()) {
+        if ($this->capturesInputs() && $this->capturesOutputs() && $this->capturesArtifacts()) {
             return $step;
         }
 
@@ -116,6 +116,11 @@ class SwarmCapture
     public function capturesOutputs(): bool
     {
         return (bool) $this->config->get('swarm.capture.outputs', true);
+    }
+
+    public function capturesArtifacts(): bool
+    {
+        return $this->capturesOutputs() && (bool) $this->config->get('swarm.capture.artifacts', true);
     }
 
     public function capturesFailures(): bool

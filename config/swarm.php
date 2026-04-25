@@ -20,6 +20,7 @@ return [
     'capture' => [
         'inputs' => env('SWARM_CAPTURE_INPUTS', true),
         'outputs' => env('SWARM_CAPTURE_OUTPUTS', true),
+        'artifacts' => env('SWARM_CAPTURE_ARTIFACTS', true),
     ],
 
     'context' => [

@@ -19,5 +19,10 @@ class SwarmFailed
         public readonly int $durationMs,
         public readonly array $metadata = [],
         public readonly ?string $executionMode = null,
-    ) {}
+        ?string $exceptionClass = null,
+    ) {
+        $this->exceptionClass = $exceptionClass ?? $exception::class;
+    }
+
+    public readonly string $exceptionClass;
 }

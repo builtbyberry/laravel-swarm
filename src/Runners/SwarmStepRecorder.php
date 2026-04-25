@@ -87,7 +87,7 @@ class SwarmStepRecorder
                 ->mergeMetadata($contextMetadata);
         }
 
-        if ($this->capture->capturesOutputs()) {
+        if ($this->capture->capturesArtifacts()) {
             $state->context->addArtifact($artifact);
         }
 
@@ -99,7 +99,7 @@ class SwarmStepRecorder
             $state->contextStore->put($state->context, $state->ttlSeconds);
         }
 
-        if ($storeArtifacts && $this->capture->capturesOutputs()) {
+        if ($storeArtifacts && $this->capture->capturesArtifacts()) {
             $this->verifyOwnership($state);
             $state->artifactRepository->storeMany($state->context->runId, [$artifact], $state->ttlSeconds);
         }
