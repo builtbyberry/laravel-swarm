@@ -9,7 +9,9 @@ This example teaches:
 
 - `stream()` yields step and token events;
 - Laravel 13's `eventStream()` can send those events to the browser;
-- streaming is for live progress, not durable storage.
+- streaming is for live progress, not durable storage;
+- use lifecycle events or persisted history when the app needs inspection after
+  the request ends.
 
 ## Stream From A Route
 
@@ -37,3 +39,9 @@ Route::get('/article-stream', function () {
 - Use persistence if the application needs inspection after the request ends.
 - Use capture flags when streamed events may include sensitive prompts or
   outputs.
+- A stream is a request/response experience. If the browser also needs a stable
+  run detail page, use lifecycle events and a run inspector endpoint keyed by
+  the persisted `run_id`.
+- `eventStream()` is the Laravel 13-friendly default. If your frontend needs
+  custom SSE framing, headers, or `[DONE]` messages, Laravel's normal
+  `response()->stream()` is also appropriate.

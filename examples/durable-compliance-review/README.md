@@ -14,6 +14,7 @@ This example covers:
 - `SwarmCompleted` / `SwarmFailed` event handling
 - scheduled `swarm:recover`
 - scheduled `swarm:prune`
+- operator pause, resume, cancel, and recover controls
 
 **Requires:**
 
@@ -44,6 +45,10 @@ Run the package migrations before dispatching durable work:
 php artisan migrate
 php artisan queue:work
 ```
+
+Durable work still runs on Laravel queues. Keep `SWARM_DURABLE_STEP_TIMEOUT`,
+your worker timeout, and the queue connection's `retry_after` comfortably above
+the provider call duration you expect for one agent step.
 
 ## Files To Create
 
@@ -211,6 +216,54 @@ Event::listen(SwarmFailed::class, function (SwarmFailed $event): void {
 ```
 
 Durable responses do not use queued `then()` / `catch()` callbacks.
+
+## Operator Controls
+
+Use `DurableSwarmManager` when your application needs pause, resume, cancel, or
+manual recovery buttons. These controls are step-boundary controls; they do not
+hard-cancel an in-flight provider request.
+
+```php
+use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
+use Illuminate\Http\JsonResponse;
+
+public function pause(string $runId, DurableSwarmManager $manager): JsonResponse
+{
+    $manager->pause($runId);
+
+    return response()->json([
+        'run_id' => $runId,
+        'status' => 'pause_requested',
+    ]);
+}
+
+public function resume(string $runId, DurableSwarmManager $manager): JsonResponse
+{
+    $manager->resume($runId);
+
+    return response()->json([
+        'run_id' => $runId,
+        'status' => 'resume_requested',
+    ]);
+}
+
+public function cancel(string $runId, DurableSwarmManager $manager): JsonResponse
+{
+    $manager->cancel($runId);
+
+    return response()->json([
+        'run_id' => $runId,
+        'status' => 'cancel_requested',
+    ]);
+}
+
+public function recover(DurableSwarmManager $manager): JsonResponse
+{
+    return response()->json([
+        'run_ids' => $manager->recover(limit: 10),
+    ]);
+}
+```
 
 ## Scheduler
 

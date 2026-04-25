@@ -39,6 +39,13 @@ use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmStepDurations;
 
 `SwarmRuns` records run totals, failures, failure rate inputs, topology usage, and average run duration. `SwarmStepDurations` records average step duration by swarm, topology, and agent.
 
+Pulse is the aggregate observability layer. If your browser needs a live
+operations feed for individual runs, listen to Laravel Swarm lifecycle events
+and broadcast your own application event.
+
+See [Operations Dashboard](../examples/operations-dashboard/README.md) for that
+run-level pattern.
+
 ## Add The Cards
 
 Publish Pulse's dashboard view if you have not already:

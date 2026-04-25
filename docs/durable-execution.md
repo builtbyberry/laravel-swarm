@@ -125,6 +125,12 @@ jobs:
 php artisan queue:work
 ```
 
+Durable jobs still obey Laravel's queue worker and connection settings. Keep
+the worker timeout and queue connection `retry_after` comfortably above the
+longest expected provider call for one durable step. If the queue visibility
+window is shorter than the provider call, another worker may see the job as
+available before the current worker finishes.
+
 Finally, schedule recovery so checkpointed durable runs are supervised if a
 worker exits after saving state but before dispatching the next step:
 

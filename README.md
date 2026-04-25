@@ -282,7 +282,7 @@ setup should stay cheap and side-effect free in normal Laravel style.
 
 Database-backed queued runs are also prune-safe while active. A `running` run keeps its history, context, and artifact rows until it reaches a terminal state, even when their retention window has elapsed.
 
-The practical boundary to keep in mind is the same one Laravel developers already know from long-running queue jobs: a single queued run is still bounded by worker timeouts, queue visibility windows, deploy interrupts, and other normal job-lifecycle limits. If one provider call or one swarm run regularly stretches beyond that envelope, that is a sign the lightweight queue mode is no longer the right operational model for that workflow.
+The practical boundary to keep in mind is the same one Laravel developers already know from long-running queue jobs: a single queued run is still bounded by worker timeouts, queue visibility windows, deploy interrupts, and other normal job-lifecycle limits. Keep the worker timeout and queue connection `retry_after` comfortably above the provider calls and total swarm duration you expect. If one provider call or one swarm run regularly stretches beyond that envelope, that is a sign the lightweight queue mode is no longer the right operational model for that workflow.
 
 Pass structured task data the same way you would with `run()`:
 
@@ -505,6 +505,7 @@ To customize how swarm state is stored, bind your own implementations against th
 - [Testing](docs/testing.md)
 - [Hierarchical Routing](docs/hierarchical-routing.md)
 - [Pulse](docs/pulse.md)
+- [Examples](examples/README.md)
 
 ## Local Development
 

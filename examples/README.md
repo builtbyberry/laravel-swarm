@@ -19,13 +19,17 @@ Read the examples in this order:
    progress from a request.
 4. [Testing Swarms](testing-swarms/README.md): fake swarms for app tests and
    assert persisted runs when history matters.
-5. [Parallel Research Swarm](parallel-research-swarm/README.md): run independent
+5. [Run Inspector](run-inspector/README.md): build the status endpoint your UI
+   uses after a queued, streamed, synchronous, or durable run starts.
+6. [Parallel Research Swarm](parallel-research-swarm/README.md): run independent
    container-resolvable agents at the same time.
-6. [Hierarchical Support Triage](hierarchical-support-triage/README.md): let a
+7. [Hierarchical Support Triage](hierarchical-support-triage/README.md): let a
    coordinator return a validated route plan for specialist workers.
-7. [Durable Compliance Review](durable-compliance-review/README.md): checkpoint
+8. [Durable Compliance Review](durable-compliance-review/README.md): checkpoint
    a sequential workflow one agent step per job.
-8. [Privacy Capture](privacy-capture/README.md): configure capture flags for
+9. [Operations Dashboard](operations-dashboard/README.md): record lifecycle
+   events, broadcast app-owned updates, and pair them with Pulse metrics.
+10. [Privacy Capture](privacy-capture/README.md): configure capture flags for
    sensitive prompts and outputs.
 
 ## Topology Decision Table
@@ -36,6 +40,8 @@ Read the examples in this order:
 | Independent agents should work at the same time | Parallel | Agents receive the original input and must be container-resolvable by class. |
 | A coordinator should decide which specialists run | Hierarchical | The first agent returns a route plan; worker classes after it must be unique. |
 | A long workflow should survive retries without replaying everything | Durable | Sequential only; one agent step is checkpointed per queued job. |
+| A browser needs a status page after dispatch | Run inspector | Use `run_id` to compose history, context, artifacts, durable state, and pending records. |
+| Operators need live run visibility | Operations dashboard | Store lifecycle event previews and broadcast your own application event. |
 
 ## Contracts To Keep
 
@@ -45,3 +51,5 @@ Read the examples in this order:
 - Hierarchical worker classes must be unique after the coordinator.
 - Durable execution requires database persistence and sequential topology.
 - Prefer lifecycle events over queued `then()` / `catch()` callbacks.
+- For queued or durable swarms, size queue `retry_after` and worker timeouts for
+  your provider calls and total swarm duration.

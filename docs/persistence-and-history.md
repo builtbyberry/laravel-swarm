@@ -54,6 +54,24 @@ $completed = SwarmHistory::forSwarm(ArticlePipeline::class)
     ->get();
 ```
 
+## Application Run Inspector
+
+Most production UIs need more than a history query. A useful run detail page
+usually combines:
+
+- run history for status, output, steps, usage, timing, and failure details
+- context for the current or terminal run snapshot
+- artifacts for stored step outputs and explicit application artifacts
+- durable state when the run came from `dispatchDurable()`
+- a short-lived pending record for queued runs that have not started yet
+
+Laravel Swarm intentionally keeps those stores focused instead of shipping a
+package-owned dashboard API. Compose them in application code into the stable
+JSON shape your UI needs.
+
+See [Run Inspector](../examples/run-inspector/README.md) for a controller and
+service example.
+
 ## Inspecting Run History In The Console
 
 Laravel Swarm also includes read-only inspection commands:
