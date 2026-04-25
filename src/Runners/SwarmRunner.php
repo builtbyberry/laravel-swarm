@@ -32,6 +32,7 @@ use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
+use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Generator;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -68,6 +69,7 @@ class SwarmRunner
         protected HierarchicalRunner $hierarchical,
         protected DurableSwarmManager $durable,
         protected SwarmCapture $capture,
+        protected SwarmPayloadLimits $limits,
     ) {}
 
     public function run(Swarm $swarm, string|array|RunContext $task): SwarmResponse
@@ -92,6 +94,7 @@ class SwarmRunner
             ? $this->resolveQueueLeaseSeconds($timeoutSeconds)
             : null;
         $context = RunContext::fromTask($task);
+        $this->limits->checkInput($context->input);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
@@ -191,16 +194,17 @@ class SwarmRunner
         }
 
         $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
+        $capturedResponse = $this->limits->response($this->capture->response($response));
         $this->contextStore->put($this->capture->context($context), $contextTtl);
-        $this->historyStore->complete($context->runId, $this->capture->response($response), $contextTtl, $state->executionToken, $state->leaseSeconds);
+        $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
         $this->events->dispatch(new SwarmCompleted(
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $topology->value,
-            output: $this->capture->output($response->output),
+            output: $capturedResponse->output,
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-            metadata: $response->metadata,
-            artifacts: $this->capture->artifacts($response->artifacts),
+            metadata: $capturedResponse->metadata,
+            artifacts: $capturedResponse->artifacts,
             executionMode: $executionMode,
         ));
 
@@ -223,6 +227,7 @@ class SwarmRunner
         $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
         $context = RunContext::fromTask($task);
+        $this->limits->checkInput($context->input);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
@@ -269,16 +274,17 @@ class SwarmRunner
                     usage: is_array($context->metadata['usage'] ?? null) ? $context->metadata['usage'] : [],
                 ), $context, $state->topology);
 
+                $capturedResponse = $this->limits->response($this->capture->response($response));
                 $this->contextStore->put($this->capture->context($context), $contextTtl);
-                $this->historyStore->complete($context->runId, $this->capture->response($response), $contextTtl);
+                $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
                 $this->events->dispatch(new SwarmCompleted(
                     runId: $context->runId,
                     swarmClass: $swarm::class,
                     topology: $state->topology,
-                    output: $this->capture->output($response->output),
+                    output: $capturedResponse->output,
                     durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-                    metadata: $response->metadata,
-                    artifacts: $this->capture->artifacts($response->artifacts),
+                    metadata: $capturedResponse->metadata,
+                    artifacts: $capturedResponse->artifacts,
                     executionMode: self::EXECUTION_MODE_STREAM,
                 ));
             } catch (\Throwable $exception) {
@@ -307,6 +313,7 @@ class SwarmRunner
         $this->ensureContainerResolvable($swarm);
 
         $context = RunContext::fromTask($task);
+        $this->limits->checkInput($context->input);
         $pendingDispatch = new PendingDispatch(new InvokeSwarm($swarm::class, $context->toQueuePayload()));
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
@@ -332,6 +339,7 @@ class SwarmRunner
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
         $totalSteps = min(count($swarm->agents()), $this->resolveMaxAgentExecutions($swarm));
         $context = RunContext::fromTask($task);
+        $this->limits->checkInput($context->input);
         $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps);
 
         return new DurableSwarmResponse(new PendingDispatch($start->job), $this->durable, $start->runId);

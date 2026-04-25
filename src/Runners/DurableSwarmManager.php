@@ -25,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
+use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
@@ -46,6 +47,7 @@ class DurableSwarmManager
         protected SequentialRunner $sequential,
         protected Connection $connection,
         protected SwarmCapture $capture,
+        protected SwarmPayloadLimits $limits,
     ) {}
 
     /**
@@ -58,6 +60,8 @@ class DurableSwarmManager
 
     public function start(Swarm $swarm, RunContext $context, Topology $topology, int $timeoutSeconds, int $totalSteps): DurableSwarmStart
     {
+        $this->limits->checkInput($context->input);
+
         return $this->connection->transaction(function () use ($swarm, $context, $topology, $timeoutSeconds, $totalSteps): DurableSwarmStart {
             $contextTtl = $this->ttlSeconds();
             $connection = $this->config->get('swarm.durable.queue.connection');
@@ -394,9 +398,10 @@ class DurableSwarmManager
             );
 
             try {
+                $capturedResponse = $this->limits->response($this->capture->response($response));
                 $this->durableRuns->markCompleted($runId, $token);
                 $this->contextStore->put($this->capture->context($context), $this->ttlSeconds());
-                $this->historyStore->complete($runId, $this->capture->response($response), $this->ttlSeconds(), $token, $stepLeaseSeconds);
+                $this->historyStore->complete($runId, $capturedResponse, $this->ttlSeconds(), $token, $stepLeaseSeconds);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -404,10 +409,10 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                output: $this->capture->output($response->output),
+                output: $capturedResponse->output,
                 durationMs: $this->durationMillisecondsFor($runId),
-                metadata: $response->metadata,
-                artifacts: $this->capture->artifacts($response->artifacts),
+                metadata: $capturedResponse->metadata,
+                artifacts: $capturedResponse->artifacts,
                 executionMode: 'durable',
             ));
 

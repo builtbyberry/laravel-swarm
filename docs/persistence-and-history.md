@@ -216,6 +216,29 @@ snapshots, persisted failure messages, and failure event messages. They do not
 redact developer-supplied metadata. Treat metadata as operational data only and
 do not put secrets, raw prompts, or provider payloads in it.
 
+## Payload Limits
+
+Laravel Swarm can reject or truncate large captured payloads before they are
+written to history, artifacts, or lifecycle events:
+
+```php
+'limits' => [
+    'max_input_bytes' => 100_000,
+    'max_output_bytes' => 250_000,
+    'overflow' => 'fail', // or 'truncate'
+],
+```
+
+Input limits are checked before `run()`, `queue()`, `stream()`, or
+`dispatchDurable()` starts execution. Output limits apply to captured output
+surfaces. If output capture is disabled, output limit checks do not run because
+Laravel Swarm persists and emits `[redacted]` instead of the provider output.
+
+The default limit values are `null`, which keeps existing behavior. When a
+limit is configured, the default overflow strategy is `fail`. Truncation is
+opt-in and adds metadata such as `output_truncated`, `output_original_bytes`,
+and `output_stored_bytes` to the persisted step or completion record.
+
 ## Custom Table Names
 
 If you change `swarm.tables.*`, Laravel Swarm will use those table names at

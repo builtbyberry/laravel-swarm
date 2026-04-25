@@ -8,13 +8,16 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Support\PayloadLimitResult;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
+use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 
 class SwarmStepRecorder
 {
     public function __construct(
         protected SwarmCapture $capture,
+        protected SwarmPayloadLimits $limits,
     ) {}
 
     public function started(SwarmExecutionState $state, int $index, string $agentClass, string $input): void
@@ -49,14 +52,19 @@ class SwarmStepRecorder
         bool $includeUsageInMetadata = true,
         ?array $contextUsage = null,
     ): SwarmStep {
+        $limitedOutput = $this->capture->capturesOutputs()
+            ? $this->limits->output($output)
+            : new PayloadLimitResult($this->capture->output($output));
+
         $stepMetadata = array_merge(
             $includeUsageInMetadata ? ['index' => $index, 'usage' => $usage] : ['index' => $index],
             $metadata,
+            $limitedOutput->metadata,
         );
 
         $artifact = new SwarmArtifact(
             name: 'agent_output',
-            content: $output,
+            content: $limitedOutput->value,
             metadata: $stepMetadata,
             stepAgentClass: $agentClass,
         );
@@ -92,7 +100,13 @@ class SwarmStepRecorder
         }
 
         $this->verifyOwnership($state);
-        $state->historyStore->recordStep($state->context->runId, $this->capture->step($step), $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
+        $state->historyStore->recordStep($state->context->runId, $this->capture->step(new SwarmStep(
+            agentClass: $agentClass,
+            input: $input,
+            output: $limitedOutput->value,
+            artifacts: [$artifact],
+            metadata: $stepMetadata,
+        )), $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
 
         if ($storeContext) {
             $this->verifyOwnership($state);
@@ -112,9 +126,9 @@ class SwarmStepRecorder
             index: $index,
             agentClass: $agentClass,
             input: $this->capture->input($input),
-            output: $this->capture->output($output),
+            output: $limitedOutput->value,
             durationMs: $durationMs,
-            metadata: $step->metadata,
+            metadata: $stepMetadata,
             artifacts: $this->capture->artifacts($step->artifacts),
         ));
 

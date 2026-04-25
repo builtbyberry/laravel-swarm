@@ -23,6 +23,12 @@ return [
         'artifacts' => env('SWARM_CAPTURE_ARTIFACTS', true),
     ],
 
+    'limits' => [
+        'max_input_bytes' => env('SWARM_MAX_INPUT_BYTES'),
+        'max_output_bytes' => env('SWARM_MAX_OUTPUT_BYTES'),
+        'overflow' => env('SWARM_LIMIT_OVERFLOW', 'fail'),
+    ],
+
     'context' => [
         'driver' => env('SWARM_CONTEXT_DRIVER'),
         'ttl' => (int) env('SWARM_CONTEXT_TTL', 3600),

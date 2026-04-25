@@ -197,6 +197,54 @@ test('artifact capture can be disabled independently from output capture', funct
         && $event->artifacts === []);
 });
 
+test('input payload limits fail before agent execution', function () {
+    config()->set('swarm.limits.max_input_bytes', 5);
+
+    expect(fn () => FakeSequentialSwarm::make()->run('too-large-input'))
+        ->toThrow(SwarmException::class, 'Swarm input payload is 15 bytes, which exceeds the configured 5 byte limit.');
+
+    FakeResearcher::assertNeverPrompted();
+});
+
+test('output payload limits fail before output persistence', function () {
+    config()->set('swarm.limits.max_output_bytes', 5);
+
+    try {
+        FakeSequentialSwarm::make()->run('output-limit-task');
+        $this->fail('Expected the swarm to fail.');
+    } catch (SwarmException $exception) {
+        expect($exception->getMessage())->toBe('Swarm output payload is 12 bytes, which exceeds the configured 5 byte limit.');
+    }
+
+    $history = app(RunHistoryStore::class)->query(status: 'failed', limit: 1)[0];
+
+    expect($history['steps'])->toBe([]);
+    expect($history['output'])->toBeNull();
+});
+
+test('output payload limits can truncate persisted and emitted output', function () {
+    config()->set('swarm.limits.max_output_bytes', 8);
+    config()->set('swarm.limits.overflow', 'truncate');
+    Event::fake();
+
+    $response = FakeSequentialSwarm::make()->run('truncate-task');
+    $history = app(RunHistoryStore::class)->find($response->metadata['run_id']);
+
+    expect($response->output)->toBe('editor-out');
+    expect($history['steps'][0]['output'])->toBe('research');
+    expect($history['steps'][0]['metadata'])
+        ->toHaveKey('output_truncated', true)
+        ->toHaveKey('output_original_bytes', 12)
+        ->toHaveKey('output_stored_bytes', 8);
+    expect($history['output'])->toBe('editor-o');
+    expect($history['metadata'])->toHaveKey('output_truncated', true);
+
+    Event::assertDispatched(SwarmStepCompleted::class, fn (SwarmStepCompleted $event): bool => $event->output === 'research'
+        && $event->metadata['output_truncated'] === true);
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event): bool => $event->output === 'editor-o'
+        && $event->metadata['output_truncated'] === true);
+});
+
 test('capture flags redact persisted failure messages and failure events while preserving thrown exception', function () {
     config()->set('swarm.capture.inputs', false);
     config()->set('swarm.capture.outputs', false);
