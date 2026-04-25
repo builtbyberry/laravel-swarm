@@ -17,6 +17,11 @@ artifacts attached to the run.
 Persisted run history includes the swarm class, topology, status, steps,
 output, usage, and completion metadata.
 
+With database-backed history, completed steps are stored in the normalized
+`swarm_run_steps` table and assembled back into the same `steps` array returned
+by `SwarmHistory`, `RunHistoryStore::find()`, and console commands. Legacy rows
+that still have inline `steps` JSON remain readable.
+
 When output capture is enabled, Laravel Swarm also creates an automatic
 `agent_output` artifact for each completed agent step. That output can appear in
 several places: the step history, the final history output, the run context's
@@ -254,6 +259,10 @@ and `output_stored_bytes` to the persisted step or completion record.
 
 If you change `swarm.tables.*`, Laravel Swarm will use those table names at
 runtime.
+
+Database history uses both `swarm.tables.history` and
+`swarm.tables.history_steps`. If you customize the history table name, customize
+the normalized step table name as well.
 
 If you publish the package migrations, update the table names there as well so
 your schema matches your runtime configuration.

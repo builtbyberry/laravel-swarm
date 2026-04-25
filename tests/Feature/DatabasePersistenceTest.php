@@ -374,6 +374,8 @@ test('database run history store persists start step completion and failure payl
     expect($stored['usage'])->toBe(['input_tokens' => 10]);
     expect($stored['artifacts'][0]['content'])->toBe('final-output');
     expect($stored['finished_at'])->not->toBeNull();
+    expect(DB::table('swarm_run_steps')->where('run_id', 'history-run-id')->count())->toBe(1);
+    expect(json_decode(DB::table('swarm_run_histories')->where('run_id', 'history-run-id')->value('steps'), true))->toBe([]);
     expect(DB::table('swarm_run_histories')->where('run_id', 'history-run-id')->value('expires_at'))->not->toBeNull();
 
     $history->fail('history-run-id', new Exception('stream failed'), 60);
@@ -386,6 +388,39 @@ test('database run history store persists start step completion and failure payl
 
     expect($history->query(limit: 10)[0]['run_id'])->toBe('history-run-id');
     expect($history->query(status: 'failed', limit: 10)[0]['status'])->toBe('failed');
+});
+
+test('database run history store reads legacy inline steps when normalized rows are absent', function () {
+    $now = Carbon::now('UTC');
+    $legacyStep = [
+        'agent_class' => FakeEditor::class,
+        'input' => 'legacy-input',
+        'output' => 'legacy-output',
+        'artifacts' => [],
+        'metadata' => ['index' => 0],
+    ];
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'legacy-steps-run-id',
+        'swarm_class' => FakeSequentialSwarm::class,
+        'topology' => 'sequential',
+        'status' => 'completed',
+        'context' => json_encode(RunContext::from('legacy-input', 'legacy-steps-run-id')->toArray()),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([$legacyStep]),
+        'output' => 'legacy-output',
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => $now,
+        'expires_at' => $now->copy()->addMinute(),
+        'execution_token' => null,
+        'leased_until' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    expect(app(DatabaseRunHistoryStore::class)->find('legacy-steps-run-id')['steps'])->toBe([$legacyStep]);
 });
 
 test('database run history store redacts failure messages when capture is disabled', function () {
@@ -445,9 +480,24 @@ test('database persistence repositories honor overridden table names when matchi
         $table->timestamps();
     });
 
+    Schema::create('custom_swarm_history_steps', function (Blueprint $table): void {
+        $table->id();
+        $table->string('run_id')->index();
+        $table->unsignedInteger('step_index');
+        $table->string('agent_class');
+        $table->longText('input');
+        $table->longText('output');
+        $table->json('artifacts');
+        $table->json('metadata');
+        $table->timestamp('expires_at')->nullable();
+        $table->timestamps();
+        $table->unique(['run_id', 'step_index']);
+    });
+
     config()->set('swarm.tables.contexts', 'custom_swarm_contexts');
     config()->set('swarm.tables.artifacts', 'custom_swarm_artifacts');
     config()->set('swarm.tables.history', 'custom_swarm_histories');
+    config()->set('swarm.tables.history_steps', 'custom_swarm_history_steps');
 
     $contextStore = app(DatabaseContextStore::class);
     $artifactRepository = app(DatabaseArtifactRepository::class);
@@ -464,10 +514,18 @@ test('database persistence repositories honor overridden table names when matchi
         ),
     ], 60);
     $historyStore->start('custom-table-run', 'ExampleSwarm', 'sequential', $context, ['run_id' => 'custom-table-run'], 60);
+    $historyStore->recordStep('custom-table-run', new SwarmStep(
+        agentClass: FakeEditor::class,
+        input: 'custom-table-task',
+        output: 'custom-step-output',
+        metadata: ['index' => 0],
+    ), 60);
 
     expect($contextStore->find('custom-table-run')['input'])->toBe('custom-table-task');
     expect($artifactRepository->all('custom-table-run')[0]['content'])->toBe('custom-artifact');
     expect($historyStore->find('custom-table-run')['status'])->toBe('running');
+    expect($historyStore->find('custom-table-run')['steps'][0]['output'])->toBe('custom-step-output');
+    expect(DB::table('custom_swarm_history_steps')->where('run_id', 'custom-table-run')->count())->toBe(1);
 });
 
 test('swarm prune removes expired database persistence rows and preserves active rows', function () {
@@ -579,6 +637,45 @@ test('swarm prune removes expired database persistence rows and preserves active
         ],
     ]);
 
+    DB::table('swarm_run_steps')->insert([
+        [
+            'run_id' => 'expired-history',
+            'step_index' => 0,
+            'agent_class' => FakeEditor::class,
+            'input' => 'expired',
+            'output' => 'expired',
+            'artifacts' => json_encode([]),
+            'metadata' => json_encode(['index' => 0]),
+            'expires_at' => $now->copy()->subMinute(),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ],
+        [
+            'run_id' => 'active-history',
+            'step_index' => 0,
+            'agent_class' => FakeEditor::class,
+            'input' => 'active',
+            'output' => 'active',
+            'artifacts' => json_encode([]),
+            'metadata' => json_encode(['index' => 0]),
+            'expires_at' => $now->copy()->addMinute(),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ],
+        [
+            'run_id' => 'running-history',
+            'step_index' => 0,
+            'agent_class' => FakeEditor::class,
+            'input' => 'running',
+            'output' => 'running',
+            'artifacts' => json_encode([]),
+            'metadata' => json_encode(['index' => 0]),
+            'expires_at' => $now->copy()->subMinute(),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ],
+    ]);
+
     Artisan::call('swarm:prune');
 
     expect(DB::table('swarm_contexts')->where('run_id', 'expired-context')->exists())->toBeFalse();
@@ -588,6 +685,9 @@ test('swarm prune removes expired database persistence rows and preserves active
     expect(DB::table('swarm_run_histories')->where('run_id', 'expired-history')->exists())->toBeFalse();
     expect(DB::table('swarm_run_histories')->where('run_id', 'active-history')->exists())->toBeTrue();
     expect(DB::table('swarm_run_histories')->where('run_id', 'running-history')->exists())->toBeTrue();
+    expect(DB::table('swarm_run_steps')->where('run_id', 'expired-history')->exists())->toBeFalse();
+    expect(DB::table('swarm_run_steps')->where('run_id', 'active-history')->exists())->toBeTrue();
+    expect(DB::table('swarm_run_steps')->where('run_id', 'running-history')->exists())->toBeTrue();
 });
 
 test('swarm prune preserves active-run contexts and artifacts and respects custom history tables', function () {

@@ -102,6 +102,20 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
 
     public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
+        if ($this->hasNormalizedStepTable()) {
+            $updated = $this->update($runId, [
+                'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+            ], $executionToken, $leaseSeconds);
+
+            if ($executionToken !== null && $updated === 0) {
+                throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
+            }
+
+            $this->stepTable()->insert($this->stepPayload($runId, $step, $ttlSeconds));
+
+            return;
+        }
+
         $history = $this->find($runId) ?? [];
         $history['steps'] ??= [];
         $history['steps'][] = $step->toArray();
@@ -277,8 +291,19 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         return $this->connection->table((string) $this->config->get('swarm.tables.history', 'swarm_run_histories'));
     }
 
+    protected function stepTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.history_steps', 'swarm_run_steps'));
+    }
+
     protected function mapRecord(object $record): array
     {
+        $steps = $this->normalizedSteps($record->run_id);
+
+        if ($steps === []) {
+            $steps = $this->decodeJson($record->steps, []);
+        }
+
         return [
             'run_id' => $record->run_id,
             'swarm_class' => $record->swarm_class,
@@ -286,7 +311,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'status' => $record->status,
             'context' => $this->decodeJson($record->context, []),
             'metadata' => $this->decodeJson($record->metadata, []),
-            'steps' => $this->decodeJson($record->steps, []),
+            'steps' => $steps,
             'output' => $record->output,
             'usage' => $this->decodeJson($record->usage, []),
             'error' => $this->decodeJson($record->error, null),
@@ -381,6 +406,28 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         ])) {
             throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for persisted run history.");
         }
+
+        $stepsTable = (string) $this->config->get('swarm.tables.history_steps', 'swarm_run_steps');
+
+        if (! $schema->hasTable($stepsTable)) {
+            throw new SwarmException("Database-backed durable swarms require the [{$stepsTable}] table.");
+        }
+
+        if (! $schema->hasColumns($stepsTable, [
+            'id',
+            'run_id',
+            'step_index',
+            'agent_class',
+            'input',
+            'output',
+            'artifacts',
+            'metadata',
+            'created_at',
+            'updated_at',
+            'expires_at',
+        ])) {
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$stepsTable}] for normalized run steps.");
+        }
     }
 
     /**
@@ -405,5 +452,62 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
 
             $query->where($path, $value);
         }
+    }
+
+    protected function hasNormalizedStepTable(): bool
+    {
+        return $this->connection->getSchemaBuilder()->hasTable((string) $this->config->get('swarm.tables.history_steps', 'swarm_run_steps'));
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    protected function normalizedSteps(string $runId): array
+    {
+        if (! $this->hasNormalizedStepTable()) {
+            return [];
+        }
+
+        return $this->stepTable()
+            ->where('run_id', $runId)
+            ->orderBy('step_index')
+            ->orderBy('id')
+            ->get()
+            ->map(fn (object $record): array => [
+                'agent_class' => $record->agent_class,
+                'input' => $record->input,
+                'output' => $record->output,
+                'artifacts' => $this->decodeJson($record->artifacts, []),
+                'metadata' => $this->decodeJson($record->metadata, []),
+            ])
+            ->all();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function stepPayload(string $runId, SwarmStep $step, int $ttlSeconds): array
+    {
+        $timestamp = Carbon::now('UTC');
+        $payload = $step->toArray();
+        $stepIndex = $step->metadata['index'] ?? $this->nextStepIndex($runId);
+
+        return [
+            'run_id' => $runId,
+            'step_index' => is_int($stepIndex) ? $stepIndex : $this->nextStepIndex($runId),
+            'agent_class' => $payload['agent_class'],
+            'input' => $payload['input'],
+            'output' => $payload['output'],
+            'artifacts' => $this->encodeJson($payload['artifacts']),
+            'metadata' => $this->encodeJson($payload['metadata']),
+            'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ];
+    }
+
+    protected function nextStepIndex(string $runId): int
+    {
+        return (int) $this->stepTable()->where('run_id', $runId)->count();
     }
 }

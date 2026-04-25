@@ -24,14 +24,11 @@ class DatabaseArtifactRepository implements ArtifactRepository
     public function storeMany(string $runId, array $artifacts, int $ttlSeconds): void
     {
         $timestamp = now();
-        $normalized = [];
+        $rows = [];
 
         foreach ($artifacts as $index => $artifact) {
-            $normalized[] = ArtifactPayload::normalize($artifact, "artifact.{$index}");
-        }
-
-        foreach ($normalized as $payload) {
-            $this->table()->insert([
+            $payload = ArtifactPayload::normalize($artifact, "artifact.{$index}");
+            $rows[] = [
                 'run_id' => $runId,
                 'name' => $payload['name'],
                 'content' => $this->encodeJson($payload['content']),
@@ -40,8 +37,14 @@ class DatabaseArtifactRepository implements ArtifactRepository
                 'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
                 'created_at' => $timestamp,
                 'updated_at' => $timestamp,
-            ]);
+            ];
         }
+
+        if ($rows === []) {
+            return;
+        }
+
+        $this->table()->insert($rows);
     }
 
     public function all(string $runId): array

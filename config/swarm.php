@@ -73,6 +73,7 @@ return [
         'contexts' => env('SWARM_CONTEXTS_TABLE', 'swarm_contexts'),
         'artifacts' => env('SWARM_ARTIFACTS_TABLE', 'swarm_artifacts'),
         'history' => env('SWARM_RUN_HISTORIES_TABLE', 'swarm_run_histories'),
+        'history_steps' => env('SWARM_RUN_HISTORY_STEPS_TABLE', 'swarm_run_steps'),
         'durable' => env('SWARM_DURABLE_RUNS_TABLE', 'swarm_durable_runs'),
     ],
 ];
