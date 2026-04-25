@@ -23,12 +23,15 @@
 - Added durable runtime table migration and configuration for durable queue routing, step timeout, and recovery grace
 - Added a migration changing `swarm_contexts.input` to `longText`
 - Added Larastan/PHPStan configuration and `larastan/larastan` as a required development quality gate
+- Added GitHub Actions CI for Pest, Larastan/PHPStan, and Pint
 - Added release-ready examples for sequential, queued, streamed, tested, parallel, hierarchical, durable, privacy-sensitive, run-inspector, and operations-dashboard swarm patterns
 
 ### Changed
 
+- Replaced the full `laravel/framework` runtime Composer constraint with explicit Laravel 13 Illuminate component constraints
 - Reworked hierarchical execution from placeholder routing into a validated route-plan runtime with explicit coordinator schema expectations
 - Updated package migration publishing to use Laravel 13's migration publishing path while continuing to auto-load package migrations
+- Updated repository packaging metadata with `.gitattributes`, a stronger `.gitignore`, Composer branch aliasing, and package-style lock-file hygiene
 - Changed database context writes to use the same normalized `RunContext::toArray()` shape as cache-backed context persistence
 - Changed database context persistence to use `updateOrInsert()` instead of an exists-then-insert flow
 - Updated parallel execution to capture scalar task and class data only before resolving each agent in the concurrency worker

@@ -17,8 +17,19 @@
     ],
     "require": {
         "php": "^8.5",
-        "laravel/ai": "^0.6",
-        "laravel/framework": "^13.0"
+        "illuminate/bus": "^13.0",
+        "illuminate/cache": "^13.0",
+        "illuminate/concurrency": "^13.0",
+        "illuminate/console": "^13.0",
+        "illuminate/container": "^13.0",
+        "illuminate/contracts": "^13.0",
+        "illuminate/database": "^13.0",
+        "illuminate/events": "^13.0",
+        "illuminate/filesystem": "^13.0",
+        "illuminate/queue": "^13.0",
+        "illuminate/support": "^13.0",
+        "illuminate/view": "^13.0",
+        "laravel/ai": "^0.6"
     },
     "require-dev": {
         "larastan/larastan": "^3.0",
@@ -42,6 +53,9 @@
         }
     },
     "extra": {
+        "branch-alias": {
+            "dev-main": "0.1.x-dev"
+        },
         "laravel": {
             "providers": [
                 "BuiltByBerry\\LaravelSwarm\\SwarmServiceProvider"
@@ -53,8 +67,10 @@
         }
     },
     "scripts": {
-        "test": "vendor/bin/pest tests/Feature tests/Unit",
-        "format": "vendor/bin/pint"
+        "analyse": "vendor/bin/phpstan analyse --memory-limit=2G --no-progress",
+        "format": "vendor/bin/pint",
+        "lint": "vendor/bin/pint --test",
+        "test": "vendor/bin/pest tests/Feature tests/Unit"
     },
     "config": {
         "sort-packages": true,

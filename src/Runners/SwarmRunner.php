@@ -305,7 +305,7 @@ class SwarmRunner
         $this->ensureContainerResolvable($swarm);
 
         $context = RunContext::fromTask($task);
-        $pendingDispatch = InvokeSwarm::dispatch($swarm::class, $context->toQueuePayload());
+        $pendingDispatch = new PendingDispatch(new InvokeSwarm($swarm::class, $context->toQueuePayload()));
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
             $pendingDispatch->onConnection($connection);
