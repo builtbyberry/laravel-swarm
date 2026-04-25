@@ -4,7 +4,7 @@
 
 ### Breaking / Contract Changes
 
-- Laravel 13 is now enforced through `laravel/framework:^13.0`
+- Laravel 13 is now enforced through explicit `illuminate/*:^13.0` component constraints
 - Structured task arrays, explicit context data, context metadata, and persisted artifact payloads must now be plain data only: strings, integers, floats, booleans, null, and arrays containing only those values
 - Objects, enums, closures, resources, `JsonSerializable`, and `Stringable` values are rejected at queue and persistence boundaries instead of being serialized or cast
 - Invalid global or per-store persistence drivers now fail clearly instead of silently falling back to cache
