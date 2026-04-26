@@ -82,6 +82,12 @@ test('swarm status command shows recent runs and a specific run', function () {
 
     expect($singleOutput)->toContain($response->metadata['run_id']);
     expect($singleOutput)->toContain('completed');
+
+    Artisan::call('swarm:status', ['runId' => $response->metadata['run_id']]);
+    $argumentOutput = Artisan::output();
+
+    expect($argumentOutput)->toContain($response->metadata['run_id']);
+    expect($argumentOutput)->toContain('completed');
 });
 
 test('swarm history command filters matching runs', function () {

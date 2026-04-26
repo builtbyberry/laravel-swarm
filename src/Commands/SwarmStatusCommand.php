@@ -12,17 +12,17 @@ use Symfony\Component\Console\Attribute\AsCommand;
 #[AsCommand(name: 'swarm:status')]
 class SwarmStatusCommand extends Command
 {
-    protected $signature = 'swarm:status {--run-id=}';
+    protected $signature = 'swarm:status {runId? : The run ID to inspect} {--run-id= : The run ID to inspect}';
 
     protected $description = 'Inspect the status of a swarm run or the most recent swarm runs';
 
     public function handle(SwarmHistory $history): int
     {
-        $runId = $this->option('run-id');
+        $runId = $this->argument('runId') ?: $this->option('run-id');
         $runs = $runId ? array_filter([$history->find((string) $runId)]) : $history->latest(10);
 
         if ($runs === []) {
-            $this->components->info('No swarm runs found.');
+            $this->components->info($runId ? "No swarm run found for run ID [{$runId}]." : 'No swarm runs found.');
 
             return self::SUCCESS;
         }
