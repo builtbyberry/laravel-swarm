@@ -7,6 +7,8 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
+use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
@@ -14,6 +16,8 @@ use Illuminate\Support\Carbon;
 
 class DatabaseDurableRunStore implements DurableRunStore
 {
+    use InteractsWithJsonColumns;
+
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
@@ -46,6 +50,8 @@ class DatabaseDurableRunStore implements DurableRunStore
             'next_step_index' => (int) $record->next_step_index,
             'current_step_index' => $record->current_step_index !== null ? (int) $record->current_step_index : null,
             'total_steps' => (int) $record->total_steps,
+            'route_plan' => $this->decodeJson($record->route_plan, null),
+            'route_cursor' => $this->decodeJson($record->route_cursor, null),
             'timeout_at' => $record->timeout_at,
             'step_timeout_seconds' => (int) $record->step_timeout_seconds,
             'execution_token' => $record->execution_token,
@@ -77,6 +83,8 @@ class DatabaseDurableRunStore implements DurableRunStore
             'next_step_index',
             'current_step_index',
             'total_steps',
+            'route_plan',
+            'route_cursor',
             'timeout_at',
             'step_timeout_seconds',
             'execution_token',
@@ -92,6 +100,16 @@ class DatabaseDurableRunStore implements DurableRunStore
 
         if (! $schema->hasColumns($table, $requiredColumns)) {
             throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for lease ownership and recovery.");
+        }
+
+        $nodeOutputTable = (string) $this->config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs');
+
+        if (! $schema->hasTable($nodeOutputTable)) {
+            throw new SwarmException("Database-backed durable swarms require the [{$nodeOutputTable}] table.");
+        }
+
+        if (! $schema->hasColumns($nodeOutputTable, ['run_id', 'node_id', 'output', 'created_at', 'updated_at', 'expires_at'])) {
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$nodeOutputTable}] for hierarchical node outputs.");
         }
     }
 
@@ -151,24 +169,103 @@ class DatabaseDurableRunStore implements DurableRunStore
         ]);
     }
 
+    public function hierarchicalNodeOutputs(string $runId): array
+    {
+        return $this->nodeOutputTable()
+            ->where('run_id', $runId)
+            ->orderBy('id')
+            ->get()
+            ->mapWithKeys(static fn (object $record): array => [(string) $record->node_id => (string) $record->output])
+            ->all();
+    }
+
+    public function hierarchicalNodeOutputsFor(string $runId, array $nodeIds): array
+    {
+        $nodeIds = array_values(array_unique(array_filter($nodeIds, static fn (string $nodeId): bool => $nodeId !== '')));
+
+        if ($nodeIds === []) {
+            return [];
+        }
+
+        return $this->nodeOutputTable()
+            ->where('run_id', $runId)
+            ->whereIn('node_id', $nodeIds)
+            ->orderBy('id')
+            ->get()
+            ->mapWithKeys(static fn (object $record): array => [(string) $record->node_id => (string) $record->output])
+            ->all();
+    }
+
+    public function checkpointHierarchicalStep(
+        string $runId,
+        string $executionToken,
+        int $nextStepIndex,
+        RunContext $context,
+        int $ttlSeconds,
+        array $routeCursor,
+        ?array $routePlan = null,
+        ?array $nodeOutput = null,
+        ?int $totalSteps = null,
+    ): void {
+        $this->connection->transaction(function () use ($runId, $executionToken, $nextStepIndex, $context, $ttlSeconds, $routeCursor, $routePlan, $nodeOutput, $totalSteps): void {
+            $timestamp = Carbon::now('UTC');
+            $expiresAt = DatabaseTtl::expiresAt($ttlSeconds);
+
+            if ($nodeOutput !== null) {
+                $this->nodeOutputTable()->upsert([
+                    [
+                        'run_id' => $runId,
+                        'node_id' => $nodeOutput['node_id'],
+                        'output' => $nodeOutput['output'],
+                        'created_at' => $timestamp,
+                        'updated_at' => $timestamp,
+                        'expires_at' => $expiresAt,
+                    ],
+                ], ['run_id', 'node_id'], ['output', 'updated_at', 'expires_at']);
+            }
+
+            $contextPayload = $context->toArray();
+            $this->contextTable()->upsert([
+                [
+                    'run_id' => $contextPayload['run_id'],
+                    'input' => $contextPayload['input'],
+                    'data' => $this->encodeJson($contextPayload['data']),
+                    'metadata' => $this->encodeJson($contextPayload['metadata']),
+                    'artifacts' => $this->encodeJson($contextPayload['artifacts']),
+                    'created_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                    'expires_at' => $expiresAt,
+                ],
+            ], ['run_id'], ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at']);
+
+            $values = [
+                'status' => 'pending',
+                'next_step_index' => $nextStepIndex,
+                'route_cursor' => $this->encodeJson($routeCursor),
+                'execution_token' => null,
+                'leased_until' => null,
+            ];
+
+            if ($routePlan !== null) {
+                $values['route_plan'] = $this->encodeJson($routePlan);
+            }
+
+            if ($totalSteps !== null) {
+                $values['total_steps'] = $totalSteps;
+            }
+
+            $this->guardedUpdate($runId, $executionToken, $values);
+        });
+    }
+
     public function markCompleted(string $runId, string $executionToken): void
     {
-        $this->guardedUpdate($runId, $executionToken, [
-            'status' => 'completed',
-            'execution_token' => null,
-            'leased_until' => null,
-            'finished_at' => Carbon::now('UTC'),
-        ]);
+        $this->markTerminal($runId, $executionToken, 'completed');
     }
 
     public function markFailed(string $runId, string $executionToken): void
     {
-        $this->guardedUpdate($runId, $executionToken, [
-            'status' => 'failed',
-            'execution_token' => null,
-            'leased_until' => null,
-            'finished_at' => Carbon::now('UTC'),
-        ]);
+        $this->markTerminal($runId, $executionToken, 'failed');
     }
 
     public function markPaused(string $runId, string $executionToken): void
@@ -182,12 +279,7 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function markCancelled(string $runId, string $executionToken): void
     {
-        $this->guardedUpdate($runId, $executionToken, [
-            'status' => 'cancelled',
-            'execution_token' => null,
-            'leased_until' => null,
-            'finished_at' => Carbon::now('UTC'),
-        ]);
+        $this->markTerminal($runId, $executionToken, 'cancelled');
     }
 
     public function pause(string $runId): bool
@@ -233,17 +325,27 @@ class DatabaseDurableRunStore implements DurableRunStore
     {
         $now = Carbon::now('UTC');
 
-        $updated = $this->table()
-            ->where('run_id', $runId)
-            ->whereIn('status', ['pending', 'paused'])
-            ->update([
-                'status' => 'cancelled',
-                'cancel_requested_at' => $now,
-                'finished_at' => $now,
-                'execution_token' => null,
-                'leased_until' => null,
-                'updated_at' => $now,
-            ]);
+        $updated = $this->connection->transaction(function () use ($runId, $now): int {
+            $updated = $this->table()
+                ->where('run_id', $runId)
+                ->whereIn('status', ['pending', 'paused'])
+                ->update([
+                    'status' => 'cancelled',
+                    'cancel_requested_at' => $now,
+                    'finished_at' => $now,
+                    'execution_token' => null,
+                    'leased_until' => null,
+                    'route_plan' => null,
+                    'route_cursor' => null,
+                    'updated_at' => $now,
+                ]);
+
+            if ($updated === 1) {
+                $this->nodeOutputTable()->where('run_id', $runId)->delete();
+            }
+
+            return $updated;
+        });
 
         if ($updated === 1) {
             return true;
@@ -311,8 +413,34 @@ class DatabaseDurableRunStore implements DurableRunStore
         }
     }
 
+    protected function markTerminal(string $runId, string $executionToken, string $status): void
+    {
+        $this->connection->transaction(function () use ($runId, $executionToken, $status): void {
+            $this->guardedUpdate($runId, $executionToken, [
+                'status' => $status,
+                'execution_token' => null,
+                'leased_until' => null,
+                'route_plan' => null,
+                'route_cursor' => null,
+                'finished_at' => Carbon::now('UTC'),
+            ]);
+
+            $this->nodeOutputTable()->where('run_id', $runId)->delete();
+        });
+    }
+
     protected function table()
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs'));
+    }
+
+    protected function contextTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.contexts', 'swarm_contexts'));
+    }
+
+    protected function nodeOutputTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs'));
     }
 }

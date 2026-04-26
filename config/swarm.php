@@ -75,5 +75,6 @@ return [
         'history' => env('SWARM_RUN_HISTORIES_TABLE', 'swarm_run_histories'),
         'history_steps' => env('SWARM_RUN_HISTORY_STEPS_TABLE', 'swarm_run_steps'),
         'durable' => env('SWARM_DURABLE_RUNS_TABLE', 'swarm_durable_runs'),
+        'durable_node_outputs' => env('SWARM_DURABLE_NODE_OUTPUTS_TABLE', 'swarm_durable_node_outputs'),
     ],
 ];

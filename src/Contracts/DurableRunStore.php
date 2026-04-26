@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
 interface DurableRunStore
 {
     /**
@@ -25,6 +27,34 @@ interface DurableRunStore
     public function markRunning(string $runId, string $executionToken, int $currentStepIndex): void;
 
     public function releaseForNextStep(string $runId, string $executionToken, int $nextStepIndex): void;
+
+    /**
+     * @return array<string, string>
+     */
+    public function hierarchicalNodeOutputs(string $runId): array;
+
+    /**
+     * @param  array<int, string>  $nodeIds
+     * @return array<string, string>
+     */
+    public function hierarchicalNodeOutputsFor(string $runId, array $nodeIds): array;
+
+    /**
+     * @param  array<string, mixed>  $routeCursor
+     * @param  array<string, mixed>|null  $routePlan
+     * @param  array{node_id: string, output: string}|null  $nodeOutput
+     */
+    public function checkpointHierarchicalStep(
+        string $runId,
+        string $executionToken,
+        int $nextStepIndex,
+        RunContext $context,
+        int $ttlSeconds,
+        array $routeCursor,
+        ?array $routePlan = null,
+        ?array $nodeOutput = null,
+        ?int $totalSteps = null,
+    ): void;
 
     public function markCompleted(string $runId, string $executionToken): void;
 

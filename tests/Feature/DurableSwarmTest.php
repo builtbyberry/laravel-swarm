@@ -15,15 +15,19 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalLimitedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Database\Schema\Blueprint;
@@ -46,6 +50,14 @@ function configureDurableRuntime(): void
     app()->forgetInstance(DurableRunStore::class);
     app()->forgetInstance(SwarmRunner::class);
     app()->forgetInstance(DurableSwarmManager::class);
+}
+
+function durableHierarchicalPlan(string $startAt, array $nodes): array
+{
+    return [
+        'start_at' => $startAt,
+        'nodes' => $nodes,
+    ];
 }
 
 function ensureJobsTableExists(): void
@@ -178,7 +190,7 @@ test('durable manager start creates runtime state before the first job is pushed
 
 test('dispatch durable fails for non sequential swarms', function () {
     expect(fn () => FakeParallelSwarm::make()->dispatchDurable('queued-task'))
-        ->toThrow(SwarmException::class, 'Durable execution is only supported for sequential swarms in this release.');
+        ->toThrow(SwarmException::class, 'Durable execution is only supported for sequential and hierarchical swarms in this release.');
 });
 
 test('dispatch durable fails clearly when persistence is not database backed', function () {
@@ -282,6 +294,473 @@ test('durable sequential swarms complete one step per job', function () {
         ->and($history['status'])->toBe('completed')
         ->and($history['output'])->toBe('editor-out')
         ->and($history['steps'])->toHaveCount(3);
+});
+
+test('durable hierarchical swarms persist the validated route cursor before worker execution', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'editor_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-task',
+                'with_outputs' => ['draft' => 'writer_node'],
+            ],
+        ]),
+    ]);
+
+    $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    FakeHierarchicalCoordinator::assertPrompted('durable-hierarchical-task');
+    FakeWriter::assertNeverPrompted();
+    FakeEditor::assertNeverPrompted();
+
+    $run = $manager->find($runId);
+    $context = app(ContextStore::class)->find($runId);
+    $cursor = $run['route_cursor'];
+
+    expect($run['next_step_index'])->toBe(1)
+        ->and($cursor['current_node_id'])->toBe('writer_node')
+        ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->count())->toBe(0)
+        ->and($context['metadata']['route_plan_start'])->toBe('writer_node');
+});
+
+test('durable hierarchical swarms execute one routed worker per advancement', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'editor_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-task',
+                'with_outputs' => ['draft' => 'writer_node'],
+            ],
+        ]),
+    ]);
+
+    $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    FakeWriter::assertPrompted('writer-task');
+    FakeEditor::assertNeverPrompted();
+
+    $context = app(ContextStore::class)->find($runId);
+    expect($manager->find($runId)['status'])->toBe('pending')
+        ->and($manager->find($runId)['next_step_index'])->toBe(2)
+        ->and($manager->find($runId)['route_cursor']['current_node_id'])->toBe('editor_node')
+        ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->where('node_id', 'writer_node')->value('output'))->toBe('writer-out')
+        ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->count())->toBe(1)
+        ->and(Schema::hasColumn('swarm_durable_runs', 'node_outputs'))->toBeFalse()
+        ->and($context['data'])->not->toHaveKey('hierarchical_node_outputs');
+
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    FakeEditor::assertPrompted(<<<'PROMPT'
+editor-task
+
+Named outputs:
+[draft]
+writer-out
+PROMPT);
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and($history['status'])->toBe('completed')
+        ->and($history['output'])->toBe('editor-out')
+        ->and($history['steps'])->toHaveCount(3)
+        ->and($history['context']['metadata']['executed_node_ids'])->toBe(['writer_node', 'editor_node']);
+});
+
+test('durable hierarchical swarms aggregate usage and redact terminal cursor state from history', function () {
+    config()->set('swarm.capture.outputs', false);
+
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+            ],
+        ]),
+    ]);
+
+    $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($history['status'])->toBe('completed')
+        ->and($history['output'])->toBe('[redacted]')
+        ->and($history['context']['data'])->not->toHaveKey('durable_hierarchical_cursor')
+        ->and($history['context']['data'])->not->toHaveKey('hierarchical_node_outputs')
+        ->and($history['usage'])->not->toBe([]);
+});
+
+test('durable hierarchical swarms execute parallel branches sequentially with group metadata', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('parallel_node', [
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['writer_node', 'editor_node'],
+                'next' => 'finish_node',
+            ],
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-branch',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-branch',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'editor_node',
+            ],
+        ]),
+    ]);
+
+    $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    FakeWriter::assertNeverPrompted();
+    expect($manager->find($runId)['route_cursor']['current_node_id'])->toBe('writer_node');
+
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    FakeWriter::assertPrompted('writer-branch');
+    FakeEditor::assertNeverPrompted();
+
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and($history['output'])->toBe('editor-out')
+        ->and($history['steps'][1]['metadata']['parent_parallel_node_id'])->toBe('parallel_node')
+        ->and($history['steps'][2]['metadata']['parent_parallel_node_id'])->toBe('parallel_node')
+        ->and($history['context']['metadata']['parallel_groups'])->toBe([
+            ['node_id' => 'parallel_node', 'branches' => ['writer_node', 'editor_node']],
+        ])
+        ->and($history['context']['metadata']['executed_node_ids'])->toBe(['parallel_node', 'writer_node', 'editor_node', 'finish_node']);
+});
+
+test('durable hierarchical recovery reruns the same worker after a crash before checkpoint', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'editor_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-task',
+                'with_outputs' => ['draft' => 'writer_node'],
+            ],
+        ]),
+    ]);
+
+    $manager = app(DurableSwarmManager::class);
+    $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $runId = $response->runId;
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    $manager->beforeStepCheckpointUsing(function (): void {
+        throw new RuntimeException('Simulated crash before checkpoint.');
+    });
+
+    expect(fn () => (new AdvanceDurableSwarm($runId, 1))->handle($manager))
+        ->toThrow(RuntimeException::class, 'Simulated crash before checkpoint.');
+
+    $manager->beforeStepCheckpointUsing(null);
+
+    $run = $manager->find($runId);
+
+    expect($run['status'])->toBe('running')
+        ->and($run['next_step_index'])->toBe(1)
+        ->and($run['route_cursor']['current_node_id'])->toBe('writer_node')
+        ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->count())->toBe(0)
+        ->and(DB::table('swarm_artifacts')->where('run_id', $runId)->count())->toBe(1);
+
+    expireDurableLease($runId);
+
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and($history['output'])->toBe('editor-out')
+        ->and($history['steps'])->toHaveCount(3)
+        ->and(DB::table('swarm_artifacts')->where('run_id', $runId)->count())->toBe(3)
+        ->and(DB::table('swarm_artifacts')->where('run_id', $runId)->where('step_agent_class', FakeWriter::class)->count())->toBe(1);
+});
+
+test('durable hierarchical checkpoint rolls back cursor and outputs when lease is lost', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'editor_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-task',
+                'with_outputs' => ['draft' => 'writer_node'],
+            ],
+        ]),
+    ]);
+
+    $manager = app(DurableSwarmManager::class);
+    $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $runId = $response->runId;
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    $manager->beforeStepCheckpointUsing(function () use ($runId): void {
+        stealDurableLease($runId);
+    });
+
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    $run = $manager->find($runId);
+    $context = app(ContextStore::class)->find($runId);
+
+    expect($run['status'])->toBe('running')
+        ->and($run['next_step_index'])->toBe(1)
+        ->and($run['route_cursor']['current_node_id'])->toBe('writer_node')
+        ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->count())->toBe(0)
+        ->and(DB::table('swarm_artifacts')->where('run_id', $runId)->count())->toBe(1)
+        ->and($context['metadata']['current_node_id'])->toBe('writer_node');
+});
+
+test('durable hierarchical completion rolls back terminal scrub when terminal context persistence fails', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+            ],
+        ]),
+    ]);
+
+    $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config')) extends DatabaseContextStore
+    {
+        public function put(RunContext $context, int $ttlSeconds): void
+        {
+            parent::put($context, $ttlSeconds);
+
+            throw new RuntimeException('Simulated terminal context persistence failure.');
+        }
+    });
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    expect(fn () => (new AdvanceDurableSwarm($runId, 1))->handle(app(DurableSwarmManager::class)))
+        ->toThrow(RuntimeException::class, 'Simulated terminal context persistence failure.');
+
+    $run = app(DurableSwarmManager::class)->find($runId);
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($run['status'])->toBe('running')
+        ->and($run['route_plan'])->not->toBeNull()
+        ->and($run['route_cursor'])->not->toBeNull()
+        ->and($history['status'])->toBe('running')
+        ->and(DB::table('swarm_artifacts')->where('run_id', $runId)->where('step_agent_class', FakeWriter::class)->count())->toBe(0);
+});
+
+test('durable hierarchical workers load only requested node outputs', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'editor_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-task',
+                'with_outputs' => ['draft' => 'writer_node'],
+            ],
+        ]),
+    ]);
+
+    $store = new class(app('db')->connection(), app('config')) extends DatabaseDurableRunStore
+    {
+        /** @var array<int, array<int, string>> */
+        public array $requestedNodeIds = [];
+
+        public function hierarchicalNodeOutputsFor(string $runId, array $nodeIds): array
+        {
+            $this->requestedNodeIds[] = array_values($nodeIds);
+
+            return parent::hierarchicalNodeOutputsFor($runId, $nodeIds);
+        }
+    };
+
+    app()->instance(DurableRunStore::class, $store);
+    app()->forgetInstance(DurableSwarmManager::class);
+    app()->forgetInstance(SwarmRunner::class);
+
+    $manager = app(DurableSwarmManager::class);
+    $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $runId = $response->runId;
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    DB::table('swarm_durable_node_outputs')->insert([
+        'run_id' => $runId,
+        'node_id' => 'unused_node',
+        'output' => str_repeat('x', 2048),
+        'expires_at' => now()->addHour(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    expect($store->requestedNodeIds)->toContain([])
+        ->and($store->requestedNodeIds)->toContain(['writer_node']);
+});
+
+test('durable hierarchical terminal states scrub route plans and node output rows', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+            ],
+        ]),
+    ]);
+
+    $manager = app(DurableSwarmManager::class);
+    $completed = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
+
+    (new AdvanceDurableSwarm($completed, 0))->handle($manager);
+    (new AdvanceDurableSwarm($completed, 1))->handle($manager);
+
+    expect($manager->find($completed)['status'])->toBe('completed')
+        ->and($manager->find($completed)['route_plan'])->toBeNull()
+        ->and($manager->find($completed)['route_cursor'])->toBeNull()
+        ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $completed)->count())->toBe(0);
+
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+            ],
+        ]),
+    ]);
+
+    $cancelled = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-cancel')->runId;
+
+    (new AdvanceDurableSwarm($cancelled, 0))->handle($manager);
+    $manager->cancel($cancelled);
+
+    expect($manager->find($cancelled)['status'])->toBe('cancelled')
+        ->and($manager->find($cancelled)['route_plan'])->toBeNull()
+        ->and($manager->find($cancelled)['route_cursor'])->toBeNull()
+        ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $cancelled)->count())->toBe(0);
+
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+            ],
+        ]),
+    ]);
+
+    FakeWriter::fake(function (): string {
+        throw new RuntimeException('Hierarchical worker failed.');
+    });
+
+    $failed = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-fail')->runId;
+
+    (new AdvanceDurableSwarm($failed, 0))->handle($manager);
+
+    expect(fn () => (new AdvanceDurableSwarm($failed, 1))->handle($manager))
+        ->toThrow(RuntimeException::class, 'Hierarchical worker failed.');
+
+    expect($manager->find($failed)['status'])->toBe('failed')
+        ->and($manager->find($failed)['route_plan'])->toBeNull()
+        ->and($manager->find($failed)['route_cursor'])->toBeNull()
+        ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $failed)->count())->toBe(0);
+});
+
+test('durable hierarchical swarms reject invalid plans before worker execution', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'editor_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-task',
+            ],
+        ]),
+    ]);
+
+    $response = FakeHierarchicalLimitedSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $runId = $response->runId;
+
+    expect(fn () => app(DurableSwarmManager::class)->advance($runId, 0))
+        ->toThrow(SwarmException::class, FakeHierarchicalLimitedSwarm::class.": hierarchical route plan requires 3 agent executions but the swarm allows 2. Increase #[MaxAgentSteps] or reduce the plan's worker nodes.");
+
+    FakeWriter::assertNeverPrompted();
+    FakeEditor::assertNeverPrompted();
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('failed');
 });
 
 test('durable advance rejects invalid persisted step timeout before lease acquisition', function () {

@@ -16,7 +16,6 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
-use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -486,7 +485,7 @@ test('database run history store merges legacy inline steps with normalized step
     ]);
 });
 
-test('database run history store rolls back history updates when normalized step insert fails', function () {
+test('database run history store idempotently upserts duplicate normalized steps', function () {
     $history = app(DatabaseRunHistoryStore::class);
     $context = RunContext::from('atomic-history-task', 'atomic-history-run-id');
 
@@ -498,17 +497,15 @@ test('database run history store rolls back history updates when normalized step
         metadata: ['index' => 0],
     ), 60);
 
-    $expiresAt = DB::table('swarm_run_histories')->where('run_id', 'atomic-history-run-id')->value('expires_at');
-
-    expect(fn () => $history->recordStep('atomic-history-run-id', new SwarmStep(
+    $history->recordStep('atomic-history-run-id', new SwarmStep(
         agentClass: FakeWriter::class,
         input: 'atomic-history-task',
         output: 'duplicate-index-output',
         metadata: ['index' => 0],
-    ), 3600))->toThrow(QueryException::class);
+    ), 3600);
 
-    expect(DB::table('swarm_run_histories')->where('run_id', 'atomic-history-run-id')->value('expires_at'))->toBe($expiresAt);
     expect(DB::table('swarm_run_steps')->where('run_id', 'atomic-history-run-id')->count())->toBe(1);
+    expect(DB::table('swarm_run_steps')->where('run_id', 'atomic-history-run-id')->value('output'))->toBe('duplicate-index-output');
 });
 
 test('database run history store requires explicit integer indexes for normalized steps', function () {

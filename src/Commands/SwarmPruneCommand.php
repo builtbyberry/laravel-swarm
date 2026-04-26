@@ -26,6 +26,7 @@ class SwarmPruneCommand extends Command
             'history_steps' => (string) $config->get('swarm.tables.history_steps', 'swarm_run_steps'),
             'contexts' => (string) $config->get('swarm.tables.contexts', 'swarm_contexts'),
             'artifacts' => (string) $config->get('swarm.tables.artifacts', 'swarm_artifacts'),
+            'durable_node_outputs' => (string) $config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs'),
         ];
 
         $deleted = [];
@@ -59,8 +60,9 @@ class SwarmPruneCommand extends Command
             $deleted['history_steps'],
         ));
         $this->components->info(sprintf(
-            'Pruned %d durable runtime record(s).',
+            'Pruned %d durable runtime and %d durable node output record(s).',
             $deleted['durable'],
+            $deleted['durable_node_outputs'],
         ));
 
         return self::SUCCESS;

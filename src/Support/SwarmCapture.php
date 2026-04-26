@@ -61,7 +61,7 @@ class SwarmCapture
         }
 
         if (! $this->capturesOutputs()) {
-            foreach (['last_output', 'hierarchical_node_outputs'] as $key) {
+            foreach (['last_output', 'hierarchical_node_outputs', 'durable_hierarchical_cursor'] as $key) {
                 if (array_key_exists($key, $data)) {
                     $data[$key] = self::REDACTED;
                 }

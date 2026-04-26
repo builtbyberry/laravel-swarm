@@ -339,8 +339,15 @@ class SwarmRunner
         $this->ensureDatabaseDurableInfrastructure();
 
         $topology = $this->resolveTopology($swarm);
+        if ($topology === Topology::Hierarchical) {
+            $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
+        }
+
         $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
-        $totalSteps = min(count($swarm->agents()), $this->resolveMaxAgentExecutions($swarm));
+        $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
+        $totalSteps = $topology === Topology::Hierarchical
+            ? $maxAgentExecutions
+            : min(count($swarm->agents()), $maxAgentExecutions);
         $context = RunContext::fromTask($task);
         $this->checkInputPayload($task, $context, self::EXECUTION_MODE_DURABLE);
         $this->ensureActiveContextCompatible(self::EXECUTION_MODE_DURABLE);
@@ -399,8 +406,8 @@ class SwarmRunner
     {
         $topology = $this->resolveTopology($swarm);
 
-        if ($topology !== Topology::Sequential) {
-            throw new SwarmException('Durable execution is only supported for sequential swarms in this release.');
+        if (! in_array($topology, [Topology::Sequential, Topology::Hierarchical], true)) {
+            throw new SwarmException('Durable execution is only supported for sequential and hierarchical swarms in this release.');
         }
     }
 

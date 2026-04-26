@@ -112,7 +112,13 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
                     throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
                 }
 
-                $this->stepTable()->insert($this->stepPayload($runId, $step, $ttlSeconds));
+                $payload = $this->stepPayload($runId, $step, $ttlSeconds);
+
+                $this->stepTable()->upsert(
+                    [$payload],
+                    ['run_id', 'step_index'],
+                    ['agent_class', 'input', 'output', 'artifacts', 'metadata', 'expires_at', 'updated_at'],
+                );
             });
 
             return;

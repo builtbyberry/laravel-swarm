@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
@@ -30,6 +31,7 @@ class HierarchicalRunner
         protected ConcurrencyManager $concurrency,
         protected SwarmStepRecorder $stepsRecorder,
         protected SwarmCapture $capture,
+        protected DurableRunStore $durableRuns,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -117,6 +119,96 @@ class HierarchicalRunner
                 'executed_steps' => count($steps),
                 'execution_mode' => $state->executionMode,
             ],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     */
+    public function runDurableStep(SwarmExecutionState $state, int $stepIndex, array $run): DurableHierarchicalStepResult
+    {
+        [$coordinator, $workers, $workerMap] = $this->resolveCoordinatorAndWorkers($state);
+
+        if ($stepIndex === 0) {
+            $coordinatorStep = $this->executeAgent(
+                state: $state,
+                agent: $coordinator,
+                input: $state->context->input,
+                index: 0,
+                metadata: ['node_role' => 'coordinator'],
+                storeContext: false,
+                storeArtifacts: false,
+            );
+
+            $plan = $this->planner->fromCoordinatorOutput($coordinator, $workers, $coordinatorStep->output, $state->swarm::class);
+            $this->ensurePlanWithinExecutionBudget($state, $plan);
+
+            $cursor = $this->buildDurableCursor($plan, $coordinator::class);
+            $nodeOutputs = [];
+            $this->mergeDurableUsage($state, $coordinatorStep);
+            $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
+            $this->applyDurableCursorToContext($state, $cursor);
+
+            return new DurableHierarchicalStepResult(
+                step: $coordinatorStep,
+                routeCursor: $cursor,
+                routePlan: $plan->toArray(),
+                complete: $this->isDurableCursorComplete($cursor),
+                totalSteps: (int) $cursor['total_steps'],
+            );
+        }
+
+        $cursor = $this->durableCursor($state, $run);
+        $plan = HierarchicalRoutePlan::fromArray($this->routePlan($state, $run));
+        $entry = $cursor['entries'][$cursor['offset']] ?? null;
+
+        if (! is_array($entry) || ($entry['type'] ?? null) !== 'worker') {
+            $nodeOutputs = $this->durableNodeOutputsForCursor($state, $plan, $cursor);
+            $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
+            $this->applyDurableCursorToContext($state, $cursor);
+
+            return new DurableHierarchicalStepResult(
+                step: null,
+                routeCursor: $cursor,
+                complete: $this->isDurableCursorComplete($cursor),
+            );
+        }
+
+        /** @var HierarchicalWorkerNode $node */
+        $node = $plan->node((string) $entry['node_id']);
+        $nodeOutputs = $this->durableNodeOutputsForCursor($state, $plan, $cursor, $node);
+        $parentParallelNodeId = $entry['parent_parallel_node_id'] ?? null;
+        $metadata = array_merge($node->metadata, ['node_id' => $node->id]);
+
+        if (is_string($parentParallelNodeId)) {
+            $metadata['parent_parallel_node_id'] = $parentParallelNodeId;
+        }
+
+        $step = $this->executeAgent(
+            state: $state,
+            agent: $workerMap[$node->agentClass],
+            input: $this->composePrompt($node->prompt, $node->withOutputs, $nodeOutputs, $node->id),
+            index: $stepIndex,
+            metadata: $metadata,
+            storeContext: false,
+            storeArtifacts: false,
+        );
+
+        $nodeOutputs[$node->id] = $step->output;
+        $this->mergeDurableUsage($state, $step);
+        $cursor['executed_node_ids'][] = $node->id;
+        $cursor['completed_node_ids'][] = $node->id;
+        $cursor['executed_agent_classes'][] = $step->agentClass;
+        $cursor['offset']++;
+
+        $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
+        $this->applyDurableCursorToContext($state, $cursor);
+
+        return new DurableHierarchicalStepResult(
+            step: $step,
+            routeCursor: $cursor,
+            nodeOutput: ['node_id' => $node->id, 'output' => $step->output],
+            complete: $this->isDurableCursorComplete($cursor),
         );
     }
 
@@ -306,6 +398,245 @@ class HierarchicalRunner
         ));
     }
 
+    /**
+     * @return array{0: Agent, 1: array<int, Agent>, 2: array<class-string, Agent>}
+     */
+    protected function resolveCoordinatorAndWorkers(SwarmExecutionState $state): array
+    {
+        $agents = $state->swarm->agents();
+
+        if ($agents === []) {
+            throw new SwarmException('Hierarchical swarms must define at least one agent.');
+        }
+
+        /** @var Agent $coordinator */
+        $coordinator = array_shift($agents);
+        $this->planner->assertCoordinatorCanPlan($coordinator);
+        $this->ensureUniqueWorkerClasses($state->swarm::class, $agents);
+
+        return [$coordinator, $agents, $this->workerMap($agents)];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function buildDurableCursor(HierarchicalRoutePlan $plan, string $coordinatorClass): array
+    {
+        $entries = $this->durableEntries($plan);
+
+        return [
+            'entries' => $entries,
+            'offset' => 0,
+            'current_node_id' => null,
+            'completed_node_ids' => [],
+            'executed_node_ids' => [],
+            'executed_agent_classes' => [],
+            'parallel_groups' => [],
+            'final_output' => null,
+            'coordinator_agent_class' => $coordinatorClass,
+            'route_plan_start' => $plan->startAt,
+            'total_steps' => 1 + count(array_filter($entries, static fn (array $entry): bool => $entry['type'] === 'worker')),
+        ];
+    }
+
+    /**
+     * @return array<int, array{type: string, node_id: string, parent_parallel_node_id?: string}>
+     */
+    protected function durableEntries(HierarchicalRoutePlan $plan): array
+    {
+        $entries = [];
+        $this->appendDurableEntries($plan, $plan->startAt, $entries);
+
+        return $entries;
+    }
+
+    /**
+     * @param  array<int, array{type: string, node_id: string, parent_parallel_node_id?: string}>  $entries
+     */
+    protected function appendDurableEntries(HierarchicalRoutePlan $plan, string $nodeId, array &$entries): void
+    {
+        $node = $plan->node($nodeId);
+
+        if ($node instanceof HierarchicalWorkerNode) {
+            $entries[] = ['type' => 'worker', 'node_id' => $node->id];
+
+            if ($node->next !== null) {
+                $this->appendDurableEntries($plan, $node->next, $entries);
+            }
+
+            return;
+        }
+
+        if ($node instanceof HierarchicalParallelNode) {
+            $entries[] = ['type' => 'parallel', 'node_id' => $node->id];
+
+            foreach ($node->branches as $branchNodeId) {
+                $entries[] = [
+                    'type' => 'worker',
+                    'node_id' => $branchNodeId,
+                    'parent_parallel_node_id' => $node->id,
+                ];
+            }
+
+            if ($node->next !== null) {
+                $this->appendDurableEntries($plan, $node->next, $entries);
+            }
+
+            return;
+        }
+
+        $entries[] = ['type' => 'finish', 'node_id' => $node->id];
+    }
+
+    /**
+     * @param  array<string, string>  $nodeOutputs
+     */
+    protected function advanceDurableCursorToNextWorker(SwarmExecutionState $state, HierarchicalRoutePlan $plan, array &$cursor, array $nodeOutputs): void
+    {
+        while (isset($cursor['entries'][$cursor['offset']])) {
+            $entry = $cursor['entries'][$cursor['offset']];
+
+            if (($entry['type'] ?? null) === 'worker') {
+                $cursor['current_node_id'] = $entry['node_id'];
+
+                return;
+            }
+
+            $node = $plan->node((string) $entry['node_id']);
+            $cursor['executed_node_ids'][] = $node->id;
+            $cursor['completed_node_ids'][] = $node->id;
+
+            if ($node instanceof HierarchicalParallelNode) {
+                $cursor['parallel_groups'][] = ['node_id' => $node->id, 'branches' => $node->branches];
+            }
+
+            if ($node instanceof HierarchicalFinishNode) {
+                $cursor['final_output'] = $node->output ?? $this->resolveOutputFromNode($node, $nodeOutputs);
+                $state->context->mergeData(['last_output' => $cursor['final_output']]);
+            }
+
+            $cursor['offset']++;
+        }
+
+        $cursor['current_node_id'] = null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $cursor
+     * @return array<string, string>
+     */
+    protected function durableNodeOutputsForCursor(SwarmExecutionState $state, HierarchicalRoutePlan $plan, array $cursor, ?HierarchicalWorkerNode $worker = null): array
+    {
+        $nodeIds = $worker !== null ? array_values($worker->withOutputs) : [];
+        $offset = (int) ($cursor['offset'] ?? 0);
+
+        if ($worker !== null) {
+            $offset++;
+        }
+
+        while (isset($cursor['entries'][$offset])) {
+            $entry = $cursor['entries'][$offset];
+
+            if (($entry['type'] ?? null) === 'worker') {
+                break;
+            }
+
+            $node = $plan->node((string) $entry['node_id']);
+
+            if ($node instanceof HierarchicalFinishNode && $node->outputFrom !== null) {
+                $nodeIds[] = $node->outputFrom;
+            }
+
+            $offset++;
+        }
+
+        return $this->durableRuns->hierarchicalNodeOutputsFor($state->context->runId, $nodeIds);
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     * @return array<string, mixed>
+     */
+    protected function durableCursor(SwarmExecutionState $state, array $run): array
+    {
+        $cursor = $run['route_cursor'] ?? null;
+
+        if (! is_array($cursor)) {
+            throw new SwarmException("Durable hierarchical run [{$state->context->runId}] is missing its persisted route cursor.");
+        }
+
+        return $cursor;
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     * @return array<string, mixed>
+     */
+    protected function routePlan(SwarmExecutionState $state, array $run): array
+    {
+        $plan = $run['route_plan'] ?? null;
+
+        if (! is_array($plan)) {
+            throw new SwarmException("Durable hierarchical run [{$state->context->runId}] is missing its persisted route plan.");
+        }
+
+        return $plan;
+    }
+
+    /**
+     * @param  array<string, mixed>  $cursor
+     */
+    protected function applyDurableCursorToContext(SwarmExecutionState $state, array $cursor): void
+    {
+        $state->context
+            ->mergeMetadata([
+                'topology' => $state->topology,
+                'coordinator_agent_class' => $cursor['coordinator_agent_class'],
+                'route_plan_start' => $cursor['route_plan_start'],
+                'current_node_id' => $cursor['current_node_id'],
+                'completed_node_ids' => $cursor['completed_node_ids'],
+                'executed_node_ids' => $cursor['executed_node_ids'],
+                'executed_agent_classes' => $cursor['executed_agent_classes'],
+                'parallel_groups' => $cursor['parallel_groups'],
+                'executed_steps' => count($cursor['executed_agent_classes']) + 1,
+                'total_steps' => $cursor['total_steps'],
+                'execution_mode' => $state->executionMode,
+            ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     */
+    public function durableCursorComplete(SwarmExecutionState $state, array $run): bool
+    {
+        $cursor = $run['route_cursor'] ?? null;
+
+        return is_array($cursor)
+            && ($cursor['current_node_id'] ?? null) === null
+            && isset($cursor['entries'], $cursor['offset'])
+            && (int) $cursor['offset'] >= count($cursor['entries']);
+    }
+
+    /**
+     * @param  array<string, mixed>  $cursor
+     */
+    protected function isDurableCursorComplete(array $cursor): bool
+    {
+        return ($cursor['current_node_id'] ?? null) === null
+            && isset($cursor['entries'], $cursor['offset'])
+            && (int) $cursor['offset'] >= count($cursor['entries']);
+    }
+
+    protected function mergeDurableUsage(SwarmExecutionState $state, SwarmStep $step): void
+    {
+        $state->context->mergeMetadata([
+            'usage' => $this->mergeUsage(
+                is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [],
+                is_array($step->metadata['usage'] ?? null) ? $step->metadata['usage'] : [],
+            ),
+        ]);
+    }
+
     protected function resolveOutputFromNode(HierarchicalFinishNode $node, array $nodeOutputs): string
     {
         $sourceNodeId = $node->outputFrom;
@@ -411,7 +742,7 @@ class HierarchicalRunner
     /**
      * @param  array<string, mixed>  $metadata
      */
-    protected function executeAgent(SwarmExecutionState $state, Agent $agent, string $input, int $index, array $metadata = []): SwarmStep
+    protected function executeAgent(SwarmExecutionState $state, Agent $agent, string $input, int $index, array $metadata = [], bool $storeContext = true, bool $storeArtifacts = true): SwarmStep
     {
         if (hrtime(true) >= $state->deadlineMonotonic) {
             throw new SwarmTimeoutException('The swarm exceeded its configured timeout while running hierarchically.');
@@ -433,6 +764,8 @@ class HierarchicalRunner
             usage: $usage,
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $metadata,
+            storeContext: $storeContext,
+            storeArtifacts: $storeArtifacts,
         );
     }
 
