@@ -1,8 +1,8 @@
-# Laravel Swarm — Package Context
+# Laravel Swarm — Agent Context
 
 ## What This Is
 
-`builtbyberry/laravel-swarm` is a Laravel package that adds multi-agent swarm orchestration on top of the official `laravel/ai` package. Laravel AI handles single-agent LLM interactions. Laravel Swarm coordinates multiple Laravel AI agents into pipelines with sequential, parallel, and hierarchical topologies.
+`builtbyberry/laravel-swarm` is a Laravel package that adds reusable multi-agent orchestration on top of the official `laravel/ai` package. Laravel AI handles single-agent LLM interactions and low-level workflow primitives. Laravel Swarm turns repeated multi-agent workflows into first-class application objects with sync, queued, streamed, and durable execution modes.
 
 ## Package Identity
 
@@ -14,100 +14,130 @@
 
 ## Core Design Principle — Laravel Native Feel
 
-Every decision must follow existing Laravel and Laravel AI conventions exactly. A developer who knows Laravel AI should look at a swarm class and understand it immediately. No invented patterns.
+Every implementation decision must follow existing Laravel and Laravel AI conventions. A developer who knows Laravel AI should look at a swarm class and understand it immediately. Do not invent new framework patterns when Laravel already has a recognizable convention.
 
-- Laravel AI uses `make:agent` — this package uses `make:swarm`
-- Laravel AI agents use `Promptable` trait — swarms use `Runnable` trait
-- Laravel AI uses PHP attributes (`#[Provider]`, `#[Model]`) — swarms use `#[Topology]`, `#[MaxAgentSteps]`, `#[Timeout]`
-- Laravel AI agents use `->prompt()`, `->queue()`, `->stream()` — swarms use `->run()`, `->queue()`
-- Laravel AI fakes with `Agent::fake()` — swarms fake with `Swarm::fake()`
-- Config lives in `config/swarm.php` — not merged into `config/ai.php`
-- Swarm classes live in `app/Ai/Swarms/` — extending the `app/Ai/` namespace Laravel AI establishes
+- Laravel AI uses `make:agent`; this package uses `make:swarm`.
+- Laravel AI agents use `Promptable`; swarms use `Runnable`.
+- Laravel AI uses PHP attributes like `#[Provider]` and `#[Model]`; swarms use `#[Topology]`, `#[MaxAgentSteps]`, and `#[Timeout]`.
+- Laravel AI agents use `prompt()`, `queue()`, and `stream()`; swarms use `run()`, `queue()`, `stream()`, and `dispatchDurable()`.
+- Laravel AI fakes with `Agent::fake()`; swarms fake with `Swarm::fake()` / `YourSwarm::fake()`.
+- Config lives in `config/swarm.php`, not `config/ai.php`.
+- Generated swarm classes live in `app/Ai/Swarms/`, extending the `app/Ai/` namespace Laravel AI establishes.
 
 ## Tech Stack
 
 - PHP ^8.5
 - Laravel ^13.0
-- `laravel/ai` ^0.6 (current Packagist line — no stable 1.0 yet)
+- `laravel/ai` ^0.6
 - `orchestra/testbench` ^11
 - `pestphp/pest` ^4.4 + `pest-plugin-laravel` ^4.1
+- `larastan/larastan` ^3.0
 - `laravel/pint` ^1.0
-- Scripts: `composer test` runs pest, `composer format` runs pint
+- Optional `laravel/pulse` integration
 
-## Package Structure
+## Package Shape
 
-```
-src/
-  Attributes/
-    MaxAgentSteps.php       — #[MaxAgentSteps(10)]
-    Timeout.php             — #[Timeout(300)]
-    Topology.php            — #[Topology(TopologyEnum::Sequential)]
-  Commands/
-    MakeSwarmCommand.php    — php artisan make:swarm
-  Concerns/
-    Runnable.php            — trait giving swarms run(), queue(), fake(), assertions
-  Contracts/
-    Swarm.php               — interface requiring agents(): array
-  Enums/
-    Topology.php            — Sequential, Parallel, Hierarchical
-  Exceptions/
-    SwarmException.php
-    SwarmTimeoutException.php
-  Facades/
-    Swarm.php               — backed by SwarmRunner
-  Responses/
-    SwarmResponse.php       — output, steps[], usage[]. Implements __toString()
-    QueuedSwarmResponse.php — then(), catch() like Laravel AI
-    SwarmStep.php           — agentClass, input, output per step
-  Runners/
-    SwarmRunner.php         — main entry, reads attributes, delegates to topology runners
-    SequentialRunner.php    — agents run in order, each output becomes next input
-    ParallelRunner.php      — all agents run concurrently via Concurrency facade
-    HierarchicalRunner.php  — first agent coordinates, delegates to others (@todo real routing)
-  Testing/
-    SwarmFake.php           — intercepts run/queue, records calls, provides assertions
-  SwarmServiceProvider.php
-stubs/
-  swarm.stub
-config/
-  swarm.php
-tests/
-  Feature/
-  Unit/
-  Fixtures/
-    Agents/   — FakeResearcher, FakeWriter, FakeEditor
-    Swarms/   — FakeSequentialSwarm, FakeParallelSwarm
-```
+Keep the mental model high-level rather than mirroring every file:
+
+- `src/Attributes` — swarm attributes for topology, timeout, and max agent steps.
+- `src/Commands` — `make:swarm` plus history, status, prune, pause, resume, cancel, and recover commands.
+- `src/Concerns` / `src/Contracts` — public swarm trait and storage/runtime contracts.
+- `src/Events` — lifecycle events for started, step started/completed, completed, failed, paused, resumed, and cancelled.
+- `src/Jobs` — queued and durable execution jobs.
+- `src/Persistence` — cache and database context, artifact, durable run, and run history stores.
+- `src/Pulse` — optional Pulse recorders, cards, and key helpers.
+- `src/Responses` — sync, queued, durable, artifact, response, and step DTOs.
+- `src/Routing` — hierarchical route plan objects and validation.
+- `src/Runners` — topology runners, durable manager, main runner, and step recorder.
+- `src/Support` — `RunContext`, history query helpers, capture helpers, monotonic time, and runtime support objects.
+- `src/Testing` — fakes and assertions.
+- `database/migrations` — package-managed persistence and durable runtime tables.
+- `docs/` and `examples/` — detailed user-facing behavior and integration examples.
+
+## Execution Modes
+
+- `run()` executes synchronously and returns a `SwarmResponse`.
+- `queue()` is lightweight background execution: one Laravel queue job owns one swarm run. Queued swarms are re-resolved from the container, so they must not rely on runtime instance state. Pass per-run data in the task payload or `RunContext`.
+- `stream()` is currently sequential-only. It emits step lifecycle events and token events for the streamed final-agent output.
+- `dispatchDurable()` is sequential-only, database-backed, checkpointed execution. It persists a durable cursor and advances one swarm step per job. Use events such as `SwarmCompleted` and `SwarmFailed`; durable responses do not support `then()` or `catch()`.
+
+Queued `then()` and `catch()` callbacks remain available for compatibility, but do not recommend them for real queued execution because serialized closures can capture excess state, fail serialization, or store sensitive data in queue payloads.
+
+## Topologies
+
+- **Sequential:** agents run in order; each output becomes the next input.
+- **Parallel:** agents run concurrently and each receives the original task. Parallel agents must be stateless, container-resolvable Laravel AI agents because Laravel concurrency serializes worker callbacks.
+- **Hierarchical:** the first agent is the coordinator. It must use Laravel AI structured output and return the full route plan. Laravel Swarm validates the plan as a DAG and executes `worker`, `parallel`, and `finish` nodes. In `run()`, parallel groups execute concurrently. In `queue()`, hierarchical parallel groups execute sequentially in declaration order in v1 while retaining parallel-safe validation rules.
+
+For hierarchical routing, there is no separate `route()` callback. The coordinator is the single source of truth for what should run next. `#[MaxAgentSteps]` counts the coordinator plus reachable worker executions and fails before worker execution if the validated plan exceeds the limit.
+
+## Persistence, History, And Capture
+
+Laravel Swarm persists run context, artifacts, and run history through configurable stores.
+
+- `RunContext` carries input, structured data, metadata, artifacts, and run ID control.
+- `ContextStore`, `ArtifactRepository`, `RunHistoryStore`, and `DurableRunStore` are the persistence contracts.
+- `SwarmHistory` provides application and console inspection over persisted runs.
+- Cache and database drivers are supported; database persistence uses package migrations loaded by the service provider.
+- Capture settings live under `swarm.capture.inputs` and `swarm.capture.outputs`. Treat persisted prompts, outputs, lifecycle events, and automatic step artifacts as sensitive surfaces.
+- Database retention is prune-based. Expired database rows remain queryable until `swarm:prune` runs, and active runs are protected from partial pruning.
+
+## Commands And Operations
+
+Public Artisan commands:
+
+- `php artisan make:swarm`
+- `php artisan swarm:status`
+- `php artisan swarm:history`
+- `php artisan swarm:prune`
+- `php artisan swarm:pause <run-id>`
+- `php artisan swarm:resume <run-id>`
+- `php artisan swarm:cancel <run-id>`
+- `php artisan swarm:recover`
+
+Schedule `swarm:prune` for database-backed persistence. Schedule `swarm:recover` frequently when using durable execution.
+
+## Pulse
+
+Laravel Swarm has optional Laravel Pulse support. When Pulse is installed, the package can register `swarm.runs` and `swarm.steps` Livewire cards. Applications enable the `SwarmRuns` and `SwarmStepDurations` recorders in `config/pulse.php`.
+
+Pulse is aggregate observability. For live per-run operations feeds, listen to Laravel Swarm lifecycle events and broadcast application-owned events.
 
 ## Key Architecture Decisions
 
-- No facades used inside orchestration classes — dependency injection only
-- `ParallelRunner` uses `ConcurrencyManager` from container, not the facade directly
-- `SwarmRunner` uses `Config` and `Cache` contracts
-- `Runnable::make()` returns `mixed` so a bound `SwarmFake` is valid on PHP 8.4+
-- `SwarmFake::queue()` returns `QueuedSwarmResponse` backed by Laravel AI's `FakePendingDispatch` to avoid `PendingDispatch::__destruct()` issues
-- Topology resolved via `ReflectionClass` reading `#[Topology]` attribute, falls back to `config('swarm.topology')`
+- Do not use facades inside orchestration internals; inject services and contracts through the container.
+- `ParallelRunner` and hierarchical parallel execution use `ConcurrencyManager` from the container, not the facade directly.
+- `SwarmRunner` resolves attributes via reflection and falls back to `config('swarm.*')`.
+- `Runnable::make()` returns `mixed` so a bound `SwarmFake` can be returned.
+- `SwarmFake` intercepts `run()`, `queue()`, `stream()`, and `dispatchDurable()` and records assertions.
+- Queued and parallel safety checks should fail before dispatch when a swarm or worker cannot be container-resolved safely.
+- Timeouts are best-effort orchestration deadlines checked before and between steps. They do not hard-cancel an in-flight provider call.
 
 ## Current State
 
-- 24 passing Pest tests
-- All three topology runners implemented (hierarchical delegates to sequential pending real coordinator logic)
-- `make:swarm` Artisan command working
-- Full fake/assertion system working
-- Config publishing working
+The package supports sequential, parallel, and hierarchical topologies; synchronous, queued, streamed, and durable execution; cache and database persistence; run history and artifacts; lifecycle events; optional Pulse observability; config, migration, and stub publishing; and a full fake/assertion system.
+
+The test suite includes Feature and Unit coverage across sequential, parallel, hierarchical routing, streaming, queued execution, durable execution, persistence, Pulse integration, commands, fakes, and support objects.
 
 ## Known Gaps / Next Work
 
-- `HierarchicalRunner` needs real coordinator routing — the first agent should return structured output that the runner uses to decide which downstream agents to invoke
-- Streaming support at the swarm level — `SwarmRunner` should support emitting progress events between agent steps so controllers can pipe them to SSE
-- Step events — emit `{"event": "step", "agent": "Writer"}` between agent runs so UIs can show real pipeline progress
-- Commercial dashboard layer (separate repo, future work)
+- Commercial dashboard layer is a separate future repo/product. The package intentionally exposes history, events, artifacts, and Pulse hooks instead of owning a full dashboard API.
 
-## Testing
+## Testing And Quality
+
+From the package root:
 
 ```bash
-cd ~/Code/laravel-swarm
-composer install
 composer test
+composer lint
+composer analyse
 composer format
 ```
+
+If running phpstan directly, use:
+
+```bash
+vendor/bin/phpstan analyse --memory-limit=2G --no-progress
+```
+
+`composer format` rewrites files with Pint. Use `composer lint` when you need a non-mutating formatting check.
