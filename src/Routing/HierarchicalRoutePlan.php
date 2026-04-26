@@ -18,6 +18,10 @@ class HierarchicalRoutePlan
 
     public function node(string $nodeId): HierarchicalRouteNode
     {
+        if (! array_key_exists($nodeId, $this->nodes)) {
+            throw new SwarmException("Hierarchical route plan references unknown node [{$nodeId}].");
+        }
+
         return $this->nodes[$nodeId];
     }
 
@@ -103,7 +107,15 @@ class HierarchicalRoutePlan
             throw new SwarmException("Persisted hierarchical route plan [start_at] references unknown node [{$startAt}].");
         }
 
-        return new self($startAt, $nodes);
+        $plan = new self($startAt, $nodes);
+
+        $plan->validatePersistedReferences();
+        $plan->validatePersistedParallelBranches();
+        $plan->validatePersistedReachability();
+        $plan->validatePersistedAcyclic();
+        $plan->validatePersistedDataDependencies();
+
+        return $plan;
     }
 
     /**
@@ -133,12 +145,12 @@ class HierarchicalRoutePlan
                 id: $nodeId,
                 branches: self::requiredStringList($payload, 'branches', $nodeId),
                 metadata: $metadata,
-                next: $next,
+                next: self::requiredString($payload, 'next', $nodeId),
             ),
             'finish' => new HierarchicalFinishNode(
                 id: $nodeId,
-                output: self::optionalString($payload, 'output', $nodeId),
-                outputFrom: self::optionalString($payload, 'output_from', $nodeId),
+                output: self::finishOutput($payload, $nodeId),
+                outputFrom: self::finishOutputFrom($payload, $nodeId),
                 metadata: $metadata,
             ),
             default => throw new SwarmException("Persisted hierarchical route node [{$nodeId}] uses unsupported type [{$type}]."),
@@ -209,6 +221,36 @@ class HierarchicalRoutePlan
 
     /**
      * @param  array<string, mixed>  $payload
+     */
+    protected static function finishOutput(array $payload, string $nodeId): ?string
+    {
+        $output = self::optionalString($payload, 'output', $nodeId);
+        $outputFrom = self::optionalString($payload, 'output_from', $nodeId);
+
+        if (($output !== null) === ($outputFrom !== null)) {
+            throw new SwarmException("Persisted hierarchical finish node [{$nodeId}] must define exactly one of [output] or [output_from].");
+        }
+
+        return $output;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected static function finishOutputFrom(array $payload, string $nodeId): ?string
+    {
+        $output = self::optionalString($payload, 'output', $nodeId);
+        $outputFrom = self::optionalString($payload, 'output_from', $nodeId);
+
+        if (($output !== null) === ($outputFrom !== null)) {
+            throw new SwarmException("Persisted hierarchical finish node [{$nodeId}] must define exactly one of [output] or [output_from].");
+        }
+
+        return $outputFrom;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
      * @return array<int, string>
      */
     protected static function requiredStringList(array $payload, string $key, string $nodeId): array
@@ -244,5 +286,173 @@ class HierarchicalRoutePlan
         }
 
         return $count;
+    }
+
+    protected function validatePersistedReferences(): void
+    {
+        foreach ($this->nodes as $node) {
+            foreach ($node->controlEdges() as $edge) {
+                if (! array_key_exists($edge, $this->nodes)) {
+                    throw new SwarmException("Persisted hierarchical route node [{$node->id}] references unknown node [{$edge}].");
+                }
+            }
+
+            if ($node instanceof HierarchicalWorkerNode) {
+                foreach ($node->withOutputs as $alias => $sourceNodeId) {
+                    if (! array_key_exists($sourceNodeId, $this->nodes)) {
+                        throw new SwarmException("Persisted hierarchical worker node [{$node->id}] maps output alias [{$alias}] from unknown node [{$sourceNodeId}].");
+                    }
+                }
+            }
+
+            if ($node instanceof HierarchicalFinishNode && $node->outputFrom !== null && ! array_key_exists($node->outputFrom, $this->nodes)) {
+                throw new SwarmException("Persisted hierarchical finish node [{$node->id}] references unknown output node [{$node->outputFrom}].");
+            }
+        }
+    }
+
+    protected function validatePersistedParallelBranches(): void
+    {
+        foreach ($this->nodes as $node) {
+            if (! $node instanceof HierarchicalParallelNode) {
+                continue;
+            }
+
+            foreach ($node->branches as $branchNodeId) {
+                $branch = $this->node($branchNodeId);
+
+                if (! $branch instanceof HierarchicalWorkerNode) {
+                    throw new SwarmException("Persisted hierarchical parallel node [{$node->id}] may only reference worker nodes in [branches].");
+                }
+
+                if ($branch->next !== null) {
+                    throw new SwarmException("Persisted hierarchical worker node [{$branch->id}] cannot define [next] when used as a parallel branch.");
+                }
+            }
+        }
+    }
+
+    protected function validatePersistedReachability(): void
+    {
+        $reachable = [];
+        $this->markPersistedReachable($this->startAt, $reachable);
+
+        foreach (array_keys($this->nodes) as $nodeId) {
+            if (! isset($reachable[$nodeId])) {
+                throw new SwarmException("Persisted hierarchical route plan contains unreachable node [{$nodeId}].");
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, true>  $reachable
+     */
+    protected function markPersistedReachable(string $nodeId, array &$reachable): void
+    {
+        if (isset($reachable[$nodeId])) {
+            return;
+        }
+
+        $reachable[$nodeId] = true;
+
+        foreach ($this->node($nodeId)->controlEdges() as $nextNodeId) {
+            $this->markPersistedReachable($nextNodeId, $reachable);
+        }
+    }
+
+    protected function validatePersistedAcyclic(): void
+    {
+        $visited = [];
+        $inProgress = [];
+
+        if ($this->hasPersistedCycle($this->startAt, $visited, $inProgress)) {
+            throw new SwarmException('Persisted hierarchical route plans must be acyclic. Loops are not supported in durable recovery.');
+        }
+    }
+
+    /**
+     * @param  array<string, bool>  $visited
+     * @param  array<string, bool>  $inProgress
+     */
+    protected function hasPersistedCycle(string $nodeId, array &$visited, array &$inProgress): bool
+    {
+        $visited[$nodeId] = true;
+        $inProgress[$nodeId] = true;
+
+        foreach ($this->node($nodeId)->controlEdges() as $nextNodeId) {
+            if (! isset($visited[$nextNodeId])) {
+                if ($this->hasPersistedCycle($nextNodeId, $visited, $inProgress)) {
+                    return true;
+                }
+            } elseif (isset($inProgress[$nextNodeId])) {
+                return true;
+            }
+        }
+
+        unset($inProgress[$nodeId]);
+
+        return false;
+    }
+
+    protected function validatePersistedDataDependencies(): void
+    {
+        $completed = [];
+
+        $this->validatePersistedNodeDataDependencies($this->startAt, $completed);
+    }
+
+    /**
+     * @param  array<string, true>  $completed
+     */
+    protected function validatePersistedNodeDataDependencies(string $nodeId, array &$completed): void
+    {
+        $node = $this->node($nodeId);
+
+        if ($node instanceof HierarchicalWorkerNode) {
+            $this->assertPersistedWorkerOutputsCompleted($node, $completed);
+            $completed[$node->id] = true;
+
+            if ($node->next !== null) {
+                $this->validatePersistedNodeDataDependencies($node->next, $completed);
+            }
+
+            return;
+        }
+
+        if ($node instanceof HierarchicalParallelNode) {
+            $groupCompleted = $completed;
+
+            foreach ($node->branches as $branchNodeId) {
+                /** @var HierarchicalWorkerNode $branch */
+                $branch = $this->node($branchNodeId);
+                $this->assertPersistedWorkerOutputsCompleted($branch, $completed);
+                $groupCompleted[$branch->id] = true;
+            }
+
+            $completed = $groupCompleted;
+
+            if ($node->next !== null) {
+                $this->validatePersistedNodeDataDependencies($node->next, $completed);
+            }
+
+            return;
+        }
+
+        /** @var HierarchicalFinishNode $node */
+        if ($node->outputFrom !== null && ! isset($completed[$node->outputFrom])) {
+            throw new SwarmException("Persisted hierarchical finish node [{$node->id}] cannot reference output from [{$node->outputFrom}] before that node has completed.");
+        }
+    }
+
+    /**
+     * @param  array<string, true>  $completed
+     */
+    protected function assertPersistedWorkerOutputsCompleted(HierarchicalWorkerNode $node, array $completed): void
+    {
+        foreach ($node->withOutputs as $alias => $sourceNodeId) {
+            if (! isset($completed[$sourceNodeId])) {
+                throw new SwarmException("Persisted hierarchical worker node [{$node->id}] cannot map output alias [{$alias}] from [{$sourceNodeId}] before that node has completed.");
+            }
+        }
     }
 }

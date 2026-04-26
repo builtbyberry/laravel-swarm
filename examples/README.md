@@ -26,7 +26,7 @@ Read the examples in this order:
 7. [Hierarchical Support Triage](hierarchical-support-triage/README.md): let a
    coordinator return a validated route plan for specialist workers.
 8. [Durable Compliance Review](durable-compliance-review/README.md): checkpoint
-   a sequential workflow one agent step per job.
+   a workflow one durable step per job.
 9. [Operations Dashboard](operations-dashboard/README.md): record lifecycle
    events, broadcast app-owned updates, and pair them with Pulse metrics.
 10. [Privacy Capture](privacy-capture/README.md): configure capture flags for
@@ -39,7 +39,7 @@ Read the examples in this order:
 | Every agent should run in a fixed order | Sequential | Each agent receives the previous agent's output. |
 | Independent agents should work at the same time | Parallel | Agents receive the original input and must be container-resolvable by class. |
 | A coordinator should decide which specialists run | Hierarchical | The first agent returns a route plan; worker classes after it must be unique. |
-| A long workflow should survive retries without replaying everything | Durable | Sequential only; one agent step is checkpointed per queued job. |
+| A long workflow should survive retries without replaying everything | Durable | Sequential and hierarchical swarms; one durable step is checkpointed per queued job. |
 | A browser needs a status page after dispatch | Run inspector | Use `run_id` to compose history, context, artifacts, durable state, and pending records. |
 | Operators need live run visibility | Operations dashboard | Store lifecycle event previews and broadcast your own application event. |
 
@@ -49,7 +49,8 @@ Read the examples in this order:
   and arrays containing those values.
 - Parallel swarm agents must be resolvable from Laravel's container by class.
 - Hierarchical worker classes must be unique after the coordinator.
-- Durable execution requires database persistence and sequential topology.
+- Durable execution requires database persistence and supports sequential and
+  hierarchical topology.
 - Prefer lifecycle events over queued `then()` / `catch()` callbacks.
 - For queued or durable swarms, size queue `retry_after` and worker timeouts for
   your provider calls and total swarm duration.

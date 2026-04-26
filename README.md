@@ -323,17 +323,20 @@ ArticlePipeline::make()->dispatchDurable([
 ]);
 ```
 
-Durable runs are checkpointed and advance one sequential step per job. That
-means retries and recovery are step-scoped instead of replaying the whole
-swarm.
+Durable runs are checkpointed and advance one step per job. Sequential durable
+runs execute one agent per job. Hierarchical durable runs execute the
+coordinator first, persist the validated route plan, and then advance one routed
+worker node per job.
 
 This is intentionally a separate execution mode:
 
 - `queue()` is lightweight background execution
 - `dispatchDurable()` is checkpointed durable execution
 
-Durable execution is sequential-only in this release and requires
-database-backed swarm persistence.
+Durable execution supports sequential and hierarchical swarms in this release
+and requires database-backed swarm persistence. Hierarchical durable parallel
+groups execute branch workers sequentially in declaration order for v1; durable
+fan-out/fan-in is intentionally deferred.
 
 Durable responses do not support `then()` or `catch()`. Durable runs are
 event-driven. Listen to `SwarmCompleted` and `SwarmFailed` instead of
@@ -430,13 +433,13 @@ class SupportRoutingSwarm implements Swarm
 
 The coordinator must implement Laravel AI structured output and return a plan
 with `start_at` and `nodes`. Worker nodes, parallel nodes, and finish nodes are
-supported. `run()` executes parallel groups concurrently; `queue()` executes
-parallel groups sequentially in declaration order in v1. Plans are still
-validated with parallel-safe dependency rules, so branch nodes cannot depend on
-sibling branch outputs. Parallel groups must define `next` and join into a
-subsequent node before the workflow can finish. `#[MaxAgentSteps]` counts the
-coordinator plus each reachable worker node and fails before worker execution
-when a plan exceeds the limit.
+supported. `run()` executes parallel groups concurrently. `queue()` and
+`dispatchDurable()` execute parallel groups sequentially in declaration order in
+v1. Plans are still validated with parallel-safe dependency rules, so branch
+nodes cannot depend on sibling branch outputs. Parallel groups must define
+`next` and join into a subsequent node before the workflow can finish.
+`#[MaxAgentSteps]` counts the coordinator plus each reachable worker node and
+fails before worker execution when a plan exceeds the limit.
 
 For the full routing contract, plan shape, and validation rules, see
 [Hierarchical Routing](docs/hierarchical-routing.md).

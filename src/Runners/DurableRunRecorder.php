@@ -50,6 +50,14 @@ class DurableRunRecorder
         });
     }
 
+    public function pauseAtBoundary(string $runId, string $token, RunContext $context): void
+    {
+        $this->connection->transaction(function () use ($runId, $token, $context): void {
+            $this->durableRuns->markPaused($runId, $token);
+            $this->historyStore->syncDurableState($runId, 'paused', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
+        });
+    }
+
     public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null): void
     {
         $this->connection->transaction(function () use ($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step): void {

@@ -195,7 +195,9 @@ context `input` field and structured task data.
 When output capture is disabled, event payloads and persisted step history keep
 their normal shape but replace captured output fields with `[redacted]`.
 Laravel Swarm also skips automatic `agent_output` artifact persistence and
-redacts terminal context output fields such as `last_output`.
+redacts terminal context output fields such as `last_output`. For hierarchical
+runs, terminal history redaction also covers hierarchical node outputs and the
+durable route cursor snapshot.
 
 When artifact capture is disabled, Laravel Swarm keeps captured input and output
 text according to the input/output capture settings, but skips automatic
@@ -226,6 +228,11 @@ Queued and durable execution keep raw context in the runtime context store while
 a run is active because workers need that state to continue the workflow. When a
 run reaches a terminal state, Laravel Swarm overwrites that context store entry
 with a redacted snapshot when capture is disabled.
+
+Durable hierarchical runs also keep route plans, route cursors, and per-node
+outputs in durable runtime storage while the run is active. Laravel Swarm clears
+that runtime route state and deletes durable node-output rows when the run
+completes, fails, or is cancelled.
 
 Capture flags cover prompts, outputs, automatic artifacts, terminal context
 snapshots, persisted failure messages, and failure event messages. They do not

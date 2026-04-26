@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.1.5
+
+### Added
+
+- Added durable hierarchical execution through `dispatchDurable()` using a
+  persisted route plan and route cursor
+- Added durable hierarchical node-output persistence with one row per node
+  output instead of a growing runtime JSON blob
+- Added targeted durable hierarchical node-output reads for `with_outputs` and
+  finish-node `output_from` dependencies
+
+### Changed
+
+- Extended durable execution support from sequential swarms to sequential and
+  hierarchical swarms
+- Hierarchical durable parallel groups execute branch workers sequentially in
+  declaration order for v1 while keeping the same parallel-safe validation
+  rules as synchronous hierarchical execution
+- Split durable checkpoint persistence into an internal recorder so the durable
+  manager owns orchestration flow while checkpoint, terminal, pause, resume, and
+  artifact persistence stay transactionally grouped
+- Added an upgrade note for the `swarm_contexts.input` `longText` migration:
+  large production tables should run package migrations during a maintenance
+  window, and rolling this column back to `text` can fail once long prompts have
+  been stored
+
+### Fixed / Hardened
+
+- Hardened durable hierarchical checkpoints so route cursor advancement,
+  context persistence, node-output persistence, artifact persistence, history
+  sync, and durable `next_step_index` advancement commit atomically
+- Hardened terminal durable completion, failure, and cancellation so runtime
+  route plans, route cursors, and durable node-output rows are cleared together
+  with terminal history/context persistence
+- Hardened durable pause and resume so runtime state and history cannot drift if
+  history sync fails
+- Preserved accumulated usage across durable hierarchical jobs before
+  checkpointing the next step
+- Redacted durable hierarchical cursor data from captured terminal history and
+  context when output capture is disabled
+- Hydrated persisted hierarchical route plans defensively with package-level
+  `SwarmException` messages when runtime state is malformed, including invalid
+  control references and output dependencies
+
+### Documentation
+
+- Updated durable execution, hierarchical routing, structured input, maintenance,
+  README, and example documentation for durable hierarchical support
+- Documented that durable fan-out/fan-in remains out of scope for this release
+
 ## v0.1.4
 
 ### Breaking / Contract Changes

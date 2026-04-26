@@ -1,7 +1,7 @@
 # Structured Input
 
-Laravel Swarm accepts the same three task shapes across `run()`, `queue()`, and
-`stream()`:
+Laravel Swarm accepts the same three task shapes across `run()`, `queue()`,
+`stream()`, and `dispatchDurable()`:
 
 - a string
 - an array
@@ -29,7 +29,7 @@ $response = ArticlePipeline::make()->run([
 ]);
 ```
 
-The same shape works with `queue()` and `stream()`:
+The same shape works with `queue()`, `stream()`, and `dispatchDurable()`:
 
 ```php
 ArticlePipeline::make()->queue([
@@ -45,6 +45,12 @@ foreach (ArticlePipeline::make()->stream([
 ]) as $event) {
     //
 }
+
+ArticlePipeline::make()->dispatchDurable([
+    'topic' => 'Laravel queues',
+    'audience' => 'intermediate developers',
+    'goal' => 'blog outline',
+]);
 ```
 
 Laravel Swarm stores array input as structured task data and makes it available
@@ -78,15 +84,15 @@ $response = ArticlePipeline::make()->run(RunContext::from([
 Most applications will not need to construct a `RunContext` manually. Arrays
 are the normal structured-input path.
 
-## Queueing Structured Input
+## Queueing And Durable Structured Input
 
-Queued structured input crosses a serialization boundary.
+Queued and durable structured input crosses a serialization boundary.
 
-When you queue a swarm with an array or `RunContext`, Laravel Swarm serializes
-the task as plain queue-safe data and rebuilds the `RunContext` on the worker
-before execution.
+When you queue or durably dispatch a swarm with an array or `RunContext`,
+Laravel Swarm serializes the task as plain queue-safe data and rebuilds the
+`RunContext` on the worker before execution.
 
-That means queued task payloads must contain plain data:
+That means queued and durable task payloads must contain plain data:
 
 - strings
 - integers

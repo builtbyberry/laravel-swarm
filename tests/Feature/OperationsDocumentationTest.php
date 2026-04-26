@@ -10,7 +10,9 @@ test('durable documentation includes production recovery and worker guidance', f
         ->and($contents)->toContain('dedicated queue')
         ->and($contents)->toContain('retry_after')
         ->and($contents)->toContain('swarm.durable.step_timeout')
-        ->and($contents)->toContain('sequential durable swarms');
+        ->and($contents)->toContain('sequential durable swarms')
+        ->and($contents)->toContain('Durable execution supports sequential and hierarchical swarms')
+        ->and($contents)->toContain('durable fan-out/fan-in is intentionally');
 });
 
 test('maintenance documentation includes the enterprise pilot posture', function () {

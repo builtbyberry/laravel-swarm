@@ -295,8 +295,18 @@ Loops are intentionally unsupported in this release.
 
 ### `dispatchDurable()`
 
-Durable execution remains sequential-only in this release. Hierarchical durable
-execution is intentionally deferred.
+- the same validated plan is used
+- the coordinator runs as durable step zero
+- Laravel Swarm persists the validated route plan and a route cursor
+- each durable worker job advances one routed worker node
+- parallel groups execute sequentially in branch declaration order in v1
+- branch metadata and history still record the plan as a parallel group so the
+  runtime can evolve later without changing the plan contract
+- terminal completed, failed, and cancelled runs clear durable route state and
+  durable node output rows from the runtime table
+
+Durable hierarchical execution intentionally does not add durable fan-out/fan-in
+in this release.
 
 ## History And Metadata
 

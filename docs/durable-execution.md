@@ -6,8 +6,8 @@ single long-running queue job.
 `queue()` remains the lightweight background mode. One queued job runs the
 whole swarm.
 
-`dispatchDurable()` is different. Laravel Swarm persists a durable cursor and
-advances one sequential step per job.
+`dispatchDurable()` is different. Laravel Swarm persists durable runtime state
+and advances one step per job.
 
 ## Choosing Between `queue()` And `dispatchDurable()`
 
@@ -29,7 +29,14 @@ $response = ArticlePipeline::make()->dispatchDurable([
 $response->runId;
 ```
 
-Durable execution is sequential-only in this release.
+Durable execution supports sequential and hierarchical swarms in this release.
+Parallel swarms are not durable yet.
+
+For hierarchical swarms, the coordinator runs first and returns the route plan.
+Laravel Swarm validates and persists that plan, then advances one routed worker
+node per durable job. Hierarchical parallel groups execute branch workers
+sequentially in declaration order for v1; durable fan-out/fan-in is intentionally
+deferred.
 
 Durable responses do not support `then()` or `catch()`. Durable runs are
 event-driven. Listen to `SwarmCompleted` and `SwarmFailed` instead of
@@ -53,18 +60,25 @@ gc_collect_cycles();
 ## How Durable Runs Advance
 
 Laravel Swarm persists durable execution state in the database and dispatches
-one job for each swarm step.
+one job for each durable step.
 
 Each durable step job:
 
 - acquires a database lease for the run
 - reloads the persisted run context
-- executes the next sequential agent
-- checkpoints the updated context, artifacts, and history
+- executes the next sequential agent or hierarchical routed worker
+- checkpoints the updated context, artifacts, history, and durable cursor
 - dispatches the next step job, or marks the run complete
 
 That gives retries and recovery a clear boundary. A retry re-runs the current
 step. It does not replay the whole workflow.
+
+For hierarchical durable runs, route plans and intermediate node outputs are
+runtime state. They are retained only while the run is active so recovery can
+continue from the correct node. When the run completes, fails, or is cancelled,
+Laravel Swarm clears the runtime route plan, route cursor, and durable node
+output rows. Terminal history and context still follow the normal capture and
+redaction settings.
 
 ## Pause, Resume, Cancel, And Recover
 
@@ -152,8 +166,8 @@ Schedule::command('swarm:prune')->daily();
 
 Before using durable swarms in production, make the operational contract
 explicit. Durable sequential execution is the recommended default for an
-enterprise pilot because each step has a clear retry, recovery, and inspection
-boundary.
+enterprise pilot because each step has the simplest retry, recovery, and
+inspection boundary.
 
 - use database-backed persistence and run the package migrations
 - put durable swarms on a dedicated queue when the workflow is important or
@@ -175,10 +189,11 @@ For a narrow production pilot, prefer sequential durable swarms with
 lower-sensitivity data, a dedicated queue, short retention, and database growth
 monitoring from day one.
 
-Parallel and hierarchical swarms remain supported, but they carry higher
-provider-rate-limit, concurrency, and cost risk. Hierarchical queued execution
-also executes parallel groups sequentially in this release. Treat those modes as
-an explicit operational choice rather than the default enterprise rollout path.
+Hierarchical durable swarms are supported, but they carry higher planning,
+prompt, and intermediate-output storage risk than a fixed sequential chain.
+Hierarchical queued and durable execution both execute parallel groups
+sequentially in this release. Treat hierarchical durable workflows as an
+explicit operational choice rather than the default enterprise rollout path.
 
 Durable recovery depends on the scheduler. If `swarm:recover` is not scheduled,
 a run can stay `running` after a worker crashes or exits between checkpointing a

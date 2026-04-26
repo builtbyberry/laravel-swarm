@@ -1179,6 +1179,41 @@ test('durable resume rolls runtime state back when history sync fails', function
     Event::assertNotDispatched(SwarmResumed::class, fn (SwarmResumed $event) => $event->runId === $runId);
 });
 
+test('in flight durable pause rolls runtime state back when history sync fails', function () {
+    Event::fake([SwarmPaused::class]);
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'pause_requested_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+
+    app()->instance(DatabaseRunHistoryStore::class, new class(app('db')->connection(), app('config'), app(SwarmCapture::class)) extends DatabaseRunHistoryStore
+    {
+        public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished, ?string $executionToken = null, ?int $leaseSeconds = null): void
+        {
+            parent::syncDurableState($runId, $status, $context, $metadata, $ttlSeconds, $finished, $executionToken, $leaseSeconds);
+
+            if ($status === 'paused') {
+                throw new RuntimeException('Simulated in-flight pause history sync failure.');
+            }
+        }
+    });
+    app()->forgetInstance(DurableRunRecorder::class);
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    expect(fn () => (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class)))
+        ->toThrow(RuntimeException::class, 'Simulated in-flight pause history sync failure.');
+
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('running');
+    expect(app(SwarmHistory::class)->find($runId)['status'])->toBe('running');
+    Event::assertNotDispatched(SwarmPaused::class, fn (SwarmPaused $event) => $event->runId === $runId);
+});
+
 test('durable recovery can resume after checkpoint persistence before next dispatch', function () {
     $manager = app(DurableSwarmManager::class);
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');

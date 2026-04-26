@@ -36,6 +36,23 @@ If you override `swarm.tables.*`, the prune command respects those configured
 table roles directly. It does not rely on default table-name patterns to decide
 which rows are safe to delete.
 
+## Migration Notes
+
+Laravel Swarm's package migrations are intentionally simple Laravel migrations.
+For most applications the swarm persistence tables are operational tables with
+short retention windows, so standard package migration workflows are enough.
+
+The v0.1.5 migration widens `swarm_contexts.input` from `text` to `longText` so
+structured and durable prompts are not truncated by database context
+persistence. On a heavily populated MySQL or MariaDB table, even a widening
+change can take a table lock depending on engine and version. Run package
+migrations during a normal maintenance window if you already have high-volume
+swarm context data.
+
+The rollback narrows that column back to `text`. Do not roll it back after
+storing prompts larger than the database `text` limit unless you have already
+pruned or exported those rows.
+
 ## Scheduling
 
 If you are using the database persistence driver in production, schedule the
@@ -88,6 +105,8 @@ For production database persistence:
 
 For a conservative enterprise pilot, start with one sequential durable workflow
 using lower-sensitivity data, a dedicated queue, short retention, and
-conservative capture settings. Do not begin with broad rollout across
-document-heavy or approval-critical workflows until storage growth, recovery
-behavior, and operator procedures have been proven in production-like use.
+conservative capture settings. Hierarchical durable workflows are supported, but
+they introduce coordinator prompts, route plans, and intermediate node outputs
+as runtime state. Do not begin with broad rollout across document-heavy or
+approval-critical workflows until storage growth, recovery behavior, and
+operator procedures have been proven in production-like use.

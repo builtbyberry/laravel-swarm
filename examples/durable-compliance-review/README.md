@@ -1,7 +1,7 @@
 # Durable Compliance Review
 
-Shows a checkpointed sequential workflow for compliance/document review where
-each agent step is persisted before the next job is dispatched.
+Shows a checkpointed workflow for compliance/document review where each durable
+step is persisted before the next job is dispatched.
 
 Use this pattern when replaying the entire swarm after a queue retry would be
 too expensive, too slow, or operationally unsafe.
@@ -27,7 +27,9 @@ This example covers:
 ## What Durable Changes
 
 `queue()` runs one queued job for the whole swarm. `dispatchDurable()` runs one
-queued job per sequential agent step and checkpoints the run between steps.
+queued job per durable step and checkpoints the run between steps. In a
+sequential swarm, that means one agent per job. In a hierarchical swarm, the
+coordinator runs first and each later job advances one routed worker node.
 
 That means a retry re-runs the current step. It does not replay the entire
 workflow from the beginning.

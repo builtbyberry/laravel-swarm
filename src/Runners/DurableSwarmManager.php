@@ -417,8 +417,7 @@ class DurableSwarmManager
 
         if (($run['pause_requested_at'] ?? null) !== null) {
             try {
-                $this->durableRuns->markPaused($runId, $token);
-                $this->historyStore->syncDurableState($runId, 'paused', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
+                $this->recorder->pauseAtBoundary($runId, $token, $context);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
