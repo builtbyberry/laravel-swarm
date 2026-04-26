@@ -21,7 +21,6 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
-use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -49,6 +48,7 @@ class DurableSwarmManager
         protected Dispatcher $events,
         protected SequentialRunner $sequential,
         protected HierarchicalRunner $hierarchical,
+        protected DurableRunRecorder $recorder,
         protected Connection $connection,
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
@@ -117,16 +117,29 @@ class DurableSwarmManager
     public function pause(string $runId): bool
     {
         $run = $this->requireRun($runId);
+        $context = null;
+        $updated = null;
 
-        if (! $this->durableRuns->pause($runId)) {
+        $paused = $this->connection->transaction(function () use ($runId, &$context, &$updated): bool {
+            if (! $this->durableRuns->pause($runId)) {
+                return false;
+            }
+
+            $updated = $this->requireRun($runId);
+
+            if ($updated['status'] === 'paused') {
+                $context = $this->loadContext($runId);
+                $this->historyStore->syncDurableState($runId, 'paused', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
+            }
+
+            return true;
+        });
+
+        if (! $paused) {
             throw new SwarmException("Durable run [{$runId}] cannot be paused from status [{$run['status']}].");
         }
 
-        $updated = $this->requireRun($runId);
-
-        if ($updated['status'] === 'paused') {
-            $context = $this->loadContext($runId);
-            $this->historyStore->syncDurableState($runId, 'paused', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
+        if (is_array($updated) && $updated['status'] === 'paused' && $context !== null) {
             $this->events->dispatch(new SwarmPaused(
                 runId: $runId,
                 swarmClass: $updated['swarm_class'],
@@ -147,12 +160,23 @@ class DurableSwarmManager
             throw new SwarmException("Durable run [{$runId}] cannot be resumed from status [{$run['status']}].");
         }
 
-        if (! $this->durableRuns->resume($runId)) {
+        $context = null;
+
+        $resumed = $this->connection->transaction(function () use ($runId, &$context): bool {
+            if (! $this->durableRuns->resume($runId)) {
+                return false;
+            }
+
+            $context = $this->loadContext($runId);
+            $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
+
+            return true;
+        });
+
+        if (! $resumed || $context === null) {
             throw new SwarmException("Durable run [{$runId}] could not be resumed.");
         }
 
-        $context = $this->loadContext($runId);
-        $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
         $this->events->dispatch(new SwarmResumed(
             runId: $runId,
             swarmClass: $run['swarm_class'],
@@ -234,12 +258,18 @@ class DurableSwarmManager
         $this->durableRuns->updateQueueRouting($runId, $connection, $queue);
     }
 
-    public function afterStepCheckpointUsing(mixed $hook): void
+    /**
+     * @internal Testing hook for crash/recovery coverage. Not part of the public package API.
+     */
+    public function afterStepCheckpointForTesting(?callable $hook): void
     {
         $this->afterStepCheckpointHook = $hook;
     }
 
-    public function beforeStepCheckpointUsing(mixed $hook): void
+    /**
+     * @internal Testing hook for crash/recovery coverage. Not part of the public package API.
+     */
+    public function beforeStepCheckpointForTesting(?callable $hook): void
     {
         $this->beforeStepCheckpointHook = $hook;
     }
@@ -261,11 +291,7 @@ class DurableSwarmManager
         if ($this->hasTimedOut($run)) {
             $exception = new SwarmException("Durable swarm run [{$runId}] exceeded its configured timeout.");
             try {
-                $this->connection->transaction(function () use ($runId, $token, $exception, $stepLeaseSeconds, $context): void {
-                    $this->durableRuns->markFailed($runId, $token);
-                    $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
-                    $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $token, $stepLeaseSeconds);
-                });
+                $this->recorder->fail($runId, $token, $exception, $context, $stepLeaseSeconds);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -285,11 +311,7 @@ class DurableSwarmManager
 
         if (($run['cancel_requested_at'] ?? null) !== null) {
             try {
-                $this->connection->transaction(function () use ($runId, $token, $context): void {
-                    $this->durableRuns->markCancelled($runId, $token);
-                    $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
-                    $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), true);
-                });
+                $this->recorder->cancel($runId, $token, $context);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -358,11 +380,7 @@ class DurableSwarmManager
             return;
         } catch (Throwable $exception) {
             try {
-                $this->connection->transaction(function () use ($runId, $token, $exception, $stepLeaseSeconds, $context): void {
-                    $this->durableRuns->markFailed($runId, $token);
-                    $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
-                    $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $token, $stepLeaseSeconds);
-                });
+                $this->recorder->fail($runId, $token, $exception, $context, $stepLeaseSeconds);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -382,12 +400,7 @@ class DurableSwarmManager
 
         if (($run = $this->requireRun($runId)) && ($run['cancel_requested_at'] ?? null) !== null) {
             try {
-                $this->connection->transaction(function () use ($runId, $token, $context, $step): void {
-                    $this->persistDurableStepArtifacts($runId, $step);
-                    $this->durableRuns->markCancelled($runId, $token);
-                    $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
-                    $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), true);
-                });
+                $this->recorder->cancel($runId, $token, $context, $step);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -440,12 +453,7 @@ class DurableSwarmManager
 
             try {
                 $capturedResponse = $this->limits->response($this->capture->response($response));
-                $this->connection->transaction(function () use ($runId, $token, $step, $context, $capturedResponse, $stepLeaseSeconds): void {
-                    $this->persistDurableStepArtifacts($runId, $step);
-                    $this->durableRuns->markCompleted($runId, $token);
-                    $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
-                    $this->historyStore->complete($runId, $capturedResponse, $this->ttlSeconds(), $token, $stepLeaseSeconds);
-                });
+                $this->recorder->complete($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -474,24 +482,9 @@ class DurableSwarmManager
             }
 
             if ($hierarchicalResult !== null) {
-                $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $hierarchicalResult, $step): void {
-                    $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
-                    $this->persistDurableStepArtifacts($runId, $step);
-                    $this->durableRuns->checkpointHierarchicalStep(
-                        runId: $runId,
-                        executionToken: $token,
-                        nextStepIndex: $nextStepIndex,
-                        context: $this->capture->activeContext($context),
-                        ttlSeconds: $this->ttlSeconds(),
-                        routeCursor: $hierarchicalResult->routeCursor,
-                        routePlan: $hierarchicalResult->routePlan,
-                        nodeOutput: $hierarchicalResult->nodeOutput,
-                        totalSteps: $hierarchicalResult->totalSteps,
-                    );
-                });
+                $this->recorder->checkpointHierarchical($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $hierarchicalResult, $step);
             } else {
-                $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
-                $this->durableRuns->releaseForNextStep($runId, $token, $nextStepIndex);
+                $this->recorder->checkpointSequential($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds);
             }
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
             return;
@@ -502,15 +495,6 @@ class DurableSwarmManager
         }
 
         $this->dispatchStepJob($runId, $nextStepIndex, $run['queue_connection'], $run['queue_name']);
-    }
-
-    protected function persistDurableStepArtifacts(string $runId, ?SwarmStep $step): void
-    {
-        if ($step === null || ! $this->capture->capturesArtifacts()) {
-            return;
-        }
-
-        $this->artifactRepository->storeMany($runId, $step->artifacts, $this->ttlSeconds());
     }
 
     public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch

@@ -25,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmSteps;
+use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
@@ -61,6 +62,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(SwarmRunner::class);
         $this->app->singleton(SwarmHistory::class);
         $this->app->singleton(SwarmEventRecorder::class);
+        $this->app->singleton(DurableRunRecorder::class);
         $this->app->singleton(DurableSwarmManager::class);
         $this->app->singleton(DurableRunStore::class, DatabaseDurableRunStore::class);
 

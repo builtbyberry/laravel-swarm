@@ -29,11 +29,6 @@ interface DurableRunStore
     public function releaseForNextStep(string $runId, string $executionToken, int $nextStepIndex): void;
 
     /**
-     * @return array<string, string>
-     */
-    public function hierarchicalNodeOutputs(string $runId): array;
-
-    /**
      * @param  array<int, string>  $nodeIds
      * @return array<string, string>
      */

@@ -169,16 +169,6 @@ class DatabaseDurableRunStore implements DurableRunStore
         ]);
     }
 
-    public function hierarchicalNodeOutputs(string $runId): array
-    {
-        return $this->nodeOutputTable()
-            ->where('run_id', $runId)
-            ->orderBy('id')
-            ->get()
-            ->mapWithKeys(static fn (object $record): array => [(string) $record->node_id => (string) $record->output])
-            ->all();
-    }
-
     public function hierarchicalNodeOutputsFor(string $runId, array $nodeIds): array
     {
         $nodeIds = array_values(array_unique(array_filter($nodeIds, static fn (string $nodeId): bool => $nodeId !== '')));

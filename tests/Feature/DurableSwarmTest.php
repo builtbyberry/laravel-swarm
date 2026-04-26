@@ -16,10 +16,13 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
@@ -49,6 +52,8 @@ function configureDurableRuntime(): void
     app()->forgetInstance(RunHistoryStore::class);
     app()->forgetInstance(DurableRunStore::class);
     app()->forgetInstance(SwarmRunner::class);
+    app()->forgetInstance(DurableRunRecorder::class);
+
     app()->forgetInstance(DurableSwarmManager::class);
 }
 
@@ -496,14 +501,14 @@ test('durable hierarchical recovery reruns the same worker after a crash before 
 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
 
-    $manager->beforeStepCheckpointUsing(function (): void {
+    $manager->beforeStepCheckpointForTesting(function (): void {
         throw new RuntimeException('Simulated crash before checkpoint.');
     });
 
     expect(fn () => (new AdvanceDurableSwarm($runId, 1))->handle($manager))
         ->toThrow(RuntimeException::class, 'Simulated crash before checkpoint.');
 
-    $manager->beforeStepCheckpointUsing(null);
+    $manager->beforeStepCheckpointForTesting(null);
 
     $run = $manager->find($runId);
 
@@ -551,7 +556,7 @@ test('durable hierarchical checkpoint rolls back cursor and outputs when lease i
 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
 
-    $manager->beforeStepCheckpointUsing(function () use ($runId): void {
+    $manager->beforeStepCheckpointForTesting(function () use ($runId): void {
         stealDurableLease($runId);
     });
 
@@ -594,6 +599,8 @@ test('durable hierarchical completion rolls back terminal scrub when terminal co
             throw new RuntimeException('Simulated terminal context persistence failure.');
         }
     });
+    app()->forgetInstance(DurableRunRecorder::class);
+
     app()->forgetInstance(DurableSwarmManager::class);
 
     expect(fn () => (new AdvanceDurableSwarm($runId, 1))->handle(app(DurableSwarmManager::class)))
@@ -641,6 +648,8 @@ test('durable hierarchical workers load only requested node outputs', function (
     };
 
     app()->instance(DurableRunStore::class, $store);
+    app()->forgetInstance(DurableRunRecorder::class);
+
     app()->forgetInstance(DurableSwarmManager::class);
     app()->forgetInstance(SwarmRunner::class);
 
@@ -843,6 +852,7 @@ test('durable workers stop cleanly when lease ownership is lost before context p
             return $this->inner->find($runId);
         }
     });
+    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
 
     Event::fake([SwarmCompleted::class]);
@@ -886,6 +896,7 @@ test('durable workers stop cleanly when the lease expires before context persist
             return $this->inner->find($runId);
         }
     });
+    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
 
     Event::fake([SwarmCompleted::class]);
@@ -931,6 +942,7 @@ test('durable workers stop cleanly when lease ownership is lost before next step
             return $this->inner->all($runId);
         }
     });
+    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
 
     Event::fake([SwarmCompleted::class]);
@@ -1064,6 +1076,7 @@ test('dispatch durable rolls startup writes back when a later startup write fail
             throw new RuntimeException('Simulated context persistence failure after startup write.');
         }
     });
+    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
     app()->forgetInstance(SwarmRunner::class);
 
@@ -1112,19 +1125,73 @@ test('durable pause resume and cancel commands update runtime state', function (
     Event::assertDispatched(SwarmCancelled::class, fn (SwarmCancelled $event) => $event->runId === $runId);
 });
 
+test('durable pause rolls runtime state back when history sync fails', function () {
+    Event::fake([SwarmPaused::class]);
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+
+    app()->instance(DatabaseRunHistoryStore::class, new class(app('db')->connection(), app('config'), app(SwarmCapture::class)) extends DatabaseRunHistoryStore
+    {
+        public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished, ?string $executionToken = null, ?int $leaseSeconds = null): void
+        {
+            parent::syncDurableState($runId, $status, $context, $metadata, $ttlSeconds, $finished, $executionToken, $leaseSeconds);
+
+            throw new RuntimeException('Simulated pause history sync failure.');
+        }
+    });
+    app()->forgetInstance(DurableRunRecorder::class);
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    expect(fn () => app(DurableSwarmManager::class)->pause($runId))
+        ->toThrow(RuntimeException::class, 'Simulated pause history sync failure.');
+
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending');
+    expect(app(SwarmHistory::class)->find($runId)['status'])->toBe('pending');
+    Event::assertNotDispatched(SwarmPaused::class, fn (SwarmPaused $event) => $event->runId === $runId);
+});
+
+test('durable resume rolls runtime state back when history sync fails', function () {
+    Event::fake([SwarmResumed::class]);
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+
+    app(DurableSwarmManager::class)->pause($runId);
+
+    app()->instance(DatabaseRunHistoryStore::class, new class(app('db')->connection(), app('config'), app(SwarmCapture::class)) extends DatabaseRunHistoryStore
+    {
+        public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished, ?string $executionToken = null, ?int $leaseSeconds = null): void
+        {
+            parent::syncDurableState($runId, $status, $context, $metadata, $ttlSeconds, $finished, $executionToken, $leaseSeconds);
+
+            throw new RuntimeException('Simulated resume history sync failure.');
+        }
+    });
+    app()->forgetInstance(DurableRunRecorder::class);
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    expect(fn () => app(DurableSwarmManager::class)->resume($runId))
+        ->toThrow(RuntimeException::class, 'Simulated resume history sync failure.');
+
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('paused');
+    expect(app(SwarmHistory::class)->find($runId)['status'])->toBe('paused');
+    Event::assertNotDispatched(SwarmResumed::class, fn (SwarmResumed $event) => $event->runId === $runId);
+});
+
 test('durable recovery can resume after checkpoint persistence before next dispatch', function () {
     $manager = app(DurableSwarmManager::class);
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
     $runId = $response->runId;
 
-    $manager->afterStepCheckpointUsing(function (): void {
+    $manager->afterStepCheckpointForTesting(function (): void {
         throw new RuntimeException('Simulated crash after checkpoint.');
     });
 
     expect(fn () => (new AdvanceDurableSwarm($runId, 0))->handle($manager))
         ->toThrow(RuntimeException::class, 'Simulated crash after checkpoint.');
 
-    $manager->afterStepCheckpointUsing(null);
+    $manager->afterStepCheckpointForTesting(null);
 
     $run = $manager->find($runId);
     $history = app(SwarmHistory::class)->find($runId);
