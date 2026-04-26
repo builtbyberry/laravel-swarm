@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\RecordsDurableRunFailureMetadata;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -34,7 +35,11 @@ class DurableRunRecorder
     public function fail(string $runId, string $token, Throwable $exception, RunContext $context, int $stepLeaseSeconds): void
     {
         $this->connection->transaction(function () use ($runId, $token, $exception, $context, $stepLeaseSeconds): void {
-            $this->durableRuns->markFailed($runId, $token);
+            if ($this->durableRuns instanceof RecordsDurableRunFailureMetadata) {
+                $this->durableRuns->markFailedWithMetadata($runId, $token, $exception);
+            } else {
+                $this->durableRuns->markFailed($runId, $token);
+            }
             $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $token, $stepLeaseSeconds);
         });

@@ -87,6 +87,7 @@ class DurableSwarmManager
                 'run_id' => $context->runId,
                 'swarm_class' => $swarm::class,
                 'topology' => $topology->value,
+                'execution_mode' => 'durable',
                 'status' => 'pending',
                 'next_step_index' => 0,
                 'current_step_index' => null,

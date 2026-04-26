@@ -335,6 +335,11 @@ test('durable hierarchical swarms persist the validated route cursor before work
 
     expect($run['next_step_index'])->toBe(1)
         ->and($cursor['current_node_id'])->toBe('writer_node')
+        ->and($run['execution_mode'])->toBe('durable')
+        ->and($run['route_start_node_id'])->toBe('writer_node')
+        ->and($run['current_node_id'])->toBe('writer_node')
+        ->and($run['completed_node_ids'])->toBe([])
+        ->and($run['node_states']['coordinator']['status'])->toBe('completed')
         ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->count())->toBe(0)
         ->and($context['metadata']['route_plan_start'])->toBe('writer_node');
 });
@@ -371,6 +376,9 @@ test('durable hierarchical swarms execute one routed worker per advancement', fu
     expect($manager->find($runId)['status'])->toBe('pending')
         ->and($manager->find($runId)['next_step_index'])->toBe(2)
         ->and($manager->find($runId)['route_cursor']['current_node_id'])->toBe('editor_node')
+        ->and($manager->find($runId)['current_node_id'])->toBe('editor_node')
+        ->and($manager->find($runId)['completed_node_ids'])->toBe(['writer_node'])
+        ->and($manager->find($runId)['node_states']['writer_node']['status'])->toBe('completed')
         ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->where('node_id', 'writer_node')->value('output'))->toBe('writer-out')
         ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->count())->toBe(1)
         ->and(Schema::hasColumn('swarm_durable_runs', 'node_outputs'))->toBeFalse()
@@ -675,7 +683,7 @@ test('durable hierarchical workers load only requested node outputs', function (
         ->and($store->requestedNodeIds)->toContain(['writer_node']);
 });
 
-test('durable hierarchical terminal states scrub route plans and node output rows', function () {
+test('durable hierarchical terminal states retain neutral route state and scrub node output rows', function () {
     FakeHierarchicalCoordinator::fake([
         durableHierarchicalPlan('writer_node', [
             'writer_node' => [
@@ -693,8 +701,11 @@ test('durable hierarchical terminal states scrub route plans and node output row
     (new AdvanceDurableSwarm($completed, 1))->handle($manager);
 
     expect($manager->find($completed)['status'])->toBe('completed')
-        ->and($manager->find($completed)['route_plan'])->toBeNull()
-        ->and($manager->find($completed)['route_cursor'])->toBeNull()
+        ->and($manager->find($completed)['route_plan'])->not->toBeNull()
+        ->and($manager->find($completed)['route_cursor'])->not->toBeNull()
+        ->and($manager->find($completed)['route_start_node_id'])->toBe('writer_node')
+        ->and($manager->find($completed)['completed_node_ids'])->toBe(['writer_node'])
+        ->and($manager->find($completed)['node_states']['writer_node']['status'])->toBe('completed')
         ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $completed)->count())->toBe(0);
 
     FakeHierarchicalCoordinator::fake([
@@ -713,8 +724,9 @@ test('durable hierarchical terminal states scrub route plans and node output row
     $manager->cancel($cancelled);
 
     expect($manager->find($cancelled)['status'])->toBe('cancelled')
-        ->and($manager->find($cancelled)['route_plan'])->toBeNull()
-        ->and($manager->find($cancelled)['route_cursor'])->toBeNull()
+        ->and($manager->find($cancelled)['route_plan'])->not->toBeNull()
+        ->and($manager->find($cancelled)['route_cursor'])->not->toBeNull()
+        ->and($manager->find($cancelled)['cancelled_at'])->not->toBeNull()
         ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $cancelled)->count())->toBe(0);
 
     FakeHierarchicalCoordinator::fake([
@@ -739,8 +751,10 @@ test('durable hierarchical terminal states scrub route plans and node output row
         ->toThrow(RuntimeException::class, 'Hierarchical worker failed.');
 
     expect($manager->find($failed)['status'])->toBe('failed')
-        ->and($manager->find($failed)['route_plan'])->toBeNull()
-        ->and($manager->find($failed)['route_cursor'])->toBeNull()
+        ->and($manager->find($failed)['route_plan'])->not->toBeNull()
+        ->and($manager->find($failed)['route_cursor'])->not->toBeNull()
+        ->and($manager->find($failed)['failure']['message'])->toBe('Hierarchical worker failed.')
+        ->and($manager->find($failed)['node_states']['writer_node']['status'])->toBe('failed')
         ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $failed)->count())->toBe(0);
 });
 
@@ -994,6 +1008,9 @@ test('durable recovery lets a reclaimed owner complete after a stale worker beco
 
     Artisan::call('swarm:recover');
 
+    expect($manager->find($runId)['recovery_count'])->toBe(1)
+        ->and($manager->find($runId)['last_recovered_at'])->not->toBeNull();
+
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
     (new AdvanceDurableSwarm($runId, 1))->handle($manager);
     (new AdvanceDurableSwarm($runId, 2))->handle($manager);
@@ -1108,19 +1125,25 @@ test('durable pause resume and cancel commands update runtime state', function (
 
     Artisan::call('swarm:pause', ['runId' => $runId]);
 
-    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('paused');
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('paused')
+        ->and(app(DurableSwarmManager::class)->find($runId)['paused_at'])->not->toBeNull()
+        ->and(app(DurableSwarmManager::class)->find($runId)['pause_requested_at'])->not->toBeNull();
     expect(app(SwarmHistory::class)->find($runId)['status'])->toBe('paused');
     Event::assertDispatched(SwarmPaused::class, fn (SwarmPaused $event) => $event->runId === $runId);
 
     Artisan::call('swarm:resume', ['runId' => $runId]);
 
-    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending');
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending')
+        ->and(app(DurableSwarmManager::class)->find($runId)['resumed_at'])->not->toBeNull()
+        ->and(app(DurableSwarmManager::class)->find($runId)['pause_requested_at'])->toBeNull();
     expect(app(SwarmHistory::class)->find($runId)['status'])->toBe('pending');
     Event::assertDispatched(SwarmResumed::class, fn (SwarmResumed $event) => $event->runId === $runId);
 
     Artisan::call('swarm:cancel', ['runId' => $runId]);
 
-    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('cancelled');
+    expect(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('cancelled')
+        ->and(app(DurableSwarmManager::class)->find($runId)['cancelled_at'])->not->toBeNull()
+        ->and(app(DurableSwarmManager::class)->find($runId)['cancel_requested_at'])->not->toBeNull();
     expect(app(SwarmHistory::class)->find($runId)['status'])->toBe('cancelled');
     Event::assertDispatched(SwarmCancelled::class, fn (SwarmCancelled $event) => $event->runId === $runId);
 });

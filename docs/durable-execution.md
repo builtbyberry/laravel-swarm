@@ -73,12 +73,26 @@ Each durable step job:
 That gives retries and recovery a clear boundary. A retry re-runs the current
 step. It does not replay the whole workflow.
 
-For hierarchical durable runs, route plans and intermediate node outputs are
-runtime state. They are retained only while the run is active so recovery can
-continue from the correct node. When the run completes, fails, or is cancelled,
-Laravel Swarm clears the runtime route plan, route cursor, and durable node
-output rows. Terminal history and context still follow the normal capture and
-redaction settings.
+## Operational State
+
+Durable runs persist neutral operational state in the database so applications
+can build run inspectors, operator dashboards, and recovery tools without
+depending only on terminal history rows.
+
+For hierarchical durable runs, Laravel Swarm stores the validated route plan,
+route cursor, route start node, current node, completed node IDs, and per-node
+state. For all durable runs, the runtime record also tracks execution mode,
+attempts, lease timestamps, recovery counters, pause/resume/cancel timestamps,
+timeout state, and failure metadata.
+
+`SwarmHistory` remains the stable inspection API for run history, output,
+steps, usage, timing, and terminal failure details. The durable runtime record
+is the database-backed operational surface for current execution state.
+
+Intermediate durable node outputs are still treated as runtime payloads. Laravel
+Swarm deletes durable node-output rows when a hierarchical durable run
+completes, fails, or is cancelled. Terminal history and context still follow the
+normal capture and redaction settings.
 
 ## Pause, Resume, Cancel, And Recover
 

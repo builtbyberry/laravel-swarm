@@ -70,6 +70,16 @@ usually combines:
 - durable state when the run came from `dispatchDurable()`
 - a short-lived pending record for queued runs that have not started yet
 
+`SwarmHistory` remains the stable history surface for every execution mode. For
+durable runs, database-backed persistence also exposes a durable runtime record
+with operational state such as route progress, node state, leases, attempts,
+operator controls, recovery markers, and failure metadata. Use that runtime
+record as an additional inspection surface for active and terminal durable runs.
+
+This durable operational state is only available with database-backed durable
+execution. Cache-backed persistence keeps recent history visibility, but it does
+not provide the durable runtime table or durable leases.
+
 Laravel Swarm intentionally keeps those stores focused instead of shipping a
 package-owned dashboard API. Compose them in application code into the stable
 JSON shape your UI needs.
@@ -229,10 +239,10 @@ a run is active because workers need that state to continue the workflow. When a
 run reaches a terminal state, Laravel Swarm overwrites that context store entry
 with a redacted snapshot when capture is disabled.
 
-Durable hierarchical runs also keep route plans, route cursors, and per-node
-outputs in durable runtime storage while the run is active. Laravel Swarm clears
-that runtime route state and deletes durable node-output rows when the run
-completes, fails, or is cancelled.
+Durable hierarchical runs also keep route plans, route cursors, neutral node
+state, and per-node outputs in durable runtime storage while the run is active.
+Laravel Swarm retains neutral route and node inspection state after terminal
+completion, failure, or cancellation, but deletes durable node-output rows.
 
 Capture flags cover prompts, outputs, automatic artifacts, terminal context
 snapshots, persisted failure messages, and failure event messages. They do not
