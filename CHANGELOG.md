@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.1.6 - 2026-04-26
+
+### Changed
+
+- Documented durable runtime inspection as neutral durable operational state for
+  application-owned dashboards, operators, and future connectors
+- Added the `DurableRunStore::find()` documentation path for durable runtime
+  inspection while keeping `SwarmHistory` as the stable history surface
+- Changed terminal hierarchical durable runs to retain an inspection-safe route
+  projection instead of the raw active route plan
+
+### Fixed / Hardened
+
+- Redacted durable runtime failure metadata through the existing capture policy
+  before persisting run failure and node failure state
+- Removed the one-off `RecordsDurableRunFailureMetadata` capability contract and
+  folded redacted failure metadata into the durable store contract
+- Hardened terminal durable completion, failure, and cancellation so route-plan
+  projection replacement and durable node-output deletion happen atomically
+- Made durable recovery scans pure queries and moved recovery bookkeeping to an
+  explicit `markRecoveryDispatched()` call after redispatch succeeds
+- Guarded recovery bookkeeping so stale recovery results cannot mutate terminal
+  durable runs
+
 ## v0.1.5 - 2026-04-26
 
 ### Added

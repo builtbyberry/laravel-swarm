@@ -248,7 +248,10 @@ class DurableSwarmManager
         );
 
         foreach ($runs as $run) {
-            $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+            $dispatch = $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+            unset($dispatch);
+
+            $this->durableRuns->markRecoveryDispatched($run['run_id']);
         }
 
         return array_map(static fn (array $run): string => $run['run_id'], $runs);

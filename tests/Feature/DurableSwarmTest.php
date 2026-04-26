@@ -20,10 +20,13 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
+use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
+use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
+use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
@@ -35,6 +38,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Database\Schema\Builder;
+use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -690,6 +694,12 @@ test('durable hierarchical terminal states retain neutral route state and scrub 
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
                 'prompt' => 'writer-task',
+                'metadata' => ['sensitive' => 'writer-metadata'],
+                'next' => 'finish_node',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output' => 'literal-final-output',
             ],
         ]),
     ]);
@@ -698,10 +708,16 @@ test('durable hierarchical terminal states retain neutral route state and scrub 
     $completed = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task')->runId;
 
     (new AdvanceDurableSwarm($completed, 0))->handle($manager);
+
+    expect($manager->find($completed)['route_plan']['nodes']['writer_node'])
+        ->toHaveKey('prompt', 'writer-task');
+
     (new AdvanceDurableSwarm($completed, 1))->handle($manager);
 
     expect($manager->find($completed)['status'])->toBe('completed')
         ->and($manager->find($completed)['route_plan'])->not->toBeNull()
+        ->and($manager->find($completed)['route_plan']['nodes']['writer_node'])->not->toHaveKeys(['prompt', 'metadata'])
+        ->and($manager->find($completed)['route_plan']['nodes']['finish_node'])->not->toHaveKey('output')
         ->and($manager->find($completed)['route_cursor'])->not->toBeNull()
         ->and($manager->find($completed)['route_start_node_id'])->toBe('writer_node')
         ->and($manager->find($completed)['completed_node_ids'])->toBe(['writer_node'])
@@ -714,6 +730,7 @@ test('durable hierarchical terminal states retain neutral route state and scrub 
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
                 'prompt' => 'writer-task',
+                'metadata' => ['sensitive' => 'cancel-metadata'],
             ],
         ]),
     ]);
@@ -721,10 +738,21 @@ test('durable hierarchical terminal states retain neutral route state and scrub 
     $cancelled = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-cancel')->runId;
 
     (new AdvanceDurableSwarm($cancelled, 0))->handle($manager);
+
+    DB::table('swarm_durable_node_outputs')->insert([
+        'run_id' => $cancelled,
+        'node_id' => 'writer_node',
+        'output' => 'cancel-output',
+        'expires_at' => now()->addHour(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
     $manager->cancel($cancelled);
 
     expect($manager->find($cancelled)['status'])->toBe('cancelled')
         ->and($manager->find($cancelled)['route_plan'])->not->toBeNull()
+        ->and($manager->find($cancelled)['route_plan']['nodes']['writer_node'])->not->toHaveKeys(['prompt', 'metadata'])
         ->and($manager->find($cancelled)['route_cursor'])->not->toBeNull()
         ->and($manager->find($cancelled)['cancelled_at'])->not->toBeNull()
         ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $cancelled)->count())->toBe(0);
@@ -735,6 +763,7 @@ test('durable hierarchical terminal states retain neutral route state and scrub 
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
                 'prompt' => 'writer-task',
+                'metadata' => ['sensitive' => 'failed-metadata'],
             ],
         ]),
     ]);
@@ -747,11 +776,21 @@ test('durable hierarchical terminal states retain neutral route state and scrub 
 
     (new AdvanceDurableSwarm($failed, 0))->handle($manager);
 
+    DB::table('swarm_durable_node_outputs')->insert([
+        'run_id' => $failed,
+        'node_id' => 'writer_node',
+        'output' => 'failed-output',
+        'expires_at' => now()->addHour(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
     expect(fn () => (new AdvanceDurableSwarm($failed, 1))->handle($manager))
         ->toThrow(RuntimeException::class, 'Hierarchical worker failed.');
 
     expect($manager->find($failed)['status'])->toBe('failed')
         ->and($manager->find($failed)['route_plan'])->not->toBeNull()
+        ->and($manager->find($failed)['route_plan']['nodes']['writer_node'])->not->toHaveKeys(['prompt', 'metadata'])
         ->and($manager->find($failed)['route_cursor'])->not->toBeNull()
         ->and($manager->find($failed)['failure']['message'])->toBe('Hierarchical worker failed.')
         ->and($manager->find($failed)['node_states']['writer_node']['status'])->toBe('failed')
@@ -834,8 +873,17 @@ test('durable failures redact persisted and event messages when capture is disab
         ->toThrow(RuntimeException::class, 'Queued swarm failed.');
 
     $history = app(SwarmHistory::class)->find($runId);
+    $run = app(DurableSwarmManager::class)->find($runId);
 
     expect($history['error'])->toMatchArray([
+        'class' => RuntimeException::class,
+        'message' => '[redacted]',
+    ]);
+    expect($run['failure'])->toMatchArray([
+        'class' => RuntimeException::class,
+        'message' => '[redacted]',
+    ]);
+    expect($run['node_states']['step:0']['failure'])->toMatchArray([
         'class' => RuntimeException::class,
         'message' => '[redacted]',
     ]);
@@ -997,14 +1045,24 @@ test('durable recovery lets a reclaimed owner complete after a stale worker beco
 
     expect($manager->find($runId)['status'])->toBe('running');
 
+    $staleUpdatedAt = now()->subMinutes(10);
+
     DB::table('swarm_durable_runs')
         ->where('run_id', $runId)
         ->update([
             'status' => 'pending',
             'execution_token' => null,
             'leased_until' => null,
-            'updated_at' => now()->subMinutes(10),
+            'updated_at' => $staleUpdatedAt,
         ]);
+
+    $beforeRecoveryScan = $manager->find($runId);
+
+    app(DurableRunStore::class)->recoverable();
+
+    expect($manager->find($runId)['recovery_count'])->toBe($beforeRecoveryScan['recovery_count'])
+        ->and($manager->find($runId)['last_recovered_at'])->toBe($beforeRecoveryScan['last_recovered_at'])
+        ->and($manager->find($runId)['updated_at'])->toBe($beforeRecoveryScan['updated_at']);
 
     Artisan::call('swarm:recover');
 
@@ -1021,6 +1079,79 @@ test('durable recovery lets a reclaimed owner complete after a stale worker beco
         ->and($history['status'])->toBe('completed')
         ->and($history['steps'])->toHaveCount(3)
         ->and($history['output'])->toBe('editor-out');
+});
+
+test('durable recovery markers advance only after redispatch succeeds', function () {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('durable-task')->runId;
+    $staleUpdatedAt = now()->subMinutes(10);
+
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'status' => 'pending',
+            'execution_token' => null,
+            'leased_until' => null,
+            'updated_at' => $staleUpdatedAt,
+        ]);
+
+    $manager = app(DurableSwarmManager::class);
+    $before = $manager->find($runId);
+
+    $throwingManager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class)) extends DurableSwarmManager
+    {
+        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
+        {
+            throw new RuntimeException('Redispatch failed.');
+        }
+    };
+
+    expect(fn () => $throwingManager->recover(runId: $runId))
+        ->toThrow(RuntimeException::class, 'Redispatch failed.');
+
+    $after = $manager->find($runId);
+
+    expect($after['recovery_count'])->toBe($before['recovery_count'])
+        ->and($after['last_recovered_at'])->toBe($before['last_recovered_at'])
+        ->and($after['updated_at'])->toBe($before['updated_at']);
+});
+
+test('durable recovery markers do not mutate terminal runs from stale recovery results', function () {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('durable-task')->runId;
+    $staleUpdatedAt = now()->subMinutes(10);
+
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'status' => 'pending',
+            'execution_token' => null,
+            'leased_until' => null,
+            'updated_at' => $staleUpdatedAt,
+        ]);
+
+    $store = app(DurableRunStore::class);
+    $recoverable = $store->recoverable(runId: $runId);
+
+    expect($recoverable)->toHaveCount(1);
+
+    $terminalAt = now();
+
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'status' => 'completed',
+            'finished_at' => $terminalAt,
+            'updated_at' => $terminalAt,
+        ]);
+
+    $before = app(DurableSwarmManager::class)->find($runId);
+
+    $store->markRecoveryDispatched($recoverable[0]['run_id']);
+
+    $after = app(DurableSwarmManager::class)->find($runId);
+
+    expect($after['recovery_count'])->toBe($before['recovery_count'])
+        ->and($after['last_recovered_at'])->toBe($before['last_recovered_at'])
+        ->and($after['updated_at'])->toBe($before['updated_at']);
 });
 
 test('dispatch durable remains lazy until the response is released', function () {

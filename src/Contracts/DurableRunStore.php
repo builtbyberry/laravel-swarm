@@ -53,7 +53,10 @@ interface DurableRunStore
 
     public function markCompleted(string $runId, string $executionToken): void;
 
-    public function markFailed(string $runId, string $executionToken): void;
+    /**
+     * @param  array{message: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure
+     */
+    public function markFailed(string $runId, string $executionToken, ?array $failure = null): void;
 
     public function markPaused(string $runId, string $executionToken): void;
 
@@ -69,6 +72,8 @@ interface DurableRunStore
      * @return array<int, array<string, mixed>>
      */
     public function recoverable(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array;
+
+    public function markRecoveryDispatched(string $runId): void;
 
     public function updateQueueRouting(string $runId, ?string $connection, ?string $queue): void;
 }

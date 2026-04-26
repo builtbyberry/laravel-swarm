@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
-use BuiltByBerry\LaravelSwarm\Contracts\RecordsDurableRunFailureMetadata;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
@@ -14,9 +13,8 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
-use Throwable;
 
-class DatabaseDurableRunStore implements DurableRunStore, RecordsDurableRunFailureMetadata
+class DatabaseDurableRunStore implements DurableRunStore
 {
     use InteractsWithJsonColumns;
 
@@ -327,14 +325,9 @@ class DatabaseDurableRunStore implements DurableRunStore, RecordsDurableRunFailu
         $this->markTerminal($runId, $executionToken, 'completed');
     }
 
-    public function markFailed(string $runId, string $executionToken): void
+    public function markFailed(string $runId, string $executionToken, ?array $failure = null): void
     {
-        $this->markTerminal($runId, $executionToken, 'failed');
-    }
-
-    public function markFailedWithMetadata(string $runId, string $executionToken, Throwable $exception): void
-    {
-        $this->markTerminal($runId, $executionToken, 'failed', $exception);
+        $this->markTerminal($runId, $executionToken, 'failed', $failure);
     }
 
     public function markPaused(string $runId, string $executionToken): void
@@ -406,6 +399,8 @@ class DatabaseDurableRunStore implements DurableRunStore, RecordsDurableRunFailu
         $now = Carbon::now('UTC');
 
         $updated = $this->connection->transaction(function () use ($runId, $now): int {
+            $routePlanProjection = $this->terminalRoutePlanProjection($this->find($runId));
+
             $updated = $this->table()
                 ->where('run_id', $runId)
                 ->whereIn('status', ['pending', 'paused'])
@@ -416,6 +411,7 @@ class DatabaseDurableRunStore implements DurableRunStore, RecordsDurableRunFailu
                     'finished_at' => $now,
                     'execution_token' => null,
                     'leased_until' => null,
+                    'route_plan' => $routePlanProjection !== null ? $this->encodeJson($routePlanProjection) : null,
                     'updated_at' => $now,
                 ]);
 
@@ -463,17 +459,22 @@ class DatabaseDurableRunStore implements DurableRunStore, RecordsDurableRunFailu
             $query->where('swarm_class', $swarmClass);
         }
 
-        return $query->get()->map(function (object $record) use ($now): ?array {
-            $this->table()
-                ->where('run_id', $record->run_id)
-                ->update([
-                    'recovery_count' => $this->connection->raw('recovery_count + 1'),
-                    'last_recovered_at' => $now,
-                    'updated_at' => $now,
-                ]);
+        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+    }
 
-            return $this->find($record->run_id);
-        })->filter()->values()->all();
+    public function markRecoveryDispatched(string $runId): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->table()
+            ->where('run_id', $runId)
+            ->whereIn('status', ['pending', 'running'])
+            ->whereNull('finished_at')
+            ->update([
+                'recovery_count' => $this->connection->raw('recovery_count + 1'),
+                'last_recovered_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
     }
 
     public function updateQueueRouting(string $runId, ?string $connection, ?string $queue): void
@@ -502,21 +503,22 @@ class DatabaseDurableRunStore implements DurableRunStore, RecordsDurableRunFailu
         }
     }
 
-    protected function markTerminal(string $runId, string $executionToken, string $status, ?Throwable $exception = null): void
+    /**
+     * @param  array{message: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure
+     */
+    protected function markTerminal(string $runId, string $executionToken, string $status, ?array $failure = null): void
     {
-        $this->connection->transaction(function () use ($runId, $executionToken, $status, $exception): void {
+        $this->connection->transaction(function () use ($runId, $executionToken, $status, $failure): void {
             $run = $this->find($runId);
             $now = Carbon::now('UTC');
             $nodeId = $run !== null ? $this->nodeIdForRun($run, (int) ($run['current_step_index'] ?? $run['next_step_index'] ?? 0)) : null;
-            $failure = $exception !== null ? [
-                'message' => $exception->getMessage(),
-                'class' => $exception::class,
-            ] : null;
+            $routePlanProjection = $this->terminalRoutePlanProjection($run);
 
             $values = [
                 'status' => $status,
                 'execution_token' => null,
                 'leased_until' => null,
+                'route_plan' => $routePlanProjection !== null ? $this->encodeJson($routePlanProjection) : null,
                 'finished_at' => $now,
             ];
 
@@ -528,7 +530,7 @@ class DatabaseDurableRunStore implements DurableRunStore, RecordsDurableRunFailu
                 $values['failure'] = $this->encodeJson($failure);
             }
 
-            if ($status === 'failed' && $exception !== null && str_contains(strtolower($exception->getMessage()), 'timeout')) {
+            if ($status === 'failed' && ($failure['timed_out'] ?? false) === true) {
                 $values['timed_out_at'] = $now;
             }
 
@@ -548,6 +550,68 @@ class DatabaseDurableRunStore implements DurableRunStore, RecordsDurableRunFailu
 
             $this->nodeOutputTable()->where('run_id', $runId)->delete();
         });
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $run
+     * @return array<string, mixed>|null
+     */
+    protected function terminalRoutePlanProjection(?array $run): ?array
+    {
+        $plan = $run['route_plan'] ?? null;
+
+        if (! is_array($plan)) {
+            return null;
+        }
+
+        $nodes = $plan['nodes'] ?? null;
+
+        if (! is_array($nodes)) {
+            return [
+                'start_at' => $plan['start_at'] ?? null,
+                'nodes' => [],
+            ];
+        }
+
+        $projectedNodes = [];
+
+        foreach ($nodes as $nodeId => $node) {
+            if (! is_string($nodeId) || ! is_array($node)) {
+                continue;
+            }
+
+            $type = $node['type'] ?? null;
+
+            if (! is_string($type)) {
+                continue;
+            }
+
+            $payload = ['type' => $type];
+
+            if ($type === 'worker') {
+                $payload = array_merge($payload, array_filter([
+                    'agent' => $node['agent'] ?? null,
+                    'with_outputs' => $node['with_outputs'] ?? null,
+                    'next' => $node['next'] ?? null,
+                ], static fn (mixed $value): bool => $value !== null && $value !== []));
+            } elseif ($type === 'parallel') {
+                $payload = array_merge($payload, array_filter([
+                    'branches' => $node['branches'] ?? null,
+                    'next' => $node['next'] ?? null,
+                ], static fn (mixed $value): bool => $value !== null && $value !== []));
+            } elseif ($type === 'finish') {
+                $payload = array_merge($payload, array_filter([
+                    'output_from' => $node['output_from'] ?? null,
+                ], static fn (mixed $value): bool => $value !== null && $value !== []));
+            }
+
+            $projectedNodes[$nodeId] = $payload;
+        }
+
+        return [
+            'start_at' => $plan['start_at'] ?? null,
+            'nodes' => $projectedNodes,
+        ];
     }
 
     /**

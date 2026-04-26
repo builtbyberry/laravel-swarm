@@ -302,8 +302,9 @@ Loops are intentionally unsupported in this release.
 - parallel groups execute sequentially in branch declaration order in v1
 - branch metadata and history still record the plan as a parallel group so the
   runtime can evolve later without changing the plan contract
-- terminal completed, failed, and cancelled runs retain neutral route, cursor,
-  and node inspection state but delete durable node output rows
+- terminal completed, failed, and cancelled runs retain a sanitized route
+  projection, cursor, and node inspection state but delete durable node output
+  rows
 
 Durable hierarchical execution intentionally does not add durable fan-out/fan-in
 in this release.

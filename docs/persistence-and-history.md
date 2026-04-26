@@ -76,6 +76,12 @@ with operational state such as route progress, node state, leases, attempts,
 operator controls, recovery markers, and failure metadata. Use that runtime
 record as an additional inspection surface for active and terminal durable runs.
 
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+
+$runtime = app(DurableRunStore::class)->find($runId);
+```
+
 This durable operational state is only available with database-backed durable
 execution. Cache-backed persistence keeps recent history visibility, but it does
 not provide the durable runtime table or durable leases.
@@ -241,13 +247,16 @@ with a redacted snapshot when capture is disabled.
 
 Durable hierarchical runs also keep route plans, route cursors, neutral node
 state, and per-node outputs in durable runtime storage while the run is active.
-Laravel Swarm retains neutral route and node inspection state after terminal
-completion, failure, or cancellation, but deletes durable node-output rows.
+Active route plans can contain worker prompts because recovery needs the raw
+route. Laravel Swarm replaces terminal route plans with an inspection-safe
+projection after completion, failure, or cancellation, and deletes durable
+node-output rows.
 
-Capture flags cover prompts, outputs, automatic artifacts, terminal context
-snapshots, persisted failure messages, and failure event messages. They do not
-redact developer-supplied metadata. Treat metadata as operational data only and
-do not put secrets, raw prompts, or provider payloads in it.
+Capture flags cover captured inputs, captured outputs, automatic artifacts,
+terminal context snapshots, durable runtime failure metadata, persisted failure
+messages, and failure event messages. They do not redact active route plans or
+developer-supplied metadata. Treat metadata as operational data only and do not
+put secrets, raw prompts, or provider payloads in it.
 
 ## Payload Limits
 

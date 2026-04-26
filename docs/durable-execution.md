@@ -79,11 +79,22 @@ Durable runs persist neutral operational state in the database so applications
 can build run inspectors, operator dashboards, and recovery tools without
 depending only on terminal history rows.
 
-For hierarchical durable runs, Laravel Swarm stores the validated route plan,
-route cursor, route start node, current node, completed node IDs, and per-node
-state. For all durable runs, the runtime record also tracks execution mode,
-attempts, lease timestamps, recovery counters, pause/resume/cancel timestamps,
-timeout state, and failure metadata.
+For hierarchical durable runs, Laravel Swarm stores the route cursor, route
+start node, current node, completed node IDs, and per-node state. While a run
+is active, the durable runtime record also keeps the validated route plan so
+recovery can continue the route. Active route plans can contain worker prompts
+and should be treated as sensitive operational storage.
+
+When a hierarchical durable run completes, fails, or is cancelled, Laravel
+Swarm replaces the raw route plan with an inspection-safe projection. The
+terminal projection keeps route topology such as node IDs, node type, worker
+agent, selected dependencies, branch IDs, next pointers, and finish
+`output_from`, but removes worker prompts, literal finish output, and node
+metadata.
+
+For all durable runs, the runtime record also tracks execution mode, attempts,
+lease timestamps, recovery counters, pause/resume/cancel timestamps, timeout
+state, and failure metadata.
 
 `SwarmHistory` remains the stable inspection API for run history, output,
 steps, usage, timing, and terminal failure details. The durable runtime record
@@ -91,8 +102,8 @@ is the database-backed operational surface for current execution state.
 
 Intermediate durable node outputs are still treated as runtime payloads. Laravel
 Swarm deletes durable node-output rows when a hierarchical durable run
-completes, fails, or is cancelled. Terminal history and context still follow the
-normal capture and redaction settings.
+completes, fails, or is cancelled. Terminal history, context, and durable
+failure metadata follow the normal capture and redaction settings.
 
 ## Pause, Resume, Cancel, And Recover
 

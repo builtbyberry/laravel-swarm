@@ -15,7 +15,17 @@ test('durable documentation includes production recovery and worker guidance', f
         ->and($contents)->toContain('durable fan-out/fan-in is intentionally')
         ->and($contents)->toContain('## Operational State')
         ->and($contents)->toContain('durable runtime record')
+        ->and($contents)->toContain('inspection-safe projection')
         ->and($contents)->toContain('durable node-output rows');
+});
+
+test('persistence documentation names durable runtime inspection access', function () {
+    $contents = file_get_contents(__DIR__.'/../../docs/persistence-and-history.md');
+
+    expect($contents)->toContain('SwarmHistory` remains the stable history surface')
+        ->and($contents)->toContain('app(DurableRunStore::class)->find($runId)')
+        ->and($contents)->toContain('Active route plans can contain worker prompts')
+        ->and($contents)->toContain('durable runtime failure metadata');
 });
 
 test('maintenance documentation includes the enterprise pilot posture', function () {
