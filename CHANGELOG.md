@@ -2,6 +2,22 @@
 
 ## v0.1.6 - 2026-04-26
 
+### Added
+
+- Added database-backed durable operational state for application-owned
+  inspectors, dashboards, operators, and future connectors
+- Added durable runtime columns for execution mode, route start/current node,
+  completed node IDs, node states, failure metadata, attempts, lease
+  timestamps, recovery counters, operator control timestamps, timeout state,
+  queue routing, and terminal timing
+- Added persisted hierarchical route plan and route cursor visibility for
+  active durable runs so inspectors can report route progress while recovery
+  still has the raw data it needs
+- Added durable runtime node-state tracking for coordinator, sequential step,
+  worker, completed, failed, paused, cancelled, and leased states
+- Added durable runtime inspection coverage for active and terminal durable
+  runs through the existing durable store surface
+
 ### Changed
 
 - Documented durable runtime inspection as neutral durable operational state for
@@ -10,6 +26,11 @@
   inspection while keeping `SwarmHistory` as the stable history surface
 - Changed terminal hierarchical durable runs to retain an inspection-safe route
   projection instead of the raw active route plan
+- Clarified that cache-backed persistence does not provide the durable runtime
+  inspection surface
+- Updated durable execution, persistence/history, and hierarchical routing docs
+  to describe active route-plan sensitivity and terminal route projection
+  behavior
 
 ### Fixed / Hardened
 
@@ -19,10 +40,17 @@
   folded redacted failure metadata into the durable store contract
 - Hardened terminal durable completion, failure, and cancellation so route-plan
   projection replacement and durable node-output deletion happen atomically
+- Hardened terminal hierarchical durable records so worker prompts, finish
+  literal output, and node metadata are not retained after completion, failure,
+  or cancellation
+- Deleted intermediate durable node-output rows at terminal states while
+  retaining sanitized route/cursor/node inspection state
 - Made durable recovery scans pure queries and moved recovery bookkeeping to an
   explicit `markRecoveryDispatched()` call after redispatch succeeds
 - Guarded recovery bookkeeping so stale recovery results cannot mutate terminal
   durable runs
+- Preserved existing history inspection APIs while adding the durable runtime
+  inspection surface additively
 
 ## v0.1.5 - 2026-04-26
 
