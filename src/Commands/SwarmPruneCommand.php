@@ -27,6 +27,7 @@ class SwarmPruneCommand extends Command
             'contexts' => (string) $config->get('swarm.tables.contexts', 'swarm_contexts'),
             'artifacts' => (string) $config->get('swarm.tables.artifacts', 'swarm_artifacts'),
             'durable_node_outputs' => (string) $config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs'),
+            'durable_branches' => (string) $config->get('swarm.tables.durable_branches', 'swarm_durable_branches'),
         ];
 
         $deleted = [];
@@ -41,7 +42,10 @@ class SwarmPruneCommand extends Command
         foreach ($tables as $name => $table) {
             if (! $schema->hasTable($table)) {
                 $deleted[$name] = 0;
-                $this->components->warn("Skipping {$name} pruning because table [{$table}] does not exist.");
+
+                if ($name !== 'durable_branches') {
+                    $this->components->warn("Skipping {$name} pruning because table [{$table}] does not exist.");
+                }
 
                 continue;
             }
@@ -60,9 +64,10 @@ class SwarmPruneCommand extends Command
             $deleted['history_steps'],
         ));
         $this->components->info(sprintf(
-            'Pruned %d durable runtime and %d durable node output record(s).',
+            'Pruned %d durable runtime, %d durable node output, and %d durable branch record(s).',
             $deleted['durable'],
             $deleted['durable_node_outputs'],
+            $deleted['durable_branches'],
         ));
 
         return self::SUCCESS;
@@ -91,7 +96,7 @@ class SwarmPruneCommand extends Command
                     ->whereNotIn('run_id', function ($subquery) use ($historyTable): void {
                         $subquery->from($historyTable)
                             ->select('run_id')
-                            ->whereIn('status', ['pending', 'running', 'paused']);
+                            ->whereIn('status', ['pending', 'running', 'paused', 'waiting']);
                     });
             }
 

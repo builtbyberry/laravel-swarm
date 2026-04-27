@@ -14,12 +14,14 @@ database tables:
 php artisan swarm:prune
 ```
 
-The command prunes the history, context, artifact, and durable runtime tables in
-bounded chunks to avoid long-running table locks on large datasets.
+The command prunes the history, context, artifact, durable runtime, durable
+node-output, and durable branch tables in bounded chunks to avoid long-running
+table locks on large datasets.
 
 Laravel Swarm protects active runs across persistence stores. While a run is
-`pending`, `running`, or `paused`, its history, context, artifact, and durable
-runtime rows are not pruned, even if their retention window has elapsed.
+`pending`, `running`, `waiting`, or `paused`, its history, context, artifact,
+durable runtime, node-output, and branch rows are not pruned, even if their
+retention window has elapsed.
 
 History pruning only removes expired terminal rows (`completed`, `failed`, and
 `cancelled`). Context and artifact pruning skip rows that belong to active runs.
@@ -30,7 +32,9 @@ history row is expired.
 skips all pruning because active-run safety depends on history. If history
 exists but the context, artifact, or durable runtime table is missing, the
 command skips that table role and reports the skip while pruning the tables
-that are present.
+that are present. If the durable branch table is missing, branch pruning is
+silently skipped so environments that have not run the durable branch migration
+can still prune older persistence tables.
 
 If you override `swarm.tables.*`, the prune command respects those configured
 table roles directly. It does not rely on default table-name patterns to decide
@@ -75,7 +79,10 @@ Schedule::command('swarm:recover')->everyFiveMinutes();
 
 `swarm:recover` is not a cleanup task like pruning. It is the safety net for
 durable runs that were checkpointed successfully but never dispatched their next
-step because a worker crashed or exited at the wrong moment.
+step because a worker crashed or exited at the wrong moment. For durable
+parallel work, recovery also releases waiting parents whose branch rows are all
+terminal, covering the crash window between a branch checkpoint and parent join
+dispatch.
 
 Prune-based retention is complementary to queue design, not a substitute for
 it. The built-in lightweight queue mode is a good fit for normal background

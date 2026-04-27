@@ -252,6 +252,12 @@ recovery needs the raw route. Laravel Swarm replaces terminal route plans with
 an inspection-safe projection after completion, failure, or cancellation, and
 deletes durable node-output rows.
 
+Durable parallel parents may be `waiting` while branch jobs own independent
+leases. Treat `waiting` as active operational state for retention and
+inspection. Recovery can release a waiting parent to its join step after every
+branch row is terminal, and operator pause, resume, and cancel commands are
+handled at that branch boundary.
+
 Capture flags cover captured inputs, captured outputs, automatic artifacts,
 terminal context snapshots, durable runtime failure metadata, persisted failure
 messages, and failure event messages. They do not redact active route plans or

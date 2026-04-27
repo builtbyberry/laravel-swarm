@@ -578,26 +578,28 @@ class DatabaseDurableRunStore implements DurableRunStore
     {
         $now = Carbon::now('UTC');
         $threshold = $now->copy()->subSeconds($graceSeconds);
+        $branchTable = (string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches');
+        $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
 
-        $query = $this->branchTable()
-            ->join($this->config->get('swarm.tables.durable', 'swarm_durable_runs'), 'swarm_durable_branches.run_id', '=', 'swarm_durable_runs.run_id')
-            ->whereIn('swarm_durable_branches.status', ['pending', 'running'])
-            ->where('swarm_durable_branches.updated_at', '<=', $threshold)
+        $query = $this->connection->table($branchTable.' as branches')
+            ->join($durableTable.' as runs', 'branches.run_id', '=', 'runs.run_id')
+            ->whereIn('branches.status', ['pending', 'running'])
+            ->where('branches.updated_at', '<=', $threshold)
             ->where(function ($query) use ($now): void {
-                $query->whereNull('swarm_durable_branches.leased_until')
-                    ->orWhere('swarm_durable_branches.leased_until', '<', $now);
+                $query->whereNull('branches.leased_until')
+                    ->orWhere('branches.leased_until', '<', $now);
             })
-            ->whereNull('swarm_durable_runs.finished_at')
-            ->orderBy('swarm_durable_branches.updated_at')
+            ->whereNull('runs.finished_at')
+            ->orderBy('branches.updated_at')
             ->limit($limit)
-            ->select('swarm_durable_branches.*');
+            ->select('branches.*');
 
         if ($runId !== null) {
-            $query->where('swarm_durable_branches.run_id', $runId);
+            $query->where('branches.run_id', $runId);
         }
 
         if ($swarmClass !== null) {
-            $query->where('swarm_durable_runs.swarm_class', $swarmClass);
+            $query->where('runs.swarm_class', $swarmClass);
         }
 
         return $query->get()
@@ -657,9 +659,33 @@ class DatabaseDurableRunStore implements DurableRunStore
             return true;
         }
 
+        $run = $this->find($runId);
+        $nodeId = is_string($run['current_node_id'] ?? null) ? $run['current_node_id'] : null;
+
+        $updated = $this->table()
+            ->where('run_id', $runId)
+            ->where('status', 'waiting')
+            ->whereNull('finished_at')
+            ->update([
+                'status' => 'paused',
+                'pause_requested_at' => $now,
+                'paused_at' => $now,
+                'node_states' => $this->encodeJson($this->mergeNodeState($runId, $nodeId ?? 'waiting', [
+                    'status' => 'paused',
+                    'finished_at' => $now->toJSON(),
+                ], $run)),
+                'execution_token' => null,
+                'leased_until' => null,
+                'updated_at' => $now,
+            ]);
+
+        if ($updated === 1) {
+            return true;
+        }
+
         return $this->table()
             ->where('run_id', $runId)
-            ->whereIn('status', ['running', 'waiting'])
+            ->where('status', 'running')
             ->update([
                 'pause_requested_at' => $now,
                 'updated_at' => $now,
@@ -668,11 +694,19 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function resume(string $runId): bool
     {
+        $run = $this->find($runId);
+        $nodeId = is_string($run['current_node_id'] ?? null) ? $run['current_node_id'] : null;
+        $hasBranchBoundary = $nodeId !== null && $this->branchTable()
+            ->where('run_id', $runId)
+            ->where('parent_node_id', $nodeId)
+            ->exists();
+        $status = $hasBranchBoundary ? 'waiting' : 'pending';
+
         return $this->table()
             ->where('run_id', $runId)
             ->where('status', 'paused')
             ->update([
-                'status' => 'pending',
+                'status' => $status,
                 'pause_requested_at' => null,
                 'resumed_at' => Carbon::now('UTC'),
                 'updated_at' => Carbon::now('UTC'),
@@ -688,7 +722,7 @@ class DatabaseDurableRunStore implements DurableRunStore
 
             $updated = $this->table()
                 ->where('run_id', $runId)
-                ->whereIn('status', ['pending', 'paused'])
+                ->whereIn('status', ['pending', 'paused', 'waiting'])
                 ->update([
                     'status' => 'cancelled',
                     'cancel_requested_at' => $now,
@@ -714,7 +748,7 @@ class DatabaseDurableRunStore implements DurableRunStore
 
         return $this->table()
             ->where('run_id', $runId)
-            ->whereIn('status', ['running', 'waiting'])
+            ->where('status', 'running')
             ->update([
                 'cancel_requested_at' => $now,
                 'updated_at' => $now,
@@ -746,6 +780,33 @@ class DatabaseDurableRunStore implements DurableRunStore
         }
 
         return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+    }
+
+    public function recoverableWaitingJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
+    {
+        $threshold = Carbon::now('UTC')->subSeconds($graceSeconds);
+
+        $query = $this->table()
+            ->where('status', 'waiting')
+            ->whereNull('finished_at')
+            ->whereNotNull('current_node_id')
+            ->where('updated_at', '<=', $threshold)
+            ->orderBy('updated_at')
+            ->limit($limit);
+
+        if ($runId !== null) {
+            $query->where('run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('swarm_class', $swarmClass);
+        }
+
+        return $query->get()
+            ->map(fn (object $record): ?array => $this->find($record->run_id))
+            ->filter(fn (?array $run): bool => $run !== null && $this->branchesAreTerminalForWaitingRun($run))
+            ->values()
+            ->all();
     }
 
     public function markRecoveryDispatched(string $runId): void
@@ -1054,6 +1115,32 @@ class DatabaseDurableRunStore implements DurableRunStore
     protected function branchTable()
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     */
+    protected function branchesAreTerminalForWaitingRun(array $run): bool
+    {
+        $parentNodeId = $run['current_node_id'] ?? null;
+
+        if (! is_string($parentNodeId)) {
+            return false;
+        }
+
+        $branches = $this->branchesFor((string) $run['run_id'], $parentNodeId);
+
+        if ($branches === []) {
+            return false;
+        }
+
+        foreach ($branches as $branch) {
+            if (! in_array($branch['status'] ?? null, ['completed', 'failed', 'cancelled'], true)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

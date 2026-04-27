@@ -169,14 +169,16 @@ class DurableSwarmManager
         }
 
         $context = null;
+        $updated = null;
 
-        $resumed = $this->connection->transaction(function () use ($runId, &$context): bool {
+        $resumed = $this->connection->transaction(function () use ($runId, &$context, &$updated): bool {
             if (! $this->durableRuns->resume($runId)) {
                 return false;
             }
 
+            $updated = $this->requireRun($runId);
             $context = $this->loadContext($runId);
-            $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
+            $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
 
             return true;
         });
@@ -193,7 +195,13 @@ class DurableSwarmManager
             executionMode: 'durable',
         ));
 
-        $this->dispatchStepJob($runId, (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+        if (is_array($updated) && $updated['status'] === 'waiting') {
+            $this->dispatchWaitingBoundary($updated, true);
+
+            return true;
+        }
+
+        $this->dispatchStepJob($runId, (int) ($updated['next_step_index'] ?? $run['next_step_index']), $run['queue_connection'], $run['queue_name']);
 
         return true;
     }
@@ -273,9 +281,26 @@ class DurableSwarmManager
             unset($dispatch);
         }
 
+        $waitingJoins = $this->durableRuns->recoverableWaitingJoins(
+            runId: $runId,
+            swarmClass: $swarmClass,
+            limit: $limit,
+            graceSeconds: (int) $this->config->get('swarm.durable.recovery.grace_seconds', 300),
+        );
+
+        foreach ($waitingJoins as $run) {
+            if ($this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
+                $dispatch = $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+                unset($dispatch);
+
+                $this->durableRuns->markRecoveryDispatched($run['run_id']);
+            }
+        }
+
         return array_values(array_unique(array_merge(
             array_map(static fn (array $run): string => $run['run_id'], $runs),
             array_map(static fn (array $branch): string => $branch['run_id'], $branches),
+            array_map(static fn (array $run): string => $run['run_id'], $waitingJoins),
         )));
     }
 
@@ -805,6 +830,11 @@ class DurableSwarmManager
     {
         $run = $this->requireRun($runId);
 
+        $this->dispatchWaitingBoundary($run);
+    }
+
+    protected function dispatchWaitingBoundary(array $run, bool $dispatchRecoverableBranches = false): void
+    {
         if ($run['status'] !== 'waiting') {
             return;
         }
@@ -815,15 +845,44 @@ class DurableSwarmManager
             return;
         }
 
-        $branches = $this->durableRuns->branchesFor($runId, $parentNodeId);
+        $branches = $this->durableRuns->branchesFor($run['run_id'], $parentNodeId);
 
-        if (! $this->branchesAreTerminal($branches)) {
+        if ($this->branchesAreTerminal($branches)) {
+            if ($this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
+                $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+            }
+
             return;
         }
 
-        if ($this->durableRuns->releaseWaitingRunForJoin($runId, (int) $run['next_step_index'])) {
-            $this->dispatchStepJob($runId, (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+        if (! $dispatchRecoverableBranches) {
+            return;
         }
+
+        foreach ($branches as $branch) {
+            if (! $this->branchShouldBeRedispatched($branch)) {
+                continue;
+            }
+
+            $this->dispatchBranchJob($run['run_id'], (string) $branch['branch_id'], $branch['queue_connection'] ?? $run['queue_connection'], $branch['queue_name'] ?? $run['queue_name']);
+        }
+    }
+
+    protected function branchShouldBeRedispatched(array $branch): bool
+    {
+        if ($branch['status'] === 'pending') {
+            return true;
+        }
+
+        if ($branch['status'] !== 'running') {
+            return false;
+        }
+
+        if (($branch['leased_until'] ?? null) === null) {
+            return true;
+        }
+
+        return Carbon::parse((string) $branch['leased_until'], 'UTC')->isPast();
     }
 
     protected function failParentFromBranches(array $run, RunContext $context, int $stepLeaseSeconds): void

@@ -433,11 +433,12 @@ class SupportRoutingSwarm implements Swarm
 
 The coordinator must implement Laravel AI structured output and return a plan
 with `start_at` and `nodes`. Worker nodes, parallel nodes, and finish nodes are
-supported. `run()` executes parallel groups concurrently. `queue()` and
-`dispatchDurable()` execute parallel groups sequentially in declaration order in
-v1. Plans are still validated with parallel-safe dependency rules, so branch
-nodes cannot depend on sibling branch outputs. Parallel groups must define
-`next` and join into a subsequent node before the workflow can finish.
+supported. `run()` executes parallel groups concurrently. `queue()` executes
+parallel groups sequentially in declaration order in v1. `dispatchDurable()`
+uses durable branch jobs with independent leases, then joins after every branch
+is terminal. Plans are still validated with parallel-safe dependency rules, so
+branch nodes cannot depend on sibling branch outputs. Parallel groups must
+define `next` and join into a subsequent node before the workflow can finish.
 `#[MaxAgentSteps]` counts the coordinator plus each reachable worker node and
 fails before worker execution when a plan exceeds the limit.
 

@@ -112,6 +112,15 @@ function expireDurableLease(string $runId): void
         ]);
 }
 
+function staleWaitingRun(string $runId): void
+{
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'updated_at' => now('UTC')->subMinutes(10),
+        ]);
+}
+
 function dropColumnIfPresent(Builder $schema, string $table, string $column): void
 {
     if ($schema->hasColumn($table, $column)) {
@@ -253,6 +262,120 @@ test('durable top level parallel collect failures waits for branch terminal stat
         ->and($context['metadata']['durable_parallel_branches'])->toHaveCount(3);
 });
 
+test('durable recovery releases waiting joins after branches checkpoint terminally', function () {
+    $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel') as $branch) {
+        DB::table('swarm_durable_branches')
+            ->where('run_id', $runId)
+            ->where('branch_id', $branch['branch_id'])
+            ->update([
+                'status' => 'completed',
+                'output' => 'output-'.$branch['step_index'],
+                'usage' => json_encode(['total_tokens' => (int) $branch['step_index'] + 1]),
+                'duration_ms' => 1,
+                'failure' => null,
+                'finished_at' => now('UTC'),
+                'execution_token' => null,
+                'leased_until' => null,
+                'updated_at' => now('UTC')->subMinutes(10),
+            ]);
+    }
+
+    staleWaitingRun($runId);
+
+    Artisan::call('swarm:recover');
+
+    expect($manager->find($runId)['status'])->toBe('pending')
+        ->and($manager->find($runId)['next_step_index'])->toBe(3)
+        ->and($manager->find($runId)['recovery_count'])->toBe(1)
+        ->and($manager->find($runId)['last_recovered_at'])->not->toBeNull();
+
+    (new AdvanceDurableSwarm($runId, 3))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('completed');
+    expect(app(SwarmHistory::class)->find($runId)['output'])->toBe("output-0\n\noutput-1\n\noutput-2");
+});
+
+test('durable recovery does not release waiting joins until every branch is terminal', function () {
+    $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    DB::table('swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->where('branch_id', 'parallel:0')
+        ->update([
+            'status' => 'completed',
+            'output' => 'output-0',
+            'usage' => json_encode([]),
+            'duration_ms' => 1,
+            'finished_at' => now('UTC'),
+            'updated_at' => now('UTC')->subMinutes(10),
+        ]);
+
+    staleWaitingRun($runId);
+
+    Artisan::call('swarm:recover');
+
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and($manager->find($runId)['recovery_count'])->toBe(0);
+});
+
+test('durable recovery joins collected branch failures and fails the parent', function () {
+    $response = FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    DB::table('swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->where('branch_id', 'parallel:0')
+        ->update([
+            'status' => 'completed',
+            'output' => 'research-out',
+            'usage' => json_encode([]),
+            'duration_ms' => 1,
+            'finished_at' => now('UTC'),
+            'updated_at' => now('UTC')->subMinutes(10),
+        ]);
+    DB::table('swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->where('branch_id', 'parallel:1')
+        ->update([
+            'status' => 'failed',
+            'failure' => json_encode(['message' => 'branch failed', 'class' => RuntimeException::class]),
+            'finished_at' => now('UTC'),
+            'updated_at' => now('UTC')->subMinutes(10),
+        ]);
+    DB::table('swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->where('branch_id', 'parallel:2')
+        ->update([
+            'status' => 'completed',
+            'output' => 'editor-out',
+            'usage' => json_encode([]),
+            'duration_ms' => 1,
+            'finished_at' => now('UTC'),
+            'updated_at' => now('UTC')->subMinutes(10),
+        ]);
+    staleWaitingRun($runId);
+
+    Artisan::call('swarm:recover');
+    (new AdvanceDurableSwarm($runId, 3))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('failed')
+        ->and(app(SwarmHistory::class)->find($runId)['status'])->toBe('failed')
+        ->and(app(ContextStore::class)->find($runId)['metadata']['durable_parallel_branches'])->toHaveCount(3);
+});
+
 test('durable top level parallel partial success continues with completed branch outputs', function () {
     $response = FakeParallelPartialSuccessSwarm::make()->dispatchDurable('parallel-durable-task');
     $runId = $response->runId;
@@ -293,6 +416,31 @@ test('durable branch queues use config and per swarm routing overrides', functio
     expect(app(DurableRunStore::class)->branchesFor($routed, 'parallel')[0])
         ->toHaveKey('queue_connection', 'branch-connection')
         ->toHaveKey('queue_name', 'branch-queue');
+});
+
+test('durable branch recovery uses the configured branch table name', function () {
+    Schema::rename('swarm_durable_branches', 'custom_swarm_durable_branches');
+    config()->set('swarm.tables.durable_branches', 'custom_swarm_durable_branches');
+    app()->forgetInstance(DurableRunStore::class);
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    DB::table('custom_swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->update([
+            'updated_at' => now('UTC')->subMinutes(10),
+            'leased_until' => null,
+        ]);
+
+    $branches = app(DurableRunStore::class)->recoverableBranches(runId: $runId);
+
+    expect($branches)->toHaveCount(3)
+        ->and($branches[0]['run_id'])->toBe($runId);
 });
 
 test('dispatch durable fails clearly when persistence is not database backed', function () {
@@ -1381,6 +1529,153 @@ test('durable pause resume and cancel commands update runtime state', function (
         ->and(app(DurableSwarmManager::class)->find($runId)['cancelled_at'])->not->toBeNull()
         ->and(app(DurableSwarmManager::class)->find($runId)['cancel_requested_at'])->not->toBeNull();
     expect(app(SwarmHistory::class)->find($runId)['status'])->toBe('cancelled');
+    Event::assertDispatched(SwarmCancelled::class, fn (SwarmCancelled $event) => $event->runId === $runId);
+});
+
+test('durable waiting runs pause immediately and resume branch work without joining early', function () {
+    Event::fake([SwarmPaused::class, SwarmResumed::class]);
+
+    $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class)) extends DurableSwarmManager
+    {
+        /** @var array<int, string> */
+        public array $branchDispatches = [];
+
+        /** @var array<int, int> */
+        public array $stepDispatches = [];
+
+        public function dispatchBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch
+        {
+            $this->branchDispatches[] = $branchId;
+
+            return parent::dispatchBranchJob($runId, $branchId, $connection, $queue);
+        }
+
+        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
+        {
+            $this->stepDispatches[] = $stepIndex;
+
+            return parent::dispatchStepJob($runId, $stepIndex, $connection, $queue);
+        }
+    };
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    $manager->branchDispatches = [];
+    $manager->stepDispatches = [];
+
+    DB::table('swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->where('branch_id', 'parallel:0')
+        ->update([
+            'status' => 'completed',
+            'output' => 'research-out',
+            'usage' => json_encode([]),
+            'duration_ms' => 1,
+            'finished_at' => now('UTC'),
+        ]);
+    DB::table('swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->where('branch_id', 'parallel:2')
+        ->update([
+            'status' => 'running',
+            'leased_until' => now('UTC')->addMinutes(5),
+            'execution_token' => 'active-branch-token',
+        ]);
+
+    $manager->pause($runId);
+
+    expect($manager->find($runId)['status'])->toBe('paused')
+        ->and(app(SwarmHistory::class)->find($runId)['status'])->toBe('paused');
+    Event::assertDispatched(SwarmPaused::class, fn (SwarmPaused $event) => $event->runId === $runId);
+
+    $manager->resume($runId);
+
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and(app(SwarmHistory::class)->find($runId)['status'])->toBe('waiting')
+        ->and($manager->branchDispatches)->toContain('parallel:1')
+        ->and($manager->branchDispatches)->not->toContain('parallel:0')
+        ->and($manager->branchDispatches)->not->toContain('parallel:2')
+        ->and($manager->stepDispatches)->not->toContain(3);
+    Event::assertDispatched(SwarmResumed::class, fn (SwarmResumed $event) => $event->runId === $runId);
+});
+
+test('durable waiting resume dispatches the join when all branches are terminal', function () {
+    $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class)) extends DurableSwarmManager
+    {
+        /** @var array<int, int> */
+        public array $stepDispatches = [];
+
+        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
+        {
+            $this->stepDispatches[] = $stepIndex;
+
+            return parent::dispatchStepJob($runId, $stepIndex, $connection, $queue);
+        }
+    };
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    DB::table('swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->update([
+            'status' => 'completed',
+            'output' => 'branch-output',
+            'usage' => json_encode([]),
+            'duration_ms' => 1,
+            'finished_at' => now('UTC'),
+            'execution_token' => null,
+            'leased_until' => null,
+        ]);
+
+    $manager->pause($runId);
+    $manager->resume($runId);
+
+    expect($manager->find($runId)['status'])->toBe('pending')
+        ->and($manager->find($runId)['next_step_index'])->toBe(3)
+        ->and($manager->stepDispatches)->toContain(3);
+});
+
+test('durable waiting cancel immediately cancels parent and non terminal branches', function () {
+    Event::fake([SwarmCancelled::class]);
+
+    $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    DB::table('swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->where('branch_id', 'parallel:0')
+        ->update([
+            'status' => 'completed',
+            'output' => 'research-out',
+            'usage' => json_encode([]),
+            'duration_ms' => 1,
+            'finished_at' => now('UTC'),
+        ]);
+    DB::table('swarm_durable_node_outputs')->insert([
+        'run_id' => $runId,
+        'node_id' => 'parallel:0',
+        'output' => 'cancel-output',
+        'expires_at' => now('UTC')->addHour(),
+        'created_at' => now('UTC'),
+        'updated_at' => now('UTC'),
+    ]);
+
+    $manager->cancel($runId);
+
+    $branches = app(DurableRunStore::class)->branchesFor($runId, 'parallel');
+
+    expect($manager->find($runId)['status'])->toBe('cancelled')
+        ->and(app(SwarmHistory::class)->find($runId)['status'])->toBe('cancelled')
+        ->and($branches[0]['status'])->toBe('completed')
+        ->and($branches[1]['status'])->toBe('cancelled')
+        ->and($branches[2]['status'])->toBe('cancelled')
+        ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->count())->toBe(0);
     Event::assertDispatched(SwarmCancelled::class, fn (SwarmCancelled $event) => $event->runId === $runId);
 });
 

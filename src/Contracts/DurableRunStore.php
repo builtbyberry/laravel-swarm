@@ -122,6 +122,11 @@ interface DurableRunStore
      */
     public function recoverable(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array;
 
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function recoverableWaitingJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array;
+
     public function markRecoveryDispatched(string $runId): void;
 
     public function updateQueueRouting(string $runId, ?string $connection, ?string $queue): void;

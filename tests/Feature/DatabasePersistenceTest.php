@@ -28,6 +28,36 @@ class DatabaseInvalidPayloadValue
     public string $value = 'sensitive';
 }
 
+function insertPrunableBranchRow(string $runId, string $branchId, Carbon $expiresAt, string $status = 'completed'): void
+{
+    DB::table('swarm_durable_branches')->insert([
+        'run_id' => $runId,
+        'branch_id' => $branchId,
+        'step_index' => 0,
+        'node_id' => null,
+        'agent_class' => FakeResearcher::class,
+        'parent_node_id' => 'parallel',
+        'status' => $status,
+        'input' => 'input',
+        'output' => 'output',
+        'usage' => json_encode([]),
+        'metadata' => json_encode([]),
+        'failure' => null,
+        'duration_ms' => 1,
+        'execution_token' => null,
+        'lease_acquired_at' => null,
+        'leased_until' => null,
+        'attempts' => 0,
+        'queue_connection' => null,
+        'queue_name' => null,
+        'started_at' => null,
+        'finished_at' => $status === 'completed' ? $expiresAt : null,
+        'expires_at' => $expiresAt,
+        'created_at' => $expiresAt,
+        'updated_at' => $expiresAt,
+    ]);
+}
+
 beforeEach(function () {
     config()->set('database.default', 'testing');
     config()->set('swarm.persistence.driver', 'database');
@@ -223,6 +253,74 @@ test('prune removes cancelled history rows and terminal durable runtime rows', f
     expect(DB::table('swarm_artifacts')->where('run_id', 'active-paused-run')->exists())->toBeTrue();
     expect(DB::table('swarm_durable_runs')->where('run_id', 'active-paused-run')->exists())->toBeTrue();
     expect(DB::table('swarm_durable_runs')->where('run_id', 'future-cancelled-run')->exists())->toBeTrue();
+});
+
+test('prune removes expired durable branch rows while preserving active runs', function () {
+    $expired = Carbon::now('UTC')->subMinute();
+    $future = Carbon::now('UTC')->addHour();
+
+    foreach ([
+        ['run_id' => 'terminal-branch-run', 'status' => 'completed', 'finished_at' => $expired],
+        ['run_id' => 'waiting-branch-run', 'status' => 'waiting', 'finished_at' => null],
+    ] as $row) {
+        DB::table('swarm_run_histories')->insert([
+            'run_id' => $row['run_id'],
+            'swarm_class' => 'ExampleSwarm',
+            'topology' => 'parallel',
+            'status' => $row['status'],
+            'context' => json_encode([]),
+            'metadata' => json_encode([]),
+            'steps' => json_encode([]),
+            'output' => null,
+            'usage' => json_encode([]),
+            'error' => null,
+            'artifacts' => json_encode([]),
+            'finished_at' => $row['finished_at'],
+            'expires_at' => $expired,
+            'execution_token' => null,
+            'leased_until' => null,
+            'created_at' => $expired,
+            'updated_at' => $expired,
+        ]);
+
+        DB::table('swarm_durable_runs')->insert([
+            'run_id' => $row['run_id'],
+            'swarm_class' => 'ExampleSwarm',
+            'topology' => 'parallel',
+            'status' => $row['status'],
+            'next_step_index' => 1,
+            'current_step_index' => null,
+            'current_node_id' => $row['status'] === 'waiting' ? 'parallel' : null,
+            'total_steps' => 1,
+            'timeout_at' => $future,
+            'step_timeout_seconds' => 300,
+            'execution_token' => null,
+            'leased_until' => null,
+            'pause_requested_at' => null,
+            'cancel_requested_at' => null,
+            'queue_connection' => null,
+            'queue_name' => null,
+            'finished_at' => $row['finished_at'],
+            'created_at' => $expired,
+            'updated_at' => $expired,
+        ]);
+    }
+
+    insertPrunableBranchRow('terminal-branch-run', 'parallel:0', $expired);
+    insertPrunableBranchRow('waiting-branch-run', 'parallel:0', $expired, 'pending');
+
+    Artisan::call('swarm:prune');
+
+    expect(DB::table('swarm_durable_branches')->where('run_id', 'terminal-branch-run')->exists())->toBeFalse()
+        ->and(DB::table('swarm_durable_branches')->where('run_id', 'waiting-branch-run')->exists())->toBeTrue();
+});
+
+test('prune silently skips the configured durable branch table when it is missing', function () {
+    Schema::dropIfExists('swarm_durable_branches');
+
+    Artisan::call('swarm:prune');
+
+    expect(Artisan::output())->not->toContain('Skipping durable_branches pruning');
 });
 
 test('swarm prune skips safely when package tables are missing', function () {

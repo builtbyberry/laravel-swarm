@@ -103,6 +103,9 @@ For durable parallel work, branch runtime rows track branch IDs, parent node IDs
 agent classes, inputs, outputs, failures, queue routing, attempts, and
 branch-specific leases. The parent durable run waits while branches are active
 and only advances the join after all branch rows are terminally accounted for.
+That waiting state is a durable branch boundary: recovery can release it to the
+join step after terminal branch checkpoints, and pause, resume, or cancel can
+operate without an active parent step job.
 
 For all durable runs, the runtime record also tracks execution mode, attempts,
 lease timestamps, recovery counters, pause/resume/cancel timestamps, timeout
@@ -132,6 +135,16 @@ php artisan swarm:recover
 `pause()` and `cancel()` are step-boundary controls. Laravel Swarm does not try
 to hard-cancel an in-flight provider request.
 
+When a durable parallel parent is waiting for branch jobs, pause and cancel are
+handled immediately at that branch boundary. Pausing a waiting run prevents the
+parent join from dispatching; active branch jobs may finish their current
+provider call, but the parent will not advance until the run is resumed.
+Resuming a paused branch boundary redispatches pending or stale branches when
+branch work remains. If every branch is already terminal, resume releases the
+parent run back to `pending` and dispatches the join step. Cancelling a waiting
+run marks non-terminal branches cancelled so stale branch workers become inert
+when they try to checkpoint.
+
 `swarm:recover` is the safety net for stranded durable runs. Schedule it
 frequently:
 
@@ -143,6 +156,8 @@ Schedule::command('swarm:recover')->everyFiveMinutes();
 
 Treat recovery like workflow supervision, not like pruning. A stranded durable
 run should not wait until tomorrow's maintenance window.
+Recovery covers both stale parent or branch leases and the crash window after a
+branch checkpoint commits but before the parent join job is dispatched.
 
 ## Timeouts And Database Requirements
 
