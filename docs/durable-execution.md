@@ -29,14 +29,21 @@ $response = ArticlePipeline::make()->dispatchDurable([
 $response->runId;
 ```
 
-Durable execution supports sequential and hierarchical swarms in this release.
-Parallel swarms are not durable yet.
+Durable execution supports sequential, parallel, and hierarchical swarms.
 
 For hierarchical swarms, the coordinator runs first and returns the route plan.
 Laravel Swarm validates and persists that plan, then advances one routed worker
-node per durable job. Hierarchical parallel groups execute branch workers
-sequentially in declaration order for v1; durable fan-out/fan-in is intentionally
-deferred.
+node per durable job. Hierarchical parallel groups create durable branch jobs
+with independent leases, then join before continuing to the next route node.
+Top-level parallel swarms use the same branch runtime and join into the same
+combined output shape as synchronous `run()`.
+
+Durable parallel branch failures are configurable with
+`swarm.durable.parallel.failure_policy` or the
+`#[DurableParallelFailurePolicy]` attribute. The default is `collect_failures`,
+which waits for all dispatched branches to reach a terminal state before
+failing the parent run with branch diagnostics. Applications can opt into
+`fail_run` or `partial_success` when that better matches the workflow.
 
 Durable responses do not support `then()` or `catch()`. Durable runs are
 event-driven. Listen to `SwarmCompleted` and `SwarmFailed` instead of
@@ -92,6 +99,11 @@ agent, selected dependencies, branch IDs, next pointers, and finish
 `output_from`, but removes worker prompts, literal finish output, and node
 metadata.
 
+For durable parallel work, branch runtime rows track branch IDs, parent node IDs,
+agent classes, inputs, outputs, failures, queue routing, attempts, and
+branch-specific leases. The parent durable run waits while branches are active
+and only advances the join after all branch rows are terminally accounted for.
+
 For all durable runs, the runtime record also tracks execution mode, attempts,
 lease timestamps, recovery counters, pause/resume/cancel timestamps, timeout
 state, and failure metadata.
@@ -100,10 +112,11 @@ state, and failure metadata.
 steps, usage, timing, and terminal failure details. The durable runtime record
 is the database-backed operational surface for current execution state.
 
-Intermediate durable node outputs are still treated as runtime payloads. Laravel
-Swarm deletes durable node-output rows when a hierarchical durable run
-completes, fails, or is cancelled. Terminal history, context, and durable
-failure metadata follow the normal capture and redaction settings.
+Intermediate durable node outputs and branch outputs are still treated as
+runtime payloads. Laravel Swarm deletes durable node-output rows when a
+hierarchical durable run completes, fails, or is cancelled. Terminal history,
+context, and durable failure metadata follow the normal capture and redaction
+settings.
 
 ## Pause, Resume, Cancel, And Recover
 
@@ -214,11 +227,11 @@ For a narrow production pilot, prefer sequential durable swarms with
 lower-sensitivity data, a dedicated queue, short retention, and database growth
 monitoring from day one.
 
-Hierarchical durable swarms are supported, but they carry higher planning,
-prompt, and intermediate-output storage risk than a fixed sequential chain.
-Hierarchical queued and durable execution both execute parallel groups
-sequentially in this release. Treat hierarchical durable workflows as an
-explicit operational choice rather than the default enterprise rollout path.
+Hierarchical durable swarms are supported, including durable branch fan-out for
+parallel route nodes, but they carry higher planning, prompt, and
+intermediate-output storage risk than a fixed sequential chain. Treat
+hierarchical durable workflows as an explicit operational choice rather than
+the default enterprise rollout path.
 
 Durable recovery depends on the scheduler. If `swarm:recover` is not scheduled,
 a run can stay `running` after a worker crashes or exits between checkpointing a

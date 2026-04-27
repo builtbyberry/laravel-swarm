@@ -163,6 +163,101 @@ class HierarchicalRunner
         $entry = $cursor['entries'][$cursor['offset']] ?? null;
 
         if (! is_array($entry) || ($entry['type'] ?? null) !== 'worker') {
+            if (is_array($entry) && ($entry['type'] ?? null) === 'parallel') {
+                /** @var HierarchicalParallelNode $parallel */
+                $parallel = $plan->node((string) $entry['node_id']);
+                $branches = $this->durableRuns->branchesFor($state->context->runId, $parallel->id);
+
+                if ($branches === []) {
+                    $requiredNodeOutputIds = [];
+                    foreach ($parallel->branches as $branchNodeId) {
+                        /** @var HierarchicalWorkerNode $branch */
+                        $branch = $plan->node($branchNodeId);
+                        $requiredNodeOutputIds = array_merge($requiredNodeOutputIds, array_values($branch->withOutputs));
+                    }
+                    $nodeOutputs = $this->durableRuns->hierarchicalNodeOutputsFor($state->context->runId, $requiredNodeOutputIds);
+                    $branchDefinitions = [];
+
+                    foreach ($parallel->branches as $ordinal => $branchNodeId) {
+                        /** @var HierarchicalWorkerNode $branch */
+                        $branch = $plan->node($branchNodeId);
+                        $input = $this->composePrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
+
+                        $branchDefinitions[] = [
+                            'branch_id' => $parallel->id.':'.$branch->id,
+                            'step_index' => $stepIndex + $ordinal,
+                            'node_id' => $branch->id,
+                            'agent_class' => $branch->agentClass,
+                            'parent_node_id' => $parallel->id,
+                            'input' => $input,
+                            'metadata' => array_merge($branch->metadata, [
+                                'node_id' => $branch->id,
+                                'parent_parallel_node_id' => $parallel->id,
+                            ]),
+                        ];
+                    }
+
+                    $cursor['current_node_id'] = $parallel->id;
+                    $this->applyDurableCursorToContext($state, $cursor);
+
+                    return new DurableHierarchicalStepResult(
+                        step: null,
+                        routeCursor: $cursor,
+                        complete: false,
+                        branches: $branchDefinitions,
+                        waitingParentNodeId: $parallel->id,
+                        nextStepIndex: $stepIndex + count($branchDefinitions),
+                    );
+                }
+
+                if (! $this->branchesAreTerminal($branches)) {
+                    $this->applyDurableCursorToContext($state, $cursor);
+
+                    return new DurableHierarchicalStepResult(
+                        step: null,
+                        routeCursor: $cursor,
+                        complete: false,
+                        waitingParentNodeId: $parallel->id,
+                    );
+                }
+
+                $nodeOutputs = $this->durableNodeOutputsForCursor($state, $plan, $cursor);
+                foreach ($branches as $branch) {
+                    if (($branch['status'] ?? null) === 'completed' && is_string($branch['node_id'] ?? null) && is_string($branch['output'] ?? null)) {
+                        $nodeOutputs[$branch['node_id']] = $branch['output'];
+                    }
+                }
+
+                $cursor['executed_node_ids'][] = $parallel->id;
+                $cursor['completed_node_ids'][] = $parallel->id;
+                $cursor['parallel_groups'][] = ['node_id' => $parallel->id, 'branches' => $parallel->branches];
+                foreach ($branches as $branch) {
+                    if (($branch['status'] ?? null) !== 'completed') {
+                        continue;
+                    }
+
+                    if (is_string($branch['node_id'] ?? null)) {
+                        $cursor['executed_node_ids'][] = $branch['node_id'];
+                        $cursor['completed_node_ids'][] = $branch['node_id'];
+                    }
+
+                    if (is_string($branch['agent_class'] ?? null)) {
+                        $cursor['executed_agent_classes'][] = $branch['agent_class'];
+                    }
+                }
+                $cursor['offset'] += 1 + count($parallel->branches);
+
+                $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
+                $this->applyDurableCursorToContext($state, $cursor);
+
+                return new DurableHierarchicalStepResult(
+                    step: null,
+                    routeCursor: $cursor,
+                    complete: $this->isDurableCursorComplete($cursor),
+                    joinedBranches: true,
+                );
+            }
+
             $nodeOutputs = $this->durableNodeOutputsForCursor($state, $plan, $cursor);
             $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
             $this->applyDurableCursorToContext($state, $cursor);
@@ -496,7 +591,7 @@ class HierarchicalRunner
         while (isset($cursor['entries'][$cursor['offset']])) {
             $entry = $cursor['entries'][$cursor['offset']];
 
-            if (($entry['type'] ?? null) === 'worker') {
+            if (in_array($entry['type'] ?? null, ['worker', 'parallel'], true)) {
                 $cursor['current_node_id'] = $entry['node_id'];
 
                 return;
@@ -625,6 +720,20 @@ class HierarchicalRunner
         return ($cursor['current_node_id'] ?? null) === null
             && isset($cursor['entries'], $cursor['offset'])
             && (int) $cursor['offset'] >= count($cursor['entries']);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $branches
+     */
+    protected function branchesAreTerminal(array $branches): bool
+    {
+        foreach ($branches as $branch) {
+            if (! in_array($branch['status'] ?? null, ['completed', 'failed', 'cancelled'], true)) {
+                return false;
+            }
+        }
+
+        return $branches !== [];
     }
 
     protected function mergeDurableUsage(SwarmExecutionState $state, SwarmStep $step): void

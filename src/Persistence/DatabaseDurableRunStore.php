@@ -139,6 +139,41 @@ class DatabaseDurableRunStore implements DurableRunStore
         if (! $schema->hasColumns($nodeOutputTable, ['run_id', 'node_id', 'output', 'created_at', 'updated_at', 'expires_at'])) {
             throw new SwarmException("Database-backed durable swarms require runtime columns on [{$nodeOutputTable}] for hierarchical node outputs.");
         }
+
+        $branchTable = (string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches');
+
+        if (! $schema->hasTable($branchTable)) {
+            throw new SwarmException("Database-backed durable swarms require the [{$branchTable}] table.");
+        }
+
+        if (! $schema->hasColumns($branchTable, [
+            'run_id',
+            'branch_id',
+            'step_index',
+            'node_id',
+            'agent_class',
+            'parent_node_id',
+            'status',
+            'input',
+            'output',
+            'usage',
+            'metadata',
+            'failure',
+            'duration_ms',
+            'execution_token',
+            'lease_acquired_at',
+            'leased_until',
+            'attempts',
+            'queue_connection',
+            'queue_name',
+            'started_at',
+            'finished_at',
+            'expires_at',
+            'created_at',
+            'updated_at',
+        ])) {
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$branchTable}] for durable branch execution.");
+        }
     }
 
     public function acquireLease(string $runId, int $expectedStepIndex, int $stepTimeoutSeconds): ?string
@@ -228,6 +263,78 @@ class DatabaseDurableRunStore implements DurableRunStore
         ]);
     }
 
+    public function waitForBranches(string $runId, string $executionToken, int $nextStepIndex, string $parentNodeId, RunContext $context, int $ttlSeconds, array $routeCursor = [], ?array $routePlan = null, ?int $totalSteps = null, array $branches = []): void
+    {
+        $this->connection->transaction(function () use ($runId, $executionToken, $nextStepIndex, $parentNodeId, $context, $ttlSeconds, $routeCursor, $routePlan, $totalSteps, $branches): void {
+            $timestamp = Carbon::now('UTC');
+            $expiresAt = DatabaseTtl::expiresAt($ttlSeconds);
+            $contextPayload = $context->toArray();
+
+            $this->contextTable()->upsert([
+                [
+                    'run_id' => $contextPayload['run_id'],
+                    'input' => $contextPayload['input'],
+                    'data' => $this->encodeJson($contextPayload['data']),
+                    'metadata' => $this->encodeJson($contextPayload['metadata']),
+                    'artifacts' => $this->encodeJson($contextPayload['artifacts']),
+                    'created_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                    'expires_at' => $expiresAt,
+                ],
+            ], ['run_id'], ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at']);
+
+            $run = $this->find($runId);
+            $values = [
+                'status' => 'waiting',
+                'next_step_index' => $nextStepIndex,
+                'current_step_index' => null,
+                'current_node_id' => $parentNodeId,
+                'node_states' => $this->encodeJson($this->mergeNodeState($runId, $parentNodeId, [
+                    'status' => 'waiting',
+                    'step_index' => $nextStepIndex,
+                    'started_at' => $timestamp->toJSON(),
+                ], $run)),
+                'execution_token' => null,
+                'leased_until' => null,
+            ];
+
+            if ($routeCursor !== []) {
+                $values['route_cursor'] = $this->encodeJson($routeCursor);
+                $values['route_start_node_id'] = $routeCursor['route_plan_start'] ?? null;
+                $values['completed_node_ids'] = $this->encodeJson($routeCursor['completed_node_ids'] ?? []);
+            }
+
+            if ($routePlan !== null) {
+                $values['route_plan'] = $this->encodeJson($routePlan);
+            }
+
+            if ($totalSteps !== null) {
+                $values['total_steps'] = $totalSteps;
+            }
+
+            if ($branches !== []) {
+                $this->insertBranchRows($runId, $branches, $timestamp, $expiresAt);
+            }
+
+            $this->guardedUpdate($runId, $executionToken, $values);
+        });
+    }
+
+    public function releaseWaitingRunForJoin(string $runId, int $nextStepIndex): bool
+    {
+        $timestamp = Carbon::now('UTC');
+
+        return $this->table()
+            ->where('run_id', $runId)
+            ->where('status', 'waiting')
+            ->where('next_step_index', $nextStepIndex)
+            ->whereNull('finished_at')
+            ->update([
+                'status' => 'pending',
+                'updated_at' => $timestamp,
+            ]) === 1;
+    }
+
     public function hierarchicalNodeOutputsFor(string $runId, array $nodeIds): array
     {
         $nodeIds = array_values(array_unique(array_filter($nodeIds, static fn (string $nodeId): bool => $nodeId !== '')));
@@ -243,6 +350,22 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->get()
             ->mapWithKeys(static fn (object $record): array => [(string) $record->node_id => (string) $record->output])
             ->all();
+    }
+
+    public function storeHierarchicalNodeOutput(string $runId, string $nodeId, string $output, int $ttlSeconds): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->nodeOutputTable()->upsert([
+            [
+                'run_id' => $runId,
+                'node_id' => $nodeId,
+                'output' => $output,
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+                'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+            ],
+        ], ['run_id', 'node_id'], ['output', 'updated_at', 'expires_at']);
     }
 
     public function checkpointHierarchicalStep(
@@ -320,6 +443,168 @@ class DatabaseDurableRunStore implements DurableRunStore
         });
     }
 
+    public function createBranches(string $runId, array $branches, int $ttlSeconds): void
+    {
+        if ($branches === []) {
+            return;
+        }
+
+        $timestamp = Carbon::now('UTC');
+        $expiresAt = DatabaseTtl::expiresAt($ttlSeconds);
+        $this->insertBranchRows($runId, $branches, $timestamp, $expiresAt);
+    }
+
+    public function findBranch(string $runId, string $branchId): ?array
+    {
+        /** @var object|null $record */
+        $record = $this->branchTable()
+            ->where('run_id', $runId)
+            ->where('branch_id', $branchId)
+            ->first();
+
+        return $record !== null ? $this->mapBranch($record) : null;
+    }
+
+    public function branchesFor(string $runId, ?string $parentNodeId = null): array
+    {
+        $query = $this->branchTable()
+            ->where('run_id', $runId)
+            ->orderBy('step_index')
+            ->orderBy('id');
+
+        if ($parentNodeId !== null) {
+            $query->where('parent_node_id', $parentNodeId);
+        }
+
+        return $query->get()
+            ->map(fn (object $record): array => $this->mapBranch($record))
+            ->all();
+    }
+
+    public function acquireBranchLease(string $runId, string $branchId, int $stepTimeoutSeconds): ?string
+    {
+        $token = RunContext::newRunId();
+        $now = Carbon::now('UTC');
+
+        $acquired = $this->branchTable()
+            ->where('run_id', $runId)
+            ->where('branch_id', $branchId)
+            ->where(function ($query) use ($now): void {
+                $query->whereNull('leased_until')
+                    ->orWhere('leased_until', '<', $now);
+            })
+            ->whereIn('status', ['pending', 'running'])
+            ->update([
+                'leased_until' => $now->copy()->addSeconds($stepTimeoutSeconds),
+                'lease_acquired_at' => $now,
+                'execution_token' => $token,
+                'attempts' => $this->connection->raw('attempts + 1'),
+                'updated_at' => $now,
+            ]);
+
+        return $acquired === 1 ? $token : null;
+    }
+
+    public function assertBranchOwned(string $runId, string $branchId, string $executionToken): void
+    {
+        $now = Carbon::now('UTC');
+
+        $owned = $this->branchTable()
+            ->where('run_id', $runId)
+            ->where('branch_id', $branchId)
+            ->where('execution_token', $executionToken)
+            ->whereNotNull('leased_until')
+            ->where('leased_until', '>=', $now)
+            ->exists();
+
+        if (! $owned) {
+            throw new LostDurableLeaseException("Durable branch [{$branchId}] for run [{$runId}] no longer owns the execution lease.");
+        }
+    }
+
+    public function markBranchRunning(string $runId, string $branchId, string $executionToken): void
+    {
+        $this->guardedBranchUpdate($runId, $branchId, $executionToken, [
+            'status' => 'running',
+            'started_at' => Carbon::now('UTC'),
+        ]);
+    }
+
+    public function markBranchCompleted(string $runId, string $branchId, string $executionToken, string $output, array $usage, int $durationMs): void
+    {
+        $this->guardedBranchUpdate($runId, $branchId, $executionToken, [
+            'status' => 'completed',
+            'output' => $output,
+            'usage' => $this->encodeJson($usage),
+            'duration_ms' => $durationMs,
+            'failure' => null,
+            'finished_at' => Carbon::now('UTC'),
+            'execution_token' => null,
+            'leased_until' => null,
+        ]);
+    }
+
+    public function markBranchFailed(string $runId, string $branchId, string $executionToken, array $failure): void
+    {
+        $this->guardedBranchUpdate($runId, $branchId, $executionToken, [
+            'status' => 'failed',
+            'failure' => $this->encodeJson($failure),
+            'finished_at' => Carbon::now('UTC'),
+            'execution_token' => null,
+            'leased_until' => null,
+        ]);
+    }
+
+    public function cancelBranches(string $runId, ?string $parentNodeId = null): void
+    {
+        $query = $this->branchTable()
+            ->where('run_id', $runId)
+            ->whereNotIn('status', ['completed', 'failed', 'cancelled']);
+
+        if ($parentNodeId !== null) {
+            $query->where('parent_node_id', $parentNodeId);
+        }
+
+        $query->update([
+            'status' => 'cancelled',
+            'finished_at' => Carbon::now('UTC'),
+            'execution_token' => null,
+            'leased_until' => null,
+            'updated_at' => Carbon::now('UTC'),
+        ]);
+    }
+
+    public function recoverableBranches(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
+    {
+        $now = Carbon::now('UTC');
+        $threshold = $now->copy()->subSeconds($graceSeconds);
+
+        $query = $this->branchTable()
+            ->join($this->config->get('swarm.tables.durable', 'swarm_durable_runs'), 'swarm_durable_branches.run_id', '=', 'swarm_durable_runs.run_id')
+            ->whereIn('swarm_durable_branches.status', ['pending', 'running'])
+            ->where('swarm_durable_branches.updated_at', '<=', $threshold)
+            ->where(function ($query) use ($now): void {
+                $query->whereNull('swarm_durable_branches.leased_until')
+                    ->orWhere('swarm_durable_branches.leased_until', '<', $now);
+            })
+            ->whereNull('swarm_durable_runs.finished_at')
+            ->orderBy('swarm_durable_branches.updated_at')
+            ->limit($limit)
+            ->select('swarm_durable_branches.*');
+
+        if ($runId !== null) {
+            $query->where('swarm_durable_branches.run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('swarm_durable_runs.swarm_class', $swarmClass);
+        }
+
+        return $query->get()
+            ->map(fn (object $record): array => $this->mapBranch($record))
+            ->all();
+    }
+
     public function markCompleted(string $runId, string $executionToken): void
     {
         $this->markTerminal($runId, $executionToken, 'completed');
@@ -374,7 +659,7 @@ class DatabaseDurableRunStore implements DurableRunStore
 
         return $this->table()
             ->where('run_id', $runId)
-            ->where('status', 'running')
+            ->whereIn('status', ['running', 'waiting'])
             ->update([
                 'pause_requested_at' => $now,
                 'updated_at' => $now,
@@ -416,6 +701,7 @@ class DatabaseDurableRunStore implements DurableRunStore
                 ]);
 
             if ($updated === 1) {
+                $this->cancelBranches($runId);
                 $this->nodeOutputTable()->where('run_id', $runId)->delete();
             }
 
@@ -428,7 +714,7 @@ class DatabaseDurableRunStore implements DurableRunStore
 
         return $this->table()
             ->where('run_id', $runId)
-            ->where('status', 'running')
+            ->whereIn('status', ['running', 'waiting'])
             ->update([
                 'cancel_requested_at' => $now,
                 'updated_at' => $now,
@@ -503,6 +789,67 @@ class DatabaseDurableRunStore implements DurableRunStore
         }
     }
 
+    protected function guardedBranchUpdate(string $runId, string $branchId, string $executionToken, array $values): void
+    {
+        $now = Carbon::now('UTC');
+        $values['updated_at'] = $now;
+
+        $updated = $this->branchTable()
+            ->where('run_id', $runId)
+            ->where('branch_id', $branchId)
+            ->where('execution_token', $executionToken)
+            ->whereNotNull('leased_until')
+            ->where('leased_until', '>=', $now)
+            ->update($values);
+
+        if ($updated === 0) {
+            throw new LostDurableLeaseException("Durable branch [{$branchId}] for run [{$runId}] no longer owns the execution lease.");
+        }
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $branches
+     */
+    protected function insertBranchRows(string $runId, array $branches, Carbon $timestamp, ?Carbon $expiresAt): void
+    {
+        $rows = [];
+
+        foreach ($branches as $branch) {
+            $rows[] = [
+                'run_id' => $runId,
+                'branch_id' => $branch['branch_id'],
+                'step_index' => $branch['step_index'],
+                'node_id' => $branch['node_id'] ?? null,
+                'agent_class' => $branch['agent_class'],
+                'parent_node_id' => $branch['parent_node_id'] ?? null,
+                'status' => 'pending',
+                'input' => $branch['input'],
+                'output' => null,
+                'usage' => null,
+                'metadata' => $this->encodeJson($branch['metadata'] ?? []),
+                'failure' => null,
+                'duration_ms' => null,
+                'execution_token' => null,
+                'lease_acquired_at' => null,
+                'leased_until' => null,
+                'attempts' => 0,
+                'queue_connection' => $branch['queue_connection'] ?? null,
+                'queue_name' => $branch['queue_name'] ?? null,
+                'started_at' => null,
+                'finished_at' => null,
+                'expires_at' => $expiresAt,
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ];
+        }
+
+        $this->branchTable()->upsert(
+            $rows,
+            ['run_id', 'branch_id'],
+            ['status', 'input', 'metadata', 'queue_connection', 'queue_name', 'expires_at', 'updated_at'],
+        );
+    }
+
     /**
      * @param  array{message: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure
      */
@@ -547,6 +894,10 @@ class DatabaseDurableRunStore implements DurableRunStore
             }
 
             $this->guardedUpdate($runId, $executionToken, $values);
+
+            if (in_array($status, ['failed', 'cancelled'], true)) {
+                $this->cancelBranches($runId);
+            }
 
             $this->nodeOutputTable()->where('run_id', $runId)->delete();
         });
@@ -698,5 +1049,43 @@ class DatabaseDurableRunStore implements DurableRunStore
     protected function nodeOutputTable()
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs'));
+    }
+
+    protected function branchTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches'));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function mapBranch(object $record): array
+    {
+        return [
+            'run_id' => $record->run_id,
+            'branch_id' => $record->branch_id,
+            'step_index' => (int) $record->step_index,
+            'node_id' => $record->node_id,
+            'agent_class' => $record->agent_class,
+            'parent_node_id' => $record->parent_node_id,
+            'status' => $record->status,
+            'input' => (string) $record->input,
+            'output' => $record->output !== null ? (string) $record->output : null,
+            'usage' => $this->decodeJson($record->usage ?? null, []),
+            'metadata' => $this->decodeJson($record->metadata ?? null, []),
+            'failure' => $this->decodeJson($record->failure ?? null, null),
+            'duration_ms' => $record->duration_ms !== null ? (int) $record->duration_ms : null,
+            'execution_token' => $record->execution_token,
+            'lease_acquired_at' => $record->lease_acquired_at ?? null,
+            'leased_until' => $record->leased_until ?? null,
+            'attempts' => (int) ($record->attempts ?? 0),
+            'queue_connection' => $record->queue_connection,
+            'queue_name' => $record->queue_name,
+            'started_at' => $record->started_at ?? null,
+            'finished_at' => $record->finished_at ?? null,
+            'expires_at' => $record->expires_at ?? null,
+            'created_at' => $record->created_at,
+            'updated_at' => $record->updated_at,
+        ];
     }
 }

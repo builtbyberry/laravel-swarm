@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Attributes\DurableParallelFailurePolicy as DurableParallelFailurePolicyAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\MaxAgentSteps as MaxAgentStepsAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Timeout as TimeoutAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
@@ -13,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
@@ -339,6 +341,10 @@ class SwarmRunner
         $this->ensureDatabaseDurableInfrastructure();
 
         $topology = $this->resolveTopology($swarm);
+        if ($topology === Topology::Parallel) {
+            $this->parallel->ensureAgentsAreContainerResolvable($swarm->agents(), $swarm::class);
+        }
+
         if ($topology === Topology::Hierarchical) {
             $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
         }
@@ -351,7 +357,7 @@ class SwarmRunner
         $context = RunContext::fromTask($task);
         $this->checkInputPayload($task, $context, self::EXECUTION_MODE_DURABLE);
         $this->ensureActiveContextCompatible(self::EXECUTION_MODE_DURABLE);
-        $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps);
+        $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $this->resolveDurableParallelFailurePolicy($swarm));
 
         return new DurableSwarmResponse(new PendingDispatch($start->job), $this->durable, $start->runId);
     }
@@ -406,8 +412,8 @@ class SwarmRunner
     {
         $topology = $this->resolveTopology($swarm);
 
-        if (! in_array($topology, [Topology::Sequential, Topology::Hierarchical], true)) {
-            throw new SwarmException('Durable execution is only supported for sequential and hierarchical swarms in this release.');
+        if (! in_array($topology, [Topology::Sequential, Topology::Parallel, Topology::Hierarchical], true)) {
+            throw new SwarmException('Durable execution is only supported for sequential, parallel, and hierarchical swarms.');
         }
     }
 
@@ -593,5 +599,23 @@ class SwarmRunner
         }
 
         return $steps;
+    }
+
+    public function resolveDurableParallelFailurePolicy(Swarm $swarm): DurableParallelFailurePolicy
+    {
+        $reflection = new ReflectionClass($swarm);
+        $attributes = $reflection->getAttributes(DurableParallelFailurePolicyAttribute::class);
+
+        if ($attributes !== []) {
+            return $attributes[0]->newInstance()->policy;
+        }
+
+        $configured = (string) $this->config->get('swarm.durable.parallel.failure_policy', DurableParallelFailurePolicy::CollectFailures->value);
+
+        try {
+            return DurableParallelFailurePolicy::from($configured);
+        } catch (ValueError $exception) {
+            throw new SwarmException("Invalid durable parallel failure policy [{$configured}]. Supported policies: collect_failures, fail_run, partial_success.", previous: $exception);
+        }
     }
 }

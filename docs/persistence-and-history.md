@@ -246,11 +246,11 @@ run reaches a terminal state, Laravel Swarm overwrites that context store entry
 with a redacted snapshot when capture is disabled.
 
 Durable hierarchical runs also keep route plans, route cursors, neutral node
-state, and per-node outputs in durable runtime storage while the run is active.
-Active route plans can contain worker prompts because recovery needs the raw
-route. Laravel Swarm replaces terminal route plans with an inspection-safe
-projection after completion, failure, or cancellation, and deletes durable
-node-output rows.
+state, durable branch state, and per-node outputs in durable runtime storage
+while the run is active. Active route plans can contain worker prompts because
+recovery needs the raw route. Laravel Swarm replaces terminal route plans with
+an inspection-safe projection after completion, failure, or cancellation, and
+deletes durable node-output rows.
 
 Capture flags cover captured inputs, captured outputs, automatic artifacts,
 terminal context snapshots, durable runtime failure metadata, persisted failure

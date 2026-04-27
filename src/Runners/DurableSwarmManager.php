@@ -7,7 +7,9 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\RoutesDurableBranches;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
@@ -18,9 +20,11 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -31,6 +35,7 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Carbon;
+use Laravel\Ai\Contracts\Agent;
 use Throwable;
 
 class DurableSwarmManager
@@ -49,6 +54,7 @@ class DurableSwarmManager
         protected SequentialRunner $sequential,
         protected HierarchicalRunner $hierarchical,
         protected DurableRunRecorder $recorder,
+        protected SwarmStepRecorder $stepsRecorder,
         protected Connection $connection,
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
@@ -62,11 +68,11 @@ class DurableSwarmManager
         $this->durableRuns->create($payload);
     }
 
-    public function start(Swarm $swarm, RunContext $context, Topology $topology, int $timeoutSeconds, int $totalSteps): DurableSwarmStart
+    public function start(Swarm $swarm, RunContext $context, Topology $topology, int $timeoutSeconds, int $totalSteps, DurableParallelFailurePolicy $parallelFailurePolicy = DurableParallelFailurePolicy::CollectFailures): DurableSwarmStart
     {
         $this->limits->checkInput($context->input);
 
-        return $this->connection->transaction(function () use ($swarm, $context, $topology, $timeoutSeconds, $totalSteps): DurableSwarmStart {
+        return $this->connection->transaction(function () use ($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $parallelFailurePolicy): DurableSwarmStart {
             $contextTtl = $this->ttlSeconds();
             $connection = $this->config->get('swarm.durable.queue.connection');
             $queue = $this->config->get('swarm.durable.queue.name');
@@ -77,6 +83,7 @@ class DurableSwarmManager
                 'execution_mode' => 'durable',
                 'completed_steps' => 0,
                 'total_steps' => $totalSteps,
+                'durable_parallel_failure_policy' => $parallelFailurePolicy->value,
             ]);
 
             $this->historyStore->start($context->runId, $swarm::class, $topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
@@ -254,7 +261,22 @@ class DurableSwarmManager
             $this->durableRuns->markRecoveryDispatched($run['run_id']);
         }
 
-        return array_map(static fn (array $run): string => $run['run_id'], $runs);
+        $branches = $this->durableRuns->recoverableBranches(
+            runId: $runId,
+            swarmClass: $swarmClass,
+            limit: $limit,
+            graceSeconds: (int) $this->config->get('swarm.durable.recovery.grace_seconds', 300),
+        );
+
+        foreach ($branches as $branch) {
+            $dispatch = $this->dispatchBranchJob($branch['run_id'], $branch['branch_id'], $branch['queue_connection'], $branch['queue_name']);
+            unset($dispatch);
+        }
+
+        return array_values(array_unique(array_merge(
+            array_map(static fn (array $run): string => $run['run_id'], $runs),
+            array_map(static fn (array $branch): string => $branch['run_id'], $branches),
+        )));
     }
 
     public function updateQueueRouting(string $runId, ?string $connection, ?string $queue): void
@@ -374,7 +396,23 @@ class DurableSwarmManager
         $hierarchicalResult = null;
 
         try {
-            if ($run['topology'] === Topology::Hierarchical->value) {
+            if ($run['topology'] === Topology::Parallel->value) {
+                if ($expectedStepIndex === 0) {
+                    $this->startTopLevelParallelBranches($state, $run, $token, $stepLeaseSeconds);
+
+                    return;
+                }
+
+                $this->joinTopLevelParallelBranches($state, $run, $token, $stepLeaseSeconds);
+
+                return;
+            } elseif ($run['topology'] === Topology::Hierarchical->value) {
+                if (is_string($run['current_node_id'] ?? null) && $this->branchJoinShouldFail($run, $context, $run['current_node_id'])) {
+                    $this->failCurrentRunFromBranchFailures($run, $token, $context, $stepLeaseSeconds, $run['current_node_id']);
+
+                    return;
+                }
+
                 $hierarchicalResult = $this->hierarchical->runDurableStep($state, $expectedStepIndex, $run);
                 $step = $hierarchicalResult->step;
             } else {
@@ -436,7 +474,9 @@ class DurableSwarmManager
             return;
         }
 
-        $nextStepIndex = $expectedStepIndex + 1;
+        $nextStepIndex = $hierarchicalResult !== null && $hierarchicalResult->nextStepIndex !== null
+            ? $hierarchicalResult->nextStepIndex
+            : $expectedStepIndex + 1;
         $isComplete = $run['topology'] === Topology::Hierarchical->value
             ? $hierarchicalResult?->complete === true
             : $nextStepIndex >= (int) $run['total_steps'];
@@ -485,7 +525,11 @@ class DurableSwarmManager
             }
 
             if ($hierarchicalResult !== null) {
-                $this->recorder->checkpointHierarchical($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $hierarchicalResult, $step);
+                if ($hierarchicalResult->branches !== [] && $hierarchicalResult->waitingParentNodeId !== null) {
+                    $this->checkpointHierarchicalBranchWait($run, $token, $nextStepIndex, $context, $stepLeaseSeconds, $hierarchicalResult);
+                } else {
+                    $this->recorder->checkpointHierarchical($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $hierarchicalResult, $step);
+                }
             } else {
                 $this->recorder->checkpointSequential($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds);
             }
@@ -497,12 +541,460 @@ class DurableSwarmManager
             ($this->afterStepCheckpointHook)($runId, $nextStepIndex);
         }
 
+        if ($hierarchicalResult !== null && $hierarchicalResult->branches !== []) {
+            $branches = $this->durableRuns->branchesFor($runId, $hierarchicalResult->waitingParentNodeId);
+
+            foreach ($branches as $branch) {
+                $this->dispatchBranchJob($runId, (string) $branch['branch_id'], $branch['queue_connection'] ?? $run['queue_connection'], $branch['queue_name'] ?? $run['queue_name']);
+            }
+
+            return;
+        }
+
         $this->dispatchStepJob($runId, $nextStepIndex, $run['queue_connection'], $run['queue_name']);
     }
 
     public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
     {
         return new PendingDispatch($this->makeStepJob($runId, $stepIndex, $connection, $queue));
+    }
+
+    public function dispatchBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch
+    {
+        return new PendingDispatch($this->makeBranchJob($runId, $branchId, $connection, $queue));
+    }
+
+    public function advanceBranch(string $runId, string $branchId): void
+    {
+        $run = $this->requireRun($runId);
+        $branch = $this->durableRuns->findBranch($runId, $branchId);
+
+        if ($branch === null || in_array($branch['status'], ['completed', 'failed', 'cancelled'], true)) {
+            return;
+        }
+
+        if (($run['cancel_requested_at'] ?? null) !== null || $run['status'] === 'cancelled') {
+            $this->durableRuns->cancelBranches($runId, $branch['parent_node_id']);
+
+            return;
+        }
+
+        if (($run['pause_requested_at'] ?? null) !== null || $run['status'] === 'paused') {
+            return;
+        }
+
+        $stepLeaseSeconds = $this->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']);
+        $token = $this->durableRuns->acquireBranchLease($runId, $branchId, $stepLeaseSeconds);
+
+        if ($token === null) {
+            return;
+        }
+
+        $context = $this->loadContext($runId);
+        $swarm = app()->make($run['swarm_class']);
+
+        if (! $swarm instanceof Swarm) {
+            throw new SwarmException("Unable to resolve durable swarm [{$run['swarm_class']}] from the container.");
+        }
+
+        $agent = app()->make($branch['agent_class']);
+
+        if (! $agent instanceof Agent) {
+            throw new SwarmException("Durable branch agent [{$branch['agent_class']}] must resolve to a Laravel AI agent.");
+        }
+
+        $this->durableRuns->markBranchRunning($runId, $branchId, $token);
+
+        $timeoutSeconds = max((int) ceil((Carbon::parse($run['timeout_at'], 'UTC')->diffInSeconds(now('UTC'), false)) * -1), 1);
+        $state = new SwarmExecutionState(
+            swarm: $swarm,
+            topology: $run['topology'],
+            executionMode: 'durable',
+            deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
+            maxAgentExecutions: (int) $run['total_steps'],
+            ttlSeconds: $this->ttlSeconds(),
+            leaseSeconds: null,
+            executionToken: null,
+            verifyOwnership: fn (): null => $this->durableRuns->assertBranchOwned($runId, $branchId, $token),
+            context: $context,
+            contextStore: $this->contextStore,
+            artifactRepository: $this->artifactRepository,
+            historyStore: $this->historyStore,
+            events: $this->events,
+        );
+
+        $startedAt = MonotonicTime::now();
+        $step = null;
+
+        try {
+            $this->stepsRecorder->started($state, (int) $branch['step_index'], $branch['agent_class'], $branch['input']);
+            $response = $agent->prompt($branch['input']);
+            $output = (string) $response;
+            $usage = $response->usage->toArray();
+            $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
+            $step = $this->stepsRecorder->completed(
+                state: $state,
+                index: (int) $branch['step_index'],
+                agentClass: $branch['agent_class'],
+                input: $branch['input'],
+                output: $output,
+                usage: $usage,
+                durationMs: $durationMs,
+                metadata: is_array($branch['metadata'] ?? null) ? $branch['metadata'] : [],
+                updateContext: false,
+                storeContext: false,
+                storeArtifacts: false,
+            );
+
+            $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step): void {
+                if (is_string($branch['node_id'] ?? null)) {
+                    $this->durableRuns->storeHierarchicalNodeOutput($runId, $branch['node_id'], $output, $this->ttlSeconds());
+                }
+
+                $this->persistBranchStepArtifacts($runId, $step);
+                $this->durableRuns->markBranchCompleted($runId, $branchId, $token, $output, $usage, $durationMs);
+            });
+        } catch (LostDurableLeaseException|LostSwarmLeaseException) {
+            return;
+        } catch (Throwable $exception) {
+            try {
+                $this->durableRuns->markBranchFailed($runId, $branchId, $token, [
+                    'message' => $this->capture->failureMessage($exception),
+                    'class' => $exception::class,
+                ]);
+            } catch (LostDurableLeaseException|LostSwarmLeaseException) {
+                return;
+            }
+
+            if ($this->parallelFailurePolicy($context) === DurableParallelFailurePolicy::FailRun) {
+                $this->failParentFromBranches($run, $context, $stepLeaseSeconds);
+            }
+        }
+
+        $this->maybeDispatchBranchJoin($runId);
+    }
+
+    protected function startTopLevelParallelBranches(SwarmExecutionState $state, array $run, string $token, int $stepLeaseSeconds): void
+    {
+        $branches = [];
+        $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
+        $input = $state->context->prompt();
+
+        foreach ($agents as $index => $agent) {
+            $branch = [
+                'branch_id' => 'parallel:'.$index,
+                'step_index' => $index,
+                'node_id' => null,
+                'agent_class' => $agent::class,
+                'parent_node_id' => 'parallel',
+                'input' => $input,
+                'metadata' => ['parallel_branch_index' => $index],
+            ];
+            $branches[] = $this->withBranchRouting($state->swarm, $state->context, $branch, $run);
+        }
+
+        $this->connection->transaction(function () use ($token, $state, $stepLeaseSeconds, $branches): void {
+            $this->historyStore->syncDurableState($state->context->runId, 'running', $this->capture->context($state->context), $state->context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
+            $this->durableRuns->waitForBranches(
+                runId: $state->context->runId,
+                executionToken: $token,
+                nextStepIndex: count($branches),
+                parentNodeId: 'parallel',
+                context: $this->capture->activeContext($state->context),
+                ttlSeconds: $this->ttlSeconds(),
+                branches: $branches,
+            );
+        });
+
+        foreach ($branches as $branch) {
+            $this->dispatchBranchJob($state->context->runId, (string) $branch['branch_id'], $branch['queue_connection'] ?? $run['queue_connection'], $branch['queue_name'] ?? $run['queue_name']);
+        }
+    }
+
+    protected function joinTopLevelParallelBranches(SwarmExecutionState $state, array $run, string $token, int $stepLeaseSeconds): void
+    {
+        $branches = $this->durableRuns->branchesFor($state->context->runId, 'parallel');
+
+        if (! $this->branchesAreTerminal($branches)) {
+            $this->durableRuns->waitForBranches($state->context->runId, $token, (int) $run['next_step_index'], 'parallel', $this->capture->activeContext($state->context), $this->ttlSeconds());
+
+            return;
+        }
+
+        $completed = array_values(array_filter($branches, static fn (array $branch): bool => ($branch['status'] ?? null) === 'completed'));
+        $failed = array_values(array_filter($branches, static fn (array $branch): bool => ($branch['status'] ?? null) === 'failed'));
+        $policy = $this->parallelFailurePolicy($state->context);
+
+        if ($failed !== [] && ($policy !== DurableParallelFailurePolicy::PartialSuccess || $completed === [])) {
+            $this->failCurrentRunFromBranchFailures($run, $token, $state->context, $stepLeaseSeconds, 'parallel');
+
+            return;
+        }
+
+        usort($completed, static fn (array $a, array $b): int => ((int) $a['step_index']) <=> ((int) $b['step_index']));
+
+        $outputs = array_map(static fn (array $branch): string => (string) $branch['output'], $completed);
+        $usage = $this->mergeBranchUsage($completed);
+        $output = implode("\n\n", $outputs);
+        $state->context
+            ->mergeData([
+                'last_output' => $output,
+                'steps' => count($completed),
+            ])
+            ->mergeMetadata([
+                'topology' => $state->topology,
+                'usage' => $usage,
+                'durable_parallel_branches' => $this->branchSummaries($branches),
+                'executed_agent_classes' => array_values(array_map(static fn (array $branch): string => (string) $branch['agent_class'], $completed)),
+            ]);
+
+        $response = new SwarmResponse(
+            output: $output,
+            steps: [],
+            usage: $usage,
+            context: $state->context,
+            artifacts: $state->context->artifacts,
+            metadata: array_merge($state->context->metadata, [
+                'run_id' => $state->context->runId,
+                'topology' => $state->topology,
+            ]),
+        );
+
+        $capturedResponse = $this->limits->response($this->capture->response($response));
+        $this->recorder->complete($state->context->runId, $token, $state->context, $capturedResponse, $stepLeaseSeconds);
+        $this->events->dispatch(new SwarmCompleted(
+            runId: $state->context->runId,
+            swarmClass: $run['swarm_class'],
+            topology: $run['topology'],
+            output: $capturedResponse->output,
+            durationMs: $this->durationMillisecondsFor($state->context->runId),
+            metadata: $capturedResponse->metadata,
+            artifacts: $capturedResponse->artifacts,
+            executionMode: 'durable',
+        ));
+    }
+
+    protected function checkpointHierarchicalBranchWait(array $run, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds, DurableHierarchicalStepResult $result): void
+    {
+        $swarm = app()->make($run['swarm_class']);
+
+        if (! $swarm instanceof Swarm) {
+            throw new SwarmException("Unable to resolve durable swarm [{$run['swarm_class']}] from the container.");
+        }
+
+        $branches = array_map(fn (array $branch): array => $this->withBranchRouting($swarm, $context, $branch, $run), $result->branches);
+
+        $this->connection->transaction(function () use ($run, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $branches): void {
+            $this->historyStore->syncDurableState($run['run_id'], 'running', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
+            $this->durableRuns->waitForBranches(
+                runId: $run['run_id'],
+                executionToken: $token,
+                nextStepIndex: $nextStepIndex,
+                parentNodeId: (string) $result->waitingParentNodeId,
+                context: $this->capture->activeContext($context),
+                ttlSeconds: $this->ttlSeconds(),
+                routeCursor: $result->routeCursor,
+                routePlan: $result->routePlan,
+                totalSteps: $result->totalSteps,
+                branches: $branches,
+            );
+        });
+    }
+
+    protected function maybeDispatchBranchJoin(string $runId): void
+    {
+        $run = $this->requireRun($runId);
+
+        if ($run['status'] !== 'waiting') {
+            return;
+        }
+
+        $parentNodeId = $run['current_node_id'];
+
+        if (! is_string($parentNodeId)) {
+            return;
+        }
+
+        $branches = $this->durableRuns->branchesFor($runId, $parentNodeId);
+
+        if (! $this->branchesAreTerminal($branches)) {
+            return;
+        }
+
+        if ($this->durableRuns->releaseWaitingRunForJoin($runId, (int) $run['next_step_index'])) {
+            $this->dispatchStepJob($runId, (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+        }
+    }
+
+    protected function failParentFromBranches(array $run, RunContext $context, int $stepLeaseSeconds): void
+    {
+        if ($run['status'] !== 'waiting') {
+            return;
+        }
+
+        $parentNodeId = is_string($run['current_node_id'] ?? null) ? $run['current_node_id'] : null;
+        $branches = $this->durableRuns->branchesFor($run['run_id'], $parentNodeId);
+        $failed = array_values(array_filter($branches, static fn (array $branch): bool => ($branch['status'] ?? null) === 'failed'));
+
+        if ($failed === []) {
+            return;
+        }
+
+        if (! $this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
+            return;
+        }
+
+        $fresh = $this->requireRun($run['run_id']);
+        $token = $this->durableRuns->acquireLease($run['run_id'], (int) $fresh['next_step_index'], $stepLeaseSeconds);
+
+        if ($token === null) {
+            return;
+        }
+
+        $this->failCurrentRunFromBranchFailures($fresh, $token, $context, $stepLeaseSeconds, $parentNodeId);
+    }
+
+    protected function failCurrentRunFromBranchFailures(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId): void
+    {
+        $branches = $this->durableRuns->branchesFor($run['run_id'], $parentNodeId);
+        $failed = array_values(array_filter($branches, static fn (array $branch): bool => ($branch['status'] ?? null) === 'failed'));
+        $message = 'Durable parallel branches failed: '.implode(', ', array_map(static fn (array $branch): string => (string) $branch['branch_id'], $failed));
+        $exception = new SwarmException($message);
+        $context->mergeMetadata([
+            'durable_parallel_branches' => $this->branchSummaries($branches),
+        ]);
+
+        $this->recorder->fail($run['run_id'], $token, $exception, $context, $stepLeaseSeconds);
+        $this->events->dispatch(new SwarmFailed(
+            runId: $run['run_id'],
+            swarmClass: $run['swarm_class'],
+            topology: $run['topology'],
+            exception: $this->capture->failureException($exception),
+            durationMs: $this->durationMillisecondsFor($run['run_id']),
+            metadata: $context->metadata,
+            executionMode: 'durable',
+            exceptionClass: $exception::class,
+        ));
+    }
+
+    protected function branchJoinShouldFail(array $run, RunContext $context, string $parentNodeId): bool
+    {
+        $branches = $this->durableRuns->branchesFor($run['run_id'], $parentNodeId);
+
+        if (! $this->branchesAreTerminal($branches)) {
+            return false;
+        }
+
+        $failed = array_values(array_filter($branches, static fn (array $branch): bool => ($branch['status'] ?? null) === 'failed'));
+
+        if ($failed === []) {
+            return false;
+        }
+
+        $completed = array_values(array_filter($branches, static fn (array $branch): bool => ($branch['status'] ?? null) === 'completed'));
+        $policy = $this->parallelFailurePolicy($context);
+
+        return $policy !== DurableParallelFailurePolicy::PartialSuccess || $completed === [];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $branches
+     */
+    protected function branchesAreTerminal(array $branches): bool
+    {
+        if ($branches === []) {
+            return false;
+        }
+
+        foreach ($branches as $branch) {
+            if (! in_array($branch['status'] ?? null, ['completed', 'failed', 'cancelled'], true)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $branches
+     * @return array<string, int>
+     */
+    protected function mergeBranchUsage(array $branches): array
+    {
+        $usage = [];
+
+        foreach ($branches as $branch) {
+            foreach ((array) ($branch['usage'] ?? []) as $key => $value) {
+                if (is_int($value)) {
+                    $usage[$key] = ($usage[$key] ?? 0) + $value;
+                }
+            }
+        }
+
+        return $usage;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $branches
+     * @return array<int, array<string, mixed>>
+     */
+    protected function branchSummaries(array $branches): array
+    {
+        return array_map(static fn (array $branch): array => [
+            'branch_id' => $branch['branch_id'],
+            'node_id' => $branch['node_id'],
+            'agent_class' => $branch['agent_class'],
+            'status' => $branch['status'],
+            'failure' => $branch['failure'],
+        ], $branches);
+    }
+
+    protected function parallelFailurePolicy(RunContext $context): DurableParallelFailurePolicy
+    {
+        $policy = $context->metadata['durable_parallel_failure_policy'] ?? DurableParallelFailurePolicy::CollectFailures->value;
+
+        return is_string($policy)
+            ? DurableParallelFailurePolicy::tryFrom($policy) ?? DurableParallelFailurePolicy::CollectFailures
+            : DurableParallelFailurePolicy::CollectFailures;
+    }
+
+    /**
+     * @param  array<string, mixed>  $branch
+     * @param  array<string, mixed>  $run
+     * @return array<string, mixed>
+     */
+    protected function withBranchRouting(Swarm $swarm, RunContext $context, array $branch, array $run): array
+    {
+        $connection = $this->config->get('swarm.durable.parallel.queue.connection');
+        $queue = $this->config->get('swarm.durable.parallel.queue.name');
+
+        if ($connection === null) {
+            $connection = $run['queue_connection'];
+        }
+
+        if ($queue === null) {
+            $queue = $run['queue_name'];
+        }
+
+        if ($swarm instanceof RoutesDurableBranches) {
+            $routing = $swarm->durableBranchQueue($context, $branch);
+            $connection = array_key_exists('connection', $routing) ? $routing['connection'] : $connection;
+            $queue = array_key_exists('queue', $routing) ? $routing['queue'] : $queue;
+        }
+
+        $branch['queue_connection'] = $connection;
+        $branch['queue_name'] = $queue;
+
+        return $branch;
+    }
+
+    protected function persistBranchStepArtifacts(string $runId, ?SwarmStep $step): void
+    {
+        if ($step === null || ! $this->capture->capturesArtifacts()) {
+            return;
+        }
+
+        $this->artifactRepository->storeMany($runId, $step->artifacts, $this->ttlSeconds());
     }
 
     protected function requireRun(string $runId): array
@@ -566,6 +1058,21 @@ class DurableSwarmManager
     protected function makeStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): AdvanceDurableSwarm
     {
         $job = new AdvanceDurableSwarm($runId, $stepIndex);
+
+        if ($connection) {
+            $job->onConnection($connection);
+        }
+
+        if ($queue) {
+            $job->onQueue($queue);
+        }
+
+        return $job;
+    }
+
+    protected function makeBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): AdvanceDurableBranch
+    {
+        $job = new AdvanceDurableBranch($runId, $branchId);
 
         if ($connection) {
             $job->onConnection($connection);

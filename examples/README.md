@@ -39,7 +39,7 @@ Read the examples in this order:
 | Every agent should run in a fixed order | Sequential | Each agent receives the previous agent's output. |
 | Independent agents should work at the same time | Parallel | Agents receive the original input and must be container-resolvable by class. |
 | A coordinator should decide which specialists run | Hierarchical | The first agent returns a route plan; worker classes after it must be unique. |
-| A long workflow should survive retries without replaying everything | Durable | Sequential and hierarchical swarms; one durable step is checkpointed per queued job. |
+| A long workflow should survive retries without replaying everything | Durable | Sequential, parallel, and hierarchical swarms; durable parallel branches use independent branch jobs and join before continuing. |
 | A browser needs a status page after dispatch | Run inspector | Use `run_id` to compose history, context, artifacts, durable state, and pending records. |
 | Operators need live run visibility | Operations dashboard | Store lifecycle event previews and broadcast your own application event. |
 
@@ -49,8 +49,8 @@ Read the examples in this order:
   and arrays containing those values.
 - Parallel swarm agents must be resolvable from Laravel's container by class.
 - Hierarchical worker classes must be unique after the coordinator.
-- Durable execution requires database persistence and supports sequential and
-  hierarchical topology.
+- Durable execution requires database persistence and supports sequential,
+  parallel, and hierarchical topology.
 - Prefer lifecycle events over queued `then()` / `catch()` callbacks.
 - For queued or durable swarms, size queue `retry_after` and worker timeouts for
   your provider calls and total swarm duration.

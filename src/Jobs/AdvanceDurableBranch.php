@@ -1,0 +1,33 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BuiltByBerry\LaravelSwarm\Jobs;
+
+use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+
+class AdvanceDurableBranch implements ShouldQueue
+{
+    use InteractsWithQueue;
+    use Queueable;
+    use SerializesModels;
+
+    public function __construct(
+        public string $runId,
+        public string $branchId,
+    ) {}
+
+    public function handle(DurableSwarmManager $manager): void
+    {
+        $manager->advanceBranch($this->runId, $this->branchId);
+    }
+
+    public function displayName(): string
+    {
+        return $this->runId.':branch:'.$this->branchId;
+    }
+}

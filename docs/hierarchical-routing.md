@@ -299,15 +299,12 @@ Loops are intentionally unsupported in this release.
 - the coordinator runs as durable step zero
 - Laravel Swarm persists the validated route plan and a route cursor
 - each durable worker job advances one routed worker node
-- parallel groups execute sequentially in branch declaration order in v1
-- branch metadata and history still record the plan as a parallel group so the
-  runtime can evolve later without changing the plan contract
+- parallel groups create durable branch jobs with independent leases
+- the parent run waits at the parallel node until branch rows are terminal,
+  then joins and continues to the next route node
 - terminal completed, failed, and cancelled runs retain a sanitized route
   projection, cursor, and node inspection state but delete durable node output
   rows
-
-Durable hierarchical execution intentionally does not add durable fan-out/fan-in
-in this release.
 
 ## History And Metadata
 

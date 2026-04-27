@@ -58,6 +58,13 @@ return [
 
     'durable' => [
         'step_timeout' => (int) env('SWARM_DURABLE_STEP_TIMEOUT', 300),
+        'parallel' => [
+            'failure_policy' => env('SWARM_DURABLE_PARALLEL_FAILURE_POLICY', 'collect_failures'),
+            'queue' => [
+                'connection' => env('SWARM_DURABLE_PARALLEL_QUEUE_CONNECTION'),
+                'name' => env('SWARM_DURABLE_PARALLEL_QUEUE'),
+            ],
+        ],
         'queue' => [
             'connection' => env('SWARM_DURABLE_QUEUE_CONNECTION'),
             'name' => env('SWARM_DURABLE_QUEUE'),
@@ -76,5 +83,6 @@ return [
         'history_steps' => env('SWARM_RUN_HISTORY_STEPS_TABLE', 'swarm_run_steps'),
         'durable' => env('SWARM_DURABLE_RUNS_TABLE', 'swarm_durable_runs'),
         'durable_node_outputs' => env('SWARM_DURABLE_NODE_OUTPUTS_TABLE', 'swarm_durable_node_outputs'),
+        'durable_branches' => env('SWARM_DURABLE_BRANCHES_TABLE', 'swarm_durable_branches'),
     ],
 ];

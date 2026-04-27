@@ -333,10 +333,10 @@ This is intentionally a separate execution mode:
 - `queue()` is lightweight background execution
 - `dispatchDurable()` is checkpointed durable execution
 
-Durable execution supports sequential and hierarchical swarms in this release
-and requires database-backed swarm persistence. Hierarchical durable parallel
-groups execute branch workers sequentially in declaration order for v1; durable
-fan-out/fan-in is intentionally deferred.
+Durable execution supports sequential, parallel, and hierarchical swarms and
+requires database-backed swarm persistence. Parallel durable swarms and
+hierarchical durable parallel groups use durable branch jobs with independent
+leases, then join before completing or continuing the route.
 
 Durable responses do not support `then()` or `catch()`. Durable runs are
 event-driven. Listen to `SwarmCompleted` and `SwarmFailed` instead of

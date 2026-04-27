@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
@@ -23,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
@@ -34,7 +36,10 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalLimitedSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelFailingSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelPartialSuccessSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRoutedParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Database\Schema\Builder;
@@ -197,9 +202,97 @@ test('durable manager start creates runtime state before the first job is pushed
         ->toHaveKey('tenant_id', 'acme');
 });
 
-test('dispatch durable fails for non sequential swarms', function () {
-    expect(fn () => FakeParallelSwarm::make()->dispatchDurable('queued-task'))
-        ->toThrow(SwarmException::class, 'Durable execution is only supported for sequential and hierarchical swarms in this release.');
+test('dispatch durable supports top level parallel swarms', function () {
+    $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    $branches = app(DurableRunStore::class)->branchesFor($runId, 'parallel');
+
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and($branches)->toHaveCount(3);
+
+    foreach ($branches as $branch) {
+        (new AdvanceDurableBranch($runId, $branch['branch_id']))->handle($manager);
+    }
+
+    expect($manager->find($runId)['status'])->toBe('pending')
+        ->and($manager->find($runId)['next_step_index'])->toBe(3);
+
+    (new AdvanceDurableSwarm($runId, 3))->handle($manager);
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and($history['output'])->toBe("research-out\n\nwriter-out\n\neditor-out")
+        ->and($history['steps'])->toHaveCount(3);
+});
+
+test('durable top level parallel collect failures waits for branch terminal states before failing', function () {
+    $response = FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel') as $branch) {
+        (new AdvanceDurableBranch($runId, $branch['branch_id']))->handle($manager);
+    }
+
+    expect($manager->find($runId)['status'])->toBe('pending');
+
+    (new AdvanceDurableSwarm($runId, 3))->handle($manager);
+
+    $history = app(SwarmHistory::class)->find($runId);
+    $context = app(ContextStore::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('failed')
+        ->and($history['status'])->toBe('failed')
+        ->and($context['metadata']['durable_parallel_branches'])->toHaveCount(3);
+});
+
+test('durable top level parallel partial success continues with completed branch outputs', function () {
+    $response = FakeParallelPartialSuccessSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel') as $branch) {
+        (new AdvanceDurableBranch($runId, $branch['branch_id']))->handle($manager);
+    }
+
+    (new AdvanceDurableSwarm($runId, 3))->handle($manager);
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and($history['output'])->toBe("research-out\n\nwriter-out")
+        ->and($history['context']['metadata']['durable_parallel_branches'])->toHaveCount(3);
+});
+
+test('durable branch queues use config and per swarm routing overrides', function () {
+    config()->set('queue.connections.branch-config', ['driver' => 'null']);
+    config()->set('queue.connections.branch-connection', ['driver' => 'null']);
+    config()->set('swarm.durable.parallel.queue.connection', 'branch-config');
+    config()->set('swarm.durable.parallel.queue.name', 'branch-config-queue');
+
+    $configured = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    (new AdvanceDurableSwarm($configured, 0))->handle($manager);
+
+    expect(app(DurableRunStore::class)->branchesFor($configured, 'parallel')[0])
+        ->toHaveKey('queue_connection', 'branch-config')
+        ->toHaveKey('queue_name', 'branch-config-queue');
+
+    $routed = FakeRoutedParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+    (new AdvanceDurableSwarm($routed, 0))->handle($manager);
+
+    expect(app(DurableRunStore::class)->branchesFor($routed, 'parallel')[0])
+        ->toHaveKey('queue_connection', 'branch-connection')
+        ->toHaveKey('queue_name', 'branch-queue');
 });
 
 test('dispatch durable fails clearly when persistence is not database backed', function () {
@@ -436,7 +529,7 @@ test('durable hierarchical swarms aggregate usage and redact terminal cursor sta
         ->and($history['usage'])->not->toBe([]);
 });
 
-test('durable hierarchical swarms execute parallel branches sequentially with group metadata', function () {
+test('durable hierarchical swarms fan out parallel branches and join with group metadata', function () {
     FakeHierarchicalCoordinator::fake([
         durableHierarchicalPlan('parallel_node', [
             'parallel_node' => [
@@ -468,14 +561,26 @@ test('durable hierarchical swarms execute parallel branches sequentially with gr
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
 
     FakeWriter::assertNeverPrompted();
-    expect($manager->find($runId)['route_cursor']['current_node_id'])->toBe('writer_node');
+    expect($manager->find($runId)['route_cursor']['current_node_id'])->toBe('parallel_node');
 
     (new AdvanceDurableSwarm($runId, 1))->handle($manager);
 
-    FakeWriter::assertPrompted('writer-branch');
-    FakeEditor::assertNeverPrompted();
+    $branches = app(DurableRunStore::class)->branchesFor($runId, 'parallel_node');
 
-    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+    expect($manager->find($runId)['status'])->toBe('waiting')
+        ->and($branches)->toHaveCount(2);
+
+    foreach ($branches as $branch) {
+        (new AdvanceDurableBranch($runId, $branch['branch_id']))->handle($manager);
+    }
+
+    FakeWriter::assertPrompted('writer-branch');
+    FakeEditor::assertPrompted('editor-branch');
+
+    expect($manager->find($runId)['status'])->toBe('pending')
+        ->and($manager->find($runId)['next_step_index'])->toBe(3);
+
+    (new AdvanceDurableSwarm($runId, 3))->handle($manager);
 
     $history = app(SwarmHistory::class)->find($runId);
 
@@ -1097,7 +1202,7 @@ test('durable recovery markers advance only after redispatch succeeds', function
     $manager = app(DurableSwarmManager::class);
     $before = $manager->find($runId);
 
-    $throwingManager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class)) extends DurableSwarmManager
+    $throwingManager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class)) extends DurableSwarmManager
     {
         public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
         {
