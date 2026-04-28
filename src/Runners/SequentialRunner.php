@@ -8,9 +8,16 @@ use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
+use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Generator;
+use Laravel\Ai\Streaming\Events\StreamEnd;
 use Laravel\Ai\Streaming\Events\TextDelta;
 
 class SequentialRunner
@@ -19,6 +26,8 @@ class SequentialRunner
 
     public function __construct(
         protected SwarmStepRecorder $steps,
+        protected SwarmCapture $capture,
+        protected SwarmPayloadLimits $limits,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -52,7 +61,7 @@ class SequentialRunner
     }
 
     /**
-     * @return Generator<int, array<string, string>, mixed, void>
+     * @return Generator<int, SwarmStreamEvent, mixed, void>
      */
     public function stream(SwarmExecutionState $state): Generator
     {
@@ -70,9 +79,19 @@ class SequentialRunner
 
             $this->steps->started($state, $index, $agent::class, $input);
 
-            yield ['event' => 'step', 'agent' => $agentName, 'status' => 'running'];
+            yield new SwarmStepStart(
+                id: SwarmStreamEvent::newId(),
+                runId: $state->context->runId,
+                stepIndex: $index,
+                agentClass: $agent::class,
+                agent: $agentName,
+                input: $this->capture->input($input),
+                timestamp: SwarmStreamEvent::timestamp(),
+            );
 
             $startedAt = MonotonicTime::now();
+            $durationMs = null;
+            $stepUsage = [];
 
             if ($index === $lastIndex) {
                 $stream = $agent->stream($input);
@@ -81,38 +100,61 @@ class SequentialRunner
                 foreach ($stream as $event) {
                     if ($event instanceof TextDelta) {
                         $output .= $event->delta;
-                        yield ['event' => 'token', 'token' => $event->delta];
+                        yield new SwarmTextDelta(
+                            id: SwarmStreamEvent::newId(),
+                            runId: $state->context->runId,
+                            stepIndex: $index,
+                            agentClass: $agent::class,
+                            delta: $this->capture->output($event->delta),
+                            timestamp: SwarmStreamEvent::timestamp(),
+                        );
+                    } elseif ($event instanceof StreamEnd) {
+                        $stepUsage = $event->usage->toArray();
                     }
                 }
 
-                $this->steps->completed(
+                $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
+                $step = $this->steps->completed(
                     state: $state,
                     index: $index,
                     agentClass: $agent::class,
                     input: $input,
                     output: $output,
-                    usage: [],
-                    durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-                    includeUsageInMetadata: false,
+                    usage: $stepUsage,
+                    durationMs: $durationMs,
                 );
             } else {
                 $response = $agent->prompt($input);
                 $output = (string) $response;
-                $usage = $this->usageFromResponse($response);
-                $mergedUsage = $this->mergeUsage($mergedUsage, $usage);
+                $stepUsage = $this->usageFromResponse($response);
 
-                $this->steps->completed(
+                $step = $this->steps->completed(
                     state: $state,
                     index: $index,
                     agentClass: $agent::class,
                     input: $input,
                     output: $output,
-                    usage: $usage,
-                    durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
+                    usage: $stepUsage,
+                    durationMs: $durationMs = MonotonicTime::elapsedMilliseconds($startedAt),
                 );
             }
 
-            yield ['event' => 'step', 'agent' => $agentName, 'status' => 'done'];
+            $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
+            $stepOutput = $step->artifacts[0]->content ?? $this->capture->output($output);
+
+            yield new SwarmStepEnd(
+                id: SwarmStreamEvent::newId(),
+                runId: $state->context->runId,
+                stepIndex: $index,
+                agentClass: $agent::class,
+                agent: $agentName,
+                output: $stepOutput,
+                durationMs: $durationMs,
+                metadata: [
+                    'usage' => $stepUsage,
+                ],
+                timestamp: SwarmStreamEvent::timestamp(),
+            );
         }
 
         $state->context->mergeMetadata([
