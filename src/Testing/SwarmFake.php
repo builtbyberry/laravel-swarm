@@ -7,10 +7,16 @@ namespace BuiltByBerry\LaravelSwarm\Testing;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
-use Generator;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\FakePendingDispatch;
@@ -100,20 +106,64 @@ class SwarmFake implements Swarm
 
     /**
      * Intercept a stream call and record it.
-     *
-     * @return Generator<int, array<string, string>, mixed, void>
      */
-    public function stream(string|array|RunContext $task): Generator
+    public function stream(string|array|RunContext $task): StreamableSwarmResponse
     {
-        $this->recordedStreamed[] = $task;
+        return new StreamableSwarmResponse('fake-run-id', function () use ($task): \Generator {
+            $this->recordedStreamed[] = $task;
+            $output = $this->resolveResponse($task);
 
-        $output = $this->resolveResponse($task);
+            yield new SwarmStreamStart(
+                id: SwarmStreamEvent::newId(),
+                runId: 'fake-run-id',
+                swarmClass: $this->swarmClass,
+                topology: 'sequential',
+                input: is_string($task) ? $task : 'structured-task',
+                metadata: ['run_id' => 'fake-run-id'],
+                timestamp: SwarmStreamEvent::timestamp(),
+            );
+            yield new SwarmStepStart(
+                id: SwarmStreamEvent::newId(),
+                runId: 'fake-run-id',
+                stepIndex: 0,
+                agentClass: self::class,
+                agent: 'SwarmFake',
+                input: is_string($task) ? $task : 'structured-task',
+                timestamp: SwarmStreamEvent::timestamp(),
+            );
+            yield new SwarmTextDelta(
+                id: SwarmStreamEvent::newId(),
+                runId: 'fake-run-id',
+                stepIndex: 0,
+                agentClass: self::class,
+                delta: $output,
+                timestamp: SwarmStreamEvent::timestamp(),
+            );
+            yield new SwarmStepEnd(
+                id: SwarmStreamEvent::newId(),
+                runId: 'fake-run-id',
+                stepIndex: 0,
+                agentClass: self::class,
+                agent: 'SwarmFake',
+                output: $output,
+                durationMs: 0,
+                metadata: [],
+                timestamp: SwarmStreamEvent::timestamp(),
+            );
+            yield new SwarmStreamEnd(
+                id: SwarmStreamEvent::newId(),
+                runId: 'fake-run-id',
+                output: $output,
+                usage: [],
+                metadata: ['run_id' => 'fake-run-id'],
+                timestamp: SwarmStreamEvent::timestamp(),
+            );
 
-        yield from (function () use ($output): Generator {
-            yield ['event' => 'step', 'agent' => 'SwarmFake', 'status' => 'running'];
-            yield ['event' => 'token', 'token' => $output];
-            yield ['event' => 'step', 'agent' => 'SwarmFake', 'status' => 'done'];
-        })();
+            return new SwarmResponse(
+                output: $output,
+                metadata: ['run_id' => 'fake-run-id'],
+            );
+        });
     }
 
     /**

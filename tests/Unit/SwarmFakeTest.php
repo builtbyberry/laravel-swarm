@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyRunnableSwarm;
@@ -55,11 +56,15 @@ test('fake intercepts stream calls', function () {
 
     $events = iterator_to_array(EmptyRunnableSwarm::make()->stream('stream-task'));
 
-    expect($events)->toBe([
-        ['event' => 'step', 'agent' => 'SwarmFake', 'status' => 'running'],
-        ['event' => 'token', 'token' => 'streamed-output'],
-        ['event' => 'step', 'agent' => 'SwarmFake', 'status' => 'done'],
+    expect(array_map(fn ($event): string => $event->type(), $events))->toBe([
+        'swarm_stream_start',
+        'swarm_step_start',
+        'swarm_text_delta',
+        'swarm_step_end',
+        'swarm_stream_end',
     ]);
+    expect($events[2])->toBeInstanceOf(SwarmTextDelta::class);
+    expect($events[2]->delta)->toBe('streamed-output');
 
     EmptyRunnableSwarm::assertStreamed('stream-task');
 });

@@ -12,11 +12,16 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamedSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
@@ -24,6 +29,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyRunnableSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRichStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStreamingFailureSwarm;
 use Illuminate\Support\Facades\Artisan;
@@ -59,13 +65,14 @@ test('sequential swarm stream yields ordered payloads and lifecycle events', fun
         'swarm_step_end',
         'swarm_step_start',
         'swarm_text_delta',
+        'swarm_text_end',
         'swarm_step_end',
         'swarm_stream_end',
     ]);
     expect($events[0])->toBeInstanceOf(SwarmStreamStart::class);
     expect($events[6])->toBeInstanceOf(SwarmTextDelta::class);
     expect($events[6]->delta)->toBe('editor-out');
-    expect($events[8])->toBeInstanceOf(SwarmStreamEnd::class);
+    expect($events[9])->toBeInstanceOf(SwarmStreamEnd::class);
 
     Event::assertDispatched(SwarmStarted::class, fn (SwarmStarted $event) => $event->executionMode === 'stream');
     Event::assertDispatchedTimes(SwarmStepStarted::class, 3);
@@ -77,6 +84,93 @@ test('sequential swarm stream yields ordered payloads and lifecycle events', fun
     expect($completedEvent->metadata['usage'])->toBeArray();
     expect($completedEvent->metadata['usage'])->not->toBe([]);
     expect($history['usage'])->toBe($completedEvent->metadata['usage']);
+});
+
+test('final streamed agent emits typed non-text upstream events', function () {
+    $events = iterator_to_array(FakeRichStreamingSwarm::make()->stream('stream-task'));
+    $types = array_map(fn ($event): string => $event->type(), $events);
+
+    expect($types)->toContain('swarm_reasoning_delta');
+    expect($types)->toContain('swarm_reasoning_end');
+    expect($types)->toContain('swarm_tool_call');
+    expect($types)->toContain('swarm_tool_result');
+    expect($types)->toContain('swarm_text_end');
+    expect(collect($events)->whereInstanceOf(SwarmReasoningDelta::class)->first()->delta)->toBe('thinking');
+    expect(collect($events)->whereInstanceOf(SwarmToolCall::class)->first()->toolCall->name)->toBe('search_docs');
+    expect(collect($events)->whereInstanceOf(SwarmToolResult::class)->first()->successful)->toBeTrue();
+    expect(collect($events)->whereInstanceOf(SwarmTextEnd::class))->toHaveCount(1);
+    expect(collect($events)->whereInstanceOf(SwarmReasoningEnd::class))->toHaveCount(1);
+    expect(collect($events)->whereInstanceOf(SwarmTextDelta::class)->first()->delta)->toBe('editor-out');
+});
+
+test('persisted replay stores typed non-text upstream events in order', function () {
+    $stream = FakeRichStreamingSwarm::make()
+        ->stream('stream-task')
+        ->storeForReplay();
+
+    iterator_to_array($stream);
+
+    $stored = iterator_to_array(app(StreamEventStore::class)->events($stream->runId));
+    $types = array_map(fn ($event): string => $event->type(), $stored);
+
+    expect($types)->toContain('swarm_reasoning_delta');
+    expect($types)->toContain('swarm_reasoning_end');
+    expect($types)->toContain('swarm_tool_call');
+    expect($types)->toContain('swarm_tool_result');
+    expect($types)->toContain('swarm_text_end');
+
+    $deltaIndex = array_search('swarm_text_delta', $types, true);
+    $reasoningDeltaIndex = array_search('swarm_reasoning_delta', $types, true);
+    $reasoningEndIndex = array_search('swarm_reasoning_end', $types, true);
+    $toolCallIndex = array_search('swarm_tool_call', $types, true);
+    $toolResultIndex = array_search('swarm_tool_result', $types, true);
+    $textEndIndex = array_search('swarm_text_end', $types, true);
+    $streamEndIndex = array_search('swarm_stream_end', $types, true);
+
+    expect($deltaIndex)->toBeInt();
+    expect($reasoningDeltaIndex)->toBeInt();
+    expect($reasoningEndIndex)->toBeInt();
+    expect($toolCallIndex)->toBeInt();
+    expect($toolResultIndex)->toBeInt();
+    expect($textEndIndex)->toBeInt();
+    expect($streamEndIndex)->toBeInt();
+    expect($deltaIndex)->toBeLessThan($reasoningDeltaIndex);
+    expect($reasoningDeltaIndex)->toBeLessThan($reasoningEndIndex);
+    expect($reasoningEndIndex)->toBeLessThan($toolCallIndex);
+    expect($toolCallIndex)->toBeLessThan($toolResultIndex);
+    expect($toolResultIndex)->toBeLessThan($textEndIndex);
+    expect($textEndIndex)->toBeLessThan($streamEndIndex);
+});
+
+test('typed replay preserves upstream event ids and timestamps', function () {
+    $stream = FakeRichStreamingSwarm::make()
+        ->stream('stream-task')
+        ->storeForReplay();
+
+    iterator_to_array($stream);
+
+    $stored = iterator_to_array(app(StreamEventStore::class)->events($stream->runId));
+
+    $textDelta = collect($stored)->whereInstanceOf(SwarmTextDelta::class)->first();
+    $reasoningDelta = collect($stored)->whereInstanceOf(SwarmReasoningDelta::class)->first();
+    $reasoningEnd = collect($stored)->whereInstanceOf(SwarmReasoningEnd::class)->first();
+    $toolCall = collect($stored)->whereInstanceOf(SwarmToolCall::class)->first();
+    $toolResult = collect($stored)->whereInstanceOf(SwarmToolResult::class)->first();
+    $textEnd = collect($stored)->whereInstanceOf(SwarmTextEnd::class)->first();
+
+    expect($textDelta->id)->toBe('delta-1');
+    expect($reasoningDelta->id)->toBe('reasoning-delta-1');
+    expect($reasoningEnd->id)->toBe('reasoning-end-1');
+    expect($toolCall->id)->toBe('tool-call-1');
+    expect($toolResult->id)->toBe('tool-result-1');
+    expect($textEnd->id)->toBe('text-end-1');
+
+    expect($textDelta->timestamp)->toBe(1_710_000_000);
+    expect($reasoningDelta->timestamp)->toBe(1_710_000_000);
+    expect($reasoningEnd->timestamp)->toBe(1_710_000_000);
+    expect($toolCall->timestamp)->toBe(1_710_000_000);
+    expect($toolResult->timestamp)->toBe(1_710_000_000);
+    expect($textEnd->timestamp)->toBe(1_710_000_000);
 });
 
 test('stream construction is lazy and does not start execution before iteration', function () {
@@ -264,6 +358,7 @@ test('store for replay persists ordered stream events as they are yielded', func
         'swarm_step_end',
         'swarm_step_start',
         'swarm_text_delta',
+        'swarm_text_end',
         'swarm_step_end',
         'swarm_stream_end',
     ]);
@@ -340,6 +435,33 @@ test('persisted replay payloads honor capture redaction', function () {
     expect(collect($events)->whereInstanceOf(SwarmTextDelta::class)->first()->delta)->toBe('[redacted]');
 });
 
+test('persisted replay redacts reasoning deltas when output capture is disabled', function () {
+    config()->set('swarm.capture.outputs', false);
+
+    $stream = FakeRichStreamingSwarm::make()
+        ->stream('sensitive-stream-task')
+        ->storeForReplay();
+
+    iterator_to_array($stream);
+
+    $events = iterator_to_array(app(StreamEventStore::class)->events($stream->runId));
+    $reasoningDelta = collect($events)->whereInstanceOf(SwarmReasoningDelta::class)->first();
+    $toolCall = collect($events)->whereInstanceOf(SwarmToolCall::class)->first();
+
+    expect($reasoningDelta)->not->toBeNull();
+    expect($reasoningDelta->delta)->toBe('[redacted]');
+    expect($reasoningDelta->summary)->toBe([0 => '[redacted]']);
+    expect($toolCall)->not->toBeNull();
+    expect($toolCall->toolCall->name)->toBe('search_docs');
+    expect($toolCall->toolCall->arguments)->toBe(['query' => '[redacted]']);
+    expect($toolCall->toolCall->reasoningSummary)->toBe([0 => '[redacted]']);
+
+    $toolResult = collect($events)->whereInstanceOf(SwarmToolResult::class)->first();
+    expect($toolResult)->not->toBeNull();
+    expect($toolResult->toolResult->arguments)->toBe(['query' => '[redacted]']);
+    expect($toolResult->toolResult->result)->toBe(['matches' => '[redacted]']);
+});
+
 test('database replay store preserves insertion order', function () {
     $stream = FakeSequentialSwarm::make()
         ->stream('stream-task')
@@ -361,6 +483,7 @@ test('database replay store preserves insertion order', function () {
         'swarm_step_end',
         'swarm_step_start',
         'swarm_text_delta',
+        'swarm_text_end',
         'swarm_step_end',
         'swarm_stream_end',
     ]);
@@ -385,6 +508,7 @@ test('cache replay store preserves event order', function () {
         'swarm_step_end',
         'swarm_step_start',
         'swarm_text_delta',
+        'swarm_text_end',
         'swarm_step_end',
         'swarm_stream_end',
     ]);
