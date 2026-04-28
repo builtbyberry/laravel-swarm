@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -17,6 +18,8 @@ use Laravel\Ai\Contracts\Agent;
 
 class ParallelRunner
 {
+    use MergesAgentUsage;
+
     public function __construct(
         protected ConcurrencyManager $concurrency,
         protected SwarmStepRecorder $stepsRecorder,
@@ -100,7 +103,7 @@ class ParallelRunner
                 'steps' => count($steps),
             ])
             ->mergeMetadata([
-                'topology' => $state->topology,
+                'topology' => $state->topology->value,
             ]);
 
         $state->contextStore->put($this->capture->activeContext($state->context), $state->ttlSeconds);
@@ -114,7 +117,7 @@ class ParallelRunner
             artifacts: $state->context->artifacts,
             metadata: [
                 'run_id' => $state->context->runId,
-                'topology' => $state->topology,
+                'topology' => $state->topology->value,
             ],
         );
     }
@@ -140,19 +143,5 @@ class ParallelRunner
                 throw new SwarmException("{$swarmClass}: parallel agent [{$agentClass}] must resolve to a Laravel AI agent.");
             }
         }
-    }
-
-    /**
-     * @param  array<string, int>  $accumulated
-     * @param  array<string, int>  $next
-     * @return array<string, int>
-     */
-    protected function mergeUsage(array $accumulated, array $next): array
-    {
-        foreach ($next as $key => $value) {
-            $accumulated[$key] = ($accumulated[$key] ?? 0) + $value;
-        }
-
-        return $accumulated;
     }
 }

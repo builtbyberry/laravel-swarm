@@ -79,7 +79,7 @@ class SwarmStepRecorder
 
         if ($updateContext) {
             $contextMetadata = [
-                'topology' => $state->topology,
+                'topology' => $state->topology->value,
                 'last_agent' => $agentClass,
             ];
 
@@ -122,7 +122,7 @@ class SwarmStepRecorder
         $state->events->dispatch(new SwarmStepCompleted(
             runId: $state->context->runId,
             swarmClass: $state->swarm::class,
-            topology: $state->topology,
+            topology: $state->topology->value,
             index: $index,
             agentClass: $agentClass,
             input: $this->capture->input($input),

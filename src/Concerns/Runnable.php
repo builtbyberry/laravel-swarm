@@ -31,12 +31,11 @@ trait Runnable
      */
     public static function make(mixed ...$arguments): mixed
     {
-        $resolved = Container::getInstance()->resolved(static::class)
-            ? Container::getInstance()->make(static::class)
-            : null;
-
-        if ($resolved instanceof SwarmFakeInstance) {
-            return $resolved;
+        if (Container::getInstance()->bound(static::class)) {
+            $resolved = Container::getInstance()->make(static::class);
+            if ($resolved instanceof SwarmFakeInstance) {
+                return $resolved;
+            }
         }
 
         return match (true) {

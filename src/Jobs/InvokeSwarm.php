@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Jobs\Concerns\InvokesQueuedSwarmCallbacks;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Bus\Queueable;
+use Illuminate\Container\Container;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
@@ -34,7 +35,7 @@ class InvokeSwarm implements ShouldQueue
      */
     public function handle(SwarmRunner $runner): void
     {
-        $swarm = app()->make($this->swarmClass);
+        $swarm = Container::getInstance()->make($this->swarmClass);
         $context = RunContext::fromPayload($this->task);
 
         if (! $swarm instanceof Swarm) {

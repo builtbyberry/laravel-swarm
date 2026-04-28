@@ -19,6 +19,8 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
@@ -1278,6 +1280,47 @@ test('durable workers stop cleanly when lease ownership is lost before next step
     FakeWriter::assertNeverPrompted();
 });
 
+test('durable workers stop cleanly when lease ownership is lost before terminal completion', function () {
+    Event::fake([SwarmCompleted::class]);
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    $recorder = app(DurableRunRecorder::class);
+
+    app()->instance(DurableRunRecorder::class, new class($recorder, $runId) extends DurableRunRecorder
+    {
+        public function __construct(
+            protected DurableRunRecorder $inner,
+            protected string $runId,
+        ) {}
+
+        public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null): void
+        {
+            stealDurableLease($this->runId);
+
+            $this->inner->complete($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step);
+        }
+    });
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    $manager = app(DurableSwarmManager::class);
+
+    expect(fn () => (new AdvanceDurableSwarm($runId, 2))->handle($manager))
+        ->not->toThrow(Throwable::class);
+
+    $run = $manager->find($runId);
+
+    expect($run['status'])->toBe('running')
+        ->and($run['execution_token'])->toBe('replacement-token');
+
+    Event::assertNotDispatched(SwarmCompleted::class, fn (SwarmCompleted $event) => $event->runId === $runId);
+});
+
 test('durable recovery lets a reclaimed owner complete after a stale worker becomes inert', function () {
     $stolen = false;
     $runId = null;
@@ -1350,7 +1393,7 @@ test('durable recovery markers advance only after redispatch succeeds', function
     $manager = app(DurableSwarmManager::class);
     $before = $manager->find($runId);
 
-    $throwingManager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class)) extends DurableSwarmManager
+    $throwingManager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app()) extends DurableSwarmManager
     {
         public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
         {
@@ -1537,7 +1580,7 @@ test('durable waiting runs pause immediately and resume branch work without join
 
     $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
     $runId = $response->runId;
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class)) extends DurableSwarmManager
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app()) extends DurableSwarmManager
     {
         /** @var array<int, string> */
         public array $branchDispatches = [];
@@ -1603,7 +1646,7 @@ test('durable waiting runs pause immediately and resume branch work without join
 test('durable waiting resume dispatches the join when all branches are terminal', function () {
     $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
     $runId = $response->runId;
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class)) extends DurableSwarmManager
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app()) extends DurableSwarmManager
     {
         /** @var array<int, int> */
         public array $stepDispatches = [];

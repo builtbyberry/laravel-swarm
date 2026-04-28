@@ -4,17 +4,19 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Generator;
-use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Streaming\Events\TextDelta;
 
 class SequentialRunner
 {
+    use MergesAgentUsage;
+
     public function __construct(
         protected SwarmStepRecorder $steps,
     ) {}
@@ -44,7 +46,7 @@ class SequentialRunner
             artifacts: $state->context->artifacts,
             metadata: [
                 'run_id' => $state->context->runId,
-                'topology' => $state->topology,
+                'topology' => $state->topology->value,
             ],
         );
     }
@@ -153,30 +155,5 @@ class SequentialRunner
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             contextUsage: $mergedUsage,
         );
-    }
-
-    /**
-     * @param  array<string, int>  $accumulated
-     * @return array<string, int>
-     */
-    protected function mergeUsage(array $accumulated, array $next): array
-    {
-        foreach ($next as $key => $value) {
-            $accumulated[$key] = ($accumulated[$key] ?? 0) + $value;
-        }
-
-        return $accumulated;
-    }
-
-    /**
-     * @return array<string, int>
-     */
-    protected function usageFromResponse(mixed $response): array
-    {
-        if ($response instanceof AgentResponse) {
-            return $response->usage->toArray();
-        }
-
-        return [];
     }
 }

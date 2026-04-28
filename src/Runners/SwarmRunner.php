@@ -4,17 +4,13 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
-use BuiltByBerry\LaravelSwarm\Attributes\DurableParallelFailurePolicy as DurableParallelFailurePolicyAttribute;
-use BuiltByBerry\LaravelSwarm\Attributes\MaxAgentSteps as MaxAgentStepsAttribute;
-use BuiltByBerry\LaravelSwarm\Attributes\Timeout as TimeoutAttribute;
-use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
-use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
@@ -47,18 +43,9 @@ use ReflectionNamedType;
 use ReflectionParameter;
 use ReflectionType;
 use ReflectionUnionType;
-use ValueError;
 
 class SwarmRunner
 {
-    protected const EXECUTION_MODE_RUN = 'run';
-
-    protected const EXECUTION_MODE_STREAM = 'stream';
-
-    protected const EXECUTION_MODE_QUEUE = 'queue';
-
-    protected const EXECUTION_MODE_DURABLE = 'durable';
-
     public function __construct(
         protected ConfigRepository $config,
         protected ContextStore $contextStore,
@@ -72,27 +59,28 @@ class SwarmRunner
         protected DurableSwarmManager $durable,
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
+        protected SwarmAttributeResolver $resolver,
     ) {}
 
     public function run(Swarm $swarm, string|array|RunContext $task): SwarmResponse
     {
-        return $this->runWithExecutionMode($swarm, $task, self::EXECUTION_MODE_RUN);
+        return $this->runWithExecutionMode($swarm, $task, ExecutionMode::Run);
     }
 
     public function runQueued(Swarm $swarm, string|array|RunContext $task): ?SwarmResponse
     {
-        return $this->runWithExecutionMode($swarm, $task, self::EXECUTION_MODE_QUEUE);
+        return $this->runWithExecutionMode($swarm, $task, ExecutionMode::Queue);
     }
 
-    protected function runWithExecutionMode(Swarm $swarm, string|array|RunContext $task, string $executionMode): ?SwarmResponse
+    protected function runWithExecutionMode(Swarm $swarm, string|array|RunContext $task, ExecutionMode $executionMode): ?SwarmResponse
     {
         $startedAt = MonotonicTime::now();
-        $topology = $this->resolveTopology($swarm);
+        $topology = $this->resolver->resolveTopology($swarm);
         $this->ensureSwarmHasAgents($swarm);
-        $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
-        $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
+        $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);
+        $maxAgentExecutions = $this->resolver->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
-        $queueLeaseSeconds = $executionMode === self::EXECUTION_MODE_QUEUE
+        $queueLeaseSeconds = $executionMode === ExecutionMode::Queue
             ? $this->resolveQueueLeaseSeconds($timeoutSeconds)
             : null;
         $context = RunContext::fromTask($task);
@@ -105,7 +93,7 @@ class SwarmRunner
 
         $state = new SwarmExecutionState(
             swarm: $swarm,
-            topology: $topology->value,
+            topology: $topology,
             executionMode: $executionMode,
             deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
             maxAgentExecutions: $maxAgentExecutions,
@@ -120,7 +108,7 @@ class SwarmRunner
             events: $this->events,
         );
 
-        if ($executionMode === self::EXECUTION_MODE_QUEUE && $this->historyStore instanceof ClaimsQueuedRunExecution) {
+        if ($executionMode === ExecutionMode::Queue && $this->historyStore instanceof ClaimsQueuedRunExecution) {
             $acquisition = $this->historyStore->acquireQueuedRun(
                 $context->runId,
                 $swarm::class,
@@ -137,7 +125,7 @@ class SwarmRunner
 
             $state = new SwarmExecutionState(
                 swarm: $swarm,
-                topology: $topology->value,
+                topology: $topology,
                 executionMode: $executionMode,
                 deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
                 maxAgentExecutions: $maxAgentExecutions,
@@ -162,7 +150,7 @@ class SwarmRunner
             topology: $topology->value,
             input: $this->capture->input($context->input),
             metadata: $context->metadata,
-            executionMode: $executionMode,
+            executionMode: $executionMode->value,
         ));
 
         try {
@@ -189,7 +177,7 @@ class SwarmRunner
                 exception: $this->capture->failureException($exception),
                 durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                 metadata: $context->metadata,
-                executionMode: $executionMode,
+                executionMode: $executionMode->value,
                 exceptionClass: $exception::class,
             ));
 
@@ -208,7 +196,7 @@ class SwarmRunner
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $capturedResponse->metadata,
             artifacts: $capturedResponse->artifacts,
-            executionMode: $executionMode,
+            executionMode: $executionMode->value,
         ));
 
         return $response;
@@ -219,19 +207,19 @@ class SwarmRunner
      */
     public function stream(Swarm $swarm, string|array|RunContext $task): Generator
     {
-        $topology = $this->resolveTopology($swarm);
+        $topology = $this->resolver->resolveTopology($swarm);
         $this->ensureSwarmHasAgents($swarm);
 
         if ($topology !== Topology::Sequential) {
             throw new SwarmException('Streaming is only supported for sequential swarms. '.$topology->value.' topology does not support streaming.');
         }
 
-        $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
-        $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
+        $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);
+        $maxAgentExecutions = $this->resolver->resolveMaxAgentExecutions($swarm);
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
         $context = RunContext::fromTask($task);
-        $this->checkInputPayload($task, $context, self::EXECUTION_MODE_STREAM);
-        $this->ensureActiveContextCompatible(self::EXECUTION_MODE_STREAM);
+        $this->checkInputPayload($task, $context, ExecutionMode::Stream);
+        $this->ensureActiveContextCompatible(ExecutionMode::Stream);
         $context->mergeMetadata([
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
@@ -239,8 +227,8 @@ class SwarmRunner
 
         $state = new SwarmExecutionState(
             swarm: $swarm,
-            topology: $topology->value,
-            executionMode: self::EXECUTION_MODE_STREAM,
+            topology: $topology,
+            executionMode: ExecutionMode::Stream,
             deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
             maxAgentExecutions: $maxAgentExecutions,
             ttlSeconds: $contextTtl,
@@ -262,7 +250,7 @@ class SwarmRunner
             topology: $topology->value,
             input: $this->capture->input($context->input),
             metadata: $context->metadata,
-            executionMode: self::EXECUTION_MODE_STREAM,
+            executionMode: ExecutionMode::Stream->value,
         ));
 
         yield from (function () use ($state, $context, $contextTtl, $swarm): Generator {
@@ -276,7 +264,7 @@ class SwarmRunner
                     context: $context,
                     artifacts: $context->artifacts,
                     usage: is_array($context->metadata['usage'] ?? null) ? $context->metadata['usage'] : [],
-                ), $context, $state->topology);
+                ), $context, $state->topology->value);
 
                 $capturedResponse = $this->limits->response($this->capture->response($response));
                 $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
@@ -284,12 +272,12 @@ class SwarmRunner
                 $this->events->dispatch(new SwarmCompleted(
                     runId: $context->runId,
                     swarmClass: $swarm::class,
-                    topology: $state->topology,
+                    topology: $state->topology->value,
                     output: $capturedResponse->output,
                     durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $capturedResponse->metadata,
                     artifacts: $capturedResponse->artifacts,
-                    executionMode: self::EXECUTION_MODE_STREAM,
+                    executionMode: ExecutionMode::Stream->value,
                 ));
             } catch (\Throwable $exception) {
                 $this->historyStore->fail($context->runId, $exception, $contextTtl);
@@ -297,11 +285,11 @@ class SwarmRunner
                 $this->events->dispatch(new SwarmFailed(
                     runId: $context->runId,
                     swarmClass: $swarm::class,
-                    topology: $state->topology,
+                    topology: $state->topology->value,
                     exception: $this->capture->failureException($exception),
                     durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                     metadata: $context->metadata,
-                    executionMode: self::EXECUTION_MODE_STREAM,
+                    executionMode: ExecutionMode::Stream->value,
                     exceptionClass: $exception::class,
                 ));
 
@@ -317,8 +305,8 @@ class SwarmRunner
         $this->ensureContainerResolvable($swarm);
 
         $context = RunContext::fromTask($task);
-        $this->checkInputPayload($task, $context, self::EXECUTION_MODE_QUEUE);
-        $this->ensureActiveContextCompatible(self::EXECUTION_MODE_QUEUE);
+        $this->checkInputPayload($task, $context, ExecutionMode::Queue);
+        $this->ensureActiveContextCompatible(ExecutionMode::Queue);
         $pendingDispatch = new PendingDispatch(new InvokeSwarm($swarm::class, $context->toQueuePayload()));
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
@@ -334,13 +322,12 @@ class SwarmRunner
 
     public function dispatchDurable(Swarm $swarm, string|array|RunContext $task): DurableSwarmResponse
     {
-        $this->ensureDurableSupported($swarm);
         $this->ensureSwarmHasAgents($swarm);
         $this->ensureQueueable($swarm);
         $this->ensureContainerResolvable($swarm);
         $this->ensureDatabaseDurableInfrastructure();
 
-        $topology = $this->resolveTopology($swarm);
+        $topology = $this->resolver->resolveTopology($swarm);
         if ($topology === Topology::Parallel) {
             $this->parallel->ensureAgentsAreContainerResolvable($swarm->agents(), $swarm::class);
         }
@@ -349,15 +336,15 @@ class SwarmRunner
             $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
         }
 
-        $timeoutSeconds = $this->resolveTimeoutSeconds($swarm);
-        $maxAgentExecutions = $this->resolveMaxAgentExecutions($swarm);
+        $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);
+        $maxAgentExecutions = $this->resolver->resolveMaxAgentExecutions($swarm);
         $totalSteps = $topology === Topology::Hierarchical
             ? $maxAgentExecutions
             : min(count($swarm->agents()), $maxAgentExecutions);
         $context = RunContext::fromTask($task);
-        $this->checkInputPayload($task, $context, self::EXECUTION_MODE_DURABLE);
-        $this->ensureActiveContextCompatible(self::EXECUTION_MODE_DURABLE);
-        $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $this->resolveDurableParallelFailurePolicy($swarm));
+        $this->checkInputPayload($task, $context, ExecutionMode::Durable);
+        $this->ensureActiveContextCompatible(ExecutionMode::Durable);
+        $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $this->resolver->resolveDurableParallelFailurePolicy($swarm));
 
         return new DurableSwarmResponse(new PendingDispatch($start->job), $this->durable, $start->runId);
     }
@@ -386,9 +373,9 @@ class SwarmRunner
         return max($timeoutSeconds * 2, 300);
     }
 
-    protected function checkInputPayload(string|array|RunContext $task, RunContext $context, string $executionMode): void
+    protected function checkInputPayload(string|array|RunContext $task, RunContext $context, ExecutionMode $executionMode): void
     {
-        if ($task instanceof RunContext || in_array($executionMode, [self::EXECUTION_MODE_QUEUE, self::EXECUTION_MODE_DURABLE], true)) {
+        if ($task instanceof RunContext || in_array($executionMode, [ExecutionMode::Queue, ExecutionMode::Durable], true)) {
             $this->limits->checkContextInput($context);
 
             return;
@@ -397,23 +384,14 @@ class SwarmRunner
         $this->limits->checkInput($context->input);
     }
 
-    protected function ensureActiveContextCompatible(string $executionMode): void
+    protected function ensureActiveContextCompatible(ExecutionMode $executionMode): void
     {
         if ($this->capture->capturesActiveContext()) {
             return;
         }
 
-        if (in_array($executionMode, [self::EXECUTION_MODE_QUEUE, self::EXECUTION_MODE_DURABLE], true)) {
+        if (in_array($executionMode, [ExecutionMode::Queue, ExecutionMode::Durable], true)) {
             throw new SwarmException('Queued and durable swarms require active runtime context persistence so workers can continue or recover the run. Enable [swarm.capture.active_context] or use synchronous execution.');
-        }
-    }
-
-    protected function ensureDurableSupported(Swarm $swarm): void
-    {
-        $topology = $this->resolveTopology($swarm);
-
-        if (! in_array($topology, [Topology::Sequential, Topology::Parallel, Topology::Hierarchical], true)) {
-            throw new SwarmException('Durable execution is only supported for sequential, parallel, and hierarchical swarms.');
         }
     }
 
@@ -428,10 +406,10 @@ class SwarmRunner
 
     protected function validateForDispatch(Swarm $swarm): void
     {
-        $topology = $this->resolveTopology($swarm);
+        $topology = $this->resolver->resolveTopology($swarm);
         $this->ensureSwarmHasAgents($swarm);
-        $this->resolveTimeoutSeconds($swarm);
-        $this->resolveMaxAgentExecutions($swarm);
+        $this->resolver->resolveTimeoutSeconds($swarm);
+        $this->resolver->resolveMaxAgentExecutions($swarm);
 
         if ($topology === Topology::Parallel) {
             $this->parallel->ensureAgentsAreContainerResolvable($swarm->agents(), $swarm::class);
@@ -455,15 +433,6 @@ class SwarmRunner
         $this->artifactRepository->assertReady();
         $this->historyStore->assertReady();
         $this->durableRuns->assertReady();
-    }
-
-    protected function databaseHistoryStore(): DatabaseRunHistoryStore
-    {
-        if (! $this->historyStore instanceof DatabaseRunHistoryStore) {
-            throw new SwarmException('Durable execution requires the database run history store.');
-        }
-
-        return $this->historyStore;
     }
 
     protected function ensureQueueable(Swarm $swarm): void
@@ -544,78 +513,6 @@ class SwarmRunner
                 "Underlying container error: {$exception->getMessage()}",
                 previous: $exception,
             );
-        }
-    }
-
-    public function resolveTopology(Swarm $swarm): Topology
-    {
-        $reflection = new ReflectionClass($swarm);
-        $attributes = $reflection->getAttributes(TopologyAttribute::class);
-
-        if ($attributes !== []) {
-            return $attributes[0]->newInstance()->topology;
-        }
-
-        $configured = (string) $this->config->get('swarm.topology', Topology::Sequential->value);
-
-        try {
-            return Topology::from($configured);
-        } catch (ValueError $exception) {
-            throw new SwarmException("Invalid swarm topology [{$configured}]. Supported topologies: sequential, parallel, hierarchical.", previous: $exception);
-        }
-    }
-
-    public function resolveTimeoutSeconds(Swarm $swarm): int
-    {
-        $reflection = new ReflectionClass($swarm);
-        $attributes = $reflection->getAttributes(TimeoutAttribute::class);
-
-        if ($attributes !== []) {
-            return $attributes[0]->newInstance()->seconds;
-        }
-
-        $seconds = (int) $this->config->get('swarm.timeout', 300);
-
-        if ($seconds <= 0) {
-            throw new SwarmException('Swarm timeout must be a positive integer.');
-        }
-
-        return $seconds;
-    }
-
-    public function resolveMaxAgentExecutions(Swarm $swarm): int
-    {
-        $reflection = new ReflectionClass($swarm);
-        $attributes = $reflection->getAttributes(MaxAgentStepsAttribute::class);
-
-        if ($attributes !== []) {
-            return $attributes[0]->newInstance()->steps;
-        }
-
-        $steps = (int) $this->config->get('swarm.max_agent_steps', 10);
-
-        if ($steps <= 0) {
-            throw new SwarmException('Swarm max agent steps must be a positive integer.');
-        }
-
-        return $steps;
-    }
-
-    public function resolveDurableParallelFailurePolicy(Swarm $swarm): DurableParallelFailurePolicy
-    {
-        $reflection = new ReflectionClass($swarm);
-        $attributes = $reflection->getAttributes(DurableParallelFailurePolicyAttribute::class);
-
-        if ($attributes !== []) {
-            return $attributes[0]->newInstance()->policy;
-        }
-
-        $configured = (string) $this->config->get('swarm.durable.parallel.failure_policy', DurableParallelFailurePolicy::CollectFailures->value);
-
-        try {
-            return DurableParallelFailurePolicy::from($configured);
-        } catch (ValueError $exception) {
-            throw new SwarmException("Invalid durable parallel failure policy [{$configured}]. Supported policies: collect_failures, fail_run, partial_success.", previous: $exception);
         }
     }
 }

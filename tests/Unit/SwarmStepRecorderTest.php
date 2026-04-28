@@ -5,6 +5,8 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
+use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
@@ -89,8 +91,8 @@ function makeStepRecorderState(?callable $verifyOwnership = null): array
 
     $state = new SwarmExecutionState(
         swarm: new FakeSequentialSwarm,
-        topology: 'sequential',
-        executionMode: 'run',
+        topology: Topology::Sequential,
+        executionMode: ExecutionMode::Run,
         deadlineMonotonic: hrtime(true) + 1_000_000_000,
         maxAgentExecutions: 10,
         ttlSeconds: 3600,

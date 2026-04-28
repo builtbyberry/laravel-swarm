@@ -5,8 +5,13 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Illuminate\Contracts\Support\Arrayable;
+use JsonSerializable;
 
-class SwarmResponse
+/**
+ * @implements Arrayable<string, mixed>
+ */
+class SwarmResponse implements Arrayable, JsonSerializable
 {
     /**
      * @param  array<int, SwarmStep>  $steps
@@ -29,5 +34,27 @@ class SwarmResponse
     public function __toString(): string
     {
         return $this->output;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function toArray(): array
+    {
+        return [
+            'output' => $this->output,
+            'steps' => array_map(fn (SwarmStep $s): array => $s->toArray(), $this->steps),
+            'usage' => $this->usage,
+            'artifacts' => array_map(fn (SwarmArtifact $a): array => $a->toArray(), $this->artifacts),
+            'metadata' => $this->metadata,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function jsonSerialize(): array
+    {
+        return $this->toArray();
     }
 }

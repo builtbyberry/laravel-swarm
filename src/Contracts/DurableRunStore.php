@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
 interface DurableRunStore
@@ -28,12 +29,7 @@ interface DurableRunStore
 
     public function releaseForNextStep(string $runId, string $executionToken, int $nextStepIndex): void;
 
-    /**
-     * @param  array<string, mixed>  $routeCursor
-     * @param  array<string, mixed>|null  $routePlan
-     * @param  array<int, array<string, mixed>>  $branches
-     */
-    public function waitForBranches(string $runId, string $executionToken, int $nextStepIndex, string $parentNodeId, RunContext $context, int $ttlSeconds, array $routeCursor = [], ?array $routePlan = null, ?int $totalSteps = null, array $branches = []): void;
+    public function waitForBranches(string $runId, BranchWaitPayload $payload): void;
 
     public function releaseWaitingRunForJoin(string $runId, int $nextStepIndex): bool;
 

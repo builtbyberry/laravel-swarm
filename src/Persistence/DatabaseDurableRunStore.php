@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
+use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -263,12 +264,20 @@ class DatabaseDurableRunStore implements DurableRunStore
         ]);
     }
 
-    public function waitForBranches(string $runId, string $executionToken, int $nextStepIndex, string $parentNodeId, RunContext $context, int $ttlSeconds, array $routeCursor = [], ?array $routePlan = null, ?int $totalSteps = null, array $branches = []): void
+    public function waitForBranches(string $runId, BranchWaitPayload $payload): void
     {
-        $this->connection->transaction(function () use ($runId, $executionToken, $nextStepIndex, $parentNodeId, $context, $ttlSeconds, $routeCursor, $routePlan, $totalSteps, $branches): void {
+        $this->connection->transaction(function () use ($runId, $payload): void {
+            $executionToken = $payload->executionToken;
+            $nextStepIndex = $payload->nextStepIndex;
+            $parentNodeId = $payload->parentNodeId;
+            $routeCursor = $payload->routeCursor;
+            $routePlan = $payload->routePlan;
+            $totalSteps = $payload->totalSteps;
+            $branches = $payload->branches;
+            $ttlSeconds = $payload->ttlSeconds;
             $timestamp = Carbon::now('UTC');
             $expiresAt = DatabaseTtl::expiresAt($ttlSeconds);
-            $contextPayload = $context->toArray();
+            $contextPayload = $payload->context->toArray();
 
             $this->contextTable()->upsert([
                 [

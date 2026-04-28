@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -22,10 +24,11 @@ use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Laravel\Ai\Contracts\Agent;
-use Laravel\Ai\Responses\AgentResponse;
 
 class HierarchicalRunner
 {
+    use MergesAgentUsage;
+
     public function __construct(
         protected HierarchicalRoutePlanner $planner,
         protected ConcurrencyManager $concurrency,
@@ -90,14 +93,14 @@ class HierarchicalRunner
                 'hierarchical_node_outputs' => $nodeOutputs,
             ])
             ->mergeMetadata([
-                'topology' => $state->topology,
+                'topology' => $state->topology->value,
                 'coordinator_agent_class' => $coordinator::class,
                 'route_plan_start' => $plan->startAt,
                 'executed_node_ids' => $executedNodeIds,
                 'executed_agent_classes' => $executedAgentClasses,
                 'parallel_groups' => $parallelGroups,
                 'executed_steps' => count($steps),
-                'execution_mode' => $state->executionMode,
+                'execution_mode' => $state->executionMode->value,
             ]);
 
         $state->contextStore->put($this->capture->activeContext($state->context), $state->ttlSeconds);
@@ -110,14 +113,14 @@ class HierarchicalRunner
             artifacts: $state->context->artifacts,
             metadata: [
                 'run_id' => $state->context->runId,
-                'topology' => $state->topology,
+                'topology' => $state->topology->value,
                 'coordinator_agent_class' => $coordinator::class,
                 'route_plan_start' => $plan->startAt,
                 'executed_node_ids' => $executedNodeIds,
                 'executed_agent_classes' => $executedAgentClasses,
                 'parallel_groups' => $parallelGroups,
                 'executed_steps' => count($steps),
-                'execution_mode' => $state->executionMode,
+                'execution_mode' => $state->executionMode->value,
             ],
         );
     }
@@ -359,7 +362,7 @@ class HierarchicalRunner
             if ($node instanceof HierarchicalParallelNode) {
                 $parallelGroups[] = ['node_id' => $node->id, 'branches' => $node->branches];
 
-                if ($state->executionMode === 'queue') {
+                if ($state->executionMode === ExecutionMode::Queue) {
                     foreach ($node->branches as $branchNodeId) {
                         /** @var HierarchicalWorkerNode $branch */
                         $branch = $plan->node($branchNodeId);
@@ -685,7 +688,7 @@ class HierarchicalRunner
     {
         $state->context
             ->mergeMetadata([
-                'topology' => $state->topology,
+                'topology' => $state->topology->value,
                 'coordinator_agent_class' => $cursor['coordinator_agent_class'],
                 'route_plan_start' => $cursor['route_plan_start'],
                 'current_node_id' => $cursor['current_node_id'],
@@ -695,7 +698,7 @@ class HierarchicalRunner
                 'parallel_groups' => $cursor['parallel_groups'],
                 'executed_steps' => count($cursor['executed_agent_classes']) + 1,
                 'total_steps' => $cursor['total_steps'],
-                'execution_mode' => $state->executionMode,
+                'execution_mode' => $state->executionMode->value,
             ]);
     }
 
@@ -876,31 +879,5 @@ class HierarchicalRunner
             storeContext: $storeContext,
             storeArtifacts: $storeArtifacts,
         );
-    }
-
-    /**
-     * @param  array<string, int>  $accumulated
-     * @param  array<string, int>  $next
-     * @return array<string, int>
-     */
-    protected function mergeUsage(array $accumulated, array $next): array
-    {
-        foreach ($next as $key => $value) {
-            $accumulated[$key] = ($accumulated[$key] ?? 0) + $value;
-        }
-
-        return $accumulated;
-    }
-
-    /**
-     * @return array<string, int>
-     */
-    protected function usageFromResponse(mixed $response): array
-    {
-        if ($response instanceof AgentResponse) {
-            return $response->usage->toArray();
-        }
-
-        return [];
     }
 }

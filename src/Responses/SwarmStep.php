@@ -4,7 +4,13 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
-final class SwarmStep
+use Illuminate\Contracts\Support\Arrayable;
+use JsonSerializable;
+
+/**
+ * @implements Arrayable<string, mixed>
+ */
+final class SwarmStep implements Arrayable, JsonSerializable
 {
     /**
      * @param  class-string  $agentClass
@@ -34,5 +40,13 @@ final class SwarmStep
             ),
             'metadata' => $this->metadata,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function jsonSerialize(): array
+    {
+        return $this->toArray();
     }
 }
