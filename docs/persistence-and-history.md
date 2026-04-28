@@ -5,6 +5,7 @@ Laravel Swarm can persist three kinds of run data:
 - context
 - artifacts
 - run history
+- stream replay events
 
 This gives you a consistent way to inspect what happened during a swarm run
 after it finishes.
@@ -16,6 +17,10 @@ artifacts attached to the run.
 
 Persisted run history includes the swarm class, topology, status, steps,
 output, usage, and completion metadata.
+
+Persisted stream replay events are opt-in. When enabled, Laravel Swarm stores
+the exact typed events yielded by `stream()` so the same progress timeline can
+be played back later by run ID.
 
 With database-backed history, completed steps are stored in the normalized
 `swarm_run_steps` table and assembled back into the same `steps` array returned
@@ -58,6 +63,30 @@ $completed = SwarmHistory::forSwarm(ArticlePipeline::class)
     ->limit(10)
     ->get();
 ```
+
+## Replaying Stream Events
+
+`stream()` responses are replayable in memory after they complete, matching
+Laravel AI's stream response behavior. Persisted replay is separate and is
+stored only when enabled globally or on a specific stream response:
+
+```php
+return ArticlePipeline::make()
+    ->stream(['topic' => 'Laravel queues'])
+    ->storeForReplay();
+```
+
+Replay stored events later through `SwarmHistory`:
+
+```php
+return SwarmHistory::replay($runId);
+```
+
+`SwarmHistory::replay($runId)` returns a lazy stream response. Database-backed
+replay reads events in stored order as the response is iterated instead of
+loading the full event set up front. If the original stream failed, replay
+emits the stored events through `swarm_stream_error` and completes without
+re-throwing the original exception.
 
 ## Application Run Inspector
 
@@ -127,11 +156,17 @@ Individual stores can override the global driver if needed:
 'artifacts' => [
     'driver' => 'cache',
 ],
+'streaming' => [
+    'replay' => [
+        'enabled' => false,
+        'driver' => 'database',
+    ],
+],
 ```
 
 Per-store drivers should only be set when you intentionally want an override.
 If you published `config/swarm.php` from an older package version, verify that
-the `context`, `artifacts`, and `history` driver values are not hardcoded to
+the `context`, `artifacts`, `history`, and `streaming.replay` driver values are not hardcoded to
 `cache`, or they will override `swarm.persistence.driver`.
 
 ### Cache
@@ -230,8 +265,8 @@ runtime context snapshot instead of raw task state. Queued and durable swarms
 require active runtime context persistence so workers can continue or recover
 the run; Laravel Swarm fails before dispatch if `active_context` is disabled for
 those modes. This setting is not encryption and it is not a replay mechanism.
-Use input/output/artifact capture settings to control terminal history and event
-capture.
+Use input/output/artifact capture settings to control terminal history, stream
+replay, and event capture.
 
 When either input or output capture is disabled, failed run history keeps the
 original exception class but stores `[redacted]` as the exception message.
@@ -287,15 +322,21 @@ Input limits always fail before execution when the configured size is exceeded.
 Laravel Swarm does not truncate task input or runtime context before handing it
 to agents.
 
-Output limits apply to captured output surfaces. If output capture is disabled,
-output limit checks do not run because Laravel Swarm persists and emits
-`[redacted]` instead of the provider output.
+Output limits apply to captured output surfaces, including run history output,
+step output, lifecycle event payloads, and persisted stream replay event
+payloads. If output capture is disabled, output limit checks do not run because
+Laravel Swarm persists and emits `[redacted]` instead of the provider output.
 
 The default limit values are `null`, which keeps existing behavior. When a
 limit is configured, the default output overflow strategy is `fail`.
 Truncation is opt-in for captured output only and adds metadata such as
 `output_truncated`, `output_original_bytes`, and `output_stored_bytes` to the
 persisted step or completion record.
+
+When overflow strategy is `fail` during streaming, Laravel Swarm can emit
+earlier deltas before the oversized terminal payload is detected. In that case,
+the stream fails and terminal events after the failure point are not emitted or
+persisted for replay.
 
 Payload limits are storage and event guardrails. They do not hard-cancel an
 in-flight provider request, limit third-party SDK buffering, or cap the
