@@ -362,6 +362,11 @@ requires database-backed swarm persistence. Parallel durable swarms and
 hierarchical durable parallel groups use durable branch jobs with independent
 leases, then join before completing or continuing the route.
 
+Start with sequential durable execution for a first production rollout. Use
+hierarchical durable execution when coordinator-owned route planning is part of
+the business workflow. For a copy-paste branch fan-out example, see
+[Durable Hierarchical Approval](examples/durable-hierarchical-approval/README.md).
+
 Durable responses also proxy the underlying pending dispatch. Chaining
 `onConnection()` or `onQueue()` updates the durable runtime record so recovery
 redispatches later jobs to the same queue routing.
@@ -471,7 +476,9 @@ define `next` and join into a subsequent node before the workflow can finish.
 fails before worker execution when a plan exceeds the limit.
 
 For the full routing contract, plan shape, and validation rules, see
-[Hierarchical Routing](docs/hierarchical-routing.md).
+[Hierarchical Routing](docs/hierarchical-routing.md). For a durable
+hierarchical parallel workflow, see
+[Durable Hierarchical Approval](examples/durable-hierarchical-approval/README.md).
 
 ## Testing
 

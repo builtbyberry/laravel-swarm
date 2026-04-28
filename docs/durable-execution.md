@@ -100,6 +100,44 @@ Each durable step job:
 That gives retries and recovery a clear boundary. A retry re-runs the current
 step. It does not replay the whole workflow.
 
+## Durable Hierarchical Parallel Flow
+
+A hierarchical durable run can contain route-plan `parallel` nodes. Those
+parallel nodes do not run inside one parent job. Laravel Swarm turns each branch
+worker into a durable branch job with its own lease.
+
+The flow is:
+
+1. the coordinator runs as the first durable step
+2. Laravel Swarm validates and persists the route plan and route cursor
+3. a parallel node creates branch runtime rows for each branch worker
+4. branch jobs run independently and checkpoint output, usage, attempts,
+   failure details, and queue routing
+5. the parent durable run enters `waiting` while branch rows are active
+6. when every branch row is terminal, the parent is released to the join step
+7. the next routed worker receives branch outputs through `with_outputs`
+8. the route continues until a finish node completes the run
+
+That waiting parent is active operational state, not a terminal run. Pause and
+cancel operate immediately at this branch boundary. Pausing prevents the join
+from dispatching while allowing already-running branch provider calls to finish.
+Resuming redispatches pending or stale branches, or releases the parent to the
+join when every branch is already terminal. Cancelling marks non-terminal branch
+rows cancelled so stale branch workers become inert when they checkpoint.
+
+Recovery also understands this boundary. If a branch checkpoints successfully
+but the worker exits before dispatching the parent join, `swarm:recover` can
+release the waiting parent once every branch row is terminal.
+
+Active route plans and branch outputs can contain worker prompts and
+intermediate outputs. Treat durable runtime tables as sensitive operational
+storage and keep capture settings and retention windows aligned with the data
+being processed.
+
+See [Durable Hierarchical Approval](../examples/durable-hierarchical-approval/README.md)
+for a copy-paste example with a coordinator, two branch reviewers, and a join
+summarizer.
+
 ## Operational State
 
 Durable runs persist neutral operational state in the database so applications

@@ -306,6 +306,13 @@ Loops are intentionally unsupported in this release.
   projection, cursor, and node inspection state but delete durable node output
   rows
 
+The three execution modes handle route-plan parallel groups differently:
+`run()` executes branch workers concurrently, `queue()` executes them
+sequentially in declaration order in v1, and `dispatchDurable()` creates branch
+jobs with independent leases and a durable parent join. See
+[Durable Hierarchical Approval](../examples/durable-hierarchical-approval/README.md)
+for a durable branch fan-out example.
+
 ## History And Metadata
 
 Hierarchical runs persist graph-aware metadata such as:

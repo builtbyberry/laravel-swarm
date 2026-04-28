@@ -28,9 +28,11 @@ Read the examples in this order:
    coordinator return a validated route plan for specialist workers.
 8. [Durable Compliance Review](durable-compliance-review/README.md): checkpoint
    a workflow one durable step per job.
-9. [Operations Dashboard](operations-dashboard/README.md): record lifecycle
+9. [Durable Hierarchical Approval](durable-hierarchical-approval/README.md):
+   combine coordinator routing with durable branch fan-out and join.
+10. [Operations Dashboard](operations-dashboard/README.md): record lifecycle
    events, broadcast app-owned updates, and pair them with Pulse metrics.
-10. [Privacy Capture](privacy-capture/README.md): configure capture flags for
+11. [Privacy Capture](privacy-capture/README.md): configure capture flags for
    sensitive prompts and outputs.
 
 ## Topology Decision Table
@@ -43,6 +45,28 @@ Read the examples in this order:
 | A long workflow should survive retries without replaying everything | Durable | Sequential, parallel, and hierarchical swarms; durable parallel branches use independent branch jobs and join before continuing. |
 | A browser needs a status page after dispatch | Run inspector | Use `run_id` to compose history, context, artifacts, durable state, and pending records. |
 | Operators need live run visibility | Operations dashboard | Store lifecycle event previews and broadcast your own application event. |
+
+## Feature Coverage
+
+| Feature | Start With |
+| --- | --- |
+| Sequential topology | [Sequential Content Pipeline](sequential-content-pipeline/README.md) |
+| Parallel topology | [Parallel Research Swarm](parallel-research-swarm/README.md) |
+| Hierarchical topology | [Hierarchical Support Triage](hierarchical-support-triage/README.md) |
+| `run()` | [Sequential Content Pipeline](sequential-content-pipeline/README.md) |
+| `queue()` | [Queued Workflow Events](queued-workflow-events/README.md) |
+| `stream()` | [Streaming Progress](streaming-progress/README.md) |
+| `dispatchDurable()` | [Durable Compliance Review](durable-compliance-review/README.md) |
+| Durable sequential execution | [Durable Compliance Review](durable-compliance-review/README.md) |
+| Durable top-level parallel execution | [Parallel Research Swarm](parallel-research-swarm/README.md#durable-parallel-usage) |
+| Durable hierarchical parallel execution | [Durable Hierarchical Approval](durable-hierarchical-approval/README.md) |
+| Persistence and history | [Run Inspector](run-inspector/README.md) and [Persistence And History](../docs/persistence-and-history.md) |
+| Artifacts and structured context | [Structured Input](../docs/structured-input.md) |
+| Capture and privacy | [Privacy Capture](privacy-capture/README.md) |
+| Pulse metrics | [Operations Dashboard](operations-dashboard/README.md) and [Pulse](../docs/pulse.md) |
+| Testing | [Testing Swarms](testing-swarms/README.md) |
+| Run inspection | [Run Inspector](run-inspector/README.md) |
+| Operations, pruning, and recovery | [Durable Compliance Review](durable-compliance-review/README.md) and [Maintenance](../docs/maintenance.md) |
 
 ## Contracts To Keep
 
