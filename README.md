@@ -57,6 +57,21 @@ durable, testing, and privacy-sensitive swarms.
 
 If your use case feels more like a reusable workflow than a single prompt, the rest of Laravel Swarm gives you three orchestration styles: sequential, parallel, and hierarchical.
 
+## Choose The Execution Mode
+
+| Method | Returns | Use When |
+| --- | --- | --- |
+| `run()` | `SwarmResponse` | The request can wait for the full workflow result. |
+| `queue()` | `QueuedSwarmResponse` | One background job can comfortably own the whole workflow. |
+| `stream()` | `Generator` of stream events | A browser or client needs live progress from a sequential swarm. |
+| `dispatchDurable()` | `DurableSwarmResponse` | The workflow needs checkpointing, recovery, or operator controls. |
+
+Only `run()` returns a `SwarmResponse` directly. `stream()` yields progress and
+token events while persisting completion through the normal history and event
+surfaces. `queue()` and `dispatchDurable()` return dispatch handles with a
+`runId`; listen to lifecycle events or inspect persisted history for the
+eventual result.
+
 ## Installation
 
 ```bash
@@ -274,6 +289,15 @@ ArticlePipeline::make()
 
 Like Laravel AI, the queued swarm response proxies the underlying pending dispatch, so you may continue chaining queue configuration methods such as `onConnection()` and `onQueue()` before the job is actually dispatched.
 
+```php
+$response = ArticlePipeline::make()
+    ->queue('Draft a blog outline about Laravel queues.')
+    ->onConnection('redis')
+    ->onQueue('ai');
+
+$response->runId;
+```
+
 Queued swarms are Laravel-native workflow definitions: the worker re-resolves the swarm from the container before execution. For queued execution, treat the swarm as a stateless definition apart from container-injected dependencies. Runtime instance state is not preserved across the queue boundary. Pass dynamic execution data in the task payload instead.
 
 Because queued swarms are validated for container resolution, topology, timeouts,
@@ -320,7 +344,7 @@ ArticlePipeline::make()->dispatchDurable([
     'topic' => 'Laravel queues',
     'audience' => 'intermediate developers',
     'goal' => 'blog outline',
-]);
+])->onQueue('swarm-durable');
 ```
 
 Durable runs are checkpointed and advance one step per job. Sequential durable
@@ -337,6 +361,10 @@ Durable execution supports sequential, parallel, and hierarchical swarms and
 requires database-backed swarm persistence. Parallel durable swarms and
 hierarchical durable parallel groups use durable branch jobs with independent
 leases, then join before completing or continuing the route.
+
+Durable responses also proxy the underlying pending dispatch. Chaining
+`onConnection()` or `onQueue()` updates the durable runtime record so recovery
+redispatches later jobs to the same queue routing.
 
 Durable responses do not support `then()` or `catch()`. Durable runs are
 event-driven. Listen to `SwarmCompleted` and `SwarmFailed` instead of
@@ -491,7 +519,32 @@ Timeout settings are best-effort orchestration deadlines, not hard cancellation 
 
 ## Responses, Events, And Persistence
 
-Every swarm run returns a `SwarmResponse` with `output`, `steps`, `usage`, `artifacts`, and `metadata`. The response casts to a string for simple use cases.
+Synchronous `run()` returns a `SwarmResponse` with `output`, `steps`, `usage`,
+`artifacts`, `metadata`, and the live `context`. The response casts to a string
+for simple use cases and implements `toArray()` / `JsonSerializable` for JSON
+responses.
+
+```php
+use App\Ai\Swarms\ArticlePipeline;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+public function store(Request $request): JsonResponse
+{
+    $data = $request->validate([
+        'topic' => ['required', 'string', 'max:200'],
+    ]);
+
+    $response = ArticlePipeline::make()->run($data);
+
+    return response()->json($response);
+}
+```
+
+`toArray()` intentionally omits the live `context` so JSON API responses do not
+accidentally re-emit prompt or input data. If your application needs the context
+inside the current PHP process, read `$response->context` directly and choose
+which fields to expose.
 
 Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted`, `SwarmCompleted`, and `SwarmFailed` include an `executionMode` payload so listeners can distinguish `run`, `stream`, `queue`, and `durable` invocations.
 
@@ -500,6 +553,35 @@ Run context, artifacts, and run history are persisted automatically using the co
 For persistence drivers, history inspection, and the `SwarmHistory` facade and inspection commands, see [Persistence And History](docs/persistence-and-history.md).
 
 To customize how swarm state is stored, bind your own implementations against the `ContextStore`, `ArtifactRepository`, or `RunHistoryStore` contracts. Most applications can use the package defaults.
+
+## Production Readiness Checklist
+
+- Choose the execution mode intentionally: `queue()` for one background job,
+  `dispatchDurable()` for checkpointed workflows.
+- Use database persistence for workflows that need history beyond cache TTLs,
+  active-run pruning protection, or durable execution.
+- Run package migrations before enabling database-backed persistence.
+- Size queue worker timeouts and `retry_after` above the longest expected
+  provider call; for durable swarms, size them above one durable step.
+- Schedule `swarm:recover` for durable execution and `swarm:prune` for
+  database retention cleanup.
+- Review capture settings before running customer, compliance, or regulated
+  data through swarms.
+- Build a run inspector or dashboard around `run_id`, lifecycle events,
+  `SwarmHistory`, and durable runtime state.
+- Use Pulse for aggregate observability when your app already runs Pulse.
+
+## Common Mistakes
+
+- Putting per-run constructor state on queued swarms. Queue workers re-resolve
+  the swarm from the container; pass dynamic data in the task payload.
+- Passing objects, enums, closures, models, or resources as queued or durable
+  task data. Use plain arrays and identifiers instead.
+- Forgetting to schedule `swarm:recover` for durable workflows.
+- Storing secrets in metadata. Capture flags redact captured inputs and
+  outputs, not developer-supplied metadata.
+- Treating queued `then()` / `catch()` callbacks as the production integration
+  point. Prefer lifecycle events and persisted status.
 
 ## Documentation
 

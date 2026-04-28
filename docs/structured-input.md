@@ -72,13 +72,25 @@ Use `RunContext` when you need more explicit control, such as setting the run
 ID yourself or attaching metadata:
 
 ```php
+use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
-$response = ArticlePipeline::make()->run(RunContext::from([
+$context = RunContext::from([
     'input' => 'Draft a blog outline about Laravel queues.',
     'data' => ['topic' => 'Laravel queues'],
-    'metadata' => ['campaign' => 'content-calendar'],
-], 'article-outline-run'));
+    'metadata' => [
+        'campaign' => 'content-calendar',
+        'tenant_id' => 'acme',
+    ],
+], 'article-outline-run');
+
+$context->addArtifact(new SwarmArtifact(
+    name: 'source_document',
+    content: ['document_id' => 1234],
+    metadata: ['kind' => 'reference'],
+));
+
+$response = ArticlePipeline::make()->run($context);
 ```
 
 Most applications will not need to construct a `RunContext` manually. Arrays

@@ -7,6 +7,7 @@ This example teaches:
 
 - use fakes for normal application tests;
 - use persisted assertions when history, artifacts, or database behavior matter;
+- use event assertions for real lifecycle behavior;
 - array task assertions use subset matching.
 
 ## Fake A Swarm
@@ -40,6 +41,29 @@ ContentPipeline::make()->queue('Draft the article.');
 ContentPipeline::assertQueued('Draft the article.');
 ```
 
+The same fake can assert streamed and durable dispatches:
+
+```php
+ContentPipeline::fake(['streamed']);
+
+iterator_to_array(ContentPipeline::make()->stream('Draft the article.'));
+
+ContentPipeline::assertStreamed('Draft the article.');
+ContentPipeline::assertNeverDispatchedDurably();
+```
+
+```php
+ContentPipeline::fake();
+
+ContentPipeline::make()->dispatchDurable([
+    'topic' => 'Laravel durable workflows',
+]);
+
+ContentPipeline::assertDispatchedDurably([
+    'topic' => 'Laravel durable workflows',
+]);
+```
+
 ## Persisted Execution
 
 ```php
@@ -57,3 +81,24 @@ ContentPipeline::assertPersisted(['topic' => 'Laravel persistence']);
 
 Use persisted assertions when the test is about history, artifacts, events, or
 database behavior. Use fakes for normal application tests.
+
+## Lifecycle Events
+
+Use `InteractsWithSwarmEvents` when the test needs to inspect real events:
+
+```php
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Testing\InteractsWithSwarmEvents;
+
+class ContentPipelineTest extends TestCase
+{
+    use InteractsWithSwarmEvents;
+}
+
+ContentPipeline::make()->run('Draft the article.');
+
+ContentPipeline::assertEventFired(
+    SwarmCompleted::class,
+    fn ($event) => $event->executionMode === 'run',
+);
+```

@@ -22,7 +22,8 @@ Read the examples in this order:
 5. [Run Inspector](run-inspector/README.md): build the status endpoint your UI
    uses after a queued, streamed, synchronous, or durable run starts.
 6. [Parallel Research Swarm](parallel-research-swarm/README.md): run independent
-   container-resolvable agents at the same time.
+   container-resolvable agents at the same time, including durable parallel
+   branch execution.
 7. [Hierarchical Support Triage](hierarchical-support-triage/README.md): let a
    coordinator return a validated route plan for specialist workers.
 8. [Durable Compliance Review](durable-compliance-review/README.md): checkpoint
@@ -51,6 +52,8 @@ Read the examples in this order:
 - Hierarchical worker classes must be unique after the coordinator.
 - Durable execution requires database persistence and supports sequential,
   parallel, and hierarchical topology.
+- Durable parallel failure behavior can be configured globally or with
+  `#[DurableParallelFailurePolicy]`.
 - Prefer lifecycle events over queued `then()` / `catch()` callbacks.
 - For queued or durable swarms, size queue `retry_after` and worker timeouts for
   your provider calls and total swarm duration.

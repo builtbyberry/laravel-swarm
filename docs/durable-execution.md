@@ -45,6 +45,26 @@ which waits for all dispatched branches to reach a terminal state before
 failing the parent run with branch diagnostics. Applications can opt into
 `fail_run` or `partial_success` when that better matches the workflow.
 
+```php
+use BuiltByBerry\LaravelSwarm\Attributes\DurableParallelFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy as FailurePolicy;
+
+#[DurableParallelFailurePolicy(FailurePolicy::PartialSuccess)]
+class ResearchSwarm implements Swarm
+{
+    use Runnable;
+
+    public function agents(): array
+    {
+        return [
+            //
+        ];
+    }
+}
+```
+
 Durable responses do not support `then()` or `catch()`. Durable runs are
 event-driven. Listen to `SwarmCompleted` and `SwarmFailed` instead of
 serializing callbacks into the queue payload.

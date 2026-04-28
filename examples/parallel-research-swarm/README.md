@@ -77,7 +77,59 @@ $response = ResearchSwarm::make()->run([
 foreach ($response->steps as $step) {
     logger()->info('Research step completed', [
         'agent' => $step->agentClass,
-        'duration_ms' => $step->durationMs,
+        'index' => $step->metadata['index'] ?? null,
+        'usage' => $step->metadata['usage'] ?? [],
     ]);
 }
 ```
+
+## Durable Parallel Usage
+
+Top-level parallel swarms can also run durably. Each agent becomes an
+independent durable branch job, and the parent run joins those branch outputs
+before completing.
+
+Use `#[DurableParallelFailurePolicy]` when the workflow needs a different
+branch-failure contract from the default `collect_failures` behavior:
+
+```php
+use App\Ai\Agents\CompetitorResearcher;
+use App\Ai\Agents\CustomerResearcher;
+use App\Ai\Agents\MarketResearcher;
+use BuiltByBerry\LaravelSwarm\Attributes\DurableParallelFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy as FailurePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+
+#[Topology(TopologyEnum::Parallel)]
+#[DurableParallelFailurePolicy(FailurePolicy::PartialSuccess)]
+class ResearchSwarm implements Swarm
+{
+    use Runnable;
+
+    public function agents(): array
+    {
+        return [
+            new MarketResearcher,
+            new CompetitorResearcher,
+            new CustomerResearcher,
+        ];
+    }
+}
+```
+
+```php
+$response = ResearchSwarm::make()
+    ->dispatchDurable([
+        'company' => 'Acme Payroll',
+        'market' => 'US mid-market payroll',
+    ])
+    ->onQueue('swarm-durable');
+
+$response->runId;
+```
+
+Durable parallel execution requires database-backed persistence, a queue
+worker, and scheduled `swarm:recover`.

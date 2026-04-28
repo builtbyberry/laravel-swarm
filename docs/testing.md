@@ -35,6 +35,7 @@ ArticlePipeline::assertDispatchedDurably('Draft a blog outline about Laravel que
 ```php
 ArticlePipeline::assertNeverRan();
 ArticlePipeline::assertNeverQueued();
+ArticlePipeline::assertNeverStreamed();
 ArticlePipeline::assertNeverDispatchedDurably();
 ```
 
