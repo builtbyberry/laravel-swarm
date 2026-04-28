@@ -53,7 +53,7 @@ Read the examples in this order:
 | Sequential topology | [Sequential Content Pipeline](sequential-content-pipeline/README.md) |
 | Parallel topology | [Parallel Research Swarm](parallel-research-swarm/README.md) |
 | Hierarchical topology | [Hierarchical Support Triage](hierarchical-support-triage/README.md) |
-| `run()` | [Sequential Content Pipeline](sequential-content-pipeline/README.md) |
+| `prompt()` | [Sequential Content Pipeline](sequential-content-pipeline/README.md) |
 | `queue()` | [Queued Workflow Events](queued-workflow-events/README.md) |
 | `stream()` | [Streaming Progress](streaming-progress/README.md) |
 | `dispatchDurable()` | [Durable Compliance Review](durable-compliance-review/README.md) |

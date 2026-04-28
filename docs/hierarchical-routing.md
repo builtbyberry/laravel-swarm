@@ -113,7 +113,7 @@ Rules:
 - `next` is required in v1; every parallel group must join into a subsequent node before the workflow can finish
 - worker nodes used as branches may not define their own `next`
 - branch workers cannot depend on sibling branch outputs
-- in `run()`, branches execute concurrently
+- in `prompt()`, branches execute concurrently
 - in `queue()`, branches execute sequentially in declaration order in v1
 
 ### Finish Nodes
@@ -277,7 +277,7 @@ Loops are intentionally unsupported in this release.
 
 ## Execution Modes
 
-### `run()`
+### `prompt()`
 
 - coordinator executes first
 - worker chains execute normally
@@ -291,7 +291,7 @@ Loops are intentionally unsupported in this release.
 - branch metadata and history still record the plan as a parallel group so the
   runtime can evolve later without changing the plan contract
 - the plan is still validated with the same parallel-safe dependency rules as
-  `run()`
+  `prompt()`
 
 ### `dispatchDurable()`
 
@@ -307,7 +307,7 @@ Loops are intentionally unsupported in this release.
   rows
 
 The three execution modes handle route-plan parallel groups differently:
-`run()` executes branch workers concurrently, `queue()` executes them
+`prompt()` executes branch workers concurrently, `queue()` executes them
 sequentially in declaration order in v1, and `dispatchDurable()` creates branch
 jobs with independent leases and a durable parent join. See
 [Durable Hierarchical Approval](../examples/durable-hierarchical-approval/README.md)

@@ -16,7 +16,7 @@ use App\Ai\Swarms\ArticlePipeline;
 
 ArticlePipeline::fake(['first', 'second']);
 
-expect((string) ArticlePipeline::make()->run('Draft a blog outline about Laravel queues.'))->toBe('first');
+expect((string) ArticlePipeline::make()->prompt('Draft a blog outline about Laravel queues.'))->toBe('first');
 ```
 
 ## Asserting Basic Interaction
@@ -24,16 +24,16 @@ expect((string) ArticlePipeline::make()->run('Draft a blog outline about Laravel
 You can assert against synchronous, queued, and streamed execution:
 
 ```php
-ArticlePipeline::assertRan('Draft a blog outline about Laravel queues.');
+ArticlePipeline::assertPrompted('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertQueued('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertStreamed('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertDispatchedDurably('Draft a blog outline about Laravel queues.');
 ```
 
-## Asserting A Swarm Did Not Run
+## Asserting A Swarm Was Not Prompted
 
 ```php
-ArticlePipeline::assertNeverRan();
+ArticlePipeline::assertNeverPrompted();
 ArticlePipeline::assertNeverQueued();
 ArticlePipeline::assertNeverStreamed();
 ArticlePipeline::assertNeverDispatchedDurably();
@@ -45,13 +45,13 @@ Array assertions use subset matching, so you only need to assert on the keys
 you care about:
 
 ```php
-ArticlePipeline::make()->run([
+ArticlePipeline::make()->prompt([
     'draft_id' => 42,
     'mode' => 'outline',
     'topic' => 'Laravel queues',
 ]);
 
-ArticlePipeline::assertRan(['draft_id' => 42]);
+ArticlePipeline::assertPrompted(['draft_id' => 42]);
 ```
 
 The same pattern works for `assertQueued()`, `assertStreamed()`, and
@@ -62,7 +62,7 @@ The same pattern works for `assertQueued()`, `assertStreamed()`, and
 Use a callable when you need more control over the recorded task value:
 
 ```php
-ArticlePipeline::assertRan(function ($task) {
+ArticlePipeline::assertPrompted(function ($task) {
     return is_array($task)
         && ($task['topic'] ?? null) === 'Laravel queues';
 });
@@ -78,7 +78,7 @@ When you want to verify real execution rather than fake interaction, use
 `assertPersisted()`:
 
 ```php
-$response = ArticlePipeline::make()->run([
+$response = ArticlePipeline::make()->prompt([
     'draft_id' => 42,
     'topic' => 'Laravel queues',
 ]);
@@ -113,12 +113,12 @@ class ArticlePipelineTest extends TestCase
 
 The recorder resets automatically between tests.
 
-Once the trait is in place, assert lifecycle events after a real run:
+Once the trait is in place, assert lifecycle events after a real prompt:
 
 ```php
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 
-ArticlePipeline::make()->run('Draft a blog outline about Laravel queues.');
+ArticlePipeline::make()->prompt('Draft a blog outline about Laravel queues.');
 
 ArticlePipeline::assertEventFired(SwarmStarted::class);
 ```
@@ -131,6 +131,9 @@ ArticlePipeline::assertEventFired(
     fn ($event) => $event->executionMode === 'run',
 );
 ```
+
+Synchronous `prompt()` calls use the existing `run` execution mode value for
+compatibility.
 
 `assertEventFired()` is test-scoped and will fail with a clear message if the
 recorder has not been activated.

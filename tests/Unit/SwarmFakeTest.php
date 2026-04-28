@@ -22,6 +22,20 @@ test('fake intercepts run and queue calls', function () {
     EmptyRunnableSwarm::assertDispatchedDurably('gamma');
 });
 
+test('fake intercepts prompt and run calls in the same sync bucket', function () {
+    EmptyRunnableSwarm::fake(['prompt-output', 'run-output']);
+
+    $swarm = EmptyRunnableSwarm::make();
+
+    expect((string) $swarm->prompt('alpha'))->toBe('prompt-output');
+    expect((string) $swarm->run('beta'))->toBe('run-output');
+
+    EmptyRunnableSwarm::assertPrompted('alpha');
+    EmptyRunnableSwarm::assertPrompted('beta');
+    EmptyRunnableSwarm::assertRan('alpha');
+    EmptyRunnableSwarm::assertRan('beta');
+});
+
 test('fake make returns the fake even when positional arguments are passed', function () {
     $fake = EmptyRunnableSwarm::fake();
 
@@ -116,6 +130,20 @@ test('assert never ran passes when idle', function () {
     EmptyRunnableSwarm::fake();
 
     EmptyRunnableSwarm::assertNeverRan();
+});
+
+test('assert never prompted passes when idle', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::assertNeverPrompted();
+});
+
+test('assert never prompted fails after a prompt', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::make()->prompt('nope');
+
+    expect(fn () => EmptyRunnableSwarm::assertNeverPrompted())->toThrow(AssertionFailedError::class);
 });
 
 test('assert never ran fails after a run', function () {

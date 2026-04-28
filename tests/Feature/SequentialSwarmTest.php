@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
@@ -41,6 +42,17 @@ test('sequential swarm runs agents in order and threads outputs', function () {
     expect($response->steps[0]->output)->toBe('research-out');
 
     expect($response->steps[2]->output)->toBe('editor-out');
+});
+
+test('sequential swarm prompts agents in order and returns a swarm response', function () {
+    $response = FakeSequentialSwarm::make()->prompt('original-task');
+
+    expect($response)->toBeInstanceOf(SwarmResponse::class)
+        ->and((string) $response)->toBe('editor-out');
+
+    FakeResearcher::assertPrompted('original-task');
+    FakeWriter::assertPrompted('research-out');
+    FakeEditor::assertPrompted('writer-out');
 });
 
 test('sequential swarm rejects empty agent lists', function () {

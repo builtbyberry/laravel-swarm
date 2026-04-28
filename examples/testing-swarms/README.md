@@ -17,14 +17,14 @@ use App\Ai\Swarms\ContentPipeline;
 
 ContentPipeline::fake(['draft complete']);
 
-$response = ContentPipeline::make()->run([
+$response = ContentPipeline::make()->prompt([
     'topic' => 'Laravel testing',
     'audience' => 'package developers',
 ]);
 
 expect((string) $response)->toBe('draft complete');
 
-ContentPipeline::assertRan([
+ContentPipeline::assertPrompted([
     'topic' => 'Laravel testing',
 ]);
 ```
@@ -71,7 +71,7 @@ use App\Ai\Swarms\ContentPipeline;
 
 config()->set('swarm.persistence.driver', 'database');
 
-$response = ContentPipeline::make()->run([
+$response = ContentPipeline::make()->prompt([
     'topic' => 'Laravel persistence',
 ]);
 
@@ -95,10 +95,13 @@ class ContentPipelineTest extends TestCase
     use InteractsWithSwarmEvents;
 }
 
-ContentPipeline::make()->run('Draft the article.');
+ContentPipeline::make()->prompt('Draft the article.');
 
 ContentPipeline::assertEventFired(
     SwarmCompleted::class,
     fn ($event) => $event->executionMode === 'run',
 );
 ```
+
+Synchronous `prompt()` calls use the existing `run` execution mode value for
+compatibility.

@@ -46,11 +46,21 @@ trait Runnable
     }
 
     /**
+     * Invoke the swarm with a given prompt or structured task.
+     */
+    public function prompt(string|array|RunContext $task): SwarmResponse
+    {
+        return Container::getInstance()->make(SwarmRunner::class)->run($this, $task);
+    }
+
+    /**
      * Run the swarm with the given task.
+     *
+     * This method is retained as a compatibility alias for prompt().
      */
     public function run(string|array|RunContext $task): SwarmResponse
     {
-        return Container::getInstance()->make(SwarmRunner::class)->run($this, $task);
+        return $this->prompt($task);
     }
 
     /**
@@ -86,6 +96,40 @@ trait Runnable
         Container::getInstance()->instance(static::class, $fake);
 
         return $fake;
+    }
+
+    /**
+     * Assert the swarm was prompted with the given task.
+     */
+    public static function assertPrompted(string|array|callable $task): void
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            'The expected swarm was not faked before calling assertPrompted().',
+        );
+
+        /** @var SwarmFakeInstance $resolved */
+        $resolved->assertPrompted($task);
+    }
+
+    /**
+     * Assert the swarm was never prompted.
+     */
+    public static function assertNeverPrompted(): void
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            'The expected swarm was not faked before calling assertNeverPrompted().',
+        );
+
+        /** @var SwarmFakeInstance $resolved */
+        $resolved->assertNeverPrompted();
     }
 
     /**

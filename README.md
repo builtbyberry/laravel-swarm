@@ -24,7 +24,7 @@ Laravel's article, [Building Multi-Agent Workflows with the Laravel AI SDK](http
 
 That is the right mental model for Swarm too. Laravel AI gives you the ingredients. Laravel Swarm gives you a reusable workflow abstraction built from those ingredients.
 
-Both are valid choices. Laravel AI is great when you want to compose the workflow yourself from lower-level primitives. Laravel Swarm is great when you want that workflow to live as a reusable, first-class object in your app with a consistent `run()`, `queue()`, `stream()`, and `dispatchDurable()` API, plus persistence, lifecycle events, and test helpers around it.
+Both are valid choices. Laravel AI is great when you want to compose the workflow yourself from lower-level primitives. Laravel Swarm is great when you want that workflow to live as a reusable, first-class object in your app with a consistent `prompt()`, `queue()`, `stream()`, and `dispatchDurable()` API, plus persistence, lifecycle events, and test helpers around it. The legacy `run()` method remains available as a compatibility alias for `prompt()`.
 
 If you prefer assembling those workflow patterns manually, the Laravel AI article is a good place to start. If you want to define the workflow once and reuse it as an application primitive, Swarm is the better fit.
 
@@ -61,16 +61,16 @@ If your use case feels more like a reusable workflow than a single prompt, the r
 
 | Method | Returns | Use When |
 | --- | --- | --- |
-| `run()` | `SwarmResponse` | The request can wait for the full workflow result. |
+| `prompt()` | `SwarmResponse` | The request can wait for the full workflow result. |
 | `queue()` | `QueuedSwarmResponse` | One background job can comfortably own the whole workflow. |
 | `stream()` | `Generator` of stream events | A browser or client needs live progress from a sequential swarm. |
 | `dispatchDurable()` | `DurableSwarmResponse` | The workflow needs checkpointing, recovery, or operator controls. |
 
-Only `run()` returns a `SwarmResponse` directly. `stream()` yields progress and
-token events while persisting completion through the normal history and event
-surfaces. `queue()` and `dispatchDurable()` return dispatch handles with a
-`runId`; listen to lifecycle events or inspect persisted history for the
-eventual result.
+Only `prompt()` returns a `SwarmResponse` directly. `run()` is retained as a
+compatibility alias. `stream()` yields progress and token events while
+persisting completion through the normal history and event surfaces. `queue()`
+and `dispatchDurable()` return dispatch handles with a `runId`; listen to
+lifecycle events or inspect persisted history for the eventual result.
 
 ## Installation
 
@@ -194,12 +194,12 @@ class ArticlePipeline implements Swarm
 
 In a sequential swarm, the first agent handles the original task, the next agent receives the previous agent's output, and so on.
 
-## Running A Swarm
+## Prompting A Swarm
 
-Use `run()` when you want synchronous execution and a `SwarmResponse` back immediately:
+Use `prompt()` when you want synchronous execution and a `SwarmResponse` back immediately:
 
 ```php
-$response = ArticlePipeline::make()->run('Draft a blog outline about Laravel queues.');
+$response = ArticlePipeline::make()->prompt('Draft a blog outline about Laravel queues.');
 
 $response->output;
 $response->steps;
@@ -210,7 +210,7 @@ $response->metadata;
 Structured task input is also first-class:
 
 ```php
-$response = ArticlePipeline::make()->run([
+$response = ArticlePipeline::make()->prompt([
     'topic' => 'Laravel queues',
     'audience' => 'intermediate developers',
     'goal' => 'blog outline',
@@ -222,7 +222,7 @@ Use `RunContext` when you need explicit control over the run ID or metadata:
 ```php
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
-$response = ArticlePipeline::make()->run(RunContext::from([
+$response = ArticlePipeline::make()->prompt(RunContext::from([
     'input' => 'Draft a blog outline about Laravel queues.',
     'data' => ['topic' => 'Laravel queues'],
     'metadata' => ['campaign' => 'content-calendar'],
@@ -230,6 +230,8 @@ $response = ArticlePipeline::make()->run(RunContext::from([
 ```
 
 Most applications will not need `RunContext` directly. For a deeper look at strings, arrays, and `RunContext`, see [Structured Input](docs/structured-input.md).
+
+`run()` remains available as a compatibility alias for existing applications.
 
 `SwarmResponse` can still be cast to a string:
 
@@ -265,7 +267,7 @@ Event::listen(SwarmFailed::class, function (SwarmFailed $event): void {
 ArticlePipeline::make()->queue('Draft a blog outline about Laravel queues.');
 ```
 
-`queue()` always queues. `run()` always runs synchronously.
+`queue()` always queues. `prompt()` always runs synchronously.
 
 Queued swarms remain the lightweight queue mode. One queued job represents one swarm run, and database-backed queued runs use lease-based ownership so duplicate deliveries do not replay work while an active worker still owns the run.
 
@@ -308,7 +310,7 @@ Database-backed queued runs are also prune-safe while active. A `running` run ke
 
 The practical boundary to keep in mind is the same one Laravel developers already know from long-running queue jobs: a single queued run is still bounded by worker timeouts, queue visibility windows, deploy interrupts, and other normal job-lifecycle limits. Keep the worker timeout and queue connection `retry_after` comfortably above the provider calls and total swarm duration you expect. If one provider call or one swarm run regularly stretches beyond that envelope, that is a sign the lightweight queue mode is no longer the right operational model for that workflow.
 
-Pass structured task data the same way you would with `run()`:
+Pass structured task data the same way you would with `prompt()`:
 
 ```php
 ArticlePipeline::make()
@@ -466,7 +468,7 @@ class SupportRoutingSwarm implements Swarm
 
 The coordinator must implement Laravel AI structured output and return a plan
 with `start_at` and `nodes`. Worker nodes, parallel nodes, and finish nodes are
-supported. `run()` executes parallel groups concurrently. `queue()` executes
+supported. `prompt()` executes parallel groups concurrently. `queue()` executes
 parallel groups sequentially in declaration order in v1. `dispatchDurable()`
 uses durable branch jobs with independent leases, then joins after every branch
 is terminal. Plans are still validated with parallel-safe dependency rules, so
@@ -487,10 +489,10 @@ Use `fake()` to intercept swarm execution in tests:
 ```php
 ArticlePipeline::fake(['first', 'second']);
 
-expect((string) ArticlePipeline::make()->run('draft intro'))->toBe('first');
+expect((string) ArticlePipeline::make()->prompt('draft intro'))->toBe('first');
 
-ArticlePipeline::assertRan('draft intro');
-ArticlePipeline::assertRan(['draft_id' => 42]);
+ArticlePipeline::assertPrompted('draft intro');
+ArticlePipeline::assertPrompted(['draft_id' => 42]);
 ArticlePipeline::assertNeverQueued();
 ```
 
@@ -526,7 +528,7 @@ Timeout settings are best-effort orchestration deadlines, not hard cancellation 
 
 ## Responses, Events, And Persistence
 
-Synchronous `run()` returns a `SwarmResponse` with `output`, `steps`, `usage`,
+Synchronous `prompt()` returns a `SwarmResponse` with `output`, `steps`, `usage`,
 `artifacts`, `metadata`, and the live `context`. The response casts to a string
 for simple use cases and implements `toArray()` / `JsonSerializable` for JSON
 responses.
@@ -542,7 +544,7 @@ public function store(Request $request): JsonResponse
         'topic' => ['required', 'string', 'max:200'],
     ]);
 
-    $response = ArticlePipeline::make()->run($data);
+    $response = ArticlePipeline::make()->prompt($data);
 
     return response()->json($response);
 }
@@ -553,7 +555,7 @@ accidentally re-emit prompt or input data. If your application needs the context
 inside the current PHP process, read `$response->context` directly and choose
 which fields to expose.
 
-Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted`, `SwarmCompleted`, and `SwarmFailed` include an `executionMode` payload so listeners can distinguish `run`, `stream`, `queue`, and `durable` invocations.
+Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted`, `SwarmCompleted`, and `SwarmFailed` include an `executionMode` payload so listeners can distinguish `run`, `stream`, `queue`, and `durable` invocations. Synchronous `prompt()` calls are recorded with the existing `run` execution mode for compatibility.
 
 Run context, artifacts, and run history are persisted automatically using the configured driver. The database driver stores records durably in package-managed tables. The cache driver is lighter and respects TTL settings.
 

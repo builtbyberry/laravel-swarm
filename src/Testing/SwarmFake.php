@@ -55,9 +55,9 @@ class SwarmFake implements Swarm
     }
 
     /**
-     * Intercept a run call and record it.
+     * Intercept a prompt call and record it.
      */
-    public function run(string|array|RunContext $task): SwarmResponse
+    public function prompt(string|array|RunContext $task): SwarmResponse
     {
         $this->recorded[] = $task;
 
@@ -67,6 +67,14 @@ class SwarmFake implements Swarm
             output: $output,
             metadata: ['run_id' => 'fake-run-id'],
         );
+    }
+
+    /**
+     * Intercept a run call and record it.
+     */
+    public function run(string|array|RunContext $task): SwarmResponse
+    {
+        return $this->prompt($task);
     }
 
     /**
@@ -109,6 +117,14 @@ class SwarmFake implements Swarm
     }
 
     /**
+     * Assert the swarm was prompted with the given task.
+     */
+    public function assertPrompted(string|array|callable $task): void
+    {
+        $this->assertRan($task);
+    }
+
+    /**
      * Assert the swarm was run with the given task.
      */
     public function assertRan(string|array|callable $task): void
@@ -132,6 +148,14 @@ class SwarmFake implements Swarm
         }
 
         PHPUnit::assertContains($task, $this->recorded, "The swarm [{$this->swarmClass}] was not run with task: [{$task}].");
+    }
+
+    /**
+     * Assert the swarm was never prompted.
+     */
+    public function assertNeverPrompted(): void
+    {
+        $this->assertNeverRan();
     }
 
     /**

@@ -19,7 +19,8 @@ Every implementation decision must follow existing Laravel and Laravel AI conven
 - Laravel AI uses `make:agent`; this package uses `make:swarm`.
 - Laravel AI agents use `Promptable`; swarms use `Runnable`.
 - Laravel AI uses PHP attributes like `#[Provider]` and `#[Model]`; swarms use `#[Topology]`, `#[MaxAgentSteps]`, and `#[Timeout]`.
-- Laravel AI agents use `prompt()`, `queue()`, and `stream()`; swarms use `run()`, `queue()`, `stream()`, and `dispatchDurable()`.
+- Laravel AI agents use `prompt()`, `queue()`, and `stream()`; swarms use `prompt()`, `queue()`, `stream()`, and `dispatchDurable()`.
+- `run()` remains available as a compatibility alias for synchronous `prompt()`.
 - Laravel AI fakes with `Agent::fake()`; swarms fake with `Swarm::fake()` / `YourSwarm::fake()`.
 - Config lives in `config/swarm.php`, not `config/ai.php`.
 - Generated swarm classes live in `app/Ai/Swarms/`, extending the `app/Ai/` namespace Laravel AI establishes.
@@ -56,10 +57,11 @@ Keep the mental model high-level rather than mirroring every file:
 
 ## Execution Modes
 
-- `run()` executes synchronously and returns a `SwarmResponse`.
+- `prompt()` executes synchronously and returns a `SwarmResponse`.
+- `run()` is a compatibility alias for `prompt()`.
 - `queue()` is lightweight background execution: one Laravel queue job owns one swarm run. Queued swarms are re-resolved from the container, so they must not rely on runtime instance state. Pass per-run data in the task payload or `RunContext`.
 - `stream()` is currently sequential-only. It emits step lifecycle events and token events for the streamed final-agent output.
-- `dispatchDurable()` is sequential-only, database-backed, checkpointed execution. It persists a durable cursor and advances one swarm step per job. Use events such as `SwarmCompleted` and `SwarmFailed`; durable responses do not support `then()` or `catch()`.
+- `dispatchDurable()` is database-backed, checkpointed execution for sequential, parallel, and hierarchical swarms. It persists a durable cursor and advances the swarm through durable jobs. Use events such as `SwarmCompleted` and `SwarmFailed`; durable responses do not support `then()` or `catch()`.
 
 Queued `then()` and `catch()` callbacks remain available for compatibility, but do not recommend them for real queued execution because serialized closures can capture excess state, fail serialization, or store sensitive data in queue payloads.
 
@@ -67,7 +69,7 @@ Queued `then()` and `catch()` callbacks remain available for compatibility, but 
 
 - **Sequential:** agents run in order; each output becomes the next input.
 - **Parallel:** agents run concurrently and each receives the original task. Parallel agents must be stateless, container-resolvable Laravel AI agents because Laravel concurrency serializes worker callbacks.
-- **Hierarchical:** the first agent is the coordinator. It must use Laravel AI structured output and return the full route plan. Laravel Swarm validates the plan as a DAG and executes `worker`, `parallel`, and `finish` nodes. In `run()`, parallel groups execute concurrently. In `queue()`, hierarchical parallel groups execute sequentially in declaration order in v1 while retaining parallel-safe validation rules.
+- **Hierarchical:** the first agent is the coordinator. It must use Laravel AI structured output and return the full route plan. Laravel Swarm validates the plan as a DAG and executes `worker`, `parallel`, and `finish` nodes. In `prompt()`, parallel groups execute concurrently. In `queue()`, hierarchical parallel groups execute sequentially in declaration order in v1 while retaining parallel-safe validation rules.
 
 For hierarchical routing, there is no separate `route()` callback. The coordinator is the single source of truth for what should run next. `#[MaxAgentSteps]` counts the coordinator plus reachable worker executions and fails before worker execution if the validated plan exceeds the limit.
 
@@ -109,7 +111,7 @@ Pulse is aggregate observability. For live per-run operations feeds, listen to L
 - `ParallelRunner` and hierarchical parallel execution use `ConcurrencyManager` from the container, not the facade directly.
 - `SwarmRunner` resolves attributes via reflection and falls back to `config('swarm.*')`.
 - `Runnable::make()` returns `mixed` so a bound `SwarmFake` can be returned.
-- `SwarmFake` intercepts `run()`, `queue()`, `stream()`, and `dispatchDurable()` and records assertions.
+- `SwarmFake` intercepts `prompt()`, `run()`, `queue()`, `stream()`, and `dispatchDurable()` and records assertions.
 - Queued and parallel safety checks should fail before dispatch when a swarm or worker cannot be container-resolved safely.
 - Timeouts are best-effort orchestration deadlines checked before and between steps. They do not hard-cancel an in-flight provider call.
 

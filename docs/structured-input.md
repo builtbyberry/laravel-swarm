@@ -1,6 +1,6 @@
 # Structured Input
 
-Laravel Swarm accepts the same three task shapes across `run()`, `queue()`,
+Laravel Swarm accepts the same three task shapes across `prompt()`, `queue()`,
 `stream()`, and `dispatchDurable()`:
 
 - a string
@@ -14,7 +14,7 @@ Most applications will use a string or array.
 Use a string when one prompt is enough:
 
 ```php
-$response = ArticlePipeline::make()->run('Draft a blog outline about Laravel queues.');
+$response = ArticlePipeline::make()->prompt('Draft a blog outline about Laravel queues.');
 ```
 
 ## Passing An Array
@@ -22,7 +22,7 @@ $response = ArticlePipeline::make()->run('Draft a blog outline about Laravel que
 Use an array when the task has a few distinct pieces of input:
 
 ```php
-$response = ArticlePipeline::make()->run([
+$response = ArticlePipeline::make()->prompt([
     'topic' => 'Laravel queues',
     'audience' => 'intermediate developers',
     'goal' => 'blog outline',
@@ -90,7 +90,7 @@ $context->addArtifact(new SwarmArtifact(
     metadata: ['kind' => 'reference'],
 ));
 
-$response = ArticlePipeline::make()->run($context);
+$response = ArticlePipeline::make()->prompt($context);
 ```
 
 Most applications will not need to construct a `RunContext` manually. Arrays

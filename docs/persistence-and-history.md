@@ -277,7 +277,7 @@ persisted context, history, artifacts, or lifecycle events:
 ],
 ```
 
-Input limits are checked before `run()`, `queue()`, `stream()`, or
+Input limits are checked before `prompt()`, `queue()`, `stream()`, or
 `dispatchDurable()` starts execution. Queued and durable dispatches, and
 explicit `RunContext` values in any execution mode, check the serialized runtime
 context payload so large data, metadata, or artifacts cannot bypass the

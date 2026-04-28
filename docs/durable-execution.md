@@ -36,7 +36,7 @@ Laravel Swarm validates and persists that plan, then advances one routed worker
 node per durable job. Hierarchical parallel groups create durable branch jobs
 with independent leases, then join before continuing to the next route node.
 Top-level parallel swarms use the same branch runtime and join into the same
-combined output shape as synchronous `run()`.
+combined output shape as synchronous `prompt()`.
 
 Durable parallel branch failures are configurable with
 `swarm.durable.parallel.failure_policy` or the

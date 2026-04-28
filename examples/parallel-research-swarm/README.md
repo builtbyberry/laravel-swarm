@@ -69,7 +69,7 @@ step-to-step dependencies, use sequential or hierarchical orchestration.
 ```php
 use App\Ai\Swarms\ResearchSwarm;
 
-$response = ResearchSwarm::make()->run([
+$response = ResearchSwarm::make()->prompt([
     'company' => 'Acme Payroll',
     'market' => 'US mid-market payroll',
 ]);

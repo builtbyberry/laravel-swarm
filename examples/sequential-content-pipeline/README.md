@@ -145,7 +145,7 @@ class ArticleEditor implements Agent
 ```php
 use App\Ai\Swarms\ContentPipeline;
 
-$response = ContentPipeline::make()->run([
+$response = ContentPipeline::make()->prompt([
     'topic' => 'Laravel queue visibility timeouts',
     'audience' => 'intermediate Laravel developers',
     'format' => '1200-word article',
@@ -164,5 +164,5 @@ writer's draft becomes the input for `ArticleEditor`.
 The final editor output is `$response->output`. The intermediate handoffs are
 available in `$response->steps`.
 
-The array task is plain data, so the same input shape can be used with `run()`,
+The array task is plain data, so the same input shape can be used with `prompt()`,
 `queue()`, `stream()`, or `dispatchDurable()` when the topology supports it.

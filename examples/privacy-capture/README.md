@@ -48,7 +48,7 @@ flags. Do not place secrets in metadata.
 ```php
 use App\Ai\Swarms\ComplianceReviewSwarm;
 
-$response = ComplianceReviewSwarm::make()->run([
+$response = ComplianceReviewSwarm::make()->prompt([
     'document_id' => 1234,
     'review_goal' => 'summarize renewal risk',
 ]);
