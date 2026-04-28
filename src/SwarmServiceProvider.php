@@ -16,13 +16,16 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmSteps;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
@@ -30,6 +33,7 @@ use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
+use BuiltByBerry\LaravelSwarm\Runners\SequentialStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
@@ -55,6 +59,7 @@ class SwarmServiceProvider extends ServiceProvider
 
         $this->app->singleton(SwarmAttributeResolver::class);
         $this->app->singleton(SequentialRunner::class);
+        $this->app->singleton(SequentialStreamRunner::class);
 
         $this->app->singleton(ParallelRunner::class);
 
@@ -85,6 +90,12 @@ class SwarmServiceProvider extends ServiceProvider
             'history',
             CacheRunHistoryStore::class,
             DatabaseRunHistoryStore::class,
+        ));
+        $this->app->singleton(StreamEventStore::class, fn (Application $app): StreamEventStore => $this->resolvePersistenceStore(
+            $app,
+            'streaming.replay',
+            CacheStreamEventStore::class,
+            DatabaseStreamEventStore::class,
         ));
     }
 
