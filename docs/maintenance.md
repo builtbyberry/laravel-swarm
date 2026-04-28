@@ -2,8 +2,9 @@
 
 Laravel Swarm's database-backed persistence uses prune-based TTL retention.
 
-`ttlSeconds` is still applied when context, artifacts, and run history rows are
-written, but database records remain queryable until you prune expired rows.
+`ttlSeconds` is still applied when context, artifacts, run history, and
+persisted stream replay rows are written, but database records remain queryable
+until you prune expired rows.
 
 ## Pruning Expired Records
 
@@ -14,14 +15,14 @@ database tables:
 php artisan swarm:prune
 ```
 
-The command prunes the history, context, artifact, durable runtime, durable
-node-output, and durable branch tables in bounded chunks to avoid long-running
-table locks on large datasets.
+The command prunes the history, context, artifact, stream replay, durable
+runtime, durable node-output, and durable branch tables in bounded chunks to
+avoid long-running table locks on large datasets.
 
 Laravel Swarm protects active runs across persistence stores. While a run is
 `pending`, `running`, `waiting`, or `paused`, its history, context, artifact,
-durable runtime, node-output, and branch rows are not pruned, even if their
-retention window has elapsed.
+stream replay, durable runtime, node-output, and branch rows are not pruned,
+even if their retention window has elapsed.
 
 History pruning only removes expired terminal rows (`completed`, `failed`, and
 `cancelled`). Context and artifact pruning skip rows that belong to active runs.

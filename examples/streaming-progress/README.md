@@ -7,9 +7,9 @@ runs.
 
 This example teaches:
 
-- `stream()` yields step and token events;
-- Laravel 13's `eventStream()` can send those events to the browser;
-- streaming is for live progress, not durable storage;
+- `stream()` yields typed step, text, reasoning, and tool events;
+- stream responses can be returned directly from controllers;
+- stream replay storage is opt-in when exact playback is needed later;
 - use lifecycle events or persisted history when the app needs inspection after
   the request ends.
 
@@ -17,31 +17,52 @@ This example teaches:
 
 ```php
 use App\Ai\Swarms\ContentPipeline;
-use Illuminate\Http\StreamedEvent;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/article-stream', function () {
-    return response()->eventStream(function () {
-        foreach (ContentPipeline::make()->stream([
+    return ContentPipeline::make()->stream([
+        'topic' => 'Laravel events',
+        'audience' => 'application developers',
+    ]);
+});
+```
+
+`toResponse()` uses Laravel AI-style `data:` SSE lines and a final `[DONE]`.
+If you want Laravel 13 named SSE events, each swarm stream event also exposes
+`toStreamedEvent()` for use with `response()->eventStream()`.
+
+## Persist Exact Stream Replay
+
+```php
+use App\Ai\Swarms\ContentPipeline;
+use BuiltByBerry\LaravelSwarm\Facades\SwarmHistory;
+use Illuminate\Support\Facades\Route;
+
+Route::get('/article-stream', function () {
+    return ContentPipeline::make()
+        ->stream([
             'topic' => 'Laravel events',
             'audience' => 'application developers',
-        ]) as $event) {
-            yield new StreamedEvent($event['event'], $event);
-        }
-    });
+        ])
+        ->storeForReplay();
+});
+
+Route::get('/article-stream/{runId}/replay', function (string $runId) {
+    return SwarmHistory::replay($runId);
 });
 ```
 
 ## Notes
 
 - Keep streamed task input plain data.
-- Do not rely on stream output as durable storage.
+- Persisted stream replay is disabled by default. Use `storeForReplay()` for a
+  single response or `SWARM_STREAM_REPLAY_ENABLED=true` globally.
 - Use persistence if the application needs inspection after the request ends.
 - Use capture flags when streamed events may include sensitive prompts or
   outputs.
+- Final-agent non-text events (`swarm_reasoning_*`, `swarm_tool_*`,
+  `swarm_text_end`) are persisted and replayed in emitted order when replay is
+  enabled.
 - A stream is a request/response experience. If the browser also needs a stable
-  run detail page, use lifecycle events and a run inspector endpoint keyed by
-  the persisted `run_id`.
-- `eventStream()` is the Laravel 13-friendly default. If your frontend needs
-  custom SSE framing, headers, or `[DONE]` messages, Laravel's normal
-  `response()->stream()` is also appropriate.
+  run detail page, use lifecycle events, persisted replay, and a run inspector
+  endpoint keyed by the persisted `run_id`.

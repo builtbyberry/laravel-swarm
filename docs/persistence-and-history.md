@@ -88,6 +88,17 @@ loading the full event set up front. If the original stream failed, replay
 emits the stored events through `swarm_stream_error` and completes without
 re-throwing the original exception.
 
+Persisted replay keeps the same typed stream timeline Laravel Swarm emitted,
+including final-agent non-text events such as `swarm_text_end`,
+`swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`, and
+`swarm_tool_result`.
+For upstream streamed final-agent events, persisted typed replay preserves the
+upstream event IDs and timestamps so replay records keep source provenance.
+When output capture is disabled, output-bearing fields in text/reasoning/tool
+event payloads are redacted in both live and replayed streams. For tool
+payloads, redaction preserves argument/result keys while replacing values with
+`[redacted]`.
+
 ## Application Run Inspector
 
 Most production UIs need more than a history query. A useful run detail page

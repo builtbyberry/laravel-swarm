@@ -45,9 +45,10 @@ Keep the mental model high-level rather than mirroring every file:
 - `src/Concerns` / `src/Contracts` — public swarm trait and storage/runtime contracts.
 - `src/Events` — lifecycle events for started, step started/completed, completed, failed, paused, resumed, and cancelled.
 - `src/Jobs` — queued and durable execution jobs.
-- `src/Persistence` — cache and database context, artifact, durable run, and run history stores.
+- `src/Persistence` — cache and database context, artifact, durable run, run history, and stream replay stores.
 - `src/Pulse` — optional Pulse recorders, cards, and key helpers.
-- `src/Responses` — sync, queued, durable, artifact, response, and step DTOs.
+- `src/Responses` — sync, queued, durable, streamable, artifact, response, and step DTOs.
+- `src/Streaming` — typed swarm stream events aligned with Laravel AI stream events.
 - `src/Routing` — hierarchical route plan objects and validation.
 - `src/Runners` — topology runners, durable manager, main runner, and step recorder.
 - `src/Support` — `RunContext`, history query helpers, capture helpers, monotonic time, and runtime support objects.
@@ -60,7 +61,7 @@ Keep the mental model high-level rather than mirroring every file:
 - `prompt()` executes synchronously and returns a `SwarmResponse`.
 - `run()` is a compatibility alias for `prompt()`.
 - `queue()` is lightweight background execution: one Laravel queue job owns one swarm run. Queued swarms are re-resolved from the container, so they must not rely on runtime instance state. Pass per-run data in the task payload or `RunContext`.
-- `stream()` is currently sequential-only. It emits step lifecycle events and token events for the streamed final-agent output.
+- `stream()` is currently sequential-only. It returns a lazy `StreamableSwarmResponse`, emits typed stream events for step progress and streamed final-agent output, and supports in-memory replay after completion. Persisted exact stream replay is opt-in through `storeForReplay()` or `swarm.streaming.replay.enabled`; replay stored events with `SwarmHistory::replay($runId)`.
 - `dispatchDurable()` is database-backed, checkpointed execution for sequential, parallel, and hierarchical swarms. It persists a durable cursor and advances the swarm through durable jobs. Use events such as `SwarmCompleted` and `SwarmFailed`; durable responses do not support `then()` or `catch()`.
 
 Queued `then()` and `catch()` callbacks remain available for compatibility, but do not recommend them for real queued execution because serialized closures can capture excess state, fail serialization, or store sensitive data in queue payloads.
@@ -111,7 +112,7 @@ Pulse is aggregate observability. For live per-run operations feeds, listen to L
 - `ParallelRunner` and hierarchical parallel execution use `ConcurrencyManager` from the container, not the facade directly.
 - `SwarmRunner` resolves attributes via reflection and falls back to `config('swarm.*')`.
 - `Runnable::make()` returns `mixed` so a bound `SwarmFake` can be returned.
-- `SwarmFake` intercepts `prompt()`, `run()`, `queue()`, `stream()`, and `dispatchDurable()` and records assertions.
+- `SwarmFake` intercepts `prompt()`, `run()`, `queue()`, `stream()`, and `dispatchDurable()` and records assertions. Stream fakes stay lazy and record only when iterated.
 - Queued and parallel safety checks should fail before dispatch when a swarm or worker cannot be container-resolved safely.
 - Timeouts are best-effort orchestration deadlines checked before and between steps. They do not hard-cancel an in-flight provider call.
 

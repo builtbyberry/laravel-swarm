@@ -63,14 +63,15 @@ If your use case feels more like a reusable workflow than a single prompt, the r
 | --- | --- | --- |
 | `prompt()` | `SwarmResponse` | The request can wait for the full workflow result. |
 | `queue()` | `QueuedSwarmResponse` | One background job can comfortably own the whole workflow. |
-| `stream()` | `Generator` of stream events | A browser or client needs live progress from a sequential swarm. |
+| `stream()` | `StreamableSwarmResponse` | A browser or client needs live progress from a sequential swarm. |
 | `dispatchDurable()` | `DurableSwarmResponse` | The workflow needs checkpointing, recovery, or operator controls. |
 
 Only `prompt()` returns a `SwarmResponse` directly. `run()` is retained as a
-compatibility alias. `stream()` yields progress and token events while
-persisting completion through the normal history and event surfaces. `queue()`
-and `dispatchDurable()` return dispatch handles with a `runId`; listen to
-lifecycle events or inspect persisted history for the eventual result.
+compatibility alias. `stream()` returns a lazy Laravel-style stream response
+that yields typed progress and token events while persisting completion through
+the normal history and event surfaces. `queue()` and `dispatchDurable()` return
+dispatch handles with a `runId`; listen to lifecycle events or inspect persisted
+history for the eventual result.
 
 ## Installation
 
@@ -397,7 +398,8 @@ For the durable runtime model, operator commands, and recovery scheduling, see
 
 ## Streaming A Swarm
 
-Use `stream()` when you want step and token events for server-sent events or other real-time updates:
+Use `stream()` when you want typed step and token events for server-sent events
+or other real-time updates:
 
 ```php
 try {
@@ -406,19 +408,71 @@ try {
         'audience' => 'intermediate developers',
         'goal' => 'blog outline',
     ]) as $event) {
-        // ['event' => 'step', 'agent' => 'WriterAgent', 'status' => 'running']
-        // or ['event' => 'token', 'token' => 'Drafting the outline...']
+        if ($event->type() === 'swarm_text_delta') {
+            // $event->delta
+        }
     }
 } catch (\Throwable $exception) {
     //
 }
 ```
 
-Swarm streams emit `step` events for agent lifecycle progress and `token` events for streamed final-agent output.
+You can return a stream directly from a controller. The response uses Laravel
+AI-style `data:` SSE lines by default:
+
+```php
+return ArticlePipeline::make()->stream([
+    'topic' => 'Laravel queues',
+]);
+```
+
+Swarm streams emit typed events such as `swarm_stream_start`,
+`swarm_step_start`, `swarm_text_delta`, `swarm_text_end`,
+`swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`,
+`swarm_tool_result`, `swarm_step_end`, and `swarm_stream_end`. Like Laravel AI
+stream responses, a completed stream can be iterated again in the same PHP
+process without re-running the swarm.
+For upstream final-agent streamed provider events, replay is provenance-first:
+Laravel Swarm preserves upstream event IDs and timestamps. Invocation IDs are
+passed through when the upstream provider includes them.
+When output capture is disabled, output-bearing fields in streamed text,
+reasoning, and tool payloads are redacted consistently across live and replayed
+events. Tool payload redaction preserves object keys while replacing values with
+`[redacted]`.
+
+Stream event schema (compact reference):
+
+- `swarm_stream_start` — run metadata and captured input.
+- `swarm_step_start` — step lifecycle start with captured step input.
+- `swarm_text_delta` / `swarm_text_end` — final-agent text stream chunks and close marker.
+- `swarm_reasoning_delta` / `swarm_reasoning_end` — final-agent reasoning stream events.
+- `swarm_tool_call` / `swarm_tool_result` — final-agent tool invocation and tool response events.
+- `swarm_step_end` — step lifecycle completion with captured/limited output and usage metadata.
+- `swarm_stream_end` — terminal stream completion payload with output and aggregate usage.
+- `swarm_stream_error` — terminal stream failure payload for replay and operators.
+
+Persisted replay is opt-in:
+
+```php
+use BuiltByBerry\LaravelSwarm\Facades\SwarmHistory;
+
+return ArticlePipeline::make()
+    ->stream(['topic' => 'Laravel queues'])
+    ->storeForReplay();
+```
+
+Later, replay the stored stream events by run ID:
+
+```php
+return SwarmHistory::replay($runId);
+```
 
 Streaming is currently supported for sequential swarms only.
 
-If the final streamed agent fails, the generator re-throws the underlying exception from that agent. Wrap the stream loop in `try/catch`; `SwarmFailed` is dispatched and run history is marked failed before the exception is re-thrown.
+If the final streamed agent fails, live execution yields a `swarm_stream_error`
+event, marks run history failed, dispatches `SwarmFailed`, and re-throws the
+underlying exception. Persisted replay of a failed stream is informational: it
+replays the stored events through `swarm_stream_error` without re-throwing.
 
 `#[Timeout]` and `swarm.timeout` are best-effort orchestration deadlines. Laravel Swarm checks them before and between agent steps, but they do not hard-cancel an in-flight provider request or streamed response mid-call.
 
@@ -520,7 +574,7 @@ For test assertions against persisted history and lifecycle events, see [Testing
 
 Laravel Swarm stores its defaults in `config/swarm.php`, including topology, timeout, max agent steps, persistence drivers, and queue settings.
 
-`swarm.persistence.driver` sets the default persistence driver for all swarm stores. Individual stores can override it via `swarm.context.driver`, `swarm.artifacts.driver`, and `swarm.history.driver`. The `cache` driver is lightweight and respects TTL settings. The `database` driver stores records durably in package-managed tables.
+`swarm.persistence.driver` sets the default persistence driver for all swarm stores. Individual stores can override it via `swarm.context.driver`, `swarm.artifacts.driver`, `swarm.history.driver`, and `swarm.streaming.replay.driver`. The `cache` driver is lightweight and respects TTL settings. The `database` driver stores records durably in package-managed tables.
 
 `swarm.tables.*` changes the table names used by the database repositories at runtime. If you change them, publish and update the migrations too.
 
@@ -557,11 +611,11 @@ which fields to expose.
 
 Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted`, `SwarmCompleted`, and `SwarmFailed` include an `executionMode` payload so listeners can distinguish `run`, `stream`, `queue`, and `durable` invocations. Synchronous `prompt()` calls are recorded with the existing `run` execution mode for compatibility.
 
-Run context, artifacts, and run history are persisted automatically using the configured driver. The database driver stores records durably in package-managed tables. The cache driver is lighter and respects TTL settings.
+Run context, artifacts, and run history are persisted automatically using the configured driver. Stream event replay is stored only when `swarm.streaming.replay.enabled` is true or a stream response calls `storeForReplay()`. The database driver stores records durably in package-managed tables. The cache driver is lighter and respects TTL settings.
 
 For persistence drivers, history inspection, and the `SwarmHistory` facade and inspection commands, see [Persistence And History](docs/persistence-and-history.md).
 
-To customize how swarm state is stored, bind your own implementations against the `ContextStore`, `ArtifactRepository`, or `RunHistoryStore` contracts. Most applications can use the package defaults.
+To customize how swarm state is stored, bind your own implementations against the `ContextStore`, `ArtifactRepository`, `RunHistoryStore`, or `StreamEventStore` contracts. Most applications can use the package defaults.
 
 ## Production Readiness Checklist
 

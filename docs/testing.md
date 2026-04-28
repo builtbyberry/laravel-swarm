@@ -30,6 +30,9 @@ ArticlePipeline::assertStreamed('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertDispatchedDurably('Draft a blog outline about Laravel queues.');
 ```
 
+Faked streams are lazy, so `assertStreamed()` records after the stream response
+is iterated or returned from a controller response.
+
 ## Asserting A Swarm Was Not Prompted
 
 ```php

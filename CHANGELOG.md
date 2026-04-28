@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.1.7 - 2026-04-28
+
+### Added
+
+- Added a composite replay lookup index on `swarm_stream_events(run_id, id)`
+  to keep replay scans ordered and efficient as event volumes grow
+- Added typed streamed event coverage for final-agent non-text upstream events:
+  `swarm_text_end`, `swarm_reasoning_delta`, `swarm_reasoning_end`,
+  `swarm_tool_call`, and `swarm_tool_result`
+- Added a dedicated `SequentialStreamRunner` orchestration path to separate
+  sequential streaming flow from non-stream execution paths
+
+### Changed
+
+- Updated persistence/history documentation to explicitly state that
+  `swarm.limits.max_output_bytes` applies to persisted replay event payloads in
+  addition to step/history and lifecycle event output surfaces
+- Documented streaming overflow `fail` behavior so operators know earlier
+  deltas can be emitted before terminal events are omitted after overflow
+- Updated streaming docs and examples with the expanded event schema and
+  provenance-first replay behavior for upstream final-agent streamed events
+
+### Fixed / Hardened
+
+- Removed duplicate streamed step-end output limit application by deriving
+  `SwarmStepEnd` output from the existing recorded step output path
+- Hardened streaming tests with resilient agent-based assertions and added
+  coverage for replay payload limits and overflow fail replay behavior
+- Preserved upstream event IDs and timestamps for typed final-agent streamed
+  events in replay payloads
+- Hardened streamed reasoning/tool payload redaction by preserving keys while
+  replacing values with `[redacted]` when output capture is disabled
+
 ## v0.1.6 - 2026-04-26
 
 ### Added
