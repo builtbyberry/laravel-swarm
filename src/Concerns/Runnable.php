@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Concerns;
 
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
@@ -13,7 +14,6 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake as SwarmFakeInstance;
-use Generator;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use ReflectionClass;
@@ -64,11 +64,9 @@ trait Runnable
     }
 
     /**
-     * Stream the swarm, yielding step and token events for SSE.
-     *
-     * @return Generator<int, array<string, string>, mixed, void>
+     * Stream the swarm, yielding typed stream events for SSE.
      */
-    public function stream(string|array|RunContext $task): Generator
+    public function stream(string|array|RunContext $task): StreamableSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->stream($this, $task);
     }

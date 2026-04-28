@@ -51,6 +51,15 @@ return [
         'latest_prefix' => env('SWARM_HISTORY_LATEST_PREFIX', 'swarm:index:latest'),
     ],
 
+    'streaming' => [
+        'replay' => [
+            'enabled' => env('SWARM_STREAM_REPLAY_ENABLED', false),
+            'driver' => env('SWARM_STREAM_REPLAY_DRIVER'),
+            'store' => env('SWARM_STREAM_REPLAY_STORE'),
+            'prefix' => env('SWARM_STREAM_REPLAY_PREFIX', 'swarm:stream:'),
+        ],
+    ],
+
     'queue' => [
         'connection' => env('SWARM_QUEUE_CONNECTION'),
         'name' => env('SWARM_QUEUE'),
@@ -81,6 +90,7 @@ return [
         'artifacts' => env('SWARM_ARTIFACTS_TABLE', 'swarm_artifacts'),
         'history' => env('SWARM_RUN_HISTORIES_TABLE', 'swarm_run_histories'),
         'history_steps' => env('SWARM_RUN_HISTORY_STEPS_TABLE', 'swarm_run_steps'),
+        'stream_events' => env('SWARM_STREAM_EVENTS_TABLE', 'swarm_stream_events'),
         'durable' => env('SWARM_DURABLE_RUNS_TABLE', 'swarm_durable_runs'),
         'durable_node_outputs' => env('SWARM_DURABLE_NODE_OUTPUTS_TABLE', 'swarm_durable_node_outputs'),
         'durable_branches' => env('SWARM_DURABLE_BRANCHES_TABLE', 'swarm_durable_branches'),

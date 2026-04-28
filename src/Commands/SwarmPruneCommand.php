@@ -24,6 +24,7 @@ class SwarmPruneCommand extends Command
             'durable' => (string) $config->get('swarm.tables.durable', 'swarm_durable_runs'),
             'history' => (string) $config->get('swarm.tables.history', 'swarm_run_histories'),
             'history_steps' => (string) $config->get('swarm.tables.history_steps', 'swarm_run_steps'),
+            'stream_events' => (string) $config->get('swarm.tables.stream_events', 'swarm_stream_events'),
             'contexts' => (string) $config->get('swarm.tables.contexts', 'swarm_contexts'),
             'artifacts' => (string) $config->get('swarm.tables.artifacts', 'swarm_artifacts'),
             'durable_node_outputs' => (string) $config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs'),
@@ -62,6 +63,10 @@ class SwarmPruneCommand extends Command
         $this->components->info(sprintf(
             'Pruned %d normalized step record(s).',
             $deleted['history_steps'],
+        ));
+        $this->components->info(sprintf(
+            'Pruned %d stream event record(s).',
+            $deleted['stream_events'],
         ));
         $this->components->info(sprintf(
             'Pruned %d durable runtime, %d durable node output, and %d durable branch record(s).',
