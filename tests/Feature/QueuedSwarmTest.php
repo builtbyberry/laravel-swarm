@@ -2,14 +2,20 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
+use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\QueuedRunAcquisition;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
@@ -31,6 +37,62 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableQueuedSwarm;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+
+class LeaseStealingQueuedRunHistoryStore implements ClaimsQueuedRunExecution, RunHistoryStore
+{
+    public function __construct(
+        protected DatabaseRunHistoryStore $inner,
+        protected string $runId,
+    ) {}
+
+    public function acquireQueuedRun(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds, int $leaseSeconds): QueuedRunAcquisition
+    {
+        return $this->inner->acquireQueuedRun($runId, $swarmClass, $topology, $context, $metadata, $ttlSeconds, $leaseSeconds);
+    }
+
+    public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void
+    {
+        $this->inner->start($runId, $swarmClass, $topology, $context, $metadata, $ttlSeconds);
+    }
+
+    public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
+    {
+        $this->inner->recordStep($runId, $step, $ttlSeconds, $executionToken, $leaseSeconds);
+    }
+
+    public function complete(string $runId, SwarmResponse $response, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
+    {
+        DB::table('swarm_run_histories')
+            ->where('run_id', $this->runId)
+            ->update([
+                'execution_token' => 'replacement-token',
+                'leased_until' => now()->addMinutes(5),
+                'updated_at' => now(),
+            ]);
+
+        $this->inner->complete($runId, $response, $ttlSeconds, $executionToken, $leaseSeconds);
+    }
+
+    public function fail(string $runId, Throwable $exception, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
+    {
+        $this->inner->fail($runId, $exception, $ttlSeconds, $executionToken, $leaseSeconds);
+    }
+
+    public function find(string $runId): ?array
+    {
+        return $this->inner->find($runId);
+    }
+
+    public function findMatching(string $swarmClass, ?string $status, ?array $contextSubset): iterable
+    {
+        return $this->inner->findMatching($swarmClass, $status, $contextSubset);
+    }
+
+    public function query(?string $swarmClass = null, ?string $status = null, int $limit = 25): array
+    {
+        return $this->inner->query($swarmClass, $status, $limit);
+    }
+}
 
 function preventQueuedSwarmRedispatch(object $response): void
 {
@@ -346,6 +408,40 @@ test('queued swarm does not dispatch failed events after losing the lease', func
     $job->handle(app(SwarmRunner::class));
 
     Event::assertNotDispatched(SwarmFailed::class, fn ($event) => $event->runId === 'lease-loss-run-id');
+});
+
+test('queued swarm workers stop cleanly when lease ownership is lost before terminal completion', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.capture.outputs', false);
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+    Event::fake();
+
+    $context = RunContext::from('queued-task', 'terminal-lease-loss-run-id');
+    $historyStore = new LeaseStealingQueuedRunHistoryStore(
+        app(DatabaseRunHistoryStore::class),
+        'terminal-lease-loss-run-id',
+    );
+
+    app()->instance(RunHistoryStore::class, $historyStore);
+    app()->forgetInstance(SwarmRunner::class);
+
+    $job = new InvokeSwarm(FakeSequentialSwarm::class, $context->toQueuePayload());
+
+    expect(fn () => $job->handle(app(SwarmRunner::class)))
+        ->not->toThrow(Throwable::class);
+
+    $run = DB::table('swarm_run_histories')->where('run_id', 'terminal-lease-loss-run-id')->first();
+
+    expect($run->status)->toBe('running')
+        ->and($run->execution_token)->toBe('replacement-token')
+        ->and($run->finished_at)->toBeNull()
+        ->and($run->output)->toBeNull();
+
+    $storedContextData = json_decode((string) DB::table('swarm_contexts')->where('run_id', 'terminal-lease-loss-run-id')->value('data'), true);
+
+    expect($storedContextData['last_output'])->toBe('editor-out');
+
+    Event::assertNotDispatched(SwarmCompleted::class, fn ($event) => $event->runId === 'terminal-lease-loss-run-id');
 });
 
 test('queued swarms serialize structured task arrays into queue-safe payloads', function () {

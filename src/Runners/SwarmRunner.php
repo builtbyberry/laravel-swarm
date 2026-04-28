@@ -186,8 +186,14 @@ class SwarmRunner
 
         $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
         $capturedResponse = $this->limits->response($this->capture->response($response));
+
+        try {
+            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
+        } catch (LostSwarmLeaseException) {
+            return null;
+        }
+
         $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
-        $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
         $this->events->dispatch(new SwarmCompleted(
             runId: $context->runId,
             swarmClass: $swarm::class,

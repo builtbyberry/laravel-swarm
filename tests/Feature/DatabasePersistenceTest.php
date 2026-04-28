@@ -68,6 +68,12 @@ beforeEach(function () {
     FakeEditor::fake(['editor-out']);
 });
 
+test('database migrations add composite indexes for durable recovery scans', function () {
+    expect(Schema::hasIndex('swarm_durable_runs', 'swarm_durable_runs_recovery_idx'))->toBeTrue()
+        ->and(Schema::hasIndex('swarm_durable_runs', 'swarm_durable_runs_waiting_join_idx'))->toBeTrue()
+        ->and(Schema::hasIndex('swarm_durable_branches', 'swarm_durable_branches_recovery_idx'))->toBeTrue();
+});
+
 test('database context store persists the same context shape as cache', function () {
     $store = app(DatabaseContextStore::class);
     $context = RunContext::from([
