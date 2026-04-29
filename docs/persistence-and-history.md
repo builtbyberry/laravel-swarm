@@ -66,6 +66,9 @@ $completed = SwarmHistory::forSwarm(ArticlePipeline::class)
 
 ## Replaying Stream Events
 
+For execution-oriented streaming guidance (event types, topology constraints,
+failures, and timeouts), see [Streaming](streaming.md).
+
 `stream()` responses are replayable in memory after they complete, matching
 Laravel AI's stream response behavior. Persisted replay is separate and is
 stored only when enabled globally or on a specific stream response:

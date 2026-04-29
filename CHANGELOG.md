@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added `docs/streaming.md` as the canonical `stream()` guide and cross-linked it
+  from the README, persistence, testing, structured input, examples, and agent
+  context.
+
 ## v0.1.7 - 2026-04-28
 
 ### Added

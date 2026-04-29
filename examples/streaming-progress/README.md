@@ -1,6 +1,7 @@
 # Streaming Progress
 
-Shows how to consume stream events from a swarm.
+Shows how to consume stream events from a swarm. The canonical reference is
+[`docs/streaming.md`](../../docs/streaming.md).
 
 Use this pattern when a controller or SSE endpoint needs progress as the swarm
 runs.

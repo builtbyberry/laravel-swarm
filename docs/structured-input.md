@@ -1,7 +1,8 @@
 # Structured Input
 
 Laravel Swarm accepts the same three task shapes across `prompt()`, `queue()`,
-`stream()`, and `dispatchDurable()`:
+`stream()`, and `dispatchDurable()` (for streaming behavior and replay, see
+[Streaming](streaming.md)):
 
 - a string
 - an array

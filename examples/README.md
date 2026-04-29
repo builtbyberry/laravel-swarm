@@ -16,7 +16,7 @@ Read the examples in this order:
 2. [Queued Workflow Events](queued-workflow-events/README.md): run the same kind
    of workflow in the background and react with events.
 3. [Streaming Progress](streaming-progress/README.md): expose step/token
-   progress from a request.
+   progress from a request (see also [`docs/streaming.md`](../docs/streaming.md)).
 4. [Testing Swarms](testing-swarms/README.md): fake swarms for app tests and
    assert persisted runs when history matters.
 5. [Run Inspector](run-inspector/README.md): build the status endpoint your UI
@@ -55,7 +55,7 @@ Read the examples in this order:
 | Hierarchical topology | [Hierarchical Support Triage](hierarchical-support-triage/README.md) |
 | `prompt()` | [Sequential Content Pipeline](sequential-content-pipeline/README.md) |
 | `queue()` | [Queued Workflow Events](queued-workflow-events/README.md) |
-| `stream()` | [Streaming Progress](streaming-progress/README.md) |
+| `stream()` | [Streaming Progress](streaming-progress/README.md), [`docs/streaming.md`](../docs/streaming.md) |
 | `dispatchDurable()` | [Durable Compliance Review](durable-compliance-review/README.md) |
 | Durable sequential execution | [Durable Compliance Review](durable-compliance-review/README.md) |
 | Durable top-level parallel execution | [Parallel Research Swarm](parallel-research-swarm/README.md#durable-parallel-usage) |

@@ -30,6 +30,8 @@ ArticlePipeline::assertStreamed('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertDispatchedDurably('Draft a blog outline about Laravel queues.');
 ```
 
+Streaming behavior and event types are documented in [Streaming](streaming.md).
+
 Faked streams are lazy, so `assertStreamed()` records after the stream response
 is iterated or returned from a controller response.
 

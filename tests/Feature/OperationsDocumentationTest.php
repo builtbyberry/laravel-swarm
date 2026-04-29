@@ -29,6 +29,17 @@ test('persistence documentation names durable runtime inspection access', functi
         ->and($contents)->toContain('durable runtime failure metadata');
 });
 
+test('streaming documentation covers topology replay capture and limits', function () {
+    $contents = file_get_contents(__DIR__.'/../../docs/streaming.md');
+
+    expect($contents)->toContain('Sequential Only')
+        ->and($contents)->toContain('storeForReplay')
+        ->and($contents)->toContain('SwarmHistory::replay')
+        ->and($contents)->toContain('swarm_stream_error')
+        ->and($contents)->toContain('persistence-and-history.md#payload-limits')
+        ->and($contents)->toContain('swarm.capture');
+});
+
 test('maintenance documentation includes the enterprise pilot posture', function () {
     $contents = Str::lower(file_get_contents(__DIR__.'/../../docs/maintenance.md'));
 

@@ -398,8 +398,10 @@ For the durable runtime model, operator commands, and recovery scheduling, see
 
 ## Streaming A Swarm
 
-Use `stream()` when you want typed step and token events for server-sent events
-or other real-time updates:
+Use `stream()` for typed step and token events (SSE, live progress, or custom
+consumers). **Sequential topologies only** — see [Streaming](docs/streaming.md)
+for the full event schema, persisted replay, capture, limits, failures, and
+timeouts.
 
 ```php
 try {
@@ -417,8 +419,7 @@ try {
 }
 ```
 
-You can return a stream directly from a controller. The response uses Laravel
-AI-style `data:` SSE lines by default:
+Return a stream from a controller (Laravel AI-style `data:` SSE lines by default):
 
 ```php
 return ArticlePipeline::make()->stream([
@@ -426,55 +427,9 @@ return ArticlePipeline::make()->stream([
 ]);
 ```
 
-Swarm streams emit typed events such as `swarm_stream_start`,
-`swarm_step_start`, `swarm_text_delta`, `swarm_text_end`,
-`swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`,
-`swarm_tool_result`, `swarm_step_end`, and `swarm_stream_end`. Like Laravel AI
-stream responses, a completed stream can be iterated again in the same PHP
-process without re-running the swarm.
-For upstream final-agent streamed provider events, replay is provenance-first:
-Laravel Swarm preserves upstream event IDs and timestamps. Invocation IDs are
-passed through when the upstream provider includes them.
-When output capture is disabled, output-bearing fields in streamed text,
-reasoning, and tool payloads are redacted consistently across live and replayed
-events. Tool payload redaction preserves object keys while replacing values with
-`[redacted]`.
-
-Stream event schema (compact reference):
-
-- `swarm_stream_start` — run metadata and captured input.
-- `swarm_step_start` — step lifecycle start with captured step input.
-- `swarm_text_delta` / `swarm_text_end` — final-agent text stream chunks and close marker.
-- `swarm_reasoning_delta` / `swarm_reasoning_end` — final-agent reasoning stream events.
-- `swarm_tool_call` / `swarm_tool_result` — final-agent tool invocation and tool response events.
-- `swarm_step_end` — step lifecycle completion with captured/limited output and usage metadata.
-- `swarm_stream_end` — terminal stream completion payload with output and aggregate usage.
-- `swarm_stream_error` — terminal stream failure payload for replay and operators.
-
-Persisted replay is opt-in:
-
-```php
-use BuiltByBerry\LaravelSwarm\Facades\SwarmHistory;
-
-return ArticlePipeline::make()
-    ->stream(['topic' => 'Laravel queues'])
-    ->storeForReplay();
-```
-
-Later, replay the stored stream events by run ID:
-
-```php
-return SwarmHistory::replay($runId);
-```
-
-Streaming is currently supported for sequential swarms only.
-
-If the final streamed agent fails, live execution yields a `swarm_stream_error`
-event, marks run history failed, dispatches `SwarmFailed`, and re-throws the
-underlying exception. Persisted replay of a failed stream is informational: it
-replays the stored events through `swarm_stream_error` without re-throwing.
-
-`#[Timeout]` and `swarm.timeout` are best-effort orchestration deadlines. Laravel Swarm checks them before and between agent steps, but they do not hard-cancel an in-flight provider request or streamed response mid-call.
+Persisted replay of the exact emitted timeline is opt-in (`storeForReplay()` or
+`swarm.streaming.replay.enabled`); playback uses `SwarmHistory::replay($runId)`.
+Details: [Streaming](docs/streaming.md) and [Persistence And History](docs/persistence-and-history.md#replaying-stream-events).
 
 ## Topologies
 

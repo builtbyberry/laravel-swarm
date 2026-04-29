@@ -54,7 +54,7 @@ Keep the mental model high-level rather than mirroring every file:
 - `src/Support` — `RunContext`, history query helpers, capture helpers, monotonic time, and runtime support objects.
 - `src/Testing` — fakes and assertions.
 - `database/migrations` — package-managed persistence and durable runtime tables.
-- `docs/` and `examples/` — detailed user-facing behavior and integration examples.
+- `docs/` and `examples/` — detailed user-facing behavior and integration examples (`docs/streaming.md` for `stream()`).
 
 ## Execution Modes
 
