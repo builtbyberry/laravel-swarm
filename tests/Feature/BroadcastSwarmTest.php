@@ -240,6 +240,27 @@ test('broadcast transport failures fail live runs and omit terminal replay event
     expect($storedTypes)->not->toContain('swarm_stream_end');
 });
 
+test('terminal broadcast transport failures fail delivery but preserve completed run history', function () {
+    config()->set('swarm.streaming.replay.enabled', true);
+    $transport = fakeFailingBroadcastTransport('swarm_stream_end');
+    $runId = 'broadcast-terminal-transport-failure-run-id';
+
+    expect(fn () => FakeSequentialSwarm::make()->broadcast(
+        RunContext::from('broadcast-terminal-failure-task', $runId),
+        new Channel('swarm.run'),
+    ))->toThrow(RuntimeException::class, 'Simulated broadcast transport failure.');
+
+    $history = app(SwarmHistory::class)->find($runId);
+    $storedTypes = collect(app(StreamEventStore::class)->events($runId))
+        ->map(fn ($event): string => $event->type())
+        ->all();
+
+    expect($history['status'])->toBe('completed');
+    expect($history['output'])->toBe('editor-out');
+    expect($transport->events)->toContain('swarm_stream_end');
+    expect($storedTypes)->toContain('swarm_stream_end');
+});
+
 test('broadcast now transport failures fail live runs before terminal completion', function () {
     $transport = fakeFailingBroadcastTransport();
     $runId = 'broadcast-now-transport-failure-run-id';
@@ -254,6 +275,22 @@ test('broadcast now transport failures fail live runs before terminal completion
     expect($history['status'])->toBe('failed');
     expect($transport->events)->toContain('swarm_text_delta');
     expect($transport->events)->not->toContain('swarm_stream_end');
+});
+
+test('terminal broadcast now transport failures fail delivery but preserve completed run history', function () {
+    $transport = fakeFailingBroadcastTransport('swarm_stream_end');
+    $runId = 'broadcast-now-terminal-transport-failure-run-id';
+
+    expect(fn () => FakeSequentialSwarm::make()->broadcastNow(
+        RunContext::from('broadcast-now-terminal-failure-task', $runId),
+        new Channel('swarm.run'),
+    ))->toThrow(RuntimeException::class, 'Simulated broadcast transport failure.');
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($history['status'])->toBe('completed');
+    expect($history['output'])->toBe('editor-out');
+    expect($transport->events)->toContain('swarm_stream_end');
 });
 
 test('queued broadcast transport failures fail the job and skip then callbacks', function () {
@@ -282,4 +319,32 @@ test('queued broadcast transport failures fail the job and skip then callbacks',
     expect($state->thenCalled)->toBeFalse();
     expect($transport->events)->toContain('swarm_text_delta');
     expect($transport->events)->not->toContain('swarm_stream_end');
+});
+
+test('terminal queued broadcast transport failures fail the job but preserve completed run history', function () {
+    $transport = fakeFailingBroadcastTransport('swarm_stream_end');
+    $runId = 'queued-broadcast-terminal-transport-failure-run-id';
+    $state = (object) ['thenCalled' => false];
+
+    $queued = FakeSequentialSwarm::make()
+        ->broadcastOnQueue(
+            RunContext::from('queued-broadcast-terminal-failure-task', $runId),
+            new Channel('swarm.run'),
+        )
+        ->then(function () use ($state): void {
+            $state->thenCalled = true;
+        });
+
+    $job = $queued->getJob();
+    preventQueuedBroadcastSwarmRedispatch($queued);
+
+    expect(fn () => $job->handle(app(SwarmRunner::class)))
+        ->toThrow(RuntimeException::class, 'Simulated broadcast transport failure.');
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($history['status'])->toBe('completed');
+    expect($history['output'])->toBe('editor-out');
+    expect($state->thenCalled)->toBeFalse();
+    expect($transport->events)->toContain('swarm_stream_end');
 });

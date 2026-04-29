@@ -2,14 +2,17 @@
 
 ## Unreleased
 
+## v0.1.9 - 2026-04-29
+
 ### Added
 
 - Added Laravel AI-style swarm stream broadcast helpers:
   `broadcast()`, `broadcastNow()`, and `broadcastOnQueue()`. These helpers are
   sequential-only and broadcast typed swarm stream events rather than lifecycle
   events for every topology.
-- Documented and tested broadcast transport failures as fatal stream-consumption
-  failures, preserving Laravel AI parity while keeping swarm history coherent.
+- Documented and tested broadcast transport failures, including pre-terminal
+  failures that fail run history and terminal delivery failures that leave
+  completed swarm history intact while failing the helper or queued job.
 
 ## v0.1.8 - 2026-04-29
 
