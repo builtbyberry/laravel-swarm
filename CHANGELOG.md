@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.8 - 2026-04-29
 
 ### Breaking / Contract Changes
 
