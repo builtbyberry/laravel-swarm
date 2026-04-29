@@ -50,7 +50,7 @@ Keep the mental model high-level rather than mirroring every file:
 - `src/Responses` — sync, queued, durable, streamable, artifact, response, and step DTOs.
 - `src/Streaming` — typed swarm stream events aligned with Laravel AI stream events.
 - `src/Routing` — hierarchical route plan objects and validation.
-- `src/Runners` — topology runners, durable manager, main runner, and step recorder.
+- `src/Runners` — topology runners, sequential stream runner, durable manager, SwarmRunner, step recorder.
 - `src/Support` — `RunContext`, history query helpers, capture helpers, monotonic time, and runtime support objects.
 - `src/Testing` — fakes and assertions.
 - `database/migrations` — package-managed persistence and durable runtime tables.
@@ -61,7 +61,7 @@ Keep the mental model high-level rather than mirroring every file:
 - `prompt()` executes synchronously and returns a `SwarmResponse`.
 - `run()` is a compatibility alias for `prompt()`.
 - `queue()` is lightweight background execution: one Laravel queue job owns one swarm run. Queued swarms are re-resolved from the container, so they must not rely on runtime instance state. Pass per-run data in the task payload or `RunContext`.
-- `stream()` is currently sequential-only. It returns a lazy `StreamableSwarmResponse`, emits typed stream events for step progress and streamed final-agent output, and supports in-memory replay after completion. Persisted exact stream replay is opt-in through `storeForReplay()` or `swarm.streaming.replay.enabled`; replay stored events with `SwarmHistory::replay($runId)`.
+- `stream()` is sequential-only. It returns a lazy `StreamableSwarmResponse`, emits typed progress and final streamed output, and supports in-memory replay after completion. Persisted replay is opt-in via `storeForReplay()` or `swarm.streaming.replay.enabled`; replay with `SwarmHistory::replay($runId)`. For upstream final-agent streamed events, persisted replay preserves upstream IDs and timestamps; invocation IDs are passed through when present.
 - `dispatchDurable()` is database-backed, checkpointed execution for sequential, parallel, and hierarchical swarms. It persists a durable cursor and advances the swarm through durable jobs. Use events such as `SwarmCompleted` and `SwarmFailed`; durable responses do not support `then()` or `catch()`.
 
 Queued `then()` and `catch()` callbacks remain available for compatibility, but do not recommend them for real queued execution because serialized closures can capture excess state, fail serialization, or store sensitive data in queue payloads.
@@ -79,10 +79,10 @@ For hierarchical routing, there is no separate `route()` callback. The coordinat
 Laravel Swarm persists run context, artifacts, and run history through configurable stores.
 
 - `RunContext` carries input, structured data, metadata, artifacts, and run ID control.
-- `ContextStore`, `ArtifactRepository`, `RunHistoryStore`, and `DurableRunStore` are the persistence contracts.
+- `ContextStore`, `ArtifactRepository`, `RunHistoryStore`, `StreamEventStore`, and `DurableRunStore` are the persistence contracts.
 - `SwarmHistory` provides application and console inspection over persisted runs.
 - Cache and database drivers are supported; database persistence uses package migrations loaded by the service provider.
-- Capture settings live under `swarm.capture.inputs` and `swarm.capture.outputs`. Treat persisted prompts, outputs, lifecycle events, and automatic step artifacts as sensitive surfaces.
+- Capture lives under `swarm.capture.inputs` and `swarm.capture.outputs`. Treat prompts, outputs, lifecycle events, streamed reasoning/tool payloads, and automatic step artifacts as sensitive. With output capture off, streamed tool/reasoning payloads redact values to `[redacted]` while preserving keys where applicable.
 - Database retention is prune-based. Expired database rows remain queryable until `swarm:prune` runs, and active runs are protected from partial pruning.
 
 ## Commands And Operations
@@ -116,9 +116,44 @@ Pulse is aggregate observability. For live per-run operations feeds, listen to L
 - Queued and parallel safety checks should fail before dispatch when a swarm or worker cannot be container-resolved safely.
 - Timeouts are best-effort orchestration deadlines checked before and between steps. They do not hard-cancel an in-flight provider call.
 
+## Review Method
+
+Use multi-expert review for meaningful changes, especially streaming contracts, persistence/replay, migrations, security surfaces, and public API drift.
+
+Default review lenses:
+
+- Laravel maintainer: convention fit, DI patterns, contract shape, upgrade safety.
+- CTO: enterprise readiness, operational clarity, and long-term maintainability.
+- Engineering manager: blast radius, cohesion, rollback safety, and delivery slicing.
+- Security specialist: redaction/capture behavior, sensitive surfaces, and failure paths.
+- QA specialist: deterministic regression coverage, edge cases, and assertion resilience.
+- Docs engineer: behavior/docs/changelog parity and configuration clarity.
+- Systems integrator: migration/config compatibility and deployment/runtime wiring risk.
+- Regulatory specialist: auditability, provenance requirements, and compliance evidence quality.
+
+Required review output:
+
+- What passes.
+- Findings ordered by severity (`high`, `medium`, `low`).
+- Open gaps or follow-up items.
+- Release impact (`blocker` or `non-blocker`).
+- Consolidated verdict: `approve`, `approve-with-followups`, or `changes-required`.
+
+Severity gate:
+
+- `high`: fix before release.
+- `medium`: fix now unless explicitly deferred with an owner.
+- `low`: may defer if documented.
+
+When making an intentional tradeoff (for example replay provenance or redaction
+shape), record the chosen option, rejected option, rationale, and test/doc
+updates in the PR notes or changelog entry.
+
 ## Current State
 
 The package supports sequential, parallel, and hierarchical topologies; synchronous, queued, streamed, and durable execution; cache and database persistence; run history and artifacts; lifecycle events; optional Pulse observability; config, migration, and stub publishing; and a full fake/assertion system.
+
+Streaming covers typed non-text final-agent events (`swarm_text_end`, `swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`, `swarm_tool_result`) with persisted replay support.
 
 The test suite includes Feature and Unit coverage across sequential, parallel, hierarchical routing, streaming, queued execution, durable execution, persistence, Pulse integration, commands, fakes, and support objects.
 
