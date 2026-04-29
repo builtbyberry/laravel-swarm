@@ -61,6 +61,44 @@ For Laravel 13 named SSE events, each swarm stream event exposes
 Like Laravel AI stream responses, a **completed** stream can be iterated again
 in the same PHP process without re-running the swarm (in-memory replay).
 
+## Broadcasting Stream Events
+
+Laravel Swarm also exposes Laravel AI-style broadcast helpers for the same typed
+stream events:
+
+```php
+use App\Ai\Swarms\ArticlePipeline;
+use Illuminate\Broadcasting\PrivateChannel;
+
+ArticlePipeline::make()->broadcast(
+    ['topic' => 'Laravel queues'],
+    new PrivateChannel('swarm.article-pipeline'),
+);
+
+ArticlePipeline::make()->broadcastNow(
+    ['topic' => 'Laravel queues'],
+    new PrivateChannel('swarm.article-pipeline'),
+);
+
+ArticlePipeline::make()
+    ->broadcastOnQueue(
+        ['topic' => 'Laravel queues'],
+        new PrivateChannel('swarm.article-pipeline'),
+    )
+    ->onQueue('ai-streams');
+```
+
+`broadcast()` consumes the stream immediately and broadcasts each
+`SwarmStreamEvent` through Laravel broadcasting. `broadcastNow()` uses immediate
+delivery. `broadcastOnQueue()` dispatches a worker that streams the swarm once,
+broadcasts each event immediately from the worker, and passes the final
+`StreamedSwarmResponse` to queued `then()` callbacks.
+
+These are stream-event helpers, not lifecycle broadcasting for every topology.
+They are sequential-only for the same reason `stream()` is sequential-only. For
+prompt, queued, durable, parallel, or hierarchical operational feeds, listen to
+Laravel Swarm lifecycle events and broadcast your own application events.
+
 ## Stream Event Types
 
 Swarm streams emit typed events, including:
@@ -154,8 +192,10 @@ hard-cancel an in-flight provider request or a streamed response mid-call.
 
 ## Testing
 
-Fakes intercept `stream()`; assertions record after the stream is iterated or
-returned. See [Testing](testing.md#asserting-basic-interaction).
+Fakes intercept `stream()`, `broadcast()`, and `broadcastNow()` as streamed
+calls; assertions record after the stream is iterated, returned, or consumed by
+the broadcast helper. `broadcastOnQueue()` records in the queued bucket. See
+[Testing](testing.md#asserting-basic-interaction).
 
 ## Related
 

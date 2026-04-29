@@ -19,6 +19,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
@@ -28,11 +29,13 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
+use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
@@ -217,6 +220,14 @@ class SwarmRunner
         return $this->sequentialStream->stream($swarm, $task);
     }
 
+    public function broadcast(Swarm $swarm, string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
+    {
+        return $this->stream($swarm, $task)
+            ->each(function (SwarmStreamEvent $event) use ($channels, $now): void {
+                $event->{$now ? 'broadcastNow' : 'broadcast'}($channels);
+            });
+    }
+
     public function queue(Swarm $swarm, string|array|RunContext $task): QueuedSwarmResponse
     {
         $this->validateForDispatch($swarm);
@@ -227,6 +238,29 @@ class SwarmRunner
         $this->checkInputPayload($task, $context, ExecutionMode::Queue);
         $this->ensureActiveContextCompatible(ExecutionMode::Queue);
         $pendingDispatch = new PendingDispatch(new InvokeSwarm($swarm::class, $context->toQueuePayload()));
+
+        if ($connection = $this->config->get('swarm.queue.connection')) {
+            $pendingDispatch->onConnection($connection);
+        }
+
+        if ($name = $this->config->get('swarm.queue.name')) {
+            $pendingDispatch->onQueue($name);
+        }
+
+        return new QueuedSwarmResponse($pendingDispatch, $context->runId);
+    }
+
+    public function broadcastOnQueue(Swarm $swarm, string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
+    {
+        $this->ensureStreamableTopology($swarm);
+        $this->validateForDispatch($swarm);
+        $this->ensureQueueable($swarm);
+        $this->ensureContainerResolvable($swarm);
+
+        $context = RunContext::fromTask($task);
+        $this->checkInputPayload($task, $context, ExecutionMode::Queue);
+        $this->ensureActiveContextCompatible(ExecutionMode::Queue);
+        $pendingDispatch = new PendingDispatch(new BroadcastSwarm($swarm::class, $context->toQueuePayload(), $channels));
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
             $pendingDispatch->onConnection($connection);
@@ -336,6 +370,15 @@ class SwarmRunner
 
         if ($topology === Topology::Hierarchical) {
             $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
+        }
+    }
+
+    protected function ensureStreamableTopology(Swarm $swarm): void
+    {
+        $topology = $this->resolver->resolveTopology($swarm);
+
+        if ($topology !== Topology::Sequential) {
+            throw new SwarmException("Streaming is only supported for sequential swarms. {$topology->value} topology does not support streaming.");
         }
     }
 

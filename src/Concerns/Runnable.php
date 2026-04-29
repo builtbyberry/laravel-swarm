@@ -14,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake as SwarmFakeInstance;
+use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use ReflectionClass;
@@ -72,11 +73,35 @@ trait Runnable
     }
 
     /**
+     * Broadcast typed stream events for the swarm.
+     */
+    public function broadcast(string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
+    {
+        return Container::getInstance()->make(SwarmRunner::class)->broadcast($this, $task, $channels, $now);
+    }
+
+    /**
+     * Broadcast typed stream events immediately.
+     */
+    public function broadcastNow(string|array|RunContext $task, Channel|array $channels): StreamableSwarmResponse
+    {
+        return $this->broadcast($task, $channels, now: true);
+    }
+
+    /**
      * Queue the swarm to run in the background.
      */
     public function queue(string|array|RunContext $task): QueuedSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->queue($this, $task);
+    }
+
+    /**
+     * Queue the swarm stream and broadcast each event from the worker.
+     */
+    public function broadcastOnQueue(string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
+    {
+        return Container::getInstance()->make(SwarmRunner::class)->broadcastOnQueue($this, $task, $channels);
     }
 
     public function dispatchDurable(string|array|RunContext $task): DurableSwarmResponse

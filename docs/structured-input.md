@@ -1,7 +1,8 @@
 # Structured Input
 
 Laravel Swarm accepts the same three task shapes across `prompt()`, `queue()`,
-`stream()`, and `dispatchDurable()` (for streaming behavior and replay, see
+`stream()`, `broadcast()`, `broadcastNow()`, `broadcastOnQueue()`, and
+`dispatchDurable()` (for streaming behavior and replay, see
 [Streaming](streaming.md)):
 
 - a string
@@ -30,7 +31,8 @@ $response = ArticlePipeline::make()->prompt([
 ]);
 ```
 
-The same shape works with `queue()`, `stream()`, and `dispatchDurable()`:
+The same shape works with `queue()`, `stream()`, broadcast helpers, and
+`dispatchDurable()`:
 
 ```php
 ArticlePipeline::make()->queue([

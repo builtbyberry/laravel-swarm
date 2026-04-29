@@ -24,7 +24,7 @@ Laravel's article, [Building Multi-Agent Workflows with the Laravel AI SDK](http
 
 That is the right mental model for Swarm too. Laravel AI gives you the ingredients. Laravel Swarm gives you a reusable workflow abstraction built from those ingredients.
 
-Both are valid choices. Laravel AI is great when you want to compose the workflow yourself from lower-level primitives. Laravel Swarm is great when you want that workflow to live as a reusable, first-class object in your app with a consistent `prompt()`, `queue()`, `stream()`, and `dispatchDurable()` API, plus persistence, lifecycle events, and test helpers around it. The legacy `run()` method remains available as a compatibility alias for `prompt()`.
+Both are valid choices. Laravel AI is great when you want to compose the workflow yourself from lower-level primitives. Laravel Swarm is great when you want that workflow to live as a reusable, first-class object in your app with a consistent `prompt()`, `queue()`, `stream()`, stream-event broadcast helpers, and `dispatchDurable()` API, plus persistence, lifecycle events, and test helpers around it. The legacy `run()` method remains available as a compatibility alias for `prompt()`.
 
 If you prefer assembling those workflow patterns manually, the Laravel AI article is a good place to start. If you want to define the workflow once and reuse it as an application primitive, Swarm is the better fit.
 
@@ -64,14 +64,17 @@ If your use case feels more like a reusable workflow than a single prompt, the r
 | `prompt()` | `SwarmResponse` | The request can wait for the full workflow result. |
 | `queue()` | `QueuedSwarmResponse` | One background job can comfortably own the whole workflow. |
 | `stream()` | `StreamableSwarmResponse` | A browser or client needs live progress from a sequential swarm. |
+| `broadcast()` / `broadcastNow()` | `StreamableSwarmResponse` | A sequential swarm should stream and broadcast typed stream events now. |
+| `broadcastOnQueue()` | `QueuedSwarmResponse` | A worker should stream a sequential swarm and broadcast typed stream events. |
 | `dispatchDurable()` | `DurableSwarmResponse` | The workflow needs checkpointing, recovery, or operator controls. |
 
 Only `prompt()` returns a `SwarmResponse` directly. `run()` is retained as a
 compatibility alias. `stream()` returns a lazy Laravel-style stream response
 that yields typed progress and token events while persisting completion through
-the normal history and event surfaces. `queue()` and `dispatchDurable()` return
-dispatch handles with a `runId`; listen to lifecycle events or inspect persisted
-history for the eventual result.
+the normal history and event surfaces. Broadcast helpers consume the same typed
+stream events; they are not lifecycle broadcasting for every topology. `queue()`
+and `dispatchDurable()` return dispatch handles with a `runId`; listen to
+lifecycle events or inspect persisted history for the eventual result.
 
 ## Installation
 
@@ -427,6 +430,33 @@ return ArticlePipeline::make()->stream([
 ]);
 ```
 
+Broadcast the same typed stream events through Laravel broadcasting:
+
+```php
+use Illuminate\Broadcasting\PrivateChannel;
+
+ArticlePipeline::make()->broadcast(
+    ['topic' => 'Laravel queues'],
+    new PrivateChannel('swarm.article-pipeline'),
+);
+
+ArticlePipeline::make()->broadcastNow(
+    ['topic' => 'Laravel queues'],
+    new PrivateChannel('swarm.article-pipeline'),
+);
+
+ArticlePipeline::make()
+    ->broadcastOnQueue(
+        ['topic' => 'Laravel queues'],
+        new PrivateChannel('swarm.article-pipeline'),
+    )
+    ->onQueue('ai-streams');
+```
+
+These helpers are sequential-only stream helpers. For prompt, queued, durable,
+parallel, or hierarchical lifecycle broadcasting, listen to Laravel Swarm
+lifecycle events and broadcast application-owned events.
+
 Persisted replay of the exact emitted timeline is opt-in (`storeForReplay()` or
 `swarm.streaming.replay.enabled`); playback uses `SwarmHistory::replay($runId)`.
 Replay write failures default to failing the stream so run history stays
@@ -434,6 +464,7 @@ coherent; set `swarm.streaming.replay.failure_policy` to `continue` if live
 streaming should continue and replay should be disabled for that response.
 Previously written replay events for that response are discarded to avoid
 partial playback.
+
 Details: [Streaming](docs/streaming.md) and [Persistence And History](docs/persistence-and-history.md#replaying-stream-events).
 
 ## Topologies

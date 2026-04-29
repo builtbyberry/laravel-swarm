@@ -21,7 +21,7 @@ expect((string) ArticlePipeline::make()->prompt('Draft a blog outline about Lara
 
 ## Asserting Basic Interaction
 
-You can assert against synchronous, queued, and streamed execution:
+You can assert against synchronous, queued, durable, and streamed execution:
 
 ```php
 ArticlePipeline::assertPrompted('Draft a blog outline about Laravel queues.');
@@ -33,7 +33,10 @@ ArticlePipeline::assertDispatchedDurably('Draft a blog outline about Laravel que
 Streaming behavior and event types are documented in [Streaming](streaming.md).
 
 Faked streams are lazy, so `assertStreamed()` records after the stream response
-is iterated or returned from a controller response.
+is iterated, returned from a controller response, or consumed by `broadcast()` /
+`broadcastNow()`. `broadcastOnQueue()` records in the queued bucket, so use
+`assertQueued()` for queued stream-broadcast jobs. There is intentionally no
+separate broadcast assertion family.
 
 ## Asserting A Swarm Was Not Prompted
 

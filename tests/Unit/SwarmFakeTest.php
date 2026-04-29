@@ -2,10 +2,15 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyRunnableSwarm;
+use Illuminate\Broadcasting\AnonymousEvent;
+use Illuminate\Broadcasting\Channel;
+use Illuminate\Support\Facades\Event;
 use PHPUnit\Framework\AssertionFailedError;
 
 test('fake intercepts run and queue calls', function () {
@@ -67,6 +72,39 @@ test('fake intercepts stream calls', function () {
     expect($events[2]->delta)->toBe('streamed-output');
 
     EmptyRunnableSwarm::assertStreamed('stream-task');
+});
+
+test('fake intercepts broadcast calls as stream calls', function () {
+    Event::fake([AnonymousEvent::class]);
+    EmptyRunnableSwarm::fake(['broadcast-output']);
+
+    $response = EmptyRunnableSwarm::make()->broadcast('broadcast-task', new Channel('swarm.fake'));
+
+    expect($response)->toBeInstanceOf(StreamableSwarmResponse::class);
+    expect($response->streamedResponse?->output)->toBe('broadcast-output');
+
+    EmptyRunnableSwarm::assertStreamed('broadcast-task');
+    Event::assertDispatched(AnonymousEvent::class, fn (AnonymousEvent $event) => $event->broadcastAs() === 'swarm_stream_end');
+});
+
+test('fake intercepts broadcast now calls as stream calls', function () {
+    Event::fake([AnonymousEvent::class]);
+    EmptyRunnableSwarm::fake(['broadcast-now-output']);
+
+    EmptyRunnableSwarm::make()->broadcastNow('broadcast-now-task', new Channel('swarm.fake'));
+
+    EmptyRunnableSwarm::assertStreamed('broadcast-now-task');
+    Event::assertDispatched(AnonymousEvent::class, fn (AnonymousEvent $event) => $event->shouldBroadcastNow());
+});
+
+test('fake intercepts broadcast on queue calls as queue calls', function () {
+    EmptyRunnableSwarm::fake();
+
+    $response = EmptyRunnableSwarm::make()->broadcastOnQueue('queued-broadcast-task', new Channel('swarm.fake'));
+
+    expect($response)->toBeInstanceOf(QueuedSwarmResponse::class);
+
+    EmptyRunnableSwarm::assertQueued('queued-broadcast-task');
 });
 
 test('array responses are consumed in order', function () {

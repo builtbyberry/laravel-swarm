@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added Laravel AI-style swarm stream broadcast helpers:
+  `broadcast()`, `broadcastNow()`, and `broadcastOnQueue()`. These helpers are
+  sequential-only and broadcast typed swarm stream events rather than lifecycle
+  events for every topology.
+
 ## v0.1.8 - 2026-04-29
 
 ### Breaking / Contract Changes

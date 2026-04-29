@@ -19,7 +19,7 @@ Every implementation decision must follow existing Laravel and Laravel AI conven
 - Laravel AI uses `make:agent`; this package uses `make:swarm`.
 - Laravel AI agents use `Promptable`; swarms use `Runnable`.
 - Laravel AI uses PHP attributes like `#[Provider]` and `#[Model]`; swarms use `#[Topology]`, `#[MaxAgentSteps]`, and `#[Timeout]`.
-- Laravel AI agents use `prompt()`, `queue()`, and `stream()`; swarms use `prompt()`, `queue()`, `stream()`, and `dispatchDurable()`.
+- Laravel AI agents use `prompt()`, `queue()`, `stream()`, `broadcast()`, `broadcastNow()`, and `broadcastOnQueue()`; swarms use those same public verbs plus `dispatchDurable()`.
 - `run()` remains available as a compatibility alias for synchronous `prompt()`.
 - Laravel AI fakes with `Agent::fake()`; swarms fake with `Swarm::fake()` / `YourSwarm::fake()`.
 - Config lives in `config/swarm.php`, not `config/ai.php`.
@@ -61,7 +61,7 @@ Keep the mental model high-level rather than mirroring every file:
 - `prompt()` executes synchronously and returns a `SwarmResponse`.
 - `run()` is a compatibility alias for `prompt()`.
 - `queue()` is lightweight background execution: one Laravel queue job owns one swarm run. Queued swarms are re-resolved from the container, so they must not rely on runtime instance state. Pass per-run data in the task payload or `RunContext`.
-- `stream()` is sequential-only. It returns a lazy `StreamableSwarmResponse`, emits typed progress and final streamed output, and supports in-memory replay after completion. Persisted replay is opt-in via `storeForReplay()` or `swarm.streaming.replay.enabled`; replay with `SwarmHistory::replay($runId)`. Replay write failures default to failing the stream, unless `swarm.streaming.replay.failure_policy` is set to `continue`; in continue mode, already-written replay events are discarded so partial playback is unavailable. For upstream final-agent streamed events, persisted replay preserves upstream IDs and timestamps; invocation IDs are passed through when present.
+- `stream()` is sequential-only. It returns a lazy `StreamableSwarmResponse`, emits typed progress and final streamed output, and supports in-memory replay after completion. Persisted replay is opt-in via `storeForReplay()` or `swarm.streaming.replay.enabled`; replay with `SwarmHistory::replay($runId)`. Replay write failures default to failing the stream, unless `swarm.streaming.replay.failure_policy` is set to `continue`; in continue mode, already-written replay events are discarded so partial playback is unavailable. For upstream final-agent streamed events, persisted replay preserves upstream IDs and timestamps; invocation IDs are passed through when present. `broadcast()`, `broadcastNow()`, and `broadcastOnQueue()` are stream-event helpers for sequential swarms; they broadcast typed swarm stream events, not lifecycle events for every topology.
 - `dispatchDurable()` is database-backed, checkpointed execution for sequential, parallel, and hierarchical swarms. It persists a durable cursor and advances the swarm through durable jobs. Use events such as `SwarmCompleted` and `SwarmFailed`; durable responses do not support `then()` or `catch()`.
 
 Queued `then()` and `catch()` callbacks remain available for compatibility, but do not recommend them for real queued execution because serialized closures can capture excess state, fail serialization, or store sensitive data in queue payloads.
@@ -112,7 +112,7 @@ Pulse is aggregate observability. For live per-run operations feeds, listen to L
 - `ParallelRunner` and hierarchical parallel execution use `ConcurrencyManager` from the container, not the facade directly.
 - `SwarmRunner` resolves attributes via reflection and falls back to `config('swarm.*')`.
 - `Runnable::make()` returns `mixed` so a bound `SwarmFake` can be returned.
-- `SwarmFake` intercepts `prompt()`, `run()`, `queue()`, `stream()`, and `dispatchDurable()` and records assertions. Stream fakes stay lazy and record only when iterated.
+- `SwarmFake` intercepts `prompt()`, `run()`, `queue()`, `stream()`, `broadcast()`, `broadcastNow()`, `broadcastOnQueue()`, and `dispatchDurable()` and records assertions. Stream fakes stay lazy and record only when iterated or consumed by broadcast helpers. Broadcast helpers reuse existing buckets: `broadcast()` / `broadcastNow()` satisfy `assertStreamed()`, and `broadcastOnQueue()` satisfies `assertQueued()`.
 - Queued and parallel safety checks should fail before dispatch when a swarm or worker cannot be container-resolved safely.
 - Timeouts are best-effort orchestration deadlines checked before and between steps. They do not hard-cancel an in-flight provider call.
 
@@ -153,7 +153,7 @@ updates in the PR notes or changelog entry.
 
 The package supports sequential, parallel, and hierarchical topologies; synchronous, queued, streamed, and durable execution; cache and database persistence; run history and artifacts; lifecycle events; optional Pulse observability; config, migration, and stub publishing; and a full fake/assertion system.
 
-Streaming covers typed non-text final-agent events (`swarm_text_end`, `swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`, `swarm_tool_result`) with persisted replay support.
+Streaming covers typed non-text final-agent events (`swarm_text_end`, `swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`, `swarm_tool_result`) with persisted replay support and Laravel AI-style stream-event broadcast helpers.
 
 The test suite includes Feature and Unit coverage across sequential, parallel, hierarchical routing, streaming, queued execution, durable execution, persistence, Pulse integration, commands, fakes, and support objects.
 

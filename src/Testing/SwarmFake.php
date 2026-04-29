@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\FakePendingDispatch;
@@ -164,6 +165,33 @@ class SwarmFake implements Swarm
                 metadata: ['run_id' => 'fake-run-id'],
             );
         });
+    }
+
+    /**
+     * Intercept a broadcast call and record it as a stream.
+     */
+    public function broadcast(string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
+    {
+        return $this->stream($task)
+            ->each(function (SwarmStreamEvent $event) use ($channels, $now): void {
+                $event->{$now ? 'broadcastNow' : 'broadcast'}($channels);
+            });
+    }
+
+    /**
+     * Intercept an immediate broadcast call and record it as a stream.
+     */
+    public function broadcastNow(string|array|RunContext $task, Channel|array $channels): StreamableSwarmResponse
+    {
+        return $this->broadcast($task, $channels, now: true);
+    }
+
+    /**
+     * Intercept a queued broadcast call and record it as queued.
+     */
+    public function broadcastOnQueue(string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
+    {
+        return $this->queue($task);
     }
 
     /**
