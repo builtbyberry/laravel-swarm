@@ -457,6 +457,13 @@ These helpers are sequential-only stream helpers. For prompt, queued, durable,
 parallel, or hierarchical lifecycle broadcasting, listen to Laravel Swarm
 lifecycle events and broadcast application-owned events.
 
+Broadcast helpers do not retry or buffer delivery. If Laravel broadcasting
+throws while a helper is consuming the stream, live `broadcast()` /
+`broadcastNow()` rethrow the transport exception and `broadcastOnQueue()` lets
+the queued job fail. Once swarm execution has started, run history is marked
+failed and queued `then()` callbacks do not run. Use Laravel's broadcast and
+queue infrastructure for transport retries.
+
 Persisted replay of the exact emitted timeline is opt-in (`storeForReplay()` or
 `swarm.streaming.replay.enabled`); playback uses `SwarmHistory::replay($runId)`.
 Replay write failures default to failing the stream so run history stays

@@ -99,6 +99,13 @@ They are sequential-only for the same reason `stream()` is sequential-only. For
 prompt, queued, durable, parallel, or hierarchical operational feeds, listen to
 Laravel Swarm lifecycle events and broadcast your own application events.
 
+Broadcast helpers do not retry or buffer transport delivery. If Laravel
+broadcasting throws while the helper is consuming the stream, live `broadcast()`
+/ `broadcastNow()` rethrow the transport exception and `broadcastOnQueue()` lets
+the queued job fail. Once swarm execution has started, run history is marked
+failed and queued `then()` callbacks do not run. Use Laravel's broadcast and
+queue infrastructure for transport retries.
+
 ## Stream Event Types
 
 Swarm streams emit typed events, including:

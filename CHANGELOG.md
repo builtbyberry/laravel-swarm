@@ -8,6 +8,8 @@
   `broadcast()`, `broadcastNow()`, and `broadcastOnQueue()`. These helpers are
   sequential-only and broadcast typed swarm stream events rather than lifecycle
   events for every topology.
+- Documented and tested broadcast transport failures as fatal stream-consumption
+  failures, preserving Laravel AI parity while keeping swarm history coherent.
 
 ## v0.1.8 - 2026-04-29
 
