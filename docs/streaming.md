@@ -97,6 +97,13 @@ return ArticlePipeline::make()
 
 Or globally with `SWARM_STREAM_REPLAY_ENABLED=true` / `swarm.streaming.replay.enabled`.
 
+Replay write failures default to failing the stream so history does not remain
+`running` after replay persistence breaks. Set
+`SWARM_STREAM_REPLAY_FAILURE_POLICY=continue` if live streaming should continue
+and replay should be disabled for the rest of that response when the replay store
+cannot be written. When `continue` is used, any replay events already written for
+that run are discarded so a later replay cannot return a partial timeline.
+
 Replay later by run ID:
 
 ```php

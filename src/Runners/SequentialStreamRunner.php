@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
@@ -28,6 +29,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
+use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
 use Throwable;
 
 class SequentialStreamRunner
@@ -81,21 +83,30 @@ class SequentialStreamRunner
             events: $this->events,
         );
 
+        $startedAt = null;
+
         return new StreamableSwarmResponse(
             runId: $context->runId,
-            generator: function () use ($state, $context, $contextTtl, $swarm): \Generator {
-                return yield from $this->execute($state, $context, $contextTtl, $swarm);
+            generator: function () use ($state, $context, $contextTtl, $swarm, &$startedAt): \Generator {
+                return yield from $this->execute($state, $context, $contextTtl, $swarm, $startedAt);
             },
             streamEvents: $this->streamEvents,
             ttlSeconds: $contextTtl,
             storesForReplay: (bool) $this->config->get('swarm.streaming.replay.enabled', false),
+            replayFailurePolicy: (string) $this->config->get('swarm.streaming.replay.failure_policy', 'fail'),
+            onReplayFailure: function (Throwable $exception) use ($state, $context, $contextTtl, $swarm, &$startedAt): SwarmStreamError {
+                return $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt);
+            },
+            onAbandoned: function (SwarmException $exception) use ($state, $context, $contextTtl, $swarm, &$startedAt): void {
+                $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt);
+            },
         );
     }
 
     /**
      * @return \Generator<int, SwarmStreamEvent, mixed, SwarmResponse>
      */
-    protected function execute(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm): \Generator
+    protected function execute(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, ?int &$startedAt): \Generator
     {
         $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
         $this->historyStore->start($context->runId, $swarm::class, $state->topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
@@ -155,31 +166,68 @@ class SequentialStreamRunner
 
             return $response;
         } catch (Throwable $exception) {
-            $this->historyStore->fail($context->runId, $exception, $contextTtl);
-            $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
-            $this->events->dispatch(new SwarmFailed(
-                runId: $context->runId,
-                swarmClass: $swarm::class,
-                topology: $state->topology->value,
-                exception: $this->capture->failureException($exception),
-                durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-                metadata: $context->metadata,
-                executionMode: ExecutionMode::Stream->value,
-                exceptionClass: $exception::class,
-            ));
-
-            yield new SwarmStreamError(
-                id: SwarmStreamEvent::newId(),
-                runId: $context->runId,
-                message: $this->capture->failureMessage($exception),
-                exceptionClass: $exception::class,
-                recoverable: false,
-                metadata: $context->metadata,
-                timestamp: SwarmStreamEvent::timestamp(),
-            );
+            yield $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt);
 
             throw $exception;
         }
+    }
+
+    protected function failStream(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, Throwable $exception, ?int $startedAt): SwarmStreamError
+    {
+        $this->historyStore->fail($context->runId, $exception, $contextTtl);
+        $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
+        $this->events->dispatch(new SwarmFailed(
+            runId: $context->runId,
+            swarmClass: $swarm::class,
+            topology: $state->topology->value,
+            exception: $this->capture->failureException($exception),
+            durationMs: $startedAt !== null ? MonotonicTime::elapsedMilliseconds($startedAt) : 1,
+            metadata: $this->failureMetadata($context, $exception),
+            executionMode: ExecutionMode::Stream->value,
+            exceptionClass: $this->failureExceptionClass($exception),
+        ));
+
+        $event = new SwarmStreamError(
+            id: $exception instanceof SwarmStreamProviderException ? $exception->eventId : SwarmStreamEvent::newId(),
+            runId: $context->runId,
+            message: $this->capture->failureMessage($exception),
+            exceptionClass: $this->failureExceptionClass($exception),
+            recoverable: $exception instanceof SwarmStreamProviderException ? $exception->recoverable : false,
+            metadata: $this->failureMetadata($context, $exception),
+            timestamp: $exception instanceof SwarmStreamProviderException ? $exception->timestamp : SwarmStreamEvent::timestamp(),
+        );
+
+        if ($exception instanceof SwarmStreamProviderException && is_string($exception->invocationId)) {
+            $event->withInvocationId($exception->invocationId);
+        }
+
+        return $event;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function failureMetadata(RunContext $context, Throwable $exception): array
+    {
+        if (! $exception instanceof SwarmStreamProviderException) {
+            return $context->metadata;
+        }
+
+        return array_merge($context->metadata, [
+            'provider_error' => $exception->metadata,
+        ]);
+    }
+
+    /**
+     * @return class-string
+     */
+    protected function failureExceptionClass(Throwable $exception): string
+    {
+        if ($exception instanceof SwarmStreamProviderException) {
+            return ProviderStreamError::class;
+        }
+
+        return $exception::class;
     }
 
     protected function normalizeCompletionResponse(SwarmResponse $response, RunContext $context, string $topology): SwarmResponse

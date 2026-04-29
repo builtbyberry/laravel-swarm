@@ -170,18 +170,23 @@ Individual stores can override the global driver if needed:
 'artifacts' => [
     'driver' => 'cache',
 ],
-'streaming' => [
-    'replay' => [
-        'enabled' => false,
-        'driver' => 'database',
+    'streaming' => [
+        'replay' => [
+            'enabled' => false,
+            'driver' => 'database',
+            'failure_policy' => 'fail', // or 'continue'
+        ],
     ],
-],
 ```
 
 Per-store drivers should only be set when you intentionally want an override.
 If you published `config/swarm.php` from an older package version, verify that
 the `context`, `artifacts`, `history`, and `streaming.replay` driver values are not hardcoded to
 `cache`, or they will override `swarm.persistence.driver`.
+
+When `streaming.replay.failure_policy` is `continue`, live streaming continues
+after a replay write failure, but any replay events already written for that run
+are discarded so `SwarmHistory::replay($runId)` cannot return a partial stream.
 
 ### Cache
 

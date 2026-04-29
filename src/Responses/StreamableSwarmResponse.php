@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Responses;
 
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use Closure;
 use Generator;
@@ -22,6 +23,16 @@ use Traversable;
  */
 class StreamableSwarmResponse implements IteratorAggregate, Responsable
 {
+    protected const STATE_PENDING = 'pending';
+
+    protected const STATE_STREAMING = 'streaming';
+
+    protected const STATE_COMPLETED = 'completed';
+
+    protected const STATE_FAILED = 'failed';
+
+    protected const STATE_ABANDONED = 'abandoned';
+
     /**
      * @var Collection<int, SwarmStreamEvent>
      */
@@ -38,8 +49,16 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
 
     protected ?Throwable $failedException = null;
 
+    protected ?SwarmException $abandonedException = null;
+
+    protected string $state = self::STATE_PENDING;
+
+    protected bool $thenCallbacksRan = false;
+
     /**
      * @param  Closure():iterable<int, SwarmStreamEvent>  $generator
+     * @param  Closure(Throwable):SwarmStreamEvent|null  $onReplayFailure
+     * @param  Closure(SwarmException):void|null  $onAbandoned
      */
     public function __construct(
         public readonly string $runId,
@@ -47,7 +66,14 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         protected ?StreamEventStore $streamEvents = null,
         protected int $ttlSeconds = 3600,
         protected bool $storesForReplay = false,
+        protected string $replayFailurePolicy = 'fail',
+        protected ?Closure $onReplayFailure = null,
+        protected ?Closure $onAbandoned = null,
     ) {
+        if (! in_array($this->replayFailurePolicy, ['fail', 'continue'], true)) {
+            throw new SwarmException("Invalid swarm stream replay failure policy [{$this->replayFailurePolicy}]. Supported policies: fail, continue.");
+        }
+
         $this->events = new Collection;
     }
 
@@ -102,6 +128,14 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
 
     public function getIterator(): Traversable
     {
+        if ($this->state === self::STATE_ABANDONED) {
+            throw $this->abandonedException ?? new SwarmException('Swarm stream response was abandoned before completion and cannot be iterated again.');
+        }
+
+        if ($this->state === self::STATE_STREAMING) {
+            throw new SwarmException('Swarm stream response is already being iterated.');
+        }
+
         if ($this->streamedResponse !== null || $this->failedException !== null) {
             foreach ($this->events as $event) {
                 yield $event;
@@ -115,7 +149,9 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         }
 
         $this->started = true;
+        $this->state = self::STATE_STREAMING;
         $events = [];
+        $completed = false;
 
         try {
             $stream = ($this->generator)();
@@ -132,33 +168,126 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
                 $events[] = $event;
 
                 if ($this->storesForReplay) {
-                    $this->streamEvents?->record($this->runId, $event, $this->ttlSeconds);
+                    try {
+                        $this->streamEvents?->record($this->runId, $event, $this->ttlSeconds);
+                    } catch (Throwable $exception) {
+                        if ($this->replayFailurePolicy === 'continue') {
+                            try {
+                                $this->streamEvents->forget($this->runId);
+                            } catch (Throwable $cleanupException) {
+                                $failureEvent = $this->handleReplayFailure($cleanupException);
+
+                                if ($failureEvent instanceof SwarmStreamEvent) {
+                                    $events[] = $failureEvent;
+
+                                    yield $failureEvent;
+                                }
+
+                                throw $cleanupException;
+                            }
+
+                            $this->storesForReplay = false;
+                        } else {
+                            $failureEvent = $this->handleReplayFailure($exception);
+
+                            if ($failureEvent instanceof SwarmStreamEvent) {
+                                $events[] = $failureEvent;
+
+                                yield $failureEvent;
+                            }
+
+                            throw $exception;
+                        }
+                    }
+                }
+
+                if ($event instanceof SwarmStreamEnd) {
+                    $this->completeFromEvents($events);
+                    $completed = true;
                 }
 
                 yield $event;
             }
 
-            $this->events = new Collection($events);
             $returned = $stream instanceof Generator ? $stream->getReturn() : null;
 
-            $this->streamedResponse = $returned instanceof StreamedSwarmResponse
-                ? $returned
-                : new StreamedSwarmResponse(
-                    $returned instanceof SwarmResponse
-                        ? $returned
-                        : StreamedSwarmResponse::fromEvents($this->runId, $this->events),
-                    $this->events,
-                );
-
+            $this->completeFromEvents($events, $returned);
+            $completed = true;
         } catch (Throwable $exception) {
             $this->events = new Collection($events);
             $this->failedException = $exception;
+            $this->state = self::STATE_FAILED;
 
             throw $exception;
+        } finally {
+            if (! $completed && $this->state === self::STATE_STREAMING) {
+                $this->markAbandoned($events);
+            }
+
+            if ($this->state === self::STATE_COMPLETED && ! $this->thenCallbacksRan) {
+                $this->runThenCallbacks();
+            }
         }
+    }
+
+    /**
+     * @param  array<int, SwarmStreamEvent>  $events
+     */
+    protected function completeFromEvents(array $events, mixed $returned = null): void
+    {
+        $this->events = new Collection($events);
+        $this->streamedResponse = $returned instanceof StreamedSwarmResponse
+            ? $returned
+            : new StreamedSwarmResponse(
+                $returned instanceof SwarmResponse
+                    ? $returned
+                    : StreamedSwarmResponse::fromEvents($this->runId, $this->events),
+                $this->events,
+            );
+        $this->state = self::STATE_COMPLETED;
+    }
+
+    protected function runThenCallbacks(): void
+    {
+        $this->thenCallbacksRan = true;
 
         foreach ($this->thenCallbacks as $callback) {
             $callback($this->streamedResponse);
+        }
+    }
+
+    protected function handleReplayFailure(Throwable $exception): ?SwarmStreamEvent
+    {
+        if ($this->onReplayFailure === null) {
+            return null;
+        }
+
+        $event = ($this->onReplayFailure)($exception);
+
+        if (! $event instanceof SwarmStreamEvent) {
+            throw new SwarmException('Swarm stream replay failure callback must return a swarm stream event.');
+        }
+
+        return $event;
+    }
+
+    /**
+     * @param  array<int, SwarmStreamEvent>  $events
+     */
+    protected function markAbandoned(array $events): void
+    {
+        $this->events = new Collection($events);
+        $this->state = self::STATE_ABANDONED;
+        $this->abandonedException = new SwarmException('Swarm stream response was abandoned before completion and cannot be iterated again.');
+
+        if ($this->onAbandoned === null) {
+            return;
+        }
+
+        try {
+            ($this->onAbandoned)($this->abandonedException);
+        } catch (Throwable) {
+            //
         }
     }
 }

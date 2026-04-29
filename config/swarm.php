@@ -55,6 +55,7 @@ return [
         'replay' => [
             'enabled' => env('SWARM_STREAM_REPLAY_ENABLED', false),
             'driver' => env('SWARM_STREAM_REPLAY_DRIVER'),
+            'failure_policy' => env('SWARM_STREAM_REPLAY_FAILURE_POLICY', 'fail'),
             'store' => env('SWARM_STREAM_REPLAY_STORE'),
             'prefix' => env('SWARM_STREAM_REPLAY_PREFIX', 'swarm:stream:'),
         ],

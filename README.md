@@ -429,6 +429,11 @@ return ArticlePipeline::make()->stream([
 
 Persisted replay of the exact emitted timeline is opt-in (`storeForReplay()` or
 `swarm.streaming.replay.enabled`); playback uses `SwarmHistory::replay($runId)`.
+Replay write failures default to failing the stream so run history stays
+coherent; set `swarm.streaming.replay.failure_policy` to `continue` if live
+streaming should continue and replay should be disabled for that response.
+Previously written replay events for that response are discarded to avoid
+partial playback.
 Details: [Streaming](docs/streaming.md) and [Persistence And History](docs/persistence-and-history.md#replaying-stream-events).
 
 ## Topologies
@@ -566,7 +571,7 @@ which fields to expose.
 
 Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted`, `SwarmCompleted`, and `SwarmFailed` include an `executionMode` payload so listeners can distinguish `run`, `stream`, `queue`, and `durable` invocations. Synchronous `prompt()` calls are recorded with the existing `run` execution mode for compatibility.
 
-Run context, artifacts, and run history are persisted automatically using the configured driver. Stream event replay is stored only when `swarm.streaming.replay.enabled` is true or a stream response calls `storeForReplay()`. The database driver stores records durably in package-managed tables. The cache driver is lighter and respects TTL settings.
+Run context, artifacts, and run history are persisted automatically using the configured driver. Stream event replay is stored only when `swarm.streaming.replay.enabled` is true or a stream response calls `storeForReplay()`. Replay write failures use `swarm.streaming.replay.failure_policy`, which defaults to `fail`. The database driver stores records durably in package-managed tables. The cache driver is lighter and respects TTL settings.
 
 For persistence drivers, history inspection, and the `SwarmHistory` facade and inspection commands, see [Persistence And History](docs/persistence-and-history.md).
 

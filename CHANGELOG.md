@@ -2,11 +2,28 @@
 
 ## Unreleased
 
+### Breaking / Contract Changes
+
+- Added `StreamEventStore::forget(string $runId)` so replay stores can
+  invalidate already-written events when replay persistence is disabled after a
+  partial write failure. Custom `StreamEventStore` implementations must add this
+  method.
+
 ### Added
 
 - Added `docs/streaming.md` as the canonical `stream()` guide and cross-linked it
   from the README, persistence, testing, structured input, examples, and agent
   context.
+- Added `swarm.streaming.replay.failure_policy` /
+  `SWARM_STREAM_REPLAY_FAILURE_POLICY` with `fail` as the default and
+  `continue` as an opt-in mode for continuing live streams when replay
+  persistence fails.
+
+### Fixed / Hardened
+
+- Hardened persisted stream replay failure handling so `fail` marks the live run
+  failed coherently, while `continue` discards partial replay events before
+  continuing without persisted replay for that response.
 
 ## v0.1.7 - 2026-04-28
 

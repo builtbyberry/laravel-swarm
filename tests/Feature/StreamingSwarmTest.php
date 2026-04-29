@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
@@ -27,14 +28,18 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\FailingStreamEventStore;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Persistence\PartiallyFailingStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyRunnableSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeProviderErrorStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRichStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStreamingFailureSwarm;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
 
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');
@@ -218,6 +223,78 @@ test('stream response replays completed events in memory without re-executing', 
     FakeEditor::assertPrompted('writer-out');
 });
 
+test('breaking after terminal stream end keeps completed history and replay state', function () {
+    Event::fake();
+    $thenCalled = false;
+    $stream = FakeSequentialSwarm::make()
+        ->stream('stream-task')
+        ->then(function () use (&$thenCalled): void {
+            $thenCalled = true;
+        });
+    $received = [];
+
+    foreach ($stream as $event) {
+        $received[] = $event;
+
+        if ($event instanceof SwarmStreamEnd) {
+            break;
+        }
+    }
+
+    $types = array_map(fn ($event): string => $event->type(), $received);
+    $history = app(RunHistoryStore::class)->find($stream->runId);
+    $replay = iterator_to_array($stream);
+
+    expect($types)->toContain('swarm_stream_end');
+    expect($thenCalled)->toBeTrue();
+    expect($history['status'])->toBe('completed');
+    expect($history['output'])->toBe('editor-out');
+    expect(array_map(fn ($event): string => $event->type(), $replay))->toBe($types);
+
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event): bool => $event->runId === $stream->runId);
+    Event::assertNotDispatched(SwarmFailed::class);
+});
+
+test('partial stream iteration abandons the response and cannot re execute', function () {
+    Event::fake();
+
+    $stream = FakeSequentialSwarm::make()->stream('stream-task');
+    $received = [];
+
+    foreach ($stream as $event) {
+        $received[] = $event;
+
+        if ($event instanceof SwarmStepEnd) {
+            break;
+        }
+    }
+
+    $history = app(RunHistoryStore::class)->find($stream->runId);
+
+    expect(array_map(fn ($event): string => $event->type(), $received))->toBe([
+        'swarm_stream_start',
+        'swarm_step_start',
+        'swarm_step_end',
+    ]);
+    expect($history['status'])->toBe('failed');
+    expect($history['steps'])->toHaveCount(1);
+    expect(DB::table('swarm_run_histories')->where('run_id', $stream->runId)->count())->toBe(1);
+
+    Event::assertDispatched(
+        SwarmFailed::class,
+        fn (SwarmFailed $event): bool => $event->runId === $stream->runId
+            && $event->exception->getMessage() === 'Swarm stream response was abandoned before completion and cannot be iterated again.',
+    );
+
+    expect(fn () => iterator_to_array($stream))
+        ->toThrow(SwarmException::class, 'Swarm stream response was abandoned before completion and cannot be iterated again.');
+
+    $historyAfterReplayAttempt = app(RunHistoryStore::class)->find($stream->runId);
+
+    expect($historyAfterReplayAttempt['steps'])->toHaveCount(1);
+    expect(DB::table('swarm_run_histories')->where('run_id', $stream->runId)->count())->toBe(1);
+});
+
 test('then callbacks before and after completion receive the same streamed response', function () {
     $responses = [];
     $stream = FakeSequentialSwarm::make()
@@ -302,6 +379,101 @@ test('sequential swarm stream marks history failed and dispatches failure when t
     expect($history['steps'])->toHaveCount(2);
 });
 
+test('provider error stream events fail the swarm and preserve provider details', function () {
+    Event::fake();
+
+    $stream = FakeProviderErrorStreamingSwarm::make()->stream('stream-task');
+    $received = [];
+
+    try {
+        foreach ($stream as $event) {
+            $received[] = $event;
+        }
+
+        $this->fail('Expected the provider error stream to throw.');
+    } catch (SwarmStreamProviderException $exception) {
+        expect($exception->getMessage())->toBe('Provider stream failed.');
+    }
+
+    $types = array_map(fn ($event): string => $event->type(), $received);
+    $error = collect($received)->whereInstanceOf(SwarmStreamError::class)->first();
+
+    expect($types)->toBe([
+        'swarm_stream_start',
+        'swarm_step_start',
+        'swarm_step_end',
+        'swarm_step_start',
+        'swarm_step_end',
+        'swarm_step_start',
+        'swarm_text_delta',
+        'swarm_stream_error',
+    ]);
+    expect($types)->not->toContain('swarm_stream_end');
+    expect($error)->not->toBeNull();
+    expect($error->id)->toBe('provider-error-1');
+    expect($error->timestamp)->toBe(1_710_000_001);
+    expect($error->invocationId)->toBe('provider-invocation-1');
+    expect($error->message)->toBe('Provider stream failed.');
+    expect($error->recoverable)->toBeTrue();
+    expect($error->exceptionClass)->toBe(ProviderStreamError::class);
+    expect($error->metadata['provider_error'])->toBe([
+        'provider_error_type' => 'provider_rate_limited',
+        'provider_metadata' => [
+            'request_id' => 'req-1',
+            'details' => ['hint' => 'retry'],
+        ],
+    ]);
+
+    Event::assertDispatched(
+        SwarmFailed::class,
+        fn (SwarmFailed $event): bool => $event->runId === $stream->runId
+            && $event->exceptionClass === ProviderStreamError::class,
+    );
+    Event::assertNotDispatched(SwarmCompleted::class);
+
+    $history = app(RunHistoryStore::class)->find($stream->runId);
+
+    expect($history['status'])->toBe('failed');
+    expect($history['steps'])->toHaveCount(2);
+});
+
+test('provider error stream events honor failure redaction', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+    Event::fake();
+
+    $stream = FakeProviderErrorStreamingSwarm::make()->stream('sensitive-stream-task');
+    $received = [];
+
+    try {
+        foreach ($stream as $event) {
+            $received[] = $event;
+        }
+
+        $this->fail('Expected the provider error stream to throw.');
+    } catch (SwarmStreamProviderException $exception) {
+        expect($exception->getMessage())->toBe('Provider stream failed.');
+    }
+
+    $error = collect($received)->whereInstanceOf(SwarmStreamError::class)->first();
+
+    expect($error)->not->toBeNull();
+    expect($error->message)->toBe('[redacted]');
+    expect($error->metadata['provider_error'])->toBe([
+        'provider_error_type' => '[redacted]',
+        'provider_metadata' => [
+            'request_id' => '[redacted]',
+            'details' => ['hint' => '[redacted]'],
+        ],
+    ]);
+
+    Event::assertDispatched(
+        SwarmFailed::class,
+        fn (SwarmFailed $event): bool => $event->runId === $stream->runId
+            && $event->exception->getMessage() === '[redacted]',
+    );
+});
+
 test('then callback does not run when live stream fails', function () {
     $called = false;
     $stream = FakeStreamingFailureSwarm::make()
@@ -372,6 +544,84 @@ test('globally enabled replay persists stream events without per response opt in
     iterator_to_array($stream);
 
     expect(iterator_to_array(app(StreamEventStore::class)->events($stream->runId)))->not->toBeEmpty();
+});
+
+test('replay store failure policy fail marks history failed and yields stream error', function () {
+    config()->set('swarm.streaming.replay.enabled', true);
+    config()->set('swarm.streaming.replay.failure_policy', 'fail');
+    app()->instance(StreamEventStore::class, new FailingStreamEventStore);
+    Event::fake();
+
+    $stream = FakeSequentialSwarm::make()->stream('stream-task');
+    $received = [];
+
+    try {
+        foreach ($stream as $event) {
+            $received[] = $event;
+        }
+
+        $this->fail('Expected replay store failure to throw.');
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toBe('Replay store failed.');
+    }
+
+    expect($received)->toHaveCount(1);
+    expect($received[0])->toBeInstanceOf(SwarmStreamError::class);
+    expect($received[0]->message)->toBe('Replay store failed.');
+    expect($received[0]->exceptionClass)->toBe(RuntimeException::class);
+    expect($received[0]->recoverable)->toBeFalse();
+
+    Event::assertDispatched(
+        SwarmFailed::class,
+        fn (SwarmFailed $event): bool => $event->runId === $stream->runId
+            && $event->exception->getMessage() === 'Replay store failed.',
+    );
+
+    expect(app(RunHistoryStore::class)->find($stream->runId)['status'])->toBe('failed');
+});
+
+test('replay store failure policy continue completes live stream and disables replay writes', function () {
+    config()->set('swarm.streaming.replay.enabled', true);
+    config()->set('swarm.streaming.replay.failure_policy', 'continue');
+    app()->instance(StreamEventStore::class, new FailingStreamEventStore);
+    Event::fake();
+
+    $stream = FakeSequentialSwarm::make()->stream('stream-task');
+    $events = iterator_to_array($stream);
+    $types = array_map(fn ($event): string => $event->type(), $events);
+
+    expect($types)->toContain('swarm_stream_start');
+    expect($types)->toContain('swarm_stream_end');
+    expect($types)->not->toContain('swarm_stream_error');
+    expect(iterator_to_array(app(StreamEventStore::class)->events($stream->runId)))->toBe([]);
+    expect(app(RunHistoryStore::class)->find($stream->runId)['status'])->toBe('completed');
+
+    Event::assertDispatched(SwarmCompleted::class, fn (SwarmCompleted $event): bool => $event->runId === $stream->runId);
+    Event::assertNotDispatched(SwarmFailed::class);
+});
+
+test('replay store failure policy continue invalidates partial persisted replay', function () {
+    config()->set('swarm.streaming.replay.enabled', true);
+    config()->set('swarm.streaming.replay.failure_policy', 'continue');
+    $store = new PartiallyFailingStreamEventStore;
+    app()->instance(StreamEventStore::class, $store);
+
+    $stream = FakeSequentialSwarm::make()->stream('stream-task');
+    $events = iterator_to_array($stream);
+
+    expect(array_map(fn ($event): string => $event->type(), $events))->toContain('swarm_stream_end');
+    expect($store->forgotten)->toBeTrue();
+    expect(iterator_to_array($store->events($stream->runId)))->toBe([]);
+    expect(app(RunHistoryStore::class)->find($stream->runId)['status'])->toBe('completed');
+    expect(fn () => iterator_to_array(app(SwarmHistory::class)->replay($stream->runId)))
+        ->toThrow(SwarmException::class, "No persisted stream replay events exist for run [{$stream->runId}].");
+});
+
+test('invalid replay failure policy fails clearly', function () {
+    config()->set('swarm.streaming.replay.failure_policy', 'explode');
+
+    expect(fn () => FakeSequentialSwarm::make()->stream('stream-task'))
+        ->toThrow(SwarmException::class, 'Invalid swarm stream replay failure policy [explode]. Supported policies: fail, continue.');
 });
 
 test('swarm history replay lazily replays persisted stream events', function () {

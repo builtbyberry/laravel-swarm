@@ -33,6 +33,11 @@ class CacheStreamEventStore implements StreamEventStore
         $this->store()->put($this->key($runId), $events, $ttlSeconds);
     }
 
+    public function forget(string $runId): void
+    {
+        $this->store()->forget($this->key($runId));
+    }
+
     public function events(string $runId): iterable
     {
         $events = $this->store()->get($this->key($runId), []);

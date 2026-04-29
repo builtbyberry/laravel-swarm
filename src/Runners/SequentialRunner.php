@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -24,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Generator;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
+use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
 use Laravel\Ai\Streaming\Events\ReasoningDelta;
 use Laravel\Ai\Streaming\Events\ReasoningEnd;
 use Laravel\Ai\Streaming\Events\StreamEnd;
@@ -190,6 +192,16 @@ class SequentialRunner
                         yield $swarmEvent;
                     } elseif ($event instanceof StreamEnd) {
                         $stepUsage = $event->usage->toArray();
+                    } elseif ($event instanceof ProviderStreamError) {
+                        throw new SwarmStreamProviderException(
+                            message: $event->message,
+                            eventId: $event->id,
+                            invocationId: $event->invocationId,
+                            recoverable: $event->recoverable,
+                            metadata: $this->captureProviderErrorMetadata($event),
+                            timestamp: $event->timestamp,
+                            providerErrorType: $event->type,
+                        );
                     }
                 }
 
@@ -331,6 +343,26 @@ class SequentialRunner
         }
 
         return '[redacted]';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function captureProviderErrorMetadata(ProviderStreamError $event): array
+    {
+        $metadata = [
+            'provider_error_type' => $event->type,
+        ];
+
+        if (is_array($event->metadata)) {
+            $metadata['provider_metadata'] = $event->metadata;
+        }
+
+        if ($this->capture->capturesFailures()) {
+            return $metadata;
+        }
+
+        return $this->redactArrayPreservingKeys($metadata);
     }
 
     protected function syncInvocationId(SwarmStreamEvent $swarmEvent, ?string $invocationId): void

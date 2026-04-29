@@ -10,6 +10,8 @@ interface StreamEventStore
 {
     public function record(string $runId, SwarmStreamEvent $event, int $ttlSeconds): void;
 
+    public function forget(string $runId): void;
+
     /**
      * @return iterable<int, SwarmStreamEvent>
      */

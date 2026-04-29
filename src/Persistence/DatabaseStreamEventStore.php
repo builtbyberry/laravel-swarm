@@ -35,6 +35,11 @@ class DatabaseStreamEventStore implements StreamEventStore
         ]);
     }
 
+    public function forget(string $runId): void
+    {
+        $this->table()->where('run_id', $runId)->delete();
+    }
+
     public function events(string $runId): iterable
     {
         foreach ($this->table()->where('run_id', $runId)->orderBy('id')->cursor() as $record) {
