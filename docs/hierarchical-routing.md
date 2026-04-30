@@ -114,7 +114,7 @@ Rules:
 - worker nodes used as branches may not define their own `next`
 - branch workers cannot depend on sibling branch outputs
 - in `prompt()`, branches execute concurrently
-- in `queue()`, branches execute sequentially in declaration order in v1
+- in `queue()`, with `swarm.queue.hierarchical_parallel.coordination` set to `in_process` (the default), branches execute sequentially in declaration order in v1
 
 ### Finish Nodes
 
@@ -287,11 +287,13 @@ Loops are intentionally unsupported in this release.
 ### `queue()`
 
 - the same validated plan is used
-- parallel groups execute sequentially in branch declaration order in v1
+- **Default (`in_process`):** parallel groups execute sequentially in branch declaration order in v1 (single worker owns the whole `InvokeSwarm` job).
+- **Optional (`multi_worker`):** when `swarm.queue.hierarchical_parallel.coordination` is `multi_worker` (or overridden per swarm with `#[QueuedHierarchicalParallelCoordination]`), parallel route nodes fan out to `AdvanceDurableBranch` jobs using the same branch tables, leases, and join protocol as durable hierarchical runs. The primary run history row moves to `waiting` with metadata `queue_hierarchical_waiting_parallel` until branches join; `ResumeQueuedHierarchicalSwarm` continues the plan. Requires **database-backed** persistence (context, artifacts, history, durable tables)—the same gate as `dispatchDurable()`.
 - branch metadata and history still record the plan as a parallel group so the
   runtime can evolve later without changing the plan contract
 - the plan is still validated with the same parallel-safe dependency rules as
   `prompt()`
+- parallel failure policy for coordinated segments follows `swarm.durable.parallel.failure_policy` / `#[DurableParallelFailurePolicy]` (same semantics as durable branches)
 
 ### `dispatchDurable()`
 
@@ -307,11 +309,14 @@ Loops are intentionally unsupported in this release.
   rows
 
 The three execution modes handle route-plan parallel groups differently:
-`prompt()` executes branch workers concurrently, `queue()` executes them
-sequentially in declaration order in v1, and `dispatchDurable()` creates branch
+`prompt()` executes branch workers concurrently; `queue()` uses sequential branch
+order when coordination is `in_process`, or coordinated multi-worker branches
+when coordination is `multi_worker`; `dispatchDurable()` always creates branch
 jobs with independent leases and a durable parent join. See
 [Durable Hierarchical Approval](../examples/durable-hierarchical-approval/README.md)
 for a durable branch fan-out example.
+
+**Pause:** while a coordinated `queue()` run is `waiting` on parallel branches, `swarm:pause` / `DurableSwarmManager::pause()` may pause the coordination row (same durable runtime surface as hierarchical durable waits). Resume dispatches `ResumeQueuedHierarchicalSwarm` when the join is ready, matching durable waiting semantics.
 
 ## History And Metadata
 

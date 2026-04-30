@@ -62,7 +62,7 @@ If your use case feels more like a reusable workflow than a single prompt, the r
 | Method | Returns | Use When |
 | --- | --- | --- |
 | `prompt()` | `SwarmResponse` | The request can wait for the full workflow result. |
-| `queue()` | `QueuedSwarmResponse` | One background job can comfortably own the whole workflow. |
+| `queue()` | `QueuedSwarmResponse` | One background job can comfortably own the whole workflow. For hierarchical swarms, optional `multi_worker` parallel coordination fans out parallel route nodes to branch jobs (database persistence required); see [Hierarchical Routing](docs/hierarchical-routing.md). |
 | `stream()` | `StreamableSwarmResponse` | A browser or client needs live progress from a sequential swarm. |
 | `broadcast()` / `broadcastNow()` | `StreamableSwarmResponse` | A sequential swarm should stream and broadcast typed stream events now. |
 | `broadcastOnQueue()` | `QueuedSwarmResponse` | A worker should stream a sequential swarm and broadcast typed stream events. |
@@ -525,10 +525,11 @@ class SupportRoutingSwarm implements Swarm
 
 The coordinator must implement Laravel AI structured output and return a plan
 with `start_at` and `nodes`. Worker nodes, parallel nodes, and finish nodes are
-supported. `prompt()` executes parallel groups concurrently. `queue()` executes
-parallel groups sequentially in declaration order in v1. `dispatchDurable()`
-uses durable branch jobs with independent leases, then joins after every branch
-is terminal. Plans are still validated with parallel-safe dependency rules, so
+supported. `prompt()` executes parallel groups concurrently. `queue()` uses
+sequential parallel branch order when `swarm.queue.hierarchical_parallel.coordination`
+is `in_process` (default), or multi-worker coordinated branches when set to
+`multi_worker`. `dispatchDurable()` uses durable branch jobs with independent
+leases for every checkpointed step, then joins after every branch is terminal. Plans are still validated with parallel-safe dependency rules, so
 branch nodes cannot depend on sibling branch outputs. Parallel groups must
 define `next` and join into a subsequent node before the workflow can finish.
 `#[MaxAgentSteps]` counts the coordinator plus each reachable worker node and
@@ -622,15 +623,17 @@ To customize how swarm state is stored, bind your own implementations against th
 
 ## Production Readiness Checklist
 
-- Choose the execution mode intentionally: `queue()` for one background job,
-  `dispatchDurable()` for checkpointed workflows.
+- Choose the execution mode intentionally: `queue()` for one background job
+  (or hierarchical `queue()` with `multi_worker` parallel coordination when you
+  want branch jobs without full durable checkpointing), `dispatchDurable()` for
+  checkpointed workflows.
 - Use database persistence for workflows that need history beyond cache TTLs,
   active-run pruning protection, or durable execution.
 - Run package migrations before enabling database-backed persistence.
 - Size queue worker timeouts and `retry_after` above the longest expected
   provider call; for durable swarms, size them above one durable step.
-- Schedule `swarm:recover` for durable execution and `swarm:prune` for
-  database retention cleanup.
+- Schedule `swarm:recover` for durable execution, coordinated queue hierarchical
+  parallel (`multi_worker`), and `swarm:prune` for database retention cleanup.
 - Review capture settings before running customer, compliance, or regulated
   data through swarms.
 - Build a run inspector or dashboard around `run_id`, lifecycle events,

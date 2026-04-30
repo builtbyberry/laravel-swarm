@@ -78,6 +78,8 @@ use Illuminate\Support\Facades\Schedule;
 Schedule::command('swarm:recover')->everyFiveMinutes();
 ```
 
+The same `swarm:recover` loop redispatches **coordinated queue hierarchical parallel** joins (`coordination_profile = queue_hierarchical_parallel` on `swarm_durable_runs`): stale `waiting` parents with terminal branch rows release to `pending` and enqueue `ResumeQueuedHierarchicalSwarm`, and branch rows are recovered the same way as durable parallel branches.
+
 `swarm:recover` is not a cleanup task like pruning. It is the safety net for
 durable runs that were checkpointed successfully but never dispatched their next
 step because a worker crashed or exited at the wrong moment. For durable

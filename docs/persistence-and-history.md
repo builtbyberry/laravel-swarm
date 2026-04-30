@@ -213,6 +213,11 @@ For queued runs, the database-backed history store uses lease-based ownership
 to guard against duplicate queue deliveries replaying the same swarm work while
 another worker still owns the run.
 
+Coordinated **queue hierarchical parallel** (`multi_worker`) uses the same lease
+fields while the primary history row is `waiting` and sets metadata
+`queue_hierarchical_waiting_parallel` until branches join; continuation uses
+`acquireQueuedRunContinuationLease` before `ResumeQueuedHierarchicalSwarm` runs.
+
 Durable execution also requires the database driver. Durable runtime state is
 stored separately from run history, but the public inspection surface remains
 the same history, context, and artifact records.

@@ -14,6 +14,8 @@ and advances one step per job.
 Use `queue()` when the swarm is short-lived and one job is still a comfortable
 fit for your workers and queue visibility settings.
 
+For **hierarchical** swarms only, you can opt into `swarm.queue.hierarchical_parallel.coordination = multi_worker` (or `#[QueuedHierarchicalParallelCoordination]`) so **parallel route nodes** fan out to separate queue jobs while sequential segments still run in `InvokeSwarm` / `ResumeQueuedHierarchicalSwarm` segments—without checkpointing every routed step like full `dispatchDurable()`. That path reuses durable branch tables, leases, join, cancel, and `swarm:recover`; lifecycle events keep `execution_mode: queue`. It requires database-backed persistence.
+
 Use `dispatchDurable()` when the workflow is long-running, production-critical,
 or more expensive to replay from the beginning:
 
