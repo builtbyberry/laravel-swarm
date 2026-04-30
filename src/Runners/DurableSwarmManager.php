@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RoutesDurableBranches;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
@@ -38,6 +39,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Carbon;
+use JsonException;
 use Laravel\Ai\Contracts\Agent;
 use Throwable;
 
@@ -118,6 +120,111 @@ class DurableSwarmManager
         });
     }
 
+    public function enterQueueHierarchicalParallelCoordination(SwarmExecutionState $state, QueueHierarchicalParallelBoundary $boundary): void
+    {
+        $swarm = $state->swarm;
+        $context = $state->context;
+        $runId = $context->runId;
+
+        if ($state->executionToken === null || $state->leaseSeconds === null) {
+            throw new SwarmException('Queued hierarchical coordination requires a queue execution token and lease.');
+        }
+
+        $stepTimeoutSeconds = (int) $this->config->get('swarm.durable.step_timeout', 300);
+        $orchestrationTimeout = (int) $this->config->get('swarm.timeout', 300);
+        $queueConnection = $this->config->get('swarm.queue.hierarchical_parallel.connection')
+            ?? $this->config->get('swarm.queue.connection');
+        $queueName = $this->config->get('swarm.queue.hierarchical_parallel.name')
+            ?? $this->config->get('swarm.queue.name');
+
+        $existing = $this->durableRuns->find($runId);
+
+        if ($existing === null) {
+            $this->durableRuns->create([
+                'run_id' => $runId,
+                'swarm_class' => $swarm::class,
+                'topology' => Topology::Hierarchical->value,
+                'execution_mode' => ExecutionMode::Queue->value,
+                'coordination_profile' => CoordinationProfile::QueueHierarchicalParallel->value,
+                'status' => 'pending',
+                'next_step_index' => 0,
+                'current_step_index' => null,
+                'total_steps' => $boundary->totalSteps,
+                'route_plan' => $this->encodeJsonForDurableInsert($boundary->routePlan),
+                'route_cursor' => $this->encodeJsonForDurableInsert($boundary->routeCursor),
+                'route_start_node_id' => $boundary->routeCursor['route_plan_start'] ?? null,
+                'current_node_id' => null,
+                'completed_node_ids' => null,
+                'node_states' => null,
+                'failure' => null,
+                'timeout_at' => now('UTC')->addSeconds($orchestrationTimeout),
+                'step_timeout_seconds' => $stepTimeoutSeconds,
+                'execution_token' => null,
+                'leased_until' => null,
+                'pause_requested_at' => null,
+                'cancel_requested_at' => null,
+                'queue_connection' => $queueConnection,
+                'queue_name' => $queueName,
+                'finished_at' => null,
+            ]);
+        } elseif (($existing['coordination_profile'] ?? CoordinationProfile::StepDurable->value) !== CoordinationProfile::QueueHierarchicalParallel->value) {
+            throw new SwarmException("Swarm run [{$runId}] already has a durable record that is not queued hierarchical coordination.");
+        }
+
+        $runRow = $this->requireRun($runId);
+
+        $token = $this->durableRuns->acquireLease($runId, (int) $runRow['next_step_index'], $this->validateStepTimeoutSeconds((int) $runRow['step_timeout_seconds']));
+
+        if ($token === null) {
+            throw new SwarmException("Unable to acquire coordination lease for queued hierarchical run [{$runId}].");
+        }
+
+        $branches = array_map(
+            fn (array $branch): array => $this->withBranchRouting($swarm, $context, $branch, $runRow),
+            $boundary->branchDefinitions,
+        );
+
+        $context->mergeMetadata([
+            'queue_hierarchical_waiting_parallel' => true,
+        ]);
+
+        $this->durableRuns->waitForBranches($runId, new BranchWaitPayload(
+            executionToken: $token,
+            nextStepIndex: $boundary->nextStepIndexAfterJoin,
+            parentNodeId: $boundary->parentParallelNodeId,
+            context: $this->capture->activeContext($context),
+            ttlSeconds: $this->ttlSeconds(),
+            routeCursor: $boundary->routeCursor,
+            routePlan: $boundary->routePlan,
+            totalSteps: $boundary->totalSteps,
+            branches: $branches,
+        ));
+
+        $this->historyStore->syncDurableState(
+            $runId,
+            'waiting',
+            $this->capture->context($context),
+            $context->metadata,
+            $this->ttlSeconds(),
+            false,
+            $state->executionToken,
+            $state->leaseSeconds,
+        );
+
+        $this->contextStore->put($this->capture->activeContext($context), $this->ttlSeconds());
+
+        $run = $this->requireRun($runId);
+
+        foreach ($this->durableRuns->branchesFor($runId, $boundary->parentParallelNodeId) as $branch) {
+            $this->dispatchBranchJob(
+                $runId,
+                (string) $branch['branch_id'],
+                $branch['queue_connection'] ?? $run['queue_connection'],
+                $branch['queue_name'] ?? $run['queue_name'],
+            );
+        }
+    }
+
     /**
      * @return array<string, mixed>|null
      */
@@ -157,7 +264,7 @@ class DurableSwarmManager
                 swarmClass: $updated['swarm_class'],
                 topology: $updated['topology'],
                 metadata: $context->metadata,
-                executionMode: ExecutionMode::Durable->value,
+                executionMode: $this->publicLifecycleExecutionMode($updated),
             ));
         }
 
@@ -196,7 +303,7 @@ class DurableSwarmManager
             swarmClass: $run['swarm_class'],
             topology: $run['topology'],
             metadata: $context->metadata,
-            executionMode: ExecutionMode::Durable->value,
+            executionMode: $this->publicLifecycleExecutionMode($updated),
         ));
 
         if (is_array($updated) && $updated['status'] === 'waiting') {
@@ -205,7 +312,9 @@ class DurableSwarmManager
             return true;
         }
 
-        $this->dispatchStepJob($runId, (int) ($updated['next_step_index'] ?? $run['next_step_index']), $run['queue_connection'], $run['queue_name']);
+        if (($updated['coordination_profile'] ?? CoordinationProfile::StepDurable->value) !== CoordinationProfile::QueueHierarchicalParallel->value) {
+            $this->dispatchStepJob($runId, (int) ($updated['next_step_index'] ?? $run['next_step_index']), $run['queue_connection'], $run['queue_name']);
+        }
 
         return true;
     }
@@ -247,7 +356,7 @@ class DurableSwarmManager
                 swarmClass: $updated['swarm_class'],
                 topology: $updated['topology'],
                 metadata: $context->metadata,
-                executionMode: ExecutionMode::Durable->value,
+                executionMode: $this->publicLifecycleExecutionMode($updated),
             ));
         }
 
@@ -294,8 +403,12 @@ class DurableSwarmManager
 
         foreach ($waitingJoins as $run) {
             if ($this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
-                $dispatch = $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
-                unset($dispatch);
+                if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
+                    $this->dispatchQueuedHierarchicalResume($run);
+                } else {
+                    $dispatch = $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+                    unset($dispatch);
+                }
 
                 $this->durableRuns->markRecoveryDispatched($run['run_id']);
             }
@@ -419,6 +532,7 @@ class DurableSwarmManager
             artifactRepository: $this->artifactRepository,
             historyStore: $this->historyStore,
             events: $this->events,
+            queueHierarchicalParallelCoordination: null,
         );
 
         $hierarchicalResult = null;
@@ -672,6 +786,7 @@ class DurableSwarmManager
             artifactRepository: $this->artifactRepository,
             historyStore: $this->historyStore,
             events: $this->events,
+            queueHierarchicalParallelCoordination: null,
         );
 
         $startedAt = MonotonicTime::now();
@@ -879,7 +994,11 @@ class DurableSwarmManager
 
         if ($this->branchesAreTerminal($branches)) {
             if ($this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
-                $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+                if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
+                    $this->dispatchQueuedHierarchicalResume($run);
+                } else {
+                    $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+                }
             }
 
             return;
@@ -961,7 +1080,7 @@ class DurableSwarmManager
             exception: $this->capture->failureException($exception),
             durationMs: $this->durationMillisecondsFor($run['run_id']),
             metadata: $context->metadata,
-            executionMode: ExecutionMode::Durable->value,
+            executionMode: $this->publicLifecycleExecutionMode($run),
             exceptionClass: $exception::class,
         ));
     }
@@ -1048,21 +1167,57 @@ class DurableSwarmManager
     }
 
     /**
+     * Public lifecycle events keep `execution_mode: queue` for coordinated queued hierarchical runs.
+     *
+     * @param  array<string, mixed>  $run
+     */
+    protected function publicLifecycleExecutionMode(array $run): string
+    {
+        if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
+            return ExecutionMode::Queue->value;
+        }
+
+        return ExecutionMode::Durable->value;
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     */
+    protected function dispatchQueuedHierarchicalResume(array $run): void
+    {
+        $connection = $this->config->get('swarm.queue.hierarchical_parallel.resume.connection')
+            ?? ($run['queue_connection'] ?? null);
+        $queue = $this->config->get('swarm.queue.hierarchical_parallel.resume.name')
+            ?? ($run['queue_name'] ?? null);
+        $dispatch = QueuedHierarchicalCoordinator::dispatchResume($run['run_id'], $connection, $queue);
+        unset($dispatch);
+    }
+
+    /**
      * @param  array<string, mixed>  $branch
      * @param  array<string, mixed>  $run
      * @return array<string, mixed>
      */
     protected function withBranchRouting(Swarm $swarm, RunContext $context, array $branch, array $run): array
     {
-        $connection = $this->config->get('swarm.durable.parallel.queue.connection');
-        $queue = $this->config->get('swarm.durable.parallel.queue.name');
+        if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
+            $connection = $this->config->get('swarm.queue.hierarchical_parallel.branch.connection')
+                ?? $this->config->get('swarm.queue.hierarchical_parallel.connection')
+                ?? $this->config->get('swarm.queue.connection');
+            $queue = $this->config->get('swarm.queue.hierarchical_parallel.branch.name')
+                ?? $this->config->get('swarm.queue.hierarchical_parallel.name')
+                ?? $this->config->get('swarm.queue.name');
+        } else {
+            $connection = $this->config->get('swarm.durable.parallel.queue.connection');
+            $queue = $this->config->get('swarm.durable.parallel.queue.name');
 
-        if ($connection === null) {
-            $connection = $run['queue_connection'];
-        }
+            if ($connection === null) {
+                $connection = $run['queue_connection'];
+            }
 
-        if ($queue === null) {
-            $queue = $run['queue_name'];
+            if ($queue === null) {
+                $queue = $run['queue_name'];
+            }
         }
 
         if ($swarm instanceof RoutesDurableBranches) {
@@ -1084,6 +1239,18 @@ class DurableSwarmManager
         }
 
         $this->artifactRepository->storeMany($runId, $step->artifacts, $this->ttlSeconds());
+    }
+
+    /**
+     * @param  array<string, mixed>|list<mixed>  $value
+     */
+    protected function encodeJsonForDurableInsert(array $value): string
+    {
+        try {
+            return json_encode($value, JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
+            throw new SwarmException('Failed to encode coordination payload for durable insert.', previous: $exception);
+        }
     }
 
     protected function requireRun(string $runId): array

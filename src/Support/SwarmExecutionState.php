@@ -30,5 +30,10 @@ class SwarmExecutionState
         public readonly ArtifactRepository $artifactRepository,
         public readonly RunHistoryStore $historyStore,
         public readonly Dispatcher $events,
+        /**
+         * When set to `multi_worker` for hierarchical `queue()`, parallel route nodes use
+         * coordinated branch jobs instead of in-process execution.
+         */
+        public readonly ?string $queueHierarchicalParallelCoordination = null,
     ) {}
 }

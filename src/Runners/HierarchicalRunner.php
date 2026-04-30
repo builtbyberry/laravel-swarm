@@ -73,19 +73,324 @@ class HierarchicalRunner
         $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorStep->output, $state->swarm::class);
         $this->ensurePlanWithinExecutionBudget($state, $plan);
 
+        $deferral = null;
         $finalOutput = $this->executePlan(
-            state: $state,
-            plan: $plan,
-            workerMap: $workerMap,
-            steps: $steps,
-            mergedUsage: $mergedUsage,
-            executedNodeIds: $executedNodeIds,
-            executedAgentClasses: $executedAgentClasses,
-            parallelGroups: $parallelGroups,
-            nodeOutputs: $nodeOutputs,
-            nextIndex: $nextIndex,
+            $state,
+            $plan,
+            $coordinator::class,
+            $workerMap,
+            $steps,
+            $mergedUsage,
+            $executedNodeIds,
+            $executedAgentClasses,
+            $parallelGroups,
+            $nodeOutputs,
+            $nextIndex,
+            $deferral,
+            null,
         );
 
+        $state->context
+            ->mergeData([
+                'last_output' => $finalOutput,
+                'steps' => count($steps),
+                'hierarchical_node_outputs' => $nodeOutputs,
+            ])
+            ->mergeMetadata([
+                'topology' => $state->topology->value,
+                'coordinator_agent_class' => $coordinator::class,
+                'route_plan_start' => $plan->startAt,
+                'executed_node_ids' => $executedNodeIds,
+                'executed_agent_classes' => $executedAgentClasses,
+                'parallel_groups' => $parallelGroups,
+                'executed_steps' => count($steps),
+                'execution_mode' => $state->executionMode->value,
+            ]);
+
+        $state->contextStore->put($this->capture->activeContext($state->context), $state->ttlSeconds);
+
+        return new SwarmResponse(
+            output: $finalOutput,
+            steps: $steps,
+            usage: $mergedUsage,
+            context: $state->context,
+            artifacts: $state->context->artifacts,
+            metadata: [
+                'run_id' => $state->context->runId,
+                'topology' => $state->topology->value,
+                'coordinator_agent_class' => $coordinator::class,
+                'route_plan_start' => $plan->startAt,
+                'executed_node_ids' => $executedNodeIds,
+                'executed_agent_classes' => $executedAgentClasses,
+                'parallel_groups' => $parallelGroups,
+                'executed_steps' => count($steps),
+                'execution_mode' => $state->executionMode->value,
+            ],
+        );
+    }
+
+    /**
+     * Queued hierarchical execution with multi-worker parallel route segments.
+     * Returns a boundary when the plan reaches a parallel node; otherwise returns the completed response.
+     */
+    public function runQueuedWithCoordination(SwarmExecutionState $state): SwarmResponse|QueueHierarchicalParallelBoundary
+    {
+        $agents = $state->swarm->agents();
+
+        if ($agents === []) {
+            throw new SwarmException('Hierarchical swarms must define at least one agent.');
+        }
+
+        /** @var Agent $coordinator */
+        $coordinator = array_shift($agents);
+        $this->planner->assertCoordinatorCanPlan($coordinator);
+        $this->ensureUniqueWorkerClasses($state->swarm::class, $agents);
+        $workerMap = $this->workerMap($agents);
+
+        $steps = [];
+        $mergedUsage = [];
+        $executedNodeIds = [];
+        $executedAgentClasses = [];
+        $parallelGroups = [];
+        $nodeOutputs = [];
+        $nextIndex = 1;
+
+        $coordinatorStep = $this->executeAgent(
+            state: $state,
+            agent: $coordinator,
+            input: $state->context->input,
+            index: 0,
+            metadata: ['node_role' => 'coordinator'],
+        );
+
+        $steps[] = $coordinatorStep;
+        $mergedUsage = $this->mergeUsage($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
+
+        $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorStep->output, $state->swarm::class);
+        $this->ensurePlanWithinExecutionBudget($state, $plan);
+
+        $deferral = null;
+        $finalOutput = $this->executePlan(
+            $state,
+            $plan,
+            $coordinator::class,
+            $workerMap,
+            $steps,
+            $mergedUsage,
+            $executedNodeIds,
+            $executedAgentClasses,
+            $parallelGroups,
+            $nodeOutputs,
+            $nextIndex,
+            $deferral,
+            null,
+        );
+
+        if ($deferral instanceof QueueHierarchicalParallelBoundary) {
+            return $deferral;
+        }
+
+        $state->context
+            ->mergeData([
+                'last_output' => $finalOutput,
+                'steps' => count($steps),
+                'hierarchical_node_outputs' => $nodeOutputs,
+            ])
+            ->mergeMetadata([
+                'topology' => $state->topology->value,
+                'coordinator_agent_class' => $coordinator::class,
+                'route_plan_start' => $plan->startAt,
+                'executed_node_ids' => $executedNodeIds,
+                'executed_agent_classes' => $executedAgentClasses,
+                'parallel_groups' => $parallelGroups,
+                'executed_steps' => count($steps),
+                'execution_mode' => $state->executionMode->value,
+            ]);
+
+        $state->contextStore->put($this->capture->activeContext($state->context), $state->ttlSeconds);
+
+        return new SwarmResponse(
+            output: $finalOutput,
+            steps: $steps,
+            usage: $mergedUsage,
+            context: $state->context,
+            artifacts: $state->context->artifacts,
+            metadata: [
+                'run_id' => $state->context->runId,
+                'topology' => $state->topology->value,
+                'coordinator_agent_class' => $coordinator::class,
+                'route_plan_start' => $plan->startAt,
+                'executed_node_ids' => $executedNodeIds,
+                'executed_agent_classes' => $executedAgentClasses,
+                'parallel_groups' => $parallelGroups,
+                'executed_steps' => count($steps),
+                'execution_mode' => $state->executionMode->value,
+            ],
+        );
+    }
+
+    /**
+     * Resume a queued hierarchical run after coordinated parallel branches join.
+     *
+     * @param  array<string, mixed>  $durableRun
+     */
+    public function continueQueuedAfterParallelJoin(SwarmExecutionState $state, array $durableRun): SwarmResponse|QueueHierarchicalParallelBoundary
+    {
+        $agents = $state->swarm->agents();
+
+        if ($agents === []) {
+            throw new SwarmException('Hierarchical swarms must define at least one agent.');
+        }
+
+        /** @var Agent $coordinator */
+        $coordinator = array_shift($agents);
+        $this->planner->assertCoordinatorCanPlan($coordinator);
+        $this->ensureUniqueWorkerClasses($state->swarm::class, $agents);
+        $workerMap = $this->workerMap($agents);
+
+        $planPayload = $durableRun['route_plan'] ?? null;
+        if (! is_array($planPayload)) {
+            throw new SwarmException("Queued hierarchical coordination run [{$state->context->runId}] is missing its route plan.");
+        }
+        $plan = HierarchicalRoutePlan::fromArray($planPayload);
+        $cursor = $this->durableCursor($state, $durableRun);
+        $parentNodeId = (string) ($durableRun['current_node_id'] ?? '');
+
+        if ($parentNodeId === '' || ! ($plan->node($parentNodeId) instanceof HierarchicalParallelNode)) {
+            throw new SwarmException('Queued hierarchical resume requires a valid parallel parent node id on the coordination run.');
+        }
+
+        /** @var HierarchicalParallelNode $parallel */
+        $parallel = $plan->node($parentNodeId);
+        $branches = $this->durableRuns->branchesFor($state->context->runId, $parallel->id);
+
+        if (! $this->branchesAreTerminal($branches)) {
+            throw new SwarmException('Queued hierarchical resume invoked before parallel branches are terminal.');
+        }
+
+        $nodeOutputs = $this->durableNodeOutputsForCursor($state, $plan, $cursor);
+        foreach ($branches as $branch) {
+            if (($branch['status'] ?? null) === 'completed' && is_string($branch['node_id'] ?? null) && is_string($branch['output'] ?? null)) {
+                $nodeOutputs[$branch['node_id']] = $branch['output'];
+            }
+        }
+
+        $cursor['executed_node_ids'][] = $parallel->id;
+        $cursor['completed_node_ids'][] = $parallel->id;
+        $cursor['parallel_groups'][] = ['node_id' => $parallel->id, 'branches' => $parallel->branches];
+        foreach ($branches as $branch) {
+            if (($branch['status'] ?? null) !== 'completed') {
+                continue;
+            }
+
+            if (is_string($branch['node_id'] ?? null)) {
+                $cursor['executed_node_ids'][] = $branch['node_id'];
+                $cursor['completed_node_ids'][] = $branch['node_id'];
+            }
+
+            if (is_string($branch['agent_class'] ?? null)) {
+                $cursor['executed_agent_classes'][] = $branch['agent_class'];
+            }
+        }
+        $cursor['offset'] += 1 + count($parallel->branches);
+
+        $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
+        $this->applyDurableCursorToContext($state, $cursor);
+
+        $steps = [];
+        $history = $state->historyStore->find($state->context->runId);
+        $priorStepCount = 0;
+        if (is_array($history) && isset($history['steps']) && is_array($history['steps'])) {
+            $priorStepCount = count($history['steps']);
+        }
+
+        $mergedUsage = is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [];
+        $executedNodeIds = is_array($state->context->metadata['executed_node_ids'] ?? null) ? $state->context->metadata['executed_node_ids'] : [];
+        $executedAgentClasses = is_array($state->context->metadata['executed_agent_classes'] ?? null) ? $state->context->metadata['executed_agent_classes'] : [];
+        $parallelGroups = is_array($state->context->metadata['parallel_groups'] ?? null) ? $state->context->metadata['parallel_groups'] : [];
+        $nodeOutputs = is_array($state->context->data['hierarchical_node_outputs'] ?? null)
+            ? $state->context->data['hierarchical_node_outputs']
+            : $nodeOutputs;
+        $nextIndex = $priorStepCount;
+
+        $deferral = null;
+        $currentNodeId = $cursor['current_node_id'] !== null ? (string) $cursor['current_node_id'] : null;
+
+        if ($currentNodeId === null && $this->isDurableCursorComplete($cursor)) {
+            $finalOutput = (string) ($cursor['final_output'] ?? $state->context->data['last_output'] ?? '');
+
+            return $this->finalizeQueuedHierarchicalResponse(
+                $state,
+                $plan,
+                $coordinator,
+                $steps,
+                $mergedUsage,
+                $executedNodeIds,
+                $executedAgentClasses,
+                $parallelGroups,
+                $nodeOutputs,
+                $finalOutput,
+            );
+        }
+
+        if ($currentNodeId === null) {
+            throw new SwarmException('Queued hierarchical resume reached an unexpected cursor state.');
+        }
+
+        $finalOutput = $this->executePlan(
+            $state,
+            $plan,
+            $coordinator::class,
+            $workerMap,
+            $steps,
+            $mergedUsage,
+            $executedNodeIds,
+            $executedAgentClasses,
+            $parallelGroups,
+            $nodeOutputs,
+            $nextIndex,
+            $deferral,
+            $currentNodeId,
+        );
+
+        if ($deferral instanceof QueueHierarchicalParallelBoundary) {
+            return $deferral;
+        }
+
+        return $this->finalizeQueuedHierarchicalResponse(
+            $state,
+            $plan,
+            $coordinator,
+            $steps,
+            $mergedUsage,
+            $executedNodeIds,
+            $executedAgentClasses,
+            $parallelGroups,
+            $nodeOutputs,
+            $finalOutput,
+        );
+    }
+
+    /**
+     * @param  array<int, SwarmStep>  $steps
+     * @param  array<string, int>  $mergedUsage
+     * @param  array<int, string>  $executedNodeIds
+     * @param  array<int, string>  $executedAgentClasses
+     * @param  array<int, array{node_id: string, branches: array<int, string>}>  $parallelGroups
+     * @param  array<string, string>  $nodeOutputs
+     */
+    protected function finalizeQueuedHierarchicalResponse(
+        SwarmExecutionState $state,
+        HierarchicalRoutePlan $plan,
+        Agent $coordinator,
+        array $steps,
+        array $mergedUsage,
+        array $executedNodeIds,
+        array $executedAgentClasses,
+        array $parallelGroups,
+        array $nodeOutputs,
+        string $finalOutput,
+    ): SwarmResponse {
         $state->context
             ->mergeData([
                 'last_output' => $finalOutput,
@@ -322,6 +627,7 @@ class HierarchicalRunner
     protected function executePlan(
         SwarmExecutionState $state,
         HierarchicalRoutePlan $plan,
+        string $coordinatorClass,
         array $workerMap,
         array &$steps,
         array &$mergedUsage,
@@ -330,8 +636,10 @@ class HierarchicalRunner
         array &$parallelGroups,
         array &$nodeOutputs,
         int &$nextIndex,
+        ?QueueHierarchicalParallelBoundary &$deferral = null,
+        ?string $startNodeId = null,
     ): string {
-        $currentNodeId = $plan->startAt;
+        $currentNodeId = $startNodeId ?? $plan->startAt;
         $lastOutput = null;
 
         while ($currentNodeId !== null) {
@@ -361,6 +669,47 @@ class HierarchicalRunner
 
             if ($node instanceof HierarchicalParallelNode) {
                 $parallelGroups[] = ['node_id' => $node->id, 'branches' => $node->branches];
+
+                if ($state->executionMode === ExecutionMode::Queue && $state->queueHierarchicalParallelCoordination === 'multi_worker') {
+                    $routeCursor = $this->cursorAtQueueParallelBoundary($state, $plan, $coordinatorClass, $node, $nodeOutputs);
+                    $branchDefinitions = [];
+
+                    foreach ($node->branches as $ordinal => $branchNodeId) {
+                        /** @var HierarchicalWorkerNode $branch */
+                        $branch = $plan->node($branchNodeId);
+                        $input = $this->composePrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
+                        $branchDefinitions[] = [
+                            'branch_id' => $node->id.':'.$branch->id,
+                            'step_index' => $nextIndex + $ordinal,
+                            'node_id' => $branch->id,
+                            'agent_class' => $branch->agentClass,
+                            'parent_node_id' => $node->id,
+                            'input' => $input,
+                            'metadata' => array_merge($branch->metadata, [
+                                'node_id' => $branch->id,
+                                'parent_parallel_node_id' => $node->id,
+                            ]),
+                        ];
+                    }
+
+                    $deferral = new QueueHierarchicalParallelBoundary(
+                        parentParallelNodeId: $node->id,
+                        branchDefinitions: $branchDefinitions,
+                        routeCursor: $routeCursor,
+                        routePlan: $plan->toArray(),
+                        nextStepIndexAfterJoin: $nextIndex + count($node->branches),
+                        totalSteps: (int) $routeCursor['total_steps'],
+                        stepsSoFar: array_values($steps),
+                        mergedUsage: $mergedUsage,
+                        executedNodeIds: $executedNodeIds,
+                        executedAgentClasses: $executedAgentClasses,
+                        parallelGroups: $parallelGroups,
+                        nodeOutputs: $nodeOutputs,
+                        coordinatorClass: $coordinatorClass,
+                    );
+
+                    return '';
+                }
 
                 if ($state->executionMode === ExecutionMode::Queue) {
                     foreach ($node->branches as $branchNodeId) {
@@ -478,6 +827,66 @@ class HierarchicalRunner
         }
 
         return $lastOutput ?? '';
+    }
+
+    /**
+     * Build a durable-style route cursor positioned at a parallel node before branch rows exist.
+     *
+     * @param  array<string, string>  $nodeOutputs
+     * @return array<string, mixed>
+     */
+    protected function cursorAtQueueParallelBoundary(
+        SwarmExecutionState $state,
+        HierarchicalRoutePlan $plan,
+        string $coordinatorClass,
+        HierarchicalParallelNode $parallel,
+        array $nodeOutputs,
+    ): array {
+        $cursor = $this->buildDurableCursor($plan, $coordinatorClass);
+
+        while (isset($cursor['entries'][$cursor['offset']])) {
+            $entry = $cursor['entries'][$cursor['offset']];
+
+            if (($entry['type'] ?? null) === 'parallel' && ($entry['node_id'] ?? null) === $parallel->id) {
+                $cursor['current_node_id'] = $parallel->id;
+
+                return $cursor;
+            }
+
+            if (($entry['type'] ?? null) === 'worker') {
+                $workerId = (string) ($entry['node_id'] ?? '');
+                $cursor['executed_node_ids'][] = $workerId;
+                $cursor['completed_node_ids'][] = $workerId;
+                $workerNode = $plan->node($workerId);
+
+                if ($workerNode instanceof HierarchicalWorkerNode) {
+                    $cursor['executed_agent_classes'][] = $workerNode->agentClass;
+                }
+
+                $cursor['offset']++;
+
+                continue;
+            }
+
+            if (($entry['type'] ?? null) === 'finish') {
+                $finishNode = $plan->node((string) ($entry['node_id'] ?? ''));
+                $cursor['executed_node_ids'][] = $finishNode->id;
+                $cursor['completed_node_ids'][] = $finishNode->id;
+
+                if ($finishNode instanceof HierarchicalFinishNode) {
+                    $cursor['final_output'] = $finishNode->output ?? $this->resolveOutputFromNode($finishNode, $nodeOutputs);
+                    $state->context->mergeData(['last_output' => $cursor['final_output']]);
+                }
+
+                $cursor['offset']++;
+
+                continue;
+            }
+
+            $cursor['offset']++;
+        }
+
+        throw new SwarmException('Hierarchical route plan for swarm ['.$state->swarm::class.'] did not reach parallel node ['.$parallel->id.'] while aligning coordination cursor.');
     }
 
     protected function ensurePlanWithinExecutionBudget(SwarmExecutionState $state, HierarchicalRoutePlan $plan): void

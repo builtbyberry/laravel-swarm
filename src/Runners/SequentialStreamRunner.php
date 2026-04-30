@@ -81,6 +81,7 @@ class SequentialStreamRunner
             artifactRepository: $this->artifactRepository,
             historyStore: $this->historyStore,
             events: $this->events,
+            queueHierarchicalParallelCoordination: null,
         );
 
         $startedAt = null;

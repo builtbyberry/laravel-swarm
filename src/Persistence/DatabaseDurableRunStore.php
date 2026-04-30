@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
@@ -48,6 +49,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             'swarm_class' => $record->swarm_class,
             'topology' => $record->topology,
             'execution_mode' => $record->execution_mode ?? 'durable',
+            'coordination_profile' => $record->coordination_profile ?? CoordinationProfile::StepDurable->value,
             'status' => $record->status,
             'next_step_index' => (int) $record->next_step_index,
             'current_step_index' => $record->current_step_index !== null ? (int) $record->current_step_index : null,
@@ -95,6 +97,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             'swarm_class',
             'topology',
             'execution_mode',
+            'coordination_profile',
             'status',
             'next_step_index',
             'current_step_index',
@@ -772,6 +775,7 @@ class DatabaseDurableRunStore implements DurableRunStore
         $query = $this->table()
             ->whereIn('status', ['pending', 'running'])
             ->whereNull('finished_at')
+            ->where('coordination_profile', '!=', CoordinationProfile::QueueHierarchicalParallel->value)
             ->where('updated_at', '<=', $threshold)
             ->where(function ($query) use ($now): void {
                 $query->whereNull('leased_until')

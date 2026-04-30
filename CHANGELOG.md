@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- **Coordinated hierarchical parallel for `queue()`:** optional
+  `swarm.queue.hierarchical_parallel.coordination` (`in_process` default,
+  `multi_worker` opt-in) and `#[QueuedHierarchicalParallelCoordination]` for
+  per-swarm overrides. Multi-worker mode reuses durable branch storage, leases,
+  join, `AdvanceDurableBranch`, `ResumeQueuedHierarchicalSwarm`, cancel, and
+  `swarm:recover`; public lifecycle metadata stays `execution_mode: queue`.
+- Migration adding `coordination_profile` to `swarm_durable_runs` (indexed;
+  default `step_durable`) plus `CoordinationProfile` enum.
+- `ClaimsQueuedRunExecution::acquireQueuedRunContinuationLease()` for resuming
+  the primary history lease after a parallel join.
+
+### Changed
+
+- `DatabaseDurableRunStore::recoverable()` excludes
+  `queue_hierarchical_parallel` coordination rows so recovery does not dispatch
+  `AdvanceDurableSwarm` for queue-only coordination parents.
+
 ## v0.1.9 - 2026-04-29
 
 ### Added

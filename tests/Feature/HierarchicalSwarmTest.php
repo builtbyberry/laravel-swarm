@@ -566,7 +566,7 @@ test('queued hierarchical execution honors the validated plan contract', functio
     expect($history['metadata']['executed_node_ids'])->toBe(['writer_node', 'editor_node']);
 });
 
-test('queued hierarchical parallel groups run sequentially in branch declaration order', function () {
+test('queued hierarchical parallel groups run sequentially when coordination is in_process (default)', function () {
     FakeHierarchicalCoordinator::fake([
         hierarchicalPlan('parallel_node', [
             'parallel_node' => [

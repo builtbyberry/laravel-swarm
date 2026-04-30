@@ -100,6 +100,41 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         return QueuedRunAcquisition::duplicateRunning();
     }
 
+    public function acquireQueuedRunContinuationLease(string $runId, int $ttlSeconds, int $leaseSeconds): QueuedRunAcquisition
+    {
+        $this->assertQueueLeaseColumnsPresent();
+        $timestamp = Carbon::now('UTC');
+        $executionToken = RunContext::newRunId();
+
+        return $this->connection->transaction(function () use ($runId, $ttlSeconds, $leaseSeconds, $timestamp, $executionToken): QueuedRunAcquisition {
+            /** @var object|null $record */
+            $record = $this->table()->where('run_id', $runId)->lockForUpdate()->first();
+
+            if ($record === null || ($record->status ?? null) !== 'waiting') {
+                return QueuedRunAcquisition::duplicateRunning();
+            }
+
+            $metadata = $this->decodeJson($record->metadata ?? null, []);
+
+            if (! ($metadata['queue_hierarchical_waiting_parallel'] ?? false)) {
+                return QueuedRunAcquisition::duplicateRunning();
+            }
+
+            $metadata['queue_hierarchical_waiting_parallel'] = false;
+
+            $this->table()->where('run_id', $runId)->update([
+                'status' => 'running',
+                'execution_token' => $executionToken,
+                'leased_until' => $timestamp->copy()->addSeconds($leaseSeconds),
+                'metadata' => $this->encodeJson($metadata),
+                'updated_at' => $timestamp,
+                'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+            ]);
+
+            return QueuedRunAcquisition::fresh($executionToken);
+        });
+    }
+
     public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
         if ($this->hasNormalizedStepTable()) {

@@ -104,6 +104,7 @@ function makeStepRecorderState(?callable $verifyOwnership = null): array
         artifactRepository: $artifacts,
         historyStore: $history,
         events: app('events'),
+        queueHierarchicalParallelCoordination: null,
     );
 
     return [$state, $history, $contextStore, $artifacts];

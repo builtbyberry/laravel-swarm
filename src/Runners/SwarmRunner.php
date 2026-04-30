@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
@@ -67,6 +68,7 @@ class SwarmRunner
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
         protected SwarmAttributeResolver $resolver,
+        protected QueuedHierarchicalCoordinator $queuedHierarchicalCoordinator,
     ) {}
 
     public function run(Swarm $swarm, string|array|RunContext $task): SwarmResponse
@@ -98,6 +100,19 @@ class SwarmRunner
             'topology' => $topology->value,
         ]);
 
+        $queueHierarchicalCoord = null;
+
+        if ($executionMode === ExecutionMode::Queue && $topology === Topology::Hierarchical) {
+            $queueHierarchicalCoord = $this->resolver->resolveQueueHierarchicalParallelCoordination($swarm);
+
+            if ($queueHierarchicalCoord === 'multi_worker') {
+                $this->ensureDatabaseDurableInfrastructure();
+                $context->mergeMetadata([
+                    'durable_parallel_failure_policy' => $this->resolver->resolveDurableParallelFailurePolicy($swarm)->value,
+                ]);
+            }
+        }
+
         $state = new SwarmExecutionState(
             swarm: $swarm,
             topology: $topology,
@@ -113,6 +128,7 @@ class SwarmRunner
             artifactRepository: $this->artifactRepository,
             historyStore: $this->historyStore,
             events: $this->events,
+            queueHierarchicalParallelCoordination: $queueHierarchicalCoord,
         );
 
         if ($executionMode === ExecutionMode::Queue && $this->historyStore instanceof ClaimsQueuedRunExecution) {
@@ -145,6 +161,7 @@ class SwarmRunner
                 artifactRepository: $this->artifactRepository,
                 historyStore: $this->historyStore,
                 events: $this->events,
+                queueHierarchicalParallelCoordination: $queueHierarchicalCoord,
             );
         } else {
             $this->historyStore->start($context->runId, $swarm::class, $topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
@@ -164,7 +181,9 @@ class SwarmRunner
             $response = match ($topology) {
                 Topology::Sequential => $this->sequential->run($state),
                 Topology::Parallel => $this->parallel->run($state),
-                Topology::Hierarchical => $this->hierarchical->run($state),
+                Topology::Hierarchical => ($executionMode === ExecutionMode::Queue && $queueHierarchicalCoord === 'multi_worker')
+                    ? $this->queuedHierarchicalCoordinator->runInvokeSegment($state)
+                    : $this->hierarchical->run($state),
             };
         } catch (LostSwarmLeaseException) {
             return null;
@@ -189,6 +208,10 @@ class SwarmRunner
             ));
 
             throw $exception;
+        }
+
+        if ($response === null) {
+            return null;
         }
 
         $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
@@ -370,6 +393,10 @@ class SwarmRunner
 
         if ($topology === Topology::Hierarchical) {
             $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
+
+            if ($this->resolver->resolveQueueHierarchicalParallelCoordination($swarm) === 'multi_worker') {
+                $this->ensureDatabaseDurableInfrastructure();
+            }
         }
     }
 
@@ -476,5 +503,150 @@ class SwarmRunner
                 previous: $exception,
             );
         }
+    }
+
+    public function resumeQueuedHierarchicalAfterJoin(string $runId): ?SwarmResponse
+    {
+        $startedAt = MonotonicTime::now();
+        $durableRun = $this->durableRuns->find($runId);
+
+        if ($durableRun === null || (($durableRun['coordination_profile'] ?? '') !== CoordinationProfile::QueueHierarchicalParallel->value)) {
+            return null;
+        }
+
+        if (! $this->historyStore instanceof ClaimsQueuedRunExecution) {
+            return null;
+        }
+
+        $swarm = Container::getInstance()->make($durableRun['swarm_class']);
+
+        if (! $swarm instanceof Swarm) {
+            throw new SwarmException("Unable to resolve queued hierarchical swarm [{$durableRun['swarm_class']}] from the container.");
+        }
+
+        $payload = $this->contextStore->find($runId);
+
+        if ($payload === null) {
+            throw new SwarmException("Swarm run [{$runId}] is missing persisted context.");
+        }
+
+        $context = RunContext::fromPayload($payload);
+        $topology = Topology::Hierarchical;
+        $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);
+        $maxAgentExecutions = $this->resolver->resolveMaxAgentExecutions($swarm);
+        $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
+        $queueLeaseSeconds = $this->resolveQueueLeaseSeconds($timeoutSeconds);
+        $acquisition = $this->historyStore->acquireQueuedRunContinuationLease($runId, $contextTtl, $queueLeaseSeconds);
+
+        if (! $acquisition->acquired()) {
+            return null;
+        }
+
+        $state = new SwarmExecutionState(
+            swarm: $swarm,
+            topology: $topology,
+            executionMode: ExecutionMode::Queue,
+            deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
+            maxAgentExecutions: $maxAgentExecutions,
+            ttlSeconds: $contextTtl,
+            leaseSeconds: $queueLeaseSeconds,
+            executionToken: $acquisition->executionToken,
+            verifyOwnership: null,
+            context: $context,
+            contextStore: $this->contextStore,
+            artifactRepository: $this->artifactRepository,
+            historyStore: $this->historyStore,
+            events: $this->events,
+            queueHierarchicalParallelCoordination: 'multi_worker',
+        );
+
+        try {
+            $outcome = $this->hierarchical->continueQueuedAfterParallelJoin($state, $durableRun);
+        } catch (LostSwarmLeaseException) {
+            return null;
+        } catch (Throwable $exception) {
+            try {
+                $this->historyStore->fail($context->runId, $exception, $contextTtl, $state->executionToken, $state->leaseSeconds);
+            } catch (LostSwarmLeaseException) {
+                return null;
+            }
+
+            $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
+            $this->maybeFailCoordinationRunFromException($runId, $exception);
+
+            $this->events->dispatch(new SwarmFailed(
+                runId: $context->runId,
+                swarmClass: $swarm::class,
+                topology: $topology->value,
+                exception: $this->capture->failureException($exception),
+                durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
+                metadata: $context->metadata,
+                executionMode: ExecutionMode::Queue->value,
+                exceptionClass: $exception::class,
+            ));
+
+            throw $exception;
+        }
+
+        if ($outcome instanceof QueueHierarchicalParallelBoundary) {
+            $this->durable->enterQueueHierarchicalParallelCoordination($state, $outcome);
+
+            return null;
+        }
+
+        $fresh = $this->durableRuns->find($runId);
+
+        if ($fresh !== null) {
+            $stepTimeout = max(1, (int) ($fresh['step_timeout_seconds'] ?? 300));
+            $durToken = $this->durableRuns->acquireLease($runId, (int) $fresh['next_step_index'], $stepTimeout);
+
+            if ($durToken !== null) {
+                $this->durableRuns->markCompleted($runId, $durToken);
+            }
+        }
+
+        $response = $this->normalizeCompletionResponse($outcome, $context, $topology->value);
+        $capturedResponse = $this->limits->response($this->capture->response($response));
+
+        try {
+            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
+        } catch (LostSwarmLeaseException) {
+            return null;
+        }
+
+        $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
+        $this->events->dispatch(new SwarmCompleted(
+            runId: $context->runId,
+            swarmClass: $swarm::class,
+            topology: $topology->value,
+            output: $capturedResponse->output,
+            durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
+            metadata: $capturedResponse->metadata,
+            artifacts: $capturedResponse->artifacts,
+            executionMode: ExecutionMode::Queue->value,
+        ));
+
+        return $response;
+    }
+
+    protected function maybeFailCoordinationRunFromException(string $runId, Throwable $exception): void
+    {
+        $fresh = $this->durableRuns->find($runId);
+
+        if ($fresh === null || (($fresh['coordination_profile'] ?? '') !== CoordinationProfile::QueueHierarchicalParallel->value)) {
+            return;
+        }
+
+        $stepTimeout = max(1, (int) ($fresh['step_timeout_seconds'] ?? 300));
+        $durToken = $this->durableRuns->acquireLease($runId, (int) $fresh['next_step_index'], $stepTimeout);
+
+        if ($durToken === null) {
+            return;
+        }
+
+        $this->durableRuns->markFailed($runId, $durToken, [
+            'message' => $this->capture->failureMessage($exception),
+            'class' => $exception::class,
+        ]);
     }
 }

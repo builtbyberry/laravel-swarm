@@ -64,6 +64,23 @@ return [
     'queue' => [
         'connection' => env('SWARM_QUEUE_CONNECTION'),
         'name' => env('SWARM_QUEUE'),
+        /*
+         * Hierarchical swarms dispatched with queue() can coordinate parallel route nodes across workers
+         * when coordination is multi_worker (requires database-backed persistence and durable tables).
+         */
+        'hierarchical_parallel' => [
+            'coordination' => env('SWARM_QUEUE_HIERARCHICAL_PARALLEL_COORDINATION', 'in_process'),
+            'connection' => env('SWARM_QUEUE_HIERARCHICAL_PARALLEL_CONNECTION'),
+            'name' => env('SWARM_QUEUE_HIERARCHICAL_PARALLEL_NAME'),
+            'branch' => [
+                'connection' => env('SWARM_QUEUE_HIERARCHICAL_PARALLEL_BRANCH_CONNECTION'),
+                'name' => env('SWARM_QUEUE_HIERARCHICAL_PARALLEL_BRANCH_NAME'),
+            ],
+            'resume' => [
+                'connection' => env('SWARM_QUEUE_HIERARCHICAL_PARALLEL_RESUME_CONNECTION'),
+                'name' => env('SWARM_QUEUE_HIERARCHICAL_PARALLEL_RESUME_NAME'),
+            ],
+        ],
     ],
 
     'durable' => [

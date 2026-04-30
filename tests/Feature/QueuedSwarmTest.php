@@ -50,6 +50,11 @@ class LeaseStealingQueuedRunHistoryStore implements ClaimsQueuedRunExecution, Ru
         return $this->inner->acquireQueuedRun($runId, $swarmClass, $topology, $context, $metadata, $ttlSeconds, $leaseSeconds);
     }
 
+    public function acquireQueuedRunContinuationLease(string $runId, int $ttlSeconds, int $leaseSeconds): QueuedRunAcquisition
+    {
+        return $this->inner->acquireQueuedRunContinuationLease($runId, $ttlSeconds, $leaseSeconds);
+    }
+
     public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void
     {
         $this->inner->start($runId, $swarmClass, $topology, $context, $metadata, $ttlSeconds);

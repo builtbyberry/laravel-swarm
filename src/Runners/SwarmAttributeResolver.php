@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Attributes\DurableParallelFailurePolicy as DurableParallelFailurePolicyAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\MaxAgentSteps as MaxAgentStepsAttribute;
+use BuiltByBerry\LaravelSwarm\Attributes\QueuedHierarchicalParallelCoordination as QueuedHierarchicalParallelCoordinationAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Timeout as TimeoutAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
@@ -74,6 +75,33 @@ class SwarmAttributeResolver
         }
 
         return $steps;
+    }
+
+    /**
+     * @return 'in_process'|'multi_worker'
+     */
+    public function resolveQueueHierarchicalParallelCoordination(Swarm $swarm): string
+    {
+        $reflection = new ReflectionClass($swarm);
+        $attributes = $reflection->getAttributes(QueuedHierarchicalParallelCoordinationAttribute::class);
+
+        if ($attributes !== []) {
+            $value = $attributes[0]->newInstance()->coordination;
+
+            if (! in_array($value, ['in_process', 'multi_worker'], true)) {
+                throw new SwarmException("Invalid queued hierarchical parallel coordination [{$value}]. Supported values: in_process, multi_worker.");
+            }
+
+            return $value;
+        }
+
+        $configured = (string) $this->config->get('swarm.queue.hierarchical_parallel.coordination', 'in_process');
+
+        if (! in_array($configured, ['in_process', 'multi_worker'], true)) {
+            throw new SwarmException("Invalid swarm.queue.hierarchical_parallel.coordination [{$configured}]. Supported values: in_process, multi_worker.");
+        }
+
+        return $configured;
     }
 
     public function resolveDurableParallelFailurePolicy(Swarm $swarm): DurableParallelFailurePolicy
