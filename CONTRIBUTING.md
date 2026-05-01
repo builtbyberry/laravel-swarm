@@ -95,6 +95,10 @@ refactor is needed, keep it incremental and preserve existing behavior first.
 Before a release tag, the maintainer should verify:
 
 - `composer test`, `composer lint`, and `composer analyse` pass.
+- Before **widening** the `laravel/ai` version range in this package’s
+  `composer.json`, the proposed constraint has been exercised (for example
+  `composer update laravel/ai` or a temporary constraint) and representative
+  swarm paths have been smoke-tested; note outcomes in the PR or release notes.
 - Dependency updates to PHP, Laravel, or `laravel/ai` have been smoke-tested
   against representative swarm paths.
 - `CHANGELOG.md` includes added, changed, fixed, and breaking notes as needed.

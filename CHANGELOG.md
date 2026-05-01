@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.11 - 2026-05-01
+
+### Documentation
+
+- Added [UPGRADING.md](UPGRADING.md) with Laravel AI upgrade flow, application-level
+  pinning, and Composer stability notes.
+- Expanded [README.md](README.md) installation guidance on pre-stable `laravel/ai`,
+  `minimum-stability` / `prefer-stable`, and links to `UPGRADING.md`.
+- Clarified [CONTRIBUTING.md](CONTRIBUTING.md) release discipline: smoke-test
+  `laravel/ai` updates before widening its semver range in package `composer.json`.
+
 ## v0.1.10 - 2026-05-01
 
 ### Documentation
