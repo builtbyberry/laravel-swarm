@@ -654,6 +654,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->join($durableTable.' as runs', 'branches.run_id', '=', 'runs.run_id')
             ->whereIn('branches.status', ['pending', 'running'])
             ->where('branches.updated_at', '<=', $threshold)
+            ->whereNull('branches.next_retry_at')
             ->where(function ($query) use ($now): void {
                 $query->whereNull('branches.leased_until')
                     ->orWhere('branches.leased_until', '<', $now);
@@ -876,6 +877,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->whereIn('status', ['pending', 'running'])
             ->whereNull('finished_at')
             ->where('coordination_profile', '!=', CoordinationProfile::QueueHierarchicalParallel->value)
+            ->whereNull('next_retry_at')
             ->where('updated_at', '<=', $threshold)
             ->where(function ($query) use ($now): void {
                 $query->whereNull('leased_until')
@@ -957,6 +959,52 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->update([
                 'recovery_count' => $this->connection->raw('recovery_count + 1'),
                 'last_recovered_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+    }
+
+    public function markRetryRecoveryDispatched(string $runId): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->table()
+            ->where('run_id', $runId)
+            ->where('status', 'pending')
+            ->whereNull('finished_at')
+            ->whereNull('leased_until')
+            ->update([
+                'next_retry_at' => null,
+                'recovery_count' => $this->connection->raw('recovery_count + 1'),
+                'last_recovered_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+    }
+
+    public function markBranchRecoveryDispatched(string $runId, string $branchId): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->branchTable()
+            ->where('run_id', $runId)
+            ->where('branch_id', $branchId)
+            ->whereIn('status', ['pending', 'running'])
+            ->whereNull('next_retry_at')
+            ->update([
+                'updated_at' => $timestamp,
+            ]);
+    }
+
+    public function markBranchRetryRecoveryDispatched(string $runId, string $branchId): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->branchTable()
+            ->where('run_id', $runId)
+            ->where('branch_id', $branchId)
+            ->where('status', 'pending')
+            ->whereNull('leased_until')
+            ->update([
+                'next_retry_at' => null,
                 'updated_at' => $timestamp,
             ]);
     }
@@ -1155,13 +1203,7 @@ class DatabaseDurableRunStore implements DurableRunStore
                 'updated_at' => $timestamp,
             ]);
 
-            $this->table()->where('run_id', $runId)->whereNull('finished_at')->update([
-                'status' => 'waiting',
-                'wait_reason' => $reason,
-                'waiting_since' => $timestamp,
-                'wait_timeout_at' => $timeoutAt,
-                'updated_at' => $timestamp,
-            ]);
+            $this->syncRunWaitSummary($runId, $timestamp);
         });
     }
 
@@ -1192,17 +1234,7 @@ class DatabaseDurableRunStore implements DurableRunStore
                 'updated_at' => $timestamp,
             ]);
 
-            $this->table()
-                ->where('run_id', $runId)
-                ->where('status', 'waiting')
-                ->whereNull('finished_at')
-                ->update([
-                    'status' => 'pending',
-                    'wait_reason' => null,
-                    'waiting_since' => null,
-                    'wait_timeout_at' => null,
-                    'updated_at' => $timestamp,
-                ]);
+            $this->syncRunWaitSummary($runId, $timestamp);
 
             return true;
         });
@@ -1238,17 +1270,7 @@ class DatabaseDurableRunStore implements DurableRunStore
                 return false;
             }
 
-            $this->table()
-                ->where('run_id', $runId)
-                ->where('status', 'waiting')
-                ->whereNull('finished_at')
-                ->update([
-                    'status' => 'pending',
-                    'wait_reason' => null,
-                    'waiting_since' => null,
-                    'wait_timeout_at' => null,
-                    'updated_at' => $timestamp,
-                ]);
+            $this->syncRunWaitSummary($runId, $timestamp);
 
             return true;
         });
@@ -1275,6 +1297,58 @@ class DatabaseDurableRunStore implements DurableRunStore
         return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
     }
 
+    public function recoverableTimedOutWaits(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
+    {
+        $now = Carbon::now('UTC');
+        $waitTable = (string) $this->config->get('swarm.tables.durable_waits', 'swarm_durable_waits');
+        $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+
+        $query = $this->connection->table($waitTable.' as waits')
+            ->join($durableTable.' as runs', 'waits.run_id', '=', 'runs.run_id')
+            ->where('waits.status', 'waiting')
+            ->whereNotNull('waits.timeout_at')
+            ->where('waits.timeout_at', '<=', $now)
+            ->where('runs.status', 'waiting')
+            ->whereNull('runs.finished_at')
+            ->orderBy('waits.timeout_at')
+            ->limit($limit)
+            ->select([
+                'waits.run_id',
+                'waits.name as wait_name',
+                'waits.timeout_at',
+                'runs.swarm_class',
+                'runs.topology',
+                'runs.execution_mode',
+                'runs.coordination_profile',
+                'runs.next_step_index',
+                'runs.queue_connection',
+                'runs.queue_name',
+            ]);
+
+        if ($runId !== null) {
+            $query->where('waits.run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('runs.swarm_class', $swarmClass);
+        }
+
+        return $query->get()
+            ->map(fn (object $record): array => [
+                'run_id' => $record->run_id,
+                'wait_name' => $record->wait_name,
+                'timeout_at' => $record->timeout_at,
+                'swarm_class' => $record->swarm_class,
+                'topology' => $record->topology,
+                'execution_mode' => $record->execution_mode ?? 'durable',
+                'coordination_profile' => $record->coordination_profile ?? CoordinationProfile::StepDurable->value,
+                'next_step_index' => (int) $record->next_step_index,
+                'queue_connection' => $record->queue_connection,
+                'queue_name' => $record->queue_name,
+            ])
+            ->all();
+    }
+
     public function releaseTimedOutWait(string $runId, string $name): bool
     {
         $timestamp = Carbon::now('UTC');
@@ -1296,17 +1370,7 @@ class DatabaseDurableRunStore implements DurableRunStore
                 return false;
             }
 
-            $this->table()
-                ->where('run_id', $runId)
-                ->where('status', 'waiting')
-                ->whereNull('finished_at')
-                ->update([
-                    'status' => 'pending',
-                    'wait_reason' => null,
-                    'waiting_since' => null,
-                    'wait_timeout_at' => null,
-                    'updated_at' => $timestamp,
-                ]);
+            $this->syncRunWaitSummary($runId, $timestamp);
 
             return true;
         });
@@ -1654,6 +1718,51 @@ class DatabaseDurableRunStore implements DurableRunStore
         if ($updated === 0) {
             throw new LostDurableLeaseException("Durable branch [{$branchId}] for run [{$runId}] no longer owns the execution lease.");
         }
+    }
+
+    protected function syncRunWaitSummary(string $runId, Carbon $timestamp): void
+    {
+        /** @var object|null $latestOpenWait */
+        $latestOpenWait = $this->waitTable()
+            ->where('run_id', $runId)
+            ->where('status', 'waiting')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($latestOpenWait === null) {
+            $this->table()
+                ->where('run_id', $runId)
+                ->where('status', 'waiting')
+                ->whereNull('finished_at')
+                ->update([
+                    'status' => 'pending',
+                    'wait_reason' => null,
+                    'waiting_since' => null,
+                    'wait_timeout_at' => null,
+                    'updated_at' => $timestamp,
+                ]);
+
+            return;
+        }
+
+        /** @var object|null $nextTimedWait */
+        $nextTimedWait = $this->waitTable()
+            ->where('run_id', $runId)
+            ->where('status', 'waiting')
+            ->whereNotNull('timeout_at')
+            ->orderBy('timeout_at')
+            ->first();
+
+        $this->table()
+            ->where('run_id', $runId)
+            ->whereNull('finished_at')
+            ->update([
+                'status' => 'waiting',
+                'wait_reason' => $latestOpenWait->reason ?? null,
+                'waiting_since' => $latestOpenWait->created_at,
+                'wait_timeout_at' => $nextTimedWait->timeout_at ?? null,
+                'updated_at' => $timestamp,
+            ]);
     }
 
     /**

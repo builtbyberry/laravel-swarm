@@ -145,6 +145,12 @@ interface DurableRunStore
 
     public function markRecoveryDispatched(string $runId): void;
 
+    public function markRetryRecoveryDispatched(string $runId): void;
+
+    public function markBranchRecoveryDispatched(string $runId, string $branchId): void;
+
+    public function markBranchRetryRecoveryDispatched(string $runId, string $branchId): void;
+
     public function updateQueueRouting(string $runId, ?string $connection, ?string $queue): void;
 
     /**
@@ -204,6 +210,11 @@ interface DurableRunStore
      * @return array<int, array<string, mixed>>
      */
     public function recoverableWaitTimeouts(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function recoverableTimedOutWaits(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;
 
     public function releaseTimedOutWait(string $runId, string $name): bool;
 

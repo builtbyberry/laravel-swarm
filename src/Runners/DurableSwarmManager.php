@@ -401,7 +401,7 @@ class DurableSwarmManager
             topology: $run['topology'],
             waitName: $name,
             reason: $reason,
-            metadata: $context->metadata,
+            metadata: $this->capturedEventMetadata($context),
             executionMode: $this->publicLifecycleExecutionMode($run),
         ));
     }
@@ -471,7 +471,7 @@ class DurableSwarmManager
             $parentContext->mergeMetadata(['durable_dispatched_child_swarms' => $dispatched]);
 
             $this->durableRuns->createWait($parentRunId, $waitName, $reason, null, $metadata);
-            $this->durableRuns->createChildRun($parentRunId, $childContext->runId, $childSwarmClass, $waitName, $childContext->toArray());
+            $this->durableRuns->createChildRun($parentRunId, $childContext->runId, $childSwarmClass, $waitName, $this->capture->context($childContext)->toArray());
             $this->contextStore->put($this->capture->activeContext($parentContext), $this->ttlSeconds());
             $this->historyStore->syncDurableState($parentRunId, 'waiting', $this->capture->context($parentContext), $parentContext->metadata, $this->ttlSeconds(), false);
         });
@@ -517,7 +517,7 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $updated['swarm_class'],
                 topology: $updated['topology'],
-                metadata: $context->metadata,
+                metadata: $this->capturedEventMetadata($context),
                 executionMode: $this->publicLifecycleExecutionMode($updated),
             ));
         }
@@ -556,7 +556,7 @@ class DurableSwarmManager
             runId: $runId,
             swarmClass: $run['swarm_class'],
             topology: $run['topology'],
-            metadata: $context->metadata,
+            metadata: $this->capturedEventMetadata($context),
             executionMode: $this->publicLifecycleExecutionMode($updated),
         ));
 
@@ -611,7 +611,7 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $updated['swarm_class'],
                 topology: $updated['topology'],
-                metadata: $context->metadata,
+                metadata: $this->capturedEventMetadata($context),
                 executionMode: $this->publicLifecycleExecutionMode($updated),
             ));
         }
@@ -648,6 +648,7 @@ class DurableSwarmManager
         foreach ($branches as $branch) {
             $dispatch = $this->dispatchBranchJob($branch['run_id'], $branch['branch_id'], $branch['queue_connection'], $branch['queue_name']);
             unset($dispatch);
+            $this->durableRuns->markBranchRecoveryDispatched($branch['run_id'], $branch['branch_id']);
         }
 
         $dueRetryRuns = $this->durableRuns->dueRetries(
@@ -659,6 +660,7 @@ class DurableSwarmManager
         foreach ($dueRetryRuns as $run) {
             $dispatch = $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
             unset($dispatch);
+            $this->durableRuns->markRetryRecoveryDispatched($run['run_id']);
         }
 
         $dueRetryBranches = $this->durableRuns->dueRetryBranches(
@@ -670,6 +672,7 @@ class DurableSwarmManager
         foreach ($dueRetryBranches as $branch) {
             $dispatch = $this->dispatchBranchJob($branch['run_id'], $branch['branch_id'], $branch['queue_connection'], $branch['queue_name']);
             unset($dispatch);
+            $this->durableRuns->markBranchRetryRecoveryDispatched($branch['run_id'], $branch['branch_id']);
         }
 
         $waitingJoins = $this->durableRuns->recoverableWaitingJoins(
@@ -692,33 +695,37 @@ class DurableSwarmManager
             }
         }
 
-        $timedOutWaits = $this->durableRuns->recoverableWaitTimeouts(
+        $timedOutWaits = $this->durableRuns->recoverableTimedOutWaits(
             runId: $runId,
             swarmClass: $swarmClass,
             limit: $limit,
         );
 
-        foreach ($timedOutWaits as $run) {
-            $waitName = $this->latestWaitingName($run['run_id']);
+        foreach ($timedOutWaits as $wait) {
+            $waitName = (string) $wait['wait_name'];
 
-            if ($waitName !== null && $this->durableRuns->releaseTimedOutWait($run['run_id'], $waitName)) {
-                $context = $this->loadContext($run['run_id']);
+            if ($this->durableRuns->releaseTimedOutWait($wait['run_id'], $waitName)) {
+                $updated = $this->requireRun($wait['run_id']);
+                $context = $this->loadContext($wait['run_id']);
                 $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
                 $outcomes[$waitName] = ['status' => 'timed_out', 'payload' => null, 'timed_out' => true];
                 $context->mergeMetadata(['durable_wait_outcomes' => $outcomes]);
                 $this->contextStore->put($this->capture->activeContext($context), $this->ttlSeconds());
-                $this->historyStore->syncDurableState($run['run_id'], 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
+                $this->historyStore->syncDurableState($wait['run_id'], $updated['status'], $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
 
                 $this->events->dispatch(new SwarmWaitTimedOut(
-                    runId: $run['run_id'],
-                    swarmClass: $run['swarm_class'],
-                    topology: $run['topology'],
+                    runId: $wait['run_id'],
+                    swarmClass: $wait['swarm_class'],
+                    topology: $wait['topology'],
                     waitName: $waitName,
-                    executionMode: $this->publicLifecycleExecutionMode($run),
+                    executionMode: $this->publicLifecycleExecutionMode($wait),
                 ));
 
-                $dispatch = $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
-                unset($dispatch);
+                if ($updated['status'] === 'pending') {
+                    $dispatch = $this->dispatchStepJob($wait['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                    unset($dispatch);
+                    $this->durableRuns->markRecoveryDispatched($wait['run_id']);
+                }
             }
         }
 
@@ -815,7 +822,7 @@ class DurableSwarmManager
                 topology: $run['topology'],
                 exception: $this->capture->failureException($exception),
                 durationMs: $this->durationMillisecondsFor($runId),
-                metadata: $context->metadata,
+                metadata: $this->capturedEventMetadata($context),
                 executionMode: ExecutionMode::Durable->value,
                 exceptionClass: $exception::class,
             ));
@@ -834,7 +841,7 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                metadata: $context->metadata,
+                metadata: $this->capturedEventMetadata($context),
                 executionMode: ExecutionMode::Durable->value,
             ));
 
@@ -858,7 +865,7 @@ class DurableSwarmManager
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
                 input: $this->capture->input($context->input),
-                metadata: $context->metadata,
+                metadata: $this->capturedEventMetadata($context),
                 executionMode: ExecutionMode::Durable->value,
             ));
         }
@@ -924,7 +931,7 @@ class DurableSwarmManager
                 topology: $run['topology'],
                 exception: $this->capture->failureException($exception),
                 durationMs: $this->durationMillisecondsFor($runId),
-                metadata: $context->metadata,
+                metadata: $this->capturedEventMetadata($context),
                 executionMode: ExecutionMode::Durable->value,
                 exceptionClass: $exception::class,
             ));
@@ -943,7 +950,7 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                metadata: $context->metadata,
+                metadata: $this->capturedEventMetadata($context),
                 executionMode: ExecutionMode::Durable->value,
             ));
 
@@ -960,7 +967,7 @@ class DurableSwarmManager
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                metadata: $context->metadata,
+                metadata: $this->capturedEventMetadata($context),
                 executionMode: ExecutionMode::Durable->value,
             ));
 
@@ -1298,6 +1305,7 @@ class DurableSwarmManager
 
         $capturedResponse = $this->limits->response($this->capture->response($response));
         $this->recorder->complete($state->context->runId, $token, $state->context, $capturedResponse, $stepLeaseSeconds);
+        $this->markChildTerminalIfNeeded($state->context->runId, 'completed', $capturedResponse->output, null);
         $this->events->dispatch(new SwarmCompleted(
             runId: $state->context->runId,
             swarmClass: $run['swarm_class'],
@@ -1438,13 +1446,17 @@ class DurableSwarmManager
         ]);
 
         $this->recorder->fail($run['run_id'], $token, $exception, $context, $stepLeaseSeconds);
+        $this->markChildTerminalIfNeeded($run['run_id'], 'failed', null, [
+            'message' => $this->capture->failureMessage($exception),
+            'class' => $exception::class,
+        ]);
         $this->events->dispatch(new SwarmFailed(
             runId: $run['run_id'],
             swarmClass: $run['swarm_class'],
             topology: $run['topology'],
             exception: $this->capture->failureException($exception),
             durationMs: $this->durationMillisecondsFor($run['run_id']),
-            metadata: $context->metadata,
+            metadata: $this->capturedEventMetadata($context),
             executionMode: $this->publicLifecycleExecutionMode($run),
             exceptionClass: $exception::class,
         ));
@@ -1999,6 +2011,16 @@ class DurableSwarmManager
         }
 
         return SwarmCapture::REDACTED;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function capturedEventMetadata(RunContext $context): array
+    {
+        $metadata = $this->durablePayload($context->metadata);
+
+        return is_array($metadata) ? $metadata : [];
     }
 
     /**
