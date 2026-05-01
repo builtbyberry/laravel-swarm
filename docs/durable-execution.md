@@ -185,6 +185,41 @@ hierarchical durable run completes, fails, or is cancelled. Terminal history,
 context, and durable failure metadata follow the normal capture and redaction
 settings.
 
+## Operational queries at scale
+
+Operator dashboards and high-volume list views should filter and sort using
+**typed columns** on `swarm_durable_runs` and **satellite tables** (labels,
+waits, signals, progress, child runs, branches), not SQL predicates on JSON
+paths inside the main durable row.
+
+Laravel Swarm’s recovery, retry, and join helpers query only typed fields. For
+your own dashboards, treat these as the supported operational dimensions:
+
+- **Identity and classification:** `run_id`, `swarm_class`, `topology`,
+  `execution_mode`, `coordination_profile`
+- **Lifecycle:** `status`, `finished_at`, `created_at`, `updated_at`
+- **Steps and hierarchy:** `next_step_index`, `current_step_index`, `total_steps`,
+  `current_node_id`, `route_start_node_id`, `parent_run_id`
+- **Leases and retries:** `leased_until`, `lease_acquired_at`, `execution_token`,
+  `attempts`, `next_retry_at`, `retry_attempt`, `recovery_count`, `last_recovered_at`
+- **Timeouts and waits:** `timeout_at`, `step_timeout_seconds`, `timed_out_at`,
+  `wait_reason`, `waiting_since`, `wait_timeout_at`, `last_progress_at`
+- **Queue routing:** `queue_connection`, `queue_name`
+- **Pause and cancel:** `pause_requested_at`, `paused_at`, `resumed_at`,
+  `cancel_requested_at`, `cancelled_at`
+- **Labels:** query `swarm_durable_labels` by `key` and the typed value columns
+  (`value_string`, `value_integer`, `value_float`, `value_boolean`, `value_type`)
+
+JSON columns on `swarm_durable_runs` (`route_plan`, `route_cursor`,
+`completed_node_ids`, `node_states`, `failure`, `retry_policy`) hold checkpoint
+state. Load them **after** narrowing by `run_id` or the filters above—for
+example when hydrating a detail view—not as the primary `WHERE` clause across a
+large table.
+
+For listing finished work, prefer **run history** (`SwarmHistory` /
+`swarm_run_histories`) and combine it with durable tables when you need live
+runtime fields.
+
 ## Pause, Resume, Cancel, And Recover
 
 Laravel Swarm includes operator commands for durable runs:

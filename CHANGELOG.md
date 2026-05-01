@@ -11,6 +11,9 @@
 
 ### Documentation
 
+- Documented durable operational query surfaces at scale: typed columns and
+  satellite tables vs JSON checkpoint columns (`docs/durable-execution.md`), plus
+  high-volume dashboard guidance in `docs/maintenance.md`.
 - Clarified that swarm persistence is operational (mutable / pruneable), not an
   immutable compliance archive; documented dry-run, prevent-prune, and audit-sink
   guidance in `docs/maintenance.md`, `docs/persistence-and-history.md`, and the

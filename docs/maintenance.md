@@ -122,6 +122,18 @@ jobs, but very long-running workflows may still outgrow the practical limits of
 a single queued job. For those workflows, use `dispatchDurable()` instead of
 stretching `queue()` beyond what one job should own.
 
+## High-volume dashboards
+
+Swarm database tables are sized for operational throughput. List and aggregation
+queries should use **run history** plus **typed durable columns** and
+**satellite tables** (labels, waits, signals, progress, child runs, branches).
+Avoid driving dashboards from SQL filters or sorts on arbitrary JSON paths in
+`swarm_durable_runs`; that pattern scales poorly and fights indexing.
+
+See [Operational queries at scale](durable-execution.md#operational-queries-at-scale)
+in `docs/durable-execution.md` for the fields the package treats as safe
+operational predicates.
+
 ## Production Checklist
 
 For production database persistence:
