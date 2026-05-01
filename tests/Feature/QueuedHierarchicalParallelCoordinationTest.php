@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
@@ -14,12 +15,15 @@ use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FailingPromptAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 
 function configureQueuedHierarchicalParallelRuntime(): void
 {
@@ -39,6 +43,34 @@ function configureQueuedHierarchicalParallelRuntime(): void
     app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(QueuedHierarchicalCoordinator::class);
     app()->forgetInstance(DurableSwarmManager::class);
+}
+
+function qhpcParallelPlanWithFailingBranch(): array
+{
+    return [
+        'start_at' => 'parallel_node',
+        'nodes' => [
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['writer_node', 'failing_node'],
+                'next' => 'finish_node',
+            ],
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-branch',
+            ],
+            'failing_node' => [
+                'type' => 'worker',
+                'agent' => FailingPromptAgent::class,
+                'prompt' => 'failing-branch',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'writer_node',
+            ],
+        ],
+    ];
 }
 
 function qhpcParallelPlan(): array
@@ -145,6 +177,33 @@ test('swarm recover releases a stale coordinated queue hierarchical waiting join
     (new ResumeQueuedHierarchicalSwarm($runId))->handle(app(QueuedHierarchicalCoordinator::class));
 
     expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
+});
+
+test('queued hierarchical parallel multi_worker fail_run fails primary run when a branch worker throws', function () {
+    Event::fake([SwarmFailed::class]);
+    config()->set('swarm.durable.parallel.failure_policy', 'fail_run');
+
+    FakeHierarchicalCoordinator::fake([qhpcParallelPlanWithFailingBranch()]);
+    FakeWriter::fake(['writer-out']);
+
+    $runId = 'qhpc-fail-run-1';
+    $context = RunContext::from('queued-hierarchical-task', $runId);
+    (new InvokeSwarm(FakeHierarchicalParallelFailBranchSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+
+    expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('waiting');
+
+    $manager = app(DurableSwarmManager::class);
+    $failingBranch = DB::table('swarm_durable_branches')->where('run_id', $runId)->where('agent_class', FailingPromptAgent::class)->first();
+    expect($failingBranch)->not->toBeNull();
+
+    (new AdvanceDurableBranch($runId, (string) $failingBranch->branch_id))->handle($manager);
+
+    $history = app(RunHistoryStore::class)->find($runId);
+    expect($history['status'])->toBe('failed');
+
+    expect($manager->find($runId)['status'])->toBe('failed');
+
+    Event::assertDispatched(SwarmFailed::class, fn (SwarmFailed $event): bool => $event->executionMode === 'queue');
 });
 
 test('queued hierarchical parallel multi_worker can be cancelled while waiting on branches', function () {
