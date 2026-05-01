@@ -251,6 +251,61 @@ trait Runnable
         $resolved->assertNeverDispatchedDurably();
     }
 
+    public static function assertDurableSignalled(string|callable $name): void
+    {
+        $resolved = static::resolvedFakeForDurableAssertion('assertDurableSignalled');
+        $resolved->assertDurableSignalled($name);
+    }
+
+    public static function assertDurableWaited(string|callable $name): void
+    {
+        $resolved = static::resolvedFakeForDurableAssertion('assertDurableWaited');
+        $resolved->assertDurableWaited($name);
+    }
+
+    public static function assertDurableProgressRecorded(array|callable $progress): void
+    {
+        $resolved = static::resolvedFakeForDurableAssertion('assertDurableProgressRecorded');
+        $resolved->assertDurableProgressRecorded($progress);
+    }
+
+    public static function assertDurableLabels(array|callable $labels): void
+    {
+        $resolved = static::resolvedFakeForDurableAssertion('assertDurableLabels');
+        $resolved->assertDurableLabels($labels);
+    }
+
+    public static function assertDurableDetails(array|callable $details): void
+    {
+        $resolved = static::resolvedFakeForDurableAssertion('assertDurableDetails');
+        $resolved->assertDurableDetails($details);
+    }
+
+    public static function assertDurableRetryScheduled(array|callable $policy): void
+    {
+        $resolved = static::resolvedFakeForDurableAssertion('assertDurableRetryScheduled');
+        $resolved->assertDurableRetryScheduled($policy);
+    }
+
+    public static function assertDurableChildSwarmDispatched(string|callable $childSwarmClass): void
+    {
+        $resolved = static::resolvedFakeForDurableAssertion('assertDurableChildSwarmDispatched');
+        $resolved->assertDurableChildSwarmDispatched($childSwarmClass);
+    }
+
+    protected static function resolvedFakeForDurableAssertion(string $assertion): SwarmFakeInstance
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            "The expected swarm was not faked before calling {$assertion}().",
+        );
+
+        return $resolved;
+    }
+
     /**
      * Assert the swarm was streamed with the given task.
      */

@@ -99,6 +99,19 @@ return [
         'recovery' => [
             'grace_seconds' => (int) env('SWARM_DURABLE_RECOVERY_GRACE_SECONDS', 300),
         ],
+        'webhooks' => [
+            'enabled' => env('SWARM_WEBHOOKS_ENABLED', false),
+            'prefix' => env('SWARM_WEBHOOKS_PREFIX', 'swarm/webhooks'),
+            'auth' => [
+                'driver' => env('SWARM_WEBHOOK_AUTH_DRIVER', 'signed'),
+                'secret' => env('SWARM_WEBHOOK_SECRET'),
+                'token' => env('SWARM_WEBHOOK_TOKEN'),
+                'signature_header' => env('SWARM_WEBHOOK_SIGNATURE_HEADER', 'X-Swarm-Signature'),
+                'timestamp_header' => env('SWARM_WEBHOOK_TIMESTAMP_HEADER', 'X-Swarm-Timestamp'),
+                'tolerance_seconds' => (int) env('SWARM_WEBHOOK_TOLERANCE_SECONDS', 300),
+                'callback' => env('SWARM_WEBHOOK_AUTH_CALLBACK'),
+            ],
+        ],
     ],
 
     // These table names are honored by the database repositories at runtime.
@@ -112,5 +125,12 @@ return [
         'durable' => env('SWARM_DURABLE_RUNS_TABLE', 'swarm_durable_runs'),
         'durable_node_outputs' => env('SWARM_DURABLE_NODE_OUTPUTS_TABLE', 'swarm_durable_node_outputs'),
         'durable_branches' => env('SWARM_DURABLE_BRANCHES_TABLE', 'swarm_durable_branches'),
+        'durable_signals' => env('SWARM_DURABLE_SIGNALS_TABLE', 'swarm_durable_signals'),
+        'durable_waits' => env('SWARM_DURABLE_WAITS_TABLE', 'swarm_durable_waits'),
+        'durable_labels' => env('SWARM_DURABLE_LABELS_TABLE', 'swarm_durable_labels'),
+        'durable_details' => env('SWARM_DURABLE_DETAILS_TABLE', 'swarm_durable_details'),
+        'durable_progress' => env('SWARM_DURABLE_PROGRESS_TABLE', 'swarm_durable_progress'),
+        'durable_child_runs' => env('SWARM_DURABLE_CHILD_RUNS_TABLE', 'swarm_durable_child_runs'),
+        'durable_webhook_idempotency' => env('SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE', 'swarm_durable_webhook_idempotency'),
     ],
 ];

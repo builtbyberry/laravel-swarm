@@ -8,10 +8,13 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
+use BuiltByBerry\LaravelSwarm\Events\SwarmChildCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
+use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
+use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
@@ -31,10 +34,14 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
+use BuiltByBerry\LaravelSwarm\Support\SwarmWebhooks;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyDurableAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ChildDispatchingSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableWaitAttributeSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalLimitedSwarm;
@@ -43,6 +50,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelPartialSuccessSw
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRoutedParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RetryableDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RetryableParallelDurableSwarm;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Database\Schema\Builder;
 use Illuminate\Foundation\Bus\PendingDispatch;
@@ -1855,4 +1864,473 @@ test('duplicate durable step jobs do not double run a step', function () {
 
     FakeWriter::assertPrompted('research-out');
     expect(app(SwarmHistory::class)->find($runId)['steps'])->toHaveCount(3);
+});
+
+test('durable runs persist labels details and inspection records', function () {
+    $context = RunContext::from('durable-task')
+        ->withLabels(['tenant' => 'acme', 'priority' => 2, 'reviewed' => false])
+        ->withDetails(['document' => ['id' => 'doc-1']]);
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable($context);
+    $detail = app(DurableSwarmManager::class)->inspect($response->runId);
+
+    expect($detail->labels)->toMatchArray([
+        'tenant' => 'acme',
+        'priority' => 2,
+        'reviewed' => false,
+    ])->and($detail->details)->toMatchArray([
+        'document' => ['id' => 'doc-1'],
+    ]);
+});
+
+test('durable waits accept idempotent signals and release the run', function () {
+    Event::fake([
+        SwarmWaiting::class,
+        SwarmSignalled::class,
+    ]);
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $manager = app(DurableSwarmManager::class);
+
+    $manager->wait($response->runId, 'approval_received', 'Waiting for approval', 3600);
+    expect($manager->find($response->runId)['status'])->toBe('waiting');
+
+    $first = $response->signal('approval_received', ['approved' => true], 'approval-1');
+    $second = $response->signal('approval_received', ['approved' => true], 'approval-1');
+    $detail = $manager->inspect($response->runId);
+
+    expect($first->accepted)->toBeTrue()
+        ->and($second->duplicate)->toBeTrue()
+        ->and($manager->find($response->runId)['status'])->toBe('pending')
+        ->and($detail->waits[0]['status'])->toBe('signalled')
+        ->and($detail->signals)->toHaveCount(1);
+
+    Event::assertDispatched(SwarmWaiting::class);
+    Event::assertDispatched(SwarmSignalled::class);
+});
+
+test('durable signal idempotency handles concurrent duplicate insert races', function () {
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+
+    DB::unprepared(<<<'SQL'
+CREATE TRIGGER swarm_signal_race BEFORE INSERT ON swarm_durable_signals
+WHEN NEW.idempotency_key = 'approval-race'
+BEGIN
+    INSERT INTO swarm_durable_signals (
+        run_id,
+        name,
+        status,
+        payload,
+        idempotency_key,
+        consumed_step_index,
+        consumed_at,
+        created_at,
+        updated_at
+    ) VALUES (
+        NEW.run_id,
+        NEW.name,
+        'recorded',
+        NEW.payload,
+        NEW.idempotency_key,
+        NULL,
+        NULL,
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+    );
+END;
+SQL);
+
+    $signal = app(DurableRunStore::class)->recordSignal($response->runId, 'approval_received', ['approved' => true], 'approval-race');
+
+    expect($signal['duplicate'])->toBeTrue()
+        ->and(app(DurableRunStore::class)->signals($response->runId))->toHaveCount(1);
+});
+
+test('durable progress records latest parent and branch state', function () {
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $manager = app(DurableSwarmManager::class);
+
+    $manager->recordProgress($response->runId, null, ['stage' => 'fetching']);
+    $detail = $manager->inspect($response->runId);
+
+    expect($detail->progress)->toHaveCount(1)
+        ->and($detail->progress[0]['progress'])->toBe(['stage' => 'fetching'])
+        ->and($manager->find($response->runId)['last_progress_at'])->not->toBeNull();
+});
+
+test('durable child swarms record lineage', function () {
+    $response = FakeSequentialSwarm::make()->dispatchDurable('parent-task');
+    $child = app(DurableSwarmManager::class)->dispatchChildSwarm($response->runId, FakeSequentialSwarm::class, 'child-task');
+    $detail = app(DurableSwarmManager::class)->inspect($response->runId);
+
+    expect($child->parentRunId)->toBe($response->runId)
+        ->and($child->childSwarmClass)->toBe(FakeSequentialSwarm::class)
+        ->and($detail->children)->toHaveCount(1)
+        ->and($detail->children[0]['child_run_id'])->toBe($child->childRunId);
+});
+
+test('durable retry schedules backoff and recovers after due time', function () {
+    FlakyDurableAgent::reset(failuresBeforeSuccess: 1);
+
+    $response = RetryableDurableSwarm::make()->dispatchDurable('retry-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    $run = $manager->find($response->runId);
+    expect($run['status'])->toBe('pending')
+        ->and($run['retry_attempt'])->toBe(1)
+        ->and($run['next_retry_at'])->not->toBeNull()
+        ->and(FlakyDurableAgent::$attempts)->toBe(1);
+
+    Artisan::call('swarm:recover');
+    expect(FlakyDurableAgent::$attempts)->toBe(1);
+
+    $this->travel(61)->seconds();
+    Artisan::call('swarm:recover');
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    expect($manager->find($response->runId)['status'])->toBe('completed')
+        ->and(FlakyDurableAgent::$attempts)->toBe(2);
+});
+
+test('durable retry respects non retryable exceptions', function () {
+    FlakyDurableAgent::reset(failuresBeforeSuccess: 1, exceptionClass: InvalidArgumentException::class);
+
+    $response = RetryableDurableSwarm::make()->dispatchDurable('retry-task');
+    $manager = app(DurableSwarmManager::class);
+
+    expect(fn () => (new AdvanceDurableSwarm($response->runId, 0))->handle($manager))
+        ->toThrow(InvalidArgumentException::class);
+
+    expect($manager->find($response->runId)['status'])->toBe('failed')
+        ->and($manager->find($response->runId)['retry_attempt'])->toBe(0);
+});
+
+test('durable branch retries independently before parent join', function () {
+    FlakyDurableAgent::reset(failuresBeforeSuccess: 1);
+    FakeResearcher::fake(['stable-branch']);
+
+    $response = RetryableParallelDurableSwarm::make()->dispatchDurable('parallel-retry-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    (new AdvanceDurableBranch($response->runId, 'parallel:0'))->handle($manager);
+    (new AdvanceDurableBranch($response->runId, 'parallel:1'))->handle($manager);
+
+    $branches = app(DurableRunStore::class)->branchesFor($response->runId, 'parallel');
+    expect($branches[0]['status'])->toBe('completed')
+        ->and($branches[1]['status'])->toBe('pending')
+        ->and($branches[1]['retry_attempt'])->toBe(1)
+        ->and($manager->find($response->runId)['status'])->toBe('waiting');
+
+    $this->travel(61)->seconds();
+    Artisan::call('swarm:recover');
+    (new AdvanceDurableBranch($response->runId, 'parallel:1'))->handle($manager);
+
+    expect($manager->find($response->runId)['status'])->toBe('pending');
+
+    (new AdvanceDurableSwarm($response->runId, 2))->handle($manager);
+
+    expect($manager->find($response->runId)['status'])->toBe('completed')
+        ->and(app(SwarmHistory::class)->find($response->runId)['output'])->toBe("stable-branch\n\nflaky-success");
+});
+
+test('declarative durable waits checkpoint and resume from signal', function () {
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+
+    $response = DurableWaitAttributeSwarm::make()->dispatchDurable('wait-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    expect($manager->find($response->runId)['status'])->toBe('waiting')
+        ->and($manager->inspect($response->runId)->waits[0]['name'])->toBe('approval_received');
+
+    $response->signal('approval_received', ['approved' => true], 'approval-attribute');
+    (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
+
+    expect($manager->find($response->runId)['status'])->toBe('completed')
+        ->and(app(SwarmHistory::class)->find($response->runId)['output'])->toBe('writer-out');
+});
+
+test('durable child swarms wait and record terminal status on the parent', function () {
+    FakeResearcher::fake(['parent-step', 'child-research']);
+    FakeWriter::fake(['parent-final', 'child-writer']);
+    FakeEditor::fake(['child-output']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    $detail = $manager->inspect($response->runId);
+    $childRunId = $detail->children[0]['child_run_id'];
+
+    expect($manager->find($response->runId)['status'])->toBe('waiting');
+
+    (new AdvanceDurableSwarm($childRunId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($childRunId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($childRunId, 2))->handle($manager);
+
+    expect($manager->find($response->runId)['status'])->toBe('pending');
+
+    (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
+
+    $parentContext = app(ContextStore::class)->find($response->runId);
+
+    expect($manager->find($response->runId)['status'])->toBe('completed')
+        ->and($parentContext['metadata']['durable_child_runs'][$childRunId]['status'])->toBe('completed')
+        ->and($parentContext['metadata']['durable_child_runs'][$childRunId])->not->toHaveKey('output')
+        ->and($parentContext['metadata']['durable_child_runs'][$childRunId])->not->toHaveKey('failure')
+        ->and($manager->inspect($response->runId)->children[0]['output'])->toBe('child-output');
+});
+
+test('durable child intent recovers when crash happens before child dispatch', function () {
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+    $manager->afterChildIntentForTesting(function (): void {
+        throw new RuntimeException('crash after child intent');
+    });
+
+    expect(fn () => (new AdvanceDurableSwarm($response->runId, 0))->handle($manager))
+        ->toThrow(RuntimeException::class, 'crash after child intent');
+
+    $child = app(DurableRunStore::class)->childRuns($response->runId)[0];
+
+    expect($manager->find($response->runId)['status'])->toBe('waiting')
+        ->and($child['dispatched_at'])->toBeNull()
+        ->and($manager->find($child['child_run_id']))->toBeNull();
+
+    $manager->afterChildIntentForTesting(null);
+    $manager->recover(runId: $response->runId);
+
+    $child = app(DurableRunStore::class)->childRunForChild($child['child_run_id']);
+
+    expect($child['dispatched_at'])->not->toBeNull()
+        ->and($manager->find($child['child_run_id']))->not->toBeNull();
+});
+
+test('durable child start failures release the parent wait with failed child status', function () {
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+
+    config()->set('swarm.limits.max_input_bytes', 1);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    $detail = $manager->inspect($response->runId);
+    $child = $detail->children[0];
+    $parentContext = app(ContextStore::class)->find($response->runId);
+
+    expect($manager->find($response->runId)['status'])->toBe('pending')
+        ->and($child['status'])->toBe('failed')
+        ->and($child['failure']['class'])->toBe(SwarmException::class)
+        ->and($detail->waits[0]['status'])->toBe('child_failed')
+        ->and($parentContext['metadata']['durable_child_runs'][$child['child_run_id']]['status'])->toBe('failed')
+        ->and($parentContext['metadata']['durable_child_runs'][$child['child_run_id']])->not->toHaveKey('output')
+        ->and($parentContext['metadata']['durable_child_runs'][$child['child_run_id']])->not->toHaveKey('failure');
+});
+
+test('durable child recovery does not create a second child run when dispatch marker is missing', function () {
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    $child = app(DurableRunStore::class)->childRuns($response->runId)[0];
+
+    DB::table('swarm_durable_child_runs')
+        ->where('child_run_id', $child['child_run_id'])
+        ->update(['dispatched_at' => null]);
+
+    $manager->recover(runId: $response->runId);
+
+    expect(DB::table('swarm_durable_runs')->where('run_id', $child['child_run_id'])->count())->toBe(1)
+        ->and(app(DurableRunStore::class)->childRunForChild($child['child_run_id'])['dispatched_at'])->not->toBeNull();
+});
+
+test('durable child terminal reconciliation emits one terminal event', function () {
+    Event::fake([SwarmChildCompleted::class]);
+    FakeResearcher::fake(['parent-step', 'child-research']);
+    FakeWriter::fake(['parent-final', 'child-writer']);
+    FakeEditor::fake(['child-output']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+    $childRunId = $manager->inspect($response->runId)->children[0]['child_run_id'];
+
+    (new AdvanceDurableSwarm($childRunId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($childRunId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($childRunId, 2))->handle($manager);
+
+    $manager->recover(runId: $response->runId);
+    $manager->recover(runId: $response->runId);
+
+    Event::assertDispatchedTimes(SwarmChildCompleted::class, 1);
+});
+
+test('durable parent cancellation cancels undispatched child intents', function () {
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+    $manager->afterChildIntentForTesting(function (): void {
+        throw new RuntimeException('crash after child intent');
+    });
+
+    expect(fn () => (new AdvanceDurableSwarm($response->runId, 0))->handle($manager))
+        ->toThrow(RuntimeException::class);
+
+    $child = app(DurableRunStore::class)->childRuns($response->runId)[0];
+
+    $manager->cancel($response->runId);
+
+    expect(app(DurableRunStore::class)->childRunForChild($child['child_run_id'])['status'])->toBe('cancelled');
+});
+
+test('durable payload surfaces honor capture redaction', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('sensitive-task');
+    $manager = app(DurableSwarmManager::class);
+
+    $manager->updateDetails($response->runId, ['secret' => 'value']);
+    $manager->recordProgress($response->runId, null, ['secret' => 'value']);
+    $manager->wait($response->runId, 'approval_received', metadata: ['secret' => 'value']);
+    $response->signal('approval_received', ['secret' => 'value'], 'redacted-signal');
+
+    $detail = $manager->inspect($response->runId);
+
+    expect($detail->details['secret'])->toBe('[redacted]')
+        ->and($detail->progress[0]['progress']['secret'])->toBe('[redacted]')
+        ->and($detail->waits[0]['metadata']['secret'])->toBe('[redacted]')
+        ->and($detail->signals[0]['payload']['secret'])->toBe('[redacted]');
+});
+
+test('durable operation commands inspect signal and progress runs', function () {
+    $response = FakeSequentialSwarm::make()->dispatchDurable('command-task');
+    $manager = app(DurableSwarmManager::class);
+
+    $manager->wait($response->runId, 'approval_received');
+    $manager->recordProgress($response->runId, null, ['stage' => 'waiting']);
+
+    Artisan::call('swarm:progress', ['runId' => $response->runId]);
+    expect(Artisan::output())->toContain('waiting');
+
+    Artisan::call('swarm:signal', [
+        'runId' => $response->runId,
+        'name' => 'approval_received',
+        '--payload' => '{"approved":true}',
+        '--idempotency-key' => 'command-signal',
+    ]);
+    expect(Artisan::output())->toContain('accepted');
+
+    Artisan::call('swarm:inspect', ['runId' => $response->runId, '--json' => true]);
+    expect(Artisan::output())->toContain('approval_received');
+});
+
+test('webhook start requests are idempotent and auth modes fail closed', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'signed');
+    config()->set('swarm.durable.webhooks.auth.secret', 'secret');
+
+    SwarmWebhooks::routes([FakeSequentialSwarm::class]);
+
+    $payload = json_encode(['input' => 'webhook-task'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) time();
+    $signature = hash_hmac('sha256', $timestamp.'.'.$payload, 'secret');
+    $headers = [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+        'HTTP_X_SWARM_TIMESTAMP' => $timestamp,
+        'HTTP_X_SWARM_SIGNATURE' => $signature,
+        'HTTP_IDEMPOTENCY_KEY' => 'start-1',
+    ];
+
+    $first = $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], $headers, $payload);
+    $second = $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], $headers, $payload);
+
+    $first->assertAccepted();
+    $second->assertOk()
+        ->assertJsonPath('run_id', $first->json('run_id'))
+        ->assertJsonPath('duplicate', true);
+
+    config()->set('swarm.durable.webhooks.auth.secret', null);
+
+    expect(fn () => SwarmWebhooks::routes([FakeSequentialSwarm::class]))
+        ->toThrow(SwarmException::class);
+});
+
+test('webhook start idempotency rejects in flight and mismatched duplicate requests', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'signed');
+    config()->set('swarm.durable.webhooks.auth.secret', 'secret');
+
+    SwarmWebhooks::routes([FakeSequentialSwarm::class]);
+
+    $payload = json_encode(['input' => 'webhook-task'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) time();
+    $signature = hash_hmac('sha256', $timestamp.'.'.$payload, 'secret');
+    $headers = [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+        'HTTP_X_SWARM_TIMESTAMP' => $timestamp,
+        'HTTP_X_SWARM_SIGNATURE' => $signature,
+        'HTTP_IDEMPOTENCY_KEY' => 'reserved-start',
+    ];
+
+    app(DurableRunStore::class)->reserveWebhookIdempotency(
+        'start:'.FakeSequentialSwarm::class,
+        'reserved-start',
+        hash('sha256', $payload),
+    );
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], $headers, $payload)
+        ->assertConflict()
+        ->assertJsonPath('message', 'Idempotency key is already processing.');
+
+    $differentPayload = json_encode(['input' => 'different-task'], JSON_THROW_ON_ERROR);
+    $differentTimestamp = (string) time();
+    $differentHeaders = array_merge($headers, [
+        'HTTP_X_SWARM_TIMESTAMP' => $differentTimestamp,
+        'HTTP_X_SWARM_SIGNATURE' => hash_hmac('sha256', $differentTimestamp.'.'.$differentPayload, 'secret'),
+    ]);
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], $differentHeaders, $differentPayload)
+        ->assertConflict()
+        ->assertJsonPath('message', 'Idempotency key was already used with a different request payload.');
+});
+
+test('swarm webhooks require signed requests and dispatch durable starts', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'signed');
+    config()->set('swarm.durable.webhooks.auth.secret', 'secret');
+
+    SwarmWebhooks::routes([FakeSequentialSwarm::class]);
+
+    $payload = json_encode(['input' => 'webhook-task'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) time();
+    $signature = hash_hmac('sha256', $timestamp.'.'.$payload, 'secret');
+
+    $this->postJson('/swarm/webhooks/start/fake-sequential-swarm', ['input' => 'webhook-task'])
+        ->assertUnauthorized();
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+        'HTTP_X_SWARM_TIMESTAMP' => $timestamp,
+        'HTTP_X_SWARM_SIGNATURE' => $signature,
+    ], $payload)->assertAccepted()->assertJsonStructure(['run_id']);
 });

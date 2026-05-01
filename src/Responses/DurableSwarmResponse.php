@@ -16,6 +16,31 @@ class DurableSwarmResponse
         public readonly string $runId,
     ) {}
 
+    public function signal(string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
+    {
+        return $this->manager->signal($this->runId, $name, $payload, $idempotencyKey);
+    }
+
+    public function inspect(): DurableRunDetail
+    {
+        return $this->manager->inspect($this->runId);
+    }
+
+    public function pause(): bool
+    {
+        return $this->manager->pause($this->runId);
+    }
+
+    public function resume(): bool
+    {
+        return $this->manager->resume($this->runId);
+    }
+
+    public function cancel(): bool
+    {
+        return $this->manager->cancel($this->runId);
+    }
+
     /**
      * Proxy missing method calls to the pending dispatch instance.
      *

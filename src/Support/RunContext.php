@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Responses\DurableWaitOutcome;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use JsonException;
 
@@ -114,6 +115,81 @@ class RunContext
         $this->artifacts[] = $artifact;
 
         return $this;
+    }
+
+    /**
+     * @param  array<string, bool|int|float|string|null>  $labels
+     */
+    public function withLabels(array $labels): self
+    {
+        $this->metadata['durable_labels'] = array_merge(
+            $this->labels(),
+            self::validateLabels($labels),
+        );
+
+        return $this;
+    }
+
+    /**
+     * @param  array<string, mixed>  $details
+     */
+    public function withDetails(array $details): self
+    {
+        PlainData::array($details, 'details');
+
+        $this->metadata['durable_details'] = array_merge($this->details(), $details);
+
+        return $this;
+    }
+
+    public function label(string $key): mixed
+    {
+        return $this->labels()[$key] ?? null;
+    }
+
+    public function detail(string $key): mixed
+    {
+        return $this->details()[$key] ?? null;
+    }
+
+    public function signalPayload(string $name): mixed
+    {
+        $signals = is_array($this->metadata['durable_signals'] ?? null) ? $this->metadata['durable_signals'] : [];
+
+        return $signals[$name]['payload'] ?? null;
+    }
+
+    public function waitOutcome(string $name): ?DurableWaitOutcome
+    {
+        $outcomes = is_array($this->metadata['durable_wait_outcomes'] ?? null) ? $this->metadata['durable_wait_outcomes'] : [];
+        $outcome = $outcomes[$name] ?? null;
+
+        if (! is_array($outcome)) {
+            return null;
+        }
+
+        return new DurableWaitOutcome(
+            name: $name,
+            status: is_string($outcome['status'] ?? null) ? $outcome['status'] : 'unknown',
+            payload: $outcome['payload'] ?? null,
+            timedOut: (bool) ($outcome['timed_out'] ?? false),
+        );
+    }
+
+    /**
+     * @return array<string, bool|int|float|string|null>
+     */
+    public function labels(): array
+    {
+        return self::validateLabels(is_array($this->metadata['durable_labels'] ?? null) ? $this->metadata['durable_labels'] : []);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function details(): array
+    {
+        return is_array($this->metadata['durable_details'] ?? null) ? PlainData::array($this->metadata['durable_details'], 'details') : [];
     }
 
     /**
@@ -241,6 +317,29 @@ class RunContext
         }
 
         self::validateSerializedPayload($payload, 'RunContext payload');
+    }
+
+    /**
+     * @param  array<string, mixed>  $labels
+     * @return array<string, bool|int|float|string|null>
+     */
+    protected static function validateLabels(array $labels): array
+    {
+        $validated = [];
+
+        foreach ($labels as $key => $value) {
+            if (! is_string($key) || $key === '') {
+                throw new SwarmException('Durable run labels must use non-empty string keys.');
+            }
+
+            if (! is_bool($value) && ! is_int($value) && ! is_float($value) && ! is_string($value) && $value !== null) {
+                throw new SwarmException("Durable run label [{$key}] must be a scalar or null.");
+            }
+
+            $validated[$key] = $value;
+        }
+
+        return $validated;
     }
 
     /**

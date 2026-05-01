@@ -29,6 +29,13 @@ class SwarmPruneCommand extends Command
             'artifacts' => (string) $config->get('swarm.tables.artifacts', 'swarm_artifacts'),
             'durable_node_outputs' => (string) $config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs'),
             'durable_branches' => (string) $config->get('swarm.tables.durable_branches', 'swarm_durable_branches'),
+            'durable_signals' => (string) $config->get('swarm.tables.durable_signals', 'swarm_durable_signals'),
+            'durable_waits' => (string) $config->get('swarm.tables.durable_waits', 'swarm_durable_waits'),
+            'durable_labels' => (string) $config->get('swarm.tables.durable_labels', 'swarm_durable_labels'),
+            'durable_details' => (string) $config->get('swarm.tables.durable_details', 'swarm_durable_details'),
+            'durable_progress' => (string) $config->get('swarm.tables.durable_progress', 'swarm_durable_progress'),
+            'durable_child_runs' => (string) $config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs'),
+            'durable_webhook_idempotency' => (string) $config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'),
         ];
 
         $deleted = [];
@@ -74,6 +81,19 @@ class SwarmPruneCommand extends Command
             $deleted['durable_node_outputs'],
             $deleted['durable_branches'],
         ));
+        $this->components->info(sprintf(
+            'Pruned %d durable signal, %d wait, %d label, %d detail, %d progress, and %d child run record(s).',
+            $deleted['durable_signals'],
+            $deleted['durable_waits'],
+            $deleted['durable_labels'],
+            $deleted['durable_details'],
+            $deleted['durable_progress'],
+            $deleted['durable_child_runs'],
+        ));
+        $this->components->info(sprintf(
+            'Pruned %d durable webhook idempotency record(s).',
+            $deleted['durable_webhook_idempotency'],
+        ));
 
         return self::SUCCESS;
     }
@@ -90,6 +110,28 @@ class SwarmPruneCommand extends Command
                     ->whereIn('status', ['completed', 'failed', 'cancelled']);
             } elseif ($role === 'durable') {
                 $query->whereIn('status', ['completed', 'failed', 'cancelled'])
+                    ->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                        $subquery->from($historyTable)
+                            ->select('run_id')
+                            ->where('expires_at', '<', now())
+                            ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                    });
+            } elseif (in_array($role, ['durable_signals', 'durable_waits', 'durable_labels', 'durable_details', 'durable_progress'], true)) {
+                $query->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                    $subquery->from($historyTable)
+                        ->select('run_id')
+                        ->where('expires_at', '<', now())
+                        ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                });
+            } elseif ($role === 'durable_child_runs') {
+                $query->whereIn('parent_run_id', function ($subquery) use ($historyTable): void {
+                    $subquery->from($historyTable)
+                        ->select('run_id')
+                        ->where('expires_at', '<', now())
+                        ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                });
+            } elseif ($role === 'durable_webhook_idempotency') {
+                $query->whereNotNull('run_id')
                     ->whereIn('run_id', function ($subquery) use ($historyTable): void {
                         $subquery->from($historyTable)
                             ->select('run_id')

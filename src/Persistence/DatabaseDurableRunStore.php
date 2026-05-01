@@ -75,6 +75,14 @@ class DatabaseDurableRunStore implements DurableRunStore
             'cancel_requested_at' => $record->cancel_requested_at,
             'cancelled_at' => $record->cancelled_at ?? null,
             'timed_out_at' => $record->timed_out_at ?? null,
+            'wait_reason' => $record->wait_reason ?? null,
+            'waiting_since' => $record->waiting_since ?? null,
+            'wait_timeout_at' => $record->wait_timeout_at ?? null,
+            'last_progress_at' => $record->last_progress_at ?? null,
+            'retry_policy' => $this->decodeJson($record->retry_policy ?? null, null),
+            'retry_attempt' => (int) ($record->retry_attempt ?? 0),
+            'next_retry_at' => $record->next_retry_at ?? null,
+            'parent_run_id' => $record->parent_run_id ?? null,
             'queue_connection' => $record->queue_connection,
             'queue_name' => $record->queue_name,
             'finished_at' => $record->finished_at,
@@ -123,6 +131,14 @@ class DatabaseDurableRunStore implements DurableRunStore
             'cancel_requested_at',
             'cancelled_at',
             'timed_out_at',
+            'wait_reason',
+            'waiting_since',
+            'wait_timeout_at',
+            'last_progress_at',
+            'retry_policy',
+            'retry_attempt',
+            'next_retry_at',
+            'parent_run_id',
             'queue_connection',
             'queue_name',
             'finished_at',
@@ -172,11 +188,31 @@ class DatabaseDurableRunStore implements DurableRunStore
             'queue_name',
             'started_at',
             'finished_at',
+            'last_progress_at',
+            'retry_policy',
+            'retry_attempt',
+            'next_retry_at',
             'expires_at',
             'created_at',
             'updated_at',
         ])) {
             throw new SwarmException("Database-backed durable swarms require runtime columns on [{$branchTable}] for durable branch execution.");
+        }
+
+        foreach ([
+            'durable_signals' => ['run_id', 'name', 'status', 'payload', 'idempotency_key', 'created_at', 'updated_at'],
+            'durable_waits' => ['run_id', 'name', 'status', 'reason', 'timeout_at', 'signal_id', 'outcome', 'metadata', 'created_at', 'updated_at'],
+            'durable_labels' => ['run_id', 'key', 'value_type', 'created_at', 'updated_at'],
+            'durable_details' => ['run_id', 'details', 'created_at', 'updated_at'],
+            'durable_progress' => ['run_id', 'branch_id', 'progress', 'last_progress_at', 'created_at', 'updated_at'],
+            'durable_child_runs' => ['parent_run_id', 'child_run_id', 'child_swarm_class', 'wait_name', 'context_payload', 'status', 'output', 'failure', 'dispatched_at', 'terminal_event_dispatched_at', 'created_at', 'updated_at'],
+            'durable_webhook_idempotency' => ['scope', 'idempotency_key', 'request_hash', 'status', 'run_id', 'response_payload', 'completed_at', 'created_at', 'updated_at'],
+        ] as $role => $columns) {
+            $runtimeTable = (string) $this->config->get("swarm.tables.{$role}");
+
+            if (! $schema->hasTable($runtimeTable) || ! $schema->hasColumns($runtimeTable, $columns)) {
+                throw new SwarmException("Database-backed durable swarms require the [{$runtimeTable}] table for durable run inspection.");
+            }
         }
     }
 
@@ -191,6 +227,10 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->where(function ($query) use ($now): void {
                 $query->whereNull('leased_until')
                     ->orWhere('leased_until', '<', $now);
+            })
+            ->where(function ($query) use ($now): void {
+                $query->whereNull('next_retry_at')
+                    ->orWhere('next_retry_at', '<=', $now);
             })
             ->whereIn('status', ['pending', 'running'])
             ->update([
@@ -505,6 +545,10 @@ class DatabaseDurableRunStore implements DurableRunStore
                 $query->whereNull('leased_until')
                     ->orWhere('leased_until', '<', $now);
             })
+            ->where(function ($query) use ($now): void {
+                $query->whereNull('next_retry_at')
+                    ->orWhere('next_retry_at', '<=', $now);
+            })
             ->whereIn('status', ['pending', 'running'])
             ->update([
                 'leased_until' => $now->copy()->addSeconds($stepTimeoutSeconds),
@@ -567,6 +611,19 @@ class DatabaseDurableRunStore implements DurableRunStore
         ]);
     }
 
+    public function scheduleBranchRetry(string $runId, string $branchId, string $executionToken, array $policy, int $attempt, ?\DateTimeInterface $nextRetryAt): void
+    {
+        $this->guardedBranchUpdate($runId, $branchId, $executionToken, [
+            'status' => 'pending',
+            'retry_policy' => $this->encodeJson($policy),
+            'retry_attempt' => $attempt,
+            'next_retry_at' => $nextRetryAt,
+            'failure' => null,
+            'execution_token' => null,
+            'leased_until' => null,
+        ]);
+    }
+
     public function cancelBranches(string $runId, ?string $parentNodeId = null): void
     {
         $query = $this->branchTable()
@@ -619,6 +676,36 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->all();
     }
 
+    public function dueRetryBranches(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
+    {
+        $now = Carbon::now('UTC');
+        $branchTable = (string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches');
+        $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+
+        $query = $this->connection->table($branchTable.' as branches')
+            ->join($durableTable.' as runs', 'branches.run_id', '=', 'runs.run_id')
+            ->where('branches.status', 'pending')
+            ->whereNotNull('branches.next_retry_at')
+            ->where('branches.next_retry_at', '<=', $now)
+            ->whereNull('branches.leased_until')
+            ->whereNull('runs.finished_at')
+            ->orderBy('branches.next_retry_at')
+            ->limit($limit)
+            ->select('branches.*');
+
+        if ($runId !== null) {
+            $query->where('branches.run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('runs.swarm_class', $swarmClass);
+        }
+
+        return $query->get()
+            ->map(fn (object $record): array => $this->mapBranch($record))
+            ->all();
+    }
+
     public function markCompleted(string $runId, string $executionToken): void
     {
         $this->markTerminal($runId, $executionToken, 'completed');
@@ -627,6 +714,19 @@ class DatabaseDurableRunStore implements DurableRunStore
     public function markFailed(string $runId, string $executionToken, ?array $failure = null): void
     {
         $this->markTerminal($runId, $executionToken, 'failed', $failure);
+    }
+
+    public function scheduleRetry(string $runId, string $executionToken, array $policy, int $attempt, ?\DateTimeInterface $nextRetryAt): void
+    {
+        $this->guardedUpdate($runId, $executionToken, [
+            'status' => 'pending',
+            'retry_policy' => $this->encodeJson($policy),
+            'retry_attempt' => $attempt,
+            'next_retry_at' => $nextRetryAt,
+            'failure' => null,
+            'execution_token' => null,
+            'leased_until' => null,
+        ]);
     }
 
     public function markPaused(string $runId, string $executionToken): void
@@ -795,6 +895,30 @@ class DatabaseDurableRunStore implements DurableRunStore
         return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
     }
 
+    public function dueRetries(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
+    {
+        $now = Carbon::now('UTC');
+
+        $query = $this->table()
+            ->where('status', 'pending')
+            ->whereNull('finished_at')
+            ->whereNotNull('next_retry_at')
+            ->where('next_retry_at', '<=', $now)
+            ->whereNull('leased_until')
+            ->orderBy('next_retry_at')
+            ->limit($limit);
+
+        if ($runId !== null) {
+            $query->where('run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('swarm_class', $swarmClass);
+        }
+
+        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+    }
+
     public function recoverableWaitingJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
     {
         $threshold = Carbon::now('UTC')->subSeconds($graceSeconds);
@@ -844,6 +968,587 @@ class DatabaseDurableRunStore implements DurableRunStore
             'queue_name' => $queue,
             'updated_at' => Carbon::now('UTC'),
         ]);
+    }
+
+    public function updateLabels(string $runId, array $labels): void
+    {
+        $timestamp = Carbon::now('UTC');
+        $rows = [];
+
+        foreach ($this->normalizeLabels($labels) as $key => $value) {
+            $rows[] = array_merge([
+                'run_id' => $runId,
+                'key' => $key,
+                'value_type' => $value === null ? 'null' : get_debug_type($value),
+                'value_string' => is_string($value) ? $value : null,
+                'value_integer' => is_int($value) ? $value : null,
+                'value_float' => is_float($value) ? $value : null,
+                'value_boolean' => is_bool($value) ? $value : null,
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+        }
+
+        if ($rows !== []) {
+            $this->labelTable()->upsert(
+                $rows,
+                ['run_id', 'key'],
+                ['value_type', 'value_string', 'value_integer', 'value_float', 'value_boolean', 'updated_at'],
+            );
+        }
+    }
+
+    public function labels(string $runId): array
+    {
+        return $this->labelTable()
+            ->where('run_id', $runId)
+            ->orderBy('key')
+            ->get()
+            ->mapWithKeys(function (object $record): array {
+                $value = match ($record->value_type) {
+                    'bool' => (bool) $record->value_boolean,
+                    'int' => $record->value_integer !== null ? (int) $record->value_integer : null,
+                    'float' => $record->value_float !== null ? (float) $record->value_float : null,
+                    'string' => $record->value_string,
+                    default => null,
+                };
+
+                return [(string) $record->key => $value];
+            })
+            ->all();
+    }
+
+    public function runIdsForLabels(array $labels, int $limit = 50): array
+    {
+        $normalized = $this->normalizeLabels($labels);
+
+        if ($normalized === []) {
+            return [];
+        }
+
+        $matches = null;
+
+        foreach ($normalized as $key => $value) {
+            $query = $this->labelTable()->where('key', $key);
+
+            match (true) {
+                is_string($value) => $query->where('value_string', $value),
+                is_int($value) => $query->where('value_integer', $value),
+                is_float($value) => $query->where('value_float', $value),
+                is_bool($value) => $query->where('value_boolean', $value),
+                default => $query->where('value_type', 'null'),
+            };
+
+            $runIds = $query->pluck('run_id')->map(static fn (mixed $runId): string => (string) $runId)->all();
+            $matches = $matches === null ? $runIds : array_values(array_intersect($matches, $runIds));
+
+            if ($matches === []) {
+                return [];
+            }
+        }
+
+        return array_slice($matches ?? [], 0, $limit);
+    }
+
+    public function updateDetails(string $runId, array $details): void
+    {
+        $timestamp = Carbon::now('UTC');
+        $existing = $this->details($runId);
+
+        $this->detailTable()->upsert([
+            [
+                'run_id' => $runId,
+                'details' => $this->encodeJson(array_merge($existing, $details)),
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ],
+        ], ['run_id'], ['details', 'updated_at']);
+    }
+
+    public function details(string $runId): array
+    {
+        /** @var object|null $record */
+        $record = $this->detailTable()->where('run_id', $runId)->first();
+
+        return $record !== null ? $this->decodeJson($record->details, []) : [];
+    }
+
+    public function recordSignal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): array
+    {
+        if ($idempotencyKey !== null) {
+            /** @var object|null $existing */
+            $existing = $this->signalTable()
+                ->where('run_id', $runId)
+                ->where('idempotency_key', $idempotencyKey)
+                ->first();
+
+            if ($existing !== null) {
+                return array_merge($this->mapSignal($existing), ['duplicate' => true]);
+            }
+        }
+
+        $timestamp = Carbon::now('UTC');
+
+        $row = [
+            'run_id' => $runId,
+            'name' => $name,
+            'status' => 'recorded',
+            'payload' => $this->encodeJson($payload),
+            'idempotency_key' => $idempotencyKey,
+            'consumed_step_index' => null,
+            'consumed_at' => null,
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ];
+
+        if ($idempotencyKey !== null) {
+            $inserted = $this->signalTable()->insertOrIgnore($row);
+
+            /** @var object|null $record */
+            $record = $this->signalTable()
+                ->where('run_id', $runId)
+                ->where('idempotency_key', $idempotencyKey)
+                ->first();
+
+            if ($record === null) {
+                throw new SwarmException("Unable to record durable signal [{$name}] for run [{$runId}].");
+            }
+
+            return array_merge($this->mapSignal($record), ['duplicate' => $inserted === 0]);
+        }
+
+        $id = $this->signalTable()->insertGetId($row);
+
+        /** @var object $record */
+        $record = $this->signalTable()->where('id', $id)->first();
+
+        return array_merge($this->mapSignal($record), ['duplicate' => false]);
+    }
+
+    public function signals(string $runId): array
+    {
+        return $this->signalTable()
+            ->where('run_id', $runId)
+            ->orderBy('id')
+            ->get()
+            ->map(fn (object $record): array => $this->mapSignal($record))
+            ->all();
+    }
+
+    public function createWait(string $runId, string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = []): void
+    {
+        $timestamp = Carbon::now('UTC');
+        $timeoutAt = $timeoutSeconds !== null ? $timestamp->copy()->addSeconds($timeoutSeconds) : null;
+
+        $this->connection->transaction(function () use ($runId, $name, $reason, $timeoutAt, $metadata, $timestamp): void {
+            $this->waitTable()->insert([
+                'run_id' => $runId,
+                'name' => $name,
+                'status' => 'waiting',
+                'reason' => $reason,
+                'timeout_at' => $timeoutAt,
+                'signal_id' => null,
+                'outcome' => null,
+                'metadata' => $this->encodeJson($metadata),
+                'finished_at' => null,
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+
+            $this->table()->where('run_id', $runId)->whereNull('finished_at')->update([
+                'status' => 'waiting',
+                'wait_reason' => $reason,
+                'waiting_since' => $timestamp,
+                'wait_timeout_at' => $timeoutAt,
+                'updated_at' => $timestamp,
+            ]);
+        });
+    }
+
+    public function releaseWaitWithSignal(string $runId, string $name, int $signalId): bool
+    {
+        $timestamp = Carbon::now('UTC');
+
+        return $this->connection->transaction(function () use ($runId, $name, $signalId, $timestamp): bool {
+            $updated = $this->waitTable()
+                ->where('run_id', $runId)
+                ->where('name', $name)
+                ->where('status', 'waiting')
+                ->update([
+                    'status' => 'signalled',
+                    'signal_id' => $signalId,
+                    'outcome' => $this->encodeJson(['status' => 'signalled', 'timed_out' => false]),
+                    'finished_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                ]);
+
+            if ($updated !== 1) {
+                return false;
+            }
+
+            $this->signalTable()->where('id', $signalId)->update([
+                'status' => 'consumed',
+                'consumed_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+
+            $this->table()
+                ->where('run_id', $runId)
+                ->where('status', 'waiting')
+                ->whereNull('finished_at')
+                ->update([
+                    'status' => 'pending',
+                    'wait_reason' => null,
+                    'waiting_since' => null,
+                    'wait_timeout_at' => null,
+                    'updated_at' => $timestamp,
+                ]);
+
+            return true;
+        });
+    }
+
+    public function waits(string $runId): array
+    {
+        return $this->waitTable()
+            ->where('run_id', $runId)
+            ->orderBy('id')
+            ->get()
+            ->map(fn (object $record): array => $this->mapWait($record))
+            ->all();
+    }
+
+    public function releaseWaitWithOutcome(string $runId, string $name, string $status, array $outcome): bool
+    {
+        $timestamp = Carbon::now('UTC');
+
+        return $this->connection->transaction(function () use ($runId, $name, $status, $outcome, $timestamp): bool {
+            $updated = $this->waitTable()
+                ->where('run_id', $runId)
+                ->where('name', $name)
+                ->where('status', 'waiting')
+                ->update([
+                    'status' => $status,
+                    'outcome' => $this->encodeJson($outcome),
+                    'finished_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                ]);
+
+            if ($updated !== 1) {
+                return false;
+            }
+
+            $this->table()
+                ->where('run_id', $runId)
+                ->where('status', 'waiting')
+                ->whereNull('finished_at')
+                ->update([
+                    'status' => 'pending',
+                    'wait_reason' => null,
+                    'waiting_since' => null,
+                    'wait_timeout_at' => null,
+                    'updated_at' => $timestamp,
+                ]);
+
+            return true;
+        });
+    }
+
+    public function recoverableWaitTimeouts(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
+    {
+        $query = $this->table()
+            ->where('status', 'waiting')
+            ->whereNull('finished_at')
+            ->whereNotNull('wait_timeout_at')
+            ->where('wait_timeout_at', '<=', Carbon::now('UTC'))
+            ->orderBy('wait_timeout_at')
+            ->limit($limit);
+
+        if ($runId !== null) {
+            $query->where('run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('swarm_class', $swarmClass);
+        }
+
+        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+    }
+
+    public function releaseTimedOutWait(string $runId, string $name): bool
+    {
+        $timestamp = Carbon::now('UTC');
+
+        return $this->connection->transaction(function () use ($runId, $name, $timestamp): bool {
+            $updated = $this->waitTable()
+                ->where('run_id', $runId)
+                ->where('name', $name)
+                ->where('status', 'waiting')
+                ->where('timeout_at', '<=', $timestamp)
+                ->update([
+                    'status' => 'timed_out',
+                    'outcome' => $this->encodeJson(['status' => 'timed_out', 'timed_out' => true]),
+                    'finished_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                ]);
+
+            if ($updated !== 1) {
+                return false;
+            }
+
+            $this->table()
+                ->where('run_id', $runId)
+                ->where('status', 'waiting')
+                ->whereNull('finished_at')
+                ->update([
+                    'status' => 'pending',
+                    'wait_reason' => null,
+                    'waiting_since' => null,
+                    'wait_timeout_at' => null,
+                    'updated_at' => $timestamp,
+                ]);
+
+            return true;
+        });
+    }
+
+    public function recordProgress(string $runId, ?string $branchId, array $progress): void
+    {
+        $timestamp = Carbon::now('UTC');
+        $branch = $branchId !== null ? $this->findBranch($runId, $branchId) : null;
+        $run = $this->find($runId);
+        $storedBranchId = $branchId ?? '';
+
+        $this->progressTable()->upsert([
+            [
+                'run_id' => $runId,
+                'branch_id' => $storedBranchId,
+                'step_index' => $branch['step_index'] ?? $run['current_step_index'] ?? null,
+                'agent_class' => $branch['agent_class'] ?? null,
+                'progress' => $this->encodeJson($progress),
+                'last_progress_at' => $timestamp,
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ],
+        ], ['run_id', 'branch_id'], ['step_index', 'agent_class', 'progress', 'last_progress_at', 'updated_at']);
+
+        if ($branchId !== null) {
+            $this->branchTable()->where('run_id', $runId)->where('branch_id', $branchId)->update([
+                'last_progress_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+
+            return;
+        }
+
+        $this->table()->where('run_id', $runId)->update([
+            'last_progress_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ]);
+    }
+
+    public function progress(string $runId): array
+    {
+        return $this->progressTable()
+            ->where('run_id', $runId)
+            ->orderBy('branch_id')
+            ->get()
+            ->map(fn (object $record): array => $this->mapProgress($record))
+            ->all();
+    }
+
+    public function createChildRun(string $parentRunId, string $childRunId, string $childSwarmClass, string $waitName, array $contextPayload): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->childRunTable()->upsert([
+            [
+                'parent_run_id' => $parentRunId,
+                'child_run_id' => $childRunId,
+                'child_swarm_class' => $childSwarmClass,
+                'wait_name' => $waitName,
+                'context_payload' => $this->encodeJson($contextPayload),
+                'status' => 'pending',
+                'output' => null,
+                'failure' => null,
+                'dispatched_at' => null,
+                'terminal_event_dispatched_at' => null,
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ],
+        ], ['child_run_id'], ['child_swarm_class', 'wait_name', 'context_payload', 'status', 'updated_at']);
+    }
+
+    public function childRunForChild(string $childRunId): ?array
+    {
+        /** @var object|null $record */
+        $record = $this->childRunTable()->where('child_run_id', $childRunId)->first();
+
+        return $record !== null ? $this->mapChildRun($record) : null;
+    }
+
+    public function markChildRunDispatched(string $childRunId): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->childRunTable()
+            ->where('child_run_id', $childRunId)
+            ->whereNull('dispatched_at')
+            ->update([
+                'dispatched_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+    }
+
+    public function updateChildRun(string $childRunId, string $status, ?string $output = null, ?array $failure = null): void
+    {
+        $this->childRunTable()->where('child_run_id', $childRunId)->update([
+            'status' => $status,
+            'output' => $output,
+            'failure' => $failure !== null ? $this->encodeJson($failure) : null,
+            'updated_at' => Carbon::now('UTC'),
+        ]);
+    }
+
+    public function markChildTerminalEventDispatched(string $childRunId): bool
+    {
+        $timestamp = Carbon::now('UTC');
+        $updated = $this->childRunTable()
+            ->where('child_run_id', $childRunId)
+            ->whereNull('terminal_event_dispatched_at')
+            ->update([
+                'terminal_event_dispatched_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+
+        return $updated === 1;
+    }
+
+    public function undispatchedChildRuns(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
+    {
+        $childTable = (string) $this->config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs');
+        $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+
+        $query = $this->connection->table($childTable.' as children')
+            ->join($durableTable.' as parents', 'children.parent_run_id', '=', 'parents.run_id')
+            ->whereIn('children.status', ['pending', 'running'])
+            ->whereNull('children.dispatched_at')
+            ->whereNull('parents.finished_at')
+            ->orderBy('children.created_at')
+            ->limit($limit)
+            ->select('children.*');
+
+        if ($runId !== null) {
+            $query->where('children.parent_run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('parents.swarm_class', $swarmClass);
+        }
+
+        return $query->get()
+            ->map(fn (object $record): array => $this->mapChildRun($record))
+            ->all();
+    }
+
+    public function parentsWaitingOnTerminalChildren(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
+    {
+        $childTable = (string) $this->config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs');
+        $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+
+        $query = $this->connection->table($childTable.' as children')
+            ->join($durableTable.' as parents', 'children.parent_run_id', '=', 'parents.run_id')
+            ->where('parents.status', 'waiting')
+            ->whereIn('children.status', ['completed', 'failed', 'cancelled'])
+            ->whereNull('parents.finished_at')
+            ->orderBy('children.updated_at')
+            ->limit($limit)
+            ->select('parents.*');
+
+        if ($runId !== null) {
+            $query->where('parents.run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('parents.swarm_class', $swarmClass);
+        }
+
+        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+    }
+
+    public function childRuns(string $runId): array
+    {
+        return $this->childRunTable()
+            ->where('parent_run_id', $runId)
+            ->orderBy('id')
+            ->get()
+            ->map(fn (object $record): array => $this->mapChildRun($record))
+            ->all();
+    }
+
+    public function reserveWebhookIdempotency(string $scope, string $idempotencyKey, string $requestHash): array
+    {
+        $timestamp = Carbon::now('UTC');
+
+        try {
+            $this->webhookIdempotencyTable()->insert([
+                'scope' => $scope,
+                'idempotency_key' => $idempotencyKey,
+                'request_hash' => $requestHash,
+                'status' => 'reserved',
+                'run_id' => null,
+                'response_payload' => null,
+                'completed_at' => null,
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
+
+            return [
+                'reserved' => true,
+                'duplicate' => false,
+                'conflict' => false,
+                'in_flight' => false,
+                'record' => null,
+            ];
+        } catch (\Throwable) {
+            /** @var object|null $record */
+            $record = $this->webhookIdempotencyTable()
+                ->where('scope', $scope)
+                ->where('idempotency_key', $idempotencyKey)
+                ->first();
+
+            if ($record === null) {
+                throw new SwarmException('Unable to reserve swarm webhook idempotency key.');
+            }
+
+            $mapped = $this->mapWebhookIdempotency($record);
+            $conflict = $mapped['request_hash'] !== $requestHash;
+            $duplicate = ! $conflict && $mapped['status'] === 'completed';
+
+            return [
+                'reserved' => false,
+                'duplicate' => $duplicate,
+                'conflict' => $conflict,
+                'in_flight' => ! $conflict && ! $duplicate,
+                'record' => $mapped,
+            ];
+        }
+    }
+
+    public function completeWebhookIdempotency(string $scope, string $idempotencyKey, string $runId, array $responsePayload): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->webhookIdempotencyTable()
+            ->where('scope', $scope)
+            ->where('idempotency_key', $idempotencyKey)
+            ->update([
+                'status' => 'completed',
+                'run_id' => $runId,
+                'response_payload' => $this->encodeJson($responsePayload),
+                'completed_at' => $timestamp,
+                'updated_at' => $timestamp,
+            ]);
     }
 
     protected function guardedUpdate(string $runId, string $executionToken, array $values): void
@@ -1183,9 +1888,167 @@ class DatabaseDurableRunStore implements DurableRunStore
             'queue_name' => $record->queue_name,
             'started_at' => $record->started_at ?? null,
             'finished_at' => $record->finished_at ?? null,
+            'last_progress_at' => $record->last_progress_at ?? null,
+            'retry_policy' => $this->decodeJson($record->retry_policy ?? null, null),
+            'retry_attempt' => (int) ($record->retry_attempt ?? 0),
+            'next_retry_at' => $record->next_retry_at ?? null,
             'expires_at' => $record->expires_at ?? null,
             'created_at' => $record->created_at,
             'updated_at' => $record->updated_at,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $labels
+     * @return array<string, bool|int|float|string|null>
+     */
+    protected function normalizeLabels(array $labels): array
+    {
+        $normalized = [];
+
+        foreach ($labels as $key => $value) {
+            if (! is_string($key) || $key === '') {
+                throw new SwarmException('Durable run labels must use non-empty string keys.');
+            }
+
+            if (! is_bool($value) && ! is_int($value) && ! is_float($value) && ! is_string($value) && $value !== null) {
+                throw new SwarmException("Durable run label [{$key}] must be a scalar or null.");
+            }
+
+            $normalized[$key] = $value;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function mapSignal(object $record): array
+    {
+        return [
+            'id' => (int) $record->id,
+            'run_id' => $record->run_id,
+            'name' => $record->name,
+            'status' => $record->status,
+            'payload' => $this->decodeJson($record->payload ?? null, null),
+            'idempotency_key' => $record->idempotency_key,
+            'consumed_step_index' => $record->consumed_step_index !== null ? (int) $record->consumed_step_index : null,
+            'consumed_at' => $record->consumed_at ?? null,
+            'created_at' => $record->created_at,
+            'updated_at' => $record->updated_at,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function mapWait(object $record): array
+    {
+        return [
+            'id' => (int) $record->id,
+            'run_id' => $record->run_id,
+            'name' => $record->name,
+            'status' => $record->status,
+            'reason' => $record->reason,
+            'timeout_at' => $record->timeout_at ?? null,
+            'signal_id' => $record->signal_id !== null ? (int) $record->signal_id : null,
+            'outcome' => $this->decodeJson($record->outcome ?? null, null),
+            'metadata' => $this->decodeJson($record->metadata ?? null, []),
+            'finished_at' => $record->finished_at ?? null,
+            'created_at' => $record->created_at,
+            'updated_at' => $record->updated_at,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function mapProgress(object $record): array
+    {
+        return [
+            'run_id' => $record->run_id,
+            'branch_id' => $record->branch_id !== '' ? $record->branch_id : null,
+            'step_index' => $record->step_index !== null ? (int) $record->step_index : null,
+            'agent_class' => $record->agent_class,
+            'progress' => $this->decodeJson($record->progress ?? null, []),
+            'last_progress_at' => $record->last_progress_at,
+            'created_at' => $record->created_at,
+            'updated_at' => $record->updated_at,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function mapChildRun(object $record): array
+    {
+        return [
+            'parent_run_id' => $record->parent_run_id,
+            'child_run_id' => $record->child_run_id,
+            'child_swarm_class' => $record->child_swarm_class,
+            'wait_name' => $record->wait_name,
+            'context_payload' => $this->decodeJson($record->context_payload ?? null, []),
+            'status' => $record->status,
+            'output' => $record->output,
+            'failure' => $this->decodeJson($record->failure ?? null, null),
+            'dispatched_at' => $record->dispatched_at ?? null,
+            'terminal_event_dispatched_at' => $record->terminal_event_dispatched_at ?? null,
+            'created_at' => $record->created_at,
+            'updated_at' => $record->updated_at,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function mapWebhookIdempotency(object $record): array
+    {
+        return [
+            'scope' => $record->scope,
+            'idempotency_key' => $record->idempotency_key,
+            'request_hash' => $record->request_hash,
+            'status' => $record->status,
+            'run_id' => $record->run_id ?? null,
+            'response_payload' => $this->decodeJson($record->response_payload ?? null, null),
+            'completed_at' => $record->completed_at ?? null,
+            'created_at' => $record->created_at,
+            'updated_at' => $record->updated_at,
+        ];
+    }
+
+    protected function signalTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_signals', 'swarm_durable_signals'));
+    }
+
+    protected function waitTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_waits', 'swarm_durable_waits'));
+    }
+
+    protected function labelTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_labels', 'swarm_durable_labels'));
+    }
+
+    protected function detailTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_details', 'swarm_durable_details'));
+    }
+
+    protected function progressTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_progress', 'swarm_durable_progress'));
+    }
+
+    protected function childRunTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs'));
+    }
+
+    protected function webhookIdempotencyTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'));
     }
 }

@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Testing;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
-use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
@@ -19,7 +19,6 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Broadcasting\Channel;
-use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\FakePendingDispatch;
 
@@ -51,6 +50,21 @@ class SwarmFake implements Swarm
      * @var array<int, string|array<string, mixed>|RunContext>
      */
     protected array $recordedStreamed = [];
+
+    /**
+     * @var array<string, array<int, mixed>>
+     */
+    protected array $recordedDurableOperations = [
+        'signals' => [],
+        'waits' => [],
+        'progress' => [],
+        'labels' => [],
+        'details' => [],
+        'retries' => [],
+        'children' => [],
+        'operations' => [],
+        'inspections' => [],
+    ];
 
     /**
      * @param  class-string  $swarmClass
@@ -108,8 +122,79 @@ class SwarmFake implements Swarm
 
         return new DurableSwarmResponse(
             new FakePendingDispatch,
-            Container::getInstance()->make(DurableSwarmManager::class),
+            new FakeDurableSwarmManager($this),
             'fake-run-id',
+        );
+    }
+
+    public function recordDurableSignal(string $name, mixed $payload = null, ?string $idempotencyKey = null): void
+    {
+        $this->recordedDurableOperations['signals'][] = compact('name', 'payload', 'idempotencyKey');
+    }
+
+    public function recordDurableWait(string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = []): self
+    {
+        $this->recordedDurableOperations['waits'][] = compact('name', 'reason', 'timeoutSeconds', 'metadata');
+
+        return $this;
+    }
+
+    public function recordDurableProgress(array $progress, ?string $branchId = null): self
+    {
+        $this->recordedDurableOperations['progress'][] = compact('progress', 'branchId');
+
+        return $this;
+    }
+
+    public function recordDurableLabels(array $labels): self
+    {
+        $this->recordedDurableOperations['labels'][] = $labels;
+
+        return $this;
+    }
+
+    public function recordDurableDetails(array $details): self
+    {
+        $this->recordedDurableOperations['details'][] = $details;
+
+        return $this;
+    }
+
+    public function recordDurableRetry(array $policy): self
+    {
+        $this->recordedDurableOperations['retries'][] = $policy;
+
+        return $this;
+    }
+
+    public function recordDurableChildSwarm(string $childSwarmClass, string|array|RunContext $task): self
+    {
+        $this->recordedDurableOperations['children'][] = compact('childSwarmClass', 'task');
+
+        return $this;
+    }
+
+    public function recordDurableOperation(string $operation): void
+    {
+        $this->recordedDurableOperations['operations'][] = $operation;
+    }
+
+    public function recordDurableInspect(): void
+    {
+        $this->recordedDurableOperations['inspections'][] = true;
+    }
+
+    public function durableRunDetail(string $runId): DurableRunDetail
+    {
+        return new DurableRunDetail(
+            runId: $runId,
+            run: ['run_id' => $runId, 'status' => 'fake'],
+            labels: array_merge(...($this->recordedDurableOperations['labels'] ?: [[]])),
+            details: array_merge(...($this->recordedDurableOperations['details'] ?: [[]])),
+            waits: $this->recordedDurableOperations['waits'],
+            signals: $this->recordedDurableOperations['signals'],
+            progress: $this->recordedDurableOperations['progress'],
+            children: $this->recordedDurableOperations['children'],
         );
     }
 
@@ -323,6 +408,50 @@ class SwarmFake implements Swarm
         );
     }
 
+    public function assertDurableSignalled(string|callable $name): void
+    {
+        $this->assertRecordedDurableOperation('signals', $name, 'name', 'durable signal');
+    }
+
+    public function assertDurableWaited(string|callable $name): void
+    {
+        $this->assertRecordedDurableOperation('waits', $name, 'name', 'durable wait');
+    }
+
+    public function assertDurableProgressRecorded(array|callable $progress): void
+    {
+        if (is_callable($progress)) {
+            $this->assertRecordedDurableOperation('progress', $progress, null, 'durable progress');
+
+            return;
+        }
+
+        PHPUnit::assertTrue(
+            collect($this->recordedDurableOperations['progress'])->contains(fn (array $record): bool => $this->arraySubsetMatches($progress, $record['progress'] ?? [])),
+            "The swarm [{$this->swarmClass}] did not record durable progress matching the expected subset.",
+        );
+    }
+
+    public function assertDurableLabels(array|callable $labels): void
+    {
+        $this->assertRecordedDurableArraySubset('labels', $labels, 'durable labels');
+    }
+
+    public function assertDurableDetails(array|callable $details): void
+    {
+        $this->assertRecordedDurableArraySubset('details', $details, 'durable details');
+    }
+
+    public function assertDurableRetryScheduled(array|callable $policy): void
+    {
+        $this->assertRecordedDurableArraySubset('retries', $policy, 'durable retry');
+    }
+
+    public function assertDurableChildSwarmDispatched(string|callable $childSwarmClass): void
+    {
+        $this->assertRecordedDurableOperation('children', $childSwarmClass, 'childSwarmClass', 'durable child swarm');
+    }
+
     /**
      * Assert the swarm was streamed with the given task.
      */
@@ -374,6 +503,40 @@ class SwarmFake implements Swarm
         }
 
         return "Fake response for swarm [{$this->swarmClass}].";
+    }
+
+    protected function assertRecordedDurableOperation(string $bucket, string|callable $expected, ?string $key, string $label): void
+    {
+        if (is_callable($expected)) {
+            PHPUnit::assertTrue(
+                collect($this->recordedDurableOperations[$bucket])->contains(fn ($record): bool => (bool) $expected($record)),
+                "The swarm [{$this->swarmClass}] did not record the expected {$label}.",
+            );
+
+            return;
+        }
+
+        PHPUnit::assertTrue(
+            collect($this->recordedDurableOperations[$bucket])->contains(fn ($record): bool => is_array($record) && $key !== null && ($record[$key] ?? null) === $expected),
+            "The swarm [{$this->swarmClass}] did not record {$label} [{$expected}].",
+        );
+    }
+
+    protected function assertRecordedDurableArraySubset(string $bucket, array|callable $expected, string $label): void
+    {
+        if (is_callable($expected)) {
+            PHPUnit::assertTrue(
+                collect($this->recordedDurableOperations[$bucket])->contains(fn ($record): bool => (bool) $expected($record)),
+                "The swarm [{$this->swarmClass}] did not record the expected {$label}.",
+            );
+
+            return;
+        }
+
+        PHPUnit::assertTrue(
+            collect($this->recordedDurableOperations[$bucket])->contains(fn ($record): bool => $this->arraySubsetMatches($expected, $record)),
+            "The swarm [{$this->swarmClass}] did not record {$label} matching the expected subset.",
+        );
     }
 
     /**

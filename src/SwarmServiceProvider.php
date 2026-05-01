@@ -7,10 +7,13 @@ namespace BuiltByBerry\LaravelSwarm;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmInspectCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPauseCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmProgressCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPruneCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmRecoverCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmSignalCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
@@ -139,6 +142,9 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmResumeCommand::class,
                 SwarmCancelCommand::class,
                 SwarmRecoverCommand::class,
+                SwarmSignalCommand::class,
+                SwarmInspectCommand::class,
+                SwarmProgressCommand::class,
             ]);
         }
 

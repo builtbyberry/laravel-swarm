@@ -251,6 +251,41 @@ test('assert never durably dispatched fails after a durable dispatch', function 
     expect(fn () => EmptyRunnableSwarm::assertNeverDispatchedDurably())->toThrow(AssertionFailedError::class);
 });
 
+test('fake durable response records operations without the database manager', function () {
+    EmptyRunnableSwarm::fake();
+
+    $response = EmptyRunnableSwarm::make()->dispatchDurable('durable-task');
+
+    expect($response->signal('approval_received', ['approved' => true], 'signal-1')->accepted)->toBeTrue()
+        ->and($response->pause())->toBeTrue()
+        ->and($response->resume())->toBeTrue()
+        ->and($response->cancel())->toBeTrue()
+        ->and($response->inspect()->run['status'])->toBe('fake');
+
+    EmptyRunnableSwarm::assertDurableSignalled('approval_received');
+});
+
+test('fake durable assertions cover durable runtime surfaces', function () {
+    $fake = EmptyRunnableSwarm::fake();
+
+    $fake
+        ->recordDurableWait('approval_received', 'Waiting for approval')
+        ->recordDurableProgress(['stage' => 'tool-call'])
+        ->recordDurableLabels(['tenant' => 'acme'])
+        ->recordDurableDetails(['ticket_id' => 'TKT-1234'])
+        ->recordDurableRetry(['max_attempts' => 3])
+        ->recordDurableChildSwarm(EmptyRunnableSwarm::class, 'child-task');
+
+    EmptyRunnableSwarm::assertDurableWaited('approval_received');
+    EmptyRunnableSwarm::assertDurableProgressRecorded(['stage' => 'tool-call']);
+    EmptyRunnableSwarm::assertDurableLabels(['tenant' => 'acme']);
+    EmptyRunnableSwarm::assertDurableDetails(['ticket_id' => 'TKT-1234']);
+    EmptyRunnableSwarm::assertDurableRetryScheduled(['max_attempts' => 3]);
+    EmptyRunnableSwarm::assertDurableChildSwarmDispatched(EmptyRunnableSwarm::class);
+
+    expect(fn () => EmptyRunnableSwarm::assertDurableWaited('missing-wait'))->toThrow(AssertionFailedError::class);
+});
+
 test('assert never streamed passes when idle', function () {
     EmptyRunnableSwarm::fake();
 
