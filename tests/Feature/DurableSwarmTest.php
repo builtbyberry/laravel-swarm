@@ -2739,3 +2739,42 @@ test('swarm webhooks require signed requests and dispatch durable starts', funct
         'HTTP_X_SWARM_SIGNATURE' => $signature,
     ], $payload)->assertAccepted()->assertJsonStructure(['run_id']);
 });
+
+test('swarm webhooks token auth rejects blank config and invalid bearer tokens', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'token');
+    config()->set('swarm.durable.webhooks.auth.token', 'webhook-token');
+
+    SwarmWebhooks::routes([FakeSequentialSwarm::class]);
+
+    $payload = json_encode(['input' => 'webhook-task'], JSON_THROW_ON_ERROR);
+    $baseHeaders = [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+    ];
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], array_merge($baseHeaders, [
+        'HTTP_AUTHORIZATION' => 'Bearer wrong',
+    ]), $payload)->assertUnauthorized();
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], $baseHeaders, $payload)
+        ->assertUnauthorized();
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], array_merge($baseHeaders, [
+        'HTTP_AUTHORIZATION' => 'Bearer ',
+    ]), $payload)->assertUnauthorized();
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], array_merge($baseHeaders, [
+        'HTTP_AUTHORIZATION' => 'Bearer webhook-token',
+    ]), $payload)->assertAccepted()->assertJsonStructure(['run_id']);
+
+    config()->set('swarm.durable.webhooks.auth.token', null);
+
+    $this->withoutExceptionHandling();
+
+    expect(fn () => $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], array_merge($baseHeaders, [
+        'HTTP_AUTHORIZATION' => 'Bearer webhook-token',
+    ]), $payload))->toThrow(SwarmException::class, 'Token swarm webhooks require [SWARM_WEBHOOK_TOKEN].');
+
+    $this->withExceptionHandling();
+});

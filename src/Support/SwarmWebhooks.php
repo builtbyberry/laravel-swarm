@@ -180,7 +180,13 @@ class SwarmWebhooks
 
     protected static function authenticateToken(Request $request, ConfigRepository $config): void
     {
-        $token = (string) $config->get('swarm.durable.webhooks.auth.token');
+        $configured = $config->get('swarm.durable.webhooks.auth.token');
+
+        if (blank($configured)) {
+            throw new SwarmException('Token swarm webhooks require [SWARM_WEBHOOK_TOKEN].');
+        }
+
+        $token = (string) $configured;
         $header = (string) $request->bearerToken();
 
         if ($header === '' || ! hash_equals($token, $header)) {

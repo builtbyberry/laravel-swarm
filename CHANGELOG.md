@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- Hardened durable webhook `token` auth when `swarm.durable.webhooks.auth.token`
+  is blank during a request: configuration is validated before comparison so an
+  empty bearer token cannot match a blank secret. Missing or incorrect bearer
+  tokens still return HTTP 401.
+
 ## v0.1.11 - 2026-05-01
 
 ### Documentation
