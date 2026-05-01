@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- `swarm:prune --dry-run` reports how many rows would be deleted in each table
+  category without performing deletes.
+- `swarm.retention.prevent_prune` (`SWARM_PREVENT_PRUNE`) to disable destructive
+  pruning while still allowing `--dry-run`.
+
+### Documentation
+
+- Clarified that swarm persistence is operational (mutable / pruneable), not an
+  immutable compliance archive; documented dry-run, prevent-prune, and audit-sink
+  guidance in `docs/maintenance.md`, `docs/persistence-and-history.md`, and the
+  README production checklist.
+
 ### Security
 
 - Hardened durable webhook `token` auth when `swarm.durable.webhooks.auth.token`

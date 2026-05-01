@@ -10,6 +10,15 @@ Laravel Swarm can persist three kinds of run data:
 This gives you a consistent way to inspect what happened during a swarm run
 after it finishes.
 
+## Operational Records Versus Compliance Archives
+
+Database persistence tables are **mutable operational records**. Rows expire by
+TTL, can be updated during execution, and are removed when `swarm:prune` runs;
+they are **not** an immutable audit trail by default. For regulated retention or
+append-only evidence, mirror what you need using Laravel Swarm lifecycle events,
+your own persistence layer, or archival pipelines (for example object storage
+with legal hold, SIEM export, or organization-managed audit databases).
+
 ## What Gets Stored
 
 Persisted context includes the task input, structured data, metadata, and

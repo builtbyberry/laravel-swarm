@@ -6,6 +6,11 @@ Laravel Swarm's database-backed persistence uses prune-based TTL retention.
 persisted stream replay rows are written, but database records remain queryable
 until you prune expired rows.
 
+Swarm tables are **operational workflow storage**. Pruning **deletes** expired
+rows; it does not meet immutable audit-log expectations by itself. Teams under
+regulated retention requirements should own archival strategy (for example
+lifecycle listeners writing to append-only or application-managed audit stores).
+
 ## Pruning Expired Records
 
 Use the built-in prune command to remove expired records from the swarm
@@ -14,6 +19,21 @@ database tables:
 ```bash
 php artisan swarm:prune
 ```
+
+Preview how many rows would be deleted **without** deleting:
+
+```bash
+php artisan swarm:prune --dry-run
+```
+
+Dry-run prints the same category totals as a normal prune (prefixed with “Would
+prune”) so operators can judge impact before scheduling aggressive retention.
+
+To disable **destructive** pruning entirely (for example when retention is
+handled elsewhere), set `SWARM_PREVENT_PRUNE=true` or
+`swarm.retention.prevent_prune` to true in config. Scheduled `swarm:prune`
+then exits successfully without deleting rows. **`--dry-run` still runs** so you
+can inspect counts while pruning is disabled.
 
 The command prunes the history, context, artifact, stream replay, durable
 runtime, durable node-output, durable branch, signal, wait, label, detail,

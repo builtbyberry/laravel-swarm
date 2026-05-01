@@ -637,6 +637,10 @@ To customize how swarm state is stored, bind your own implementations against th
   provider call; for durable swarms, size them above one durable step.
 - Schedule `swarm:recover` for durable execution, coordinated queue hierarchical
   parallel (`multi_worker`), and `swarm:prune` for database retention cleanup.
+- Define retention ownership: Swarm tables are operational storage (TTL + prune).
+  Use `php artisan swarm:prune --dry-run` before tightening schedules, set
+  `SWARM_PREVENT_PRUNE` when package pruning must not delete rows, and build
+  immutable or long-lived audit evidence outside Swarm if compliance requires it.
 - Review capture settings before running customer, compliance, or regulated
   data through swarms.
 - Build a run inspector or dashboard around `run_id`, lifecycle events,

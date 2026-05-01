@@ -47,5 +47,8 @@ test('maintenance documentation includes the enterprise pilot posture', function
         ->and($contents)->toContain('schedule `swarm:recover`')
         ->and($contents)->toContain('dedicated queue')
         ->and($contents)->toContain('lower-sensitivity data')
-        ->and($contents)->toContain('conservative capture settings');
+        ->and($contents)->toContain('conservative capture settings')
+        ->and($contents)->toContain('--dry-run')
+        ->and($contents)->toContain('swarm.retention.prevent_prune')
+        ->and($contents)->toContain('swarm_prevent_prune');
 });

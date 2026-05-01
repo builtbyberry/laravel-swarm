@@ -7,19 +7,28 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 use Symfony\Component\Console\Attribute\AsCommand;
 
 #[AsCommand(name: 'swarm:prune')]
 class SwarmPruneCommand extends Command
 {
-    protected $signature = 'swarm:prune';
+    protected $signature = 'swarm:prune {--dry-run : Report rows that would be pruned without deleting}';
 
-    protected $description = 'Prune expired swarm database persistence records in bounded batches';
+    protected $description = 'Prune expired swarm database persistence records in bounded batches (use --dry-run to preview; retention.prevent_prune disables deletes)';
 
     protected const CHUNK_SIZE = 1000;
 
     public function handle(Connection $connection, ConfigRepository $config): int
     {
+        if ($config->get('swarm.retention.prevent_prune', false) === true && ! $this->option('dry-run')) {
+            $this->components->warn('Swarm pruning is disabled because swarm.retention.prevent_prune is true (SWARM_PREVENT_PRUNE). Use --dry-run to inspect impact without deleting.');
+
+            return self::SUCCESS;
+        }
+
+        $dryRun = (bool) $this->option('dry-run');
+
         $tables = [
             'durable' => (string) $config->get('swarm.tables.durable', 'swarm_durable_runs'),
             'history' => (string) $config->get('swarm.tables.history', 'swarm_run_histories'),
@@ -38,7 +47,7 @@ class SwarmPruneCommand extends Command
             'durable_webhook_idempotency' => (string) $config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'),
         ];
 
-        $deleted = [];
+        $counts = [];
         $schema = $connection->getSchemaBuilder();
 
         if (! $schema->hasTable($tables['history'])) {
@@ -49,7 +58,7 @@ class SwarmPruneCommand extends Command
 
         foreach ($tables as $name => $table) {
             if (! $schema->hasTable($table)) {
-                $deleted[$name] = 0;
+                $counts[$name] = 0;
 
                 if ($name !== 'durable_branches') {
                     $this->components->warn("Skipping {$name} pruning because table [{$table}] does not exist.");
@@ -58,44 +67,118 @@ class SwarmPruneCommand extends Command
                 continue;
             }
 
-            $deleted[$name] = $this->pruneTable($connection, $config, $name, $table, $tables['history']);
+            $counts[$name] = $dryRun
+                ? $this->countPrunableRows($connection, $config, $name, $table, $tables['history'])
+                : $this->pruneTable($connection, $config, $name, $table, $tables['history']);
         }
 
+        $verb = $dryRun ? 'Would prune' : 'Pruned';
+
         $this->components->info(sprintf(
-            'Pruned %d history, %d context, and %d artifact records.',
-            $deleted['history'],
-            $deleted['contexts'],
-            $deleted['artifacts'],
+            '%s %d history, %d context, and %d artifact records.',
+            $verb,
+            $counts['history'],
+            $counts['contexts'],
+            $counts['artifacts'],
         ));
         $this->components->info(sprintf(
-            'Pruned %d normalized step record(s).',
-            $deleted['history_steps'],
+            '%s %d normalized step record(s).',
+            $verb,
+            $counts['history_steps'],
         ));
         $this->components->info(sprintf(
-            'Pruned %d stream event record(s).',
-            $deleted['stream_events'],
+            '%s %d stream event record(s).',
+            $verb,
+            $counts['stream_events'],
         ));
         $this->components->info(sprintf(
-            'Pruned %d durable runtime, %d durable node output, and %d durable branch record(s).',
-            $deleted['durable'],
-            $deleted['durable_node_outputs'],
-            $deleted['durable_branches'],
+            '%s %d durable runtime, %d durable node output, and %d durable branch record(s).',
+            $verb,
+            $counts['durable'],
+            $counts['durable_node_outputs'],
+            $counts['durable_branches'],
         ));
         $this->components->info(sprintf(
-            'Pruned %d durable signal, %d wait, %d label, %d detail, %d progress, and %d child run record(s).',
-            $deleted['durable_signals'],
-            $deleted['durable_waits'],
-            $deleted['durable_labels'],
-            $deleted['durable_details'],
-            $deleted['durable_progress'],
-            $deleted['durable_child_runs'],
+            '%s %d durable signal, %d wait, %d label, %d detail, %d progress, and %d child run record(s).',
+            $verb,
+            $counts['durable_signals'],
+            $counts['durable_waits'],
+            $counts['durable_labels'],
+            $counts['durable_details'],
+            $counts['durable_progress'],
+            $counts['durable_child_runs'],
         ));
         $this->components->info(sprintf(
-            'Pruned %d durable webhook idempotency record(s).',
-            $deleted['durable_webhook_idempotency'],
+            '%s %d durable webhook idempotency record(s).',
+            $verb,
+            $counts['durable_webhook_idempotency'],
         ));
 
         return self::SUCCESS;
+    }
+
+    protected function pruneQuery(Connection $connection, ConfigRepository $config, string $role, string $table, string $historyTable): Builder
+    {
+        $query = $connection->table($table);
+
+        if ($role === 'history') {
+            $query->where('expires_at', '<', now())
+                ->whereIn('status', ['completed', 'failed', 'cancelled']);
+        } elseif ($role === 'durable') {
+            $query->whereIn('status', ['completed', 'failed', 'cancelled'])
+                ->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                    $subquery->from($historyTable)
+                        ->select('run_id')
+                        ->where('expires_at', '<', now())
+                        ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                });
+        } elseif (in_array($role, ['durable_signals', 'durable_waits', 'durable_labels', 'durable_details', 'durable_progress'], true)) {
+            $query->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                $subquery->from($historyTable)
+                    ->select('run_id')
+                    ->where('expires_at', '<', now())
+                    ->whereIn('status', ['completed', 'failed', 'cancelled']);
+            });
+        } elseif ($role === 'durable_child_runs') {
+            $query->whereIn('parent_run_id', function ($subquery) use ($historyTable): void {
+                $subquery->from($historyTable)
+                    ->select('run_id')
+                    ->where('expires_at', '<', now())
+                    ->whereIn('status', ['completed', 'failed', 'cancelled']);
+            });
+        } elseif ($role === 'durable_webhook_idempotency') {
+            $staleCutoff = now()->subSeconds((int) $config->get('swarm.durable.webhooks.idempotency_ttl', 3600));
+
+            $query->where(function ($query) use ($historyTable, $staleCutoff): void {
+                $query->where(function ($query) use ($historyTable): void {
+                    $query->whereNotNull('run_id')
+                        ->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                            $subquery->from($historyTable)
+                                ->select('run_id')
+                                ->where('expires_at', '<', now())
+                                ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                        });
+                })->orWhere(function ($query) use ($staleCutoff): void {
+                    $query->whereNull('run_id')
+                        ->whereIn('status', ['failed', 'reserved'])
+                        ->where('updated_at', '<', $staleCutoff);
+                });
+            });
+        } else {
+            $query->where('expires_at', '<', now())
+                ->whereNotIn('run_id', function ($subquery) use ($historyTable): void {
+                    $subquery->from($historyTable)
+                        ->select('run_id')
+                        ->whereIn('status', ['pending', 'running', 'paused', 'waiting']);
+                });
+        }
+
+        return $query;
+    }
+
+    protected function countPrunableRows(Connection $connection, ConfigRepository $config, string $role, string $table, string $historyTable): int
+    {
+        return (int) $this->pruneQuery($connection, $config, $role, $table, $historyTable)->count();
     }
 
     protected function pruneTable(Connection $connection, ConfigRepository $config, string $role, string $table, string $historyTable): int
@@ -103,61 +186,7 @@ class SwarmPruneCommand extends Command
         $deleted = 0;
 
         while (true) {
-            $query = $connection->table($table);
-
-            if ($role === 'history') {
-                $query->where('expires_at', '<', now())
-                    ->whereIn('status', ['completed', 'failed', 'cancelled']);
-            } elseif ($role === 'durable') {
-                $query->whereIn('status', ['completed', 'failed', 'cancelled'])
-                    ->whereIn('run_id', function ($subquery) use ($historyTable): void {
-                        $subquery->from($historyTable)
-                            ->select('run_id')
-                            ->where('expires_at', '<', now())
-                            ->whereIn('status', ['completed', 'failed', 'cancelled']);
-                    });
-            } elseif (in_array($role, ['durable_signals', 'durable_waits', 'durable_labels', 'durable_details', 'durable_progress'], true)) {
-                $query->whereIn('run_id', function ($subquery) use ($historyTable): void {
-                    $subquery->from($historyTable)
-                        ->select('run_id')
-                        ->where('expires_at', '<', now())
-                        ->whereIn('status', ['completed', 'failed', 'cancelled']);
-                });
-            } elseif ($role === 'durable_child_runs') {
-                $query->whereIn('parent_run_id', function ($subquery) use ($historyTable): void {
-                    $subquery->from($historyTable)
-                        ->select('run_id')
-                        ->where('expires_at', '<', now())
-                        ->whereIn('status', ['completed', 'failed', 'cancelled']);
-                });
-            } elseif ($role === 'durable_webhook_idempotency') {
-                $staleCutoff = now()->subSeconds((int) $config->get('swarm.durable.webhooks.idempotency_ttl', 3600));
-
-                $query->where(function ($query) use ($historyTable, $staleCutoff): void {
-                    $query->where(function ($query) use ($historyTable): void {
-                        $query->whereNotNull('run_id')
-                            ->whereIn('run_id', function ($subquery) use ($historyTable): void {
-                                $subquery->from($historyTable)
-                                    ->select('run_id')
-                                    ->where('expires_at', '<', now())
-                                    ->whereIn('status', ['completed', 'failed', 'cancelled']);
-                            });
-                    })->orWhere(function ($query) use ($staleCutoff): void {
-                        $query->whereNull('run_id')
-                            ->whereIn('status', ['failed', 'reserved'])
-                            ->where('updated_at', '<', $staleCutoff);
-                    });
-                });
-            } else {
-                $query->where('expires_at', '<', now())
-                    ->whereNotIn('run_id', function ($subquery) use ($historyTable): void {
-                        $subquery->from($historyTable)
-                            ->select('run_id')
-                            ->whereIn('status', ['pending', 'running', 'paused', 'waiting']);
-                    });
-            }
-
-            $chunk = $query
+            $chunk = $this->pruneQuery($connection, $config, $role, $table, $historyTable)
                 ->limit(self::CHUNK_SIZE)
                 ->delete();
 

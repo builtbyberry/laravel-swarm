@@ -13,6 +13,15 @@ return [
 
     'max_agent_steps' => (int) env('SWARM_MAX_AGENT_STEPS', 10),
 
+    /*
+     * When true, swarm:prune skips destructive deletes (scheduled pruning no-ops).
+     * Use for regulated deployments that manage retention outside the package.
+     * Dry-run (--dry-run) still reports counts when this is enabled.
+     */
+    'retention' => [
+        'prevent_prune' => filter_var(env('SWARM_PREVENT_PRUNE', false), FILTER_VALIDATE_BOOLEAN),
+    ],
+
     'persistence' => [
         'driver' => env('SWARM_PERSISTENCE_DRIVER', 'cache'),
     ],

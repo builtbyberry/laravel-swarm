@@ -261,6 +261,158 @@ test('prune removes cancelled history rows and terminal durable runtime rows', f
     expect(DB::table('swarm_durable_runs')->where('run_id', 'future-cancelled-run')->exists())->toBeTrue();
 });
 
+test('prune dry-run reports would-delete counts without deleting rows', function () {
+    $expired = Carbon::now('UTC')->subMinute();
+    $future = Carbon::now('UTC')->addHour();
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'dry-run-cancelled',
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'cancelled',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => $expired,
+        'expires_at' => $expired,
+        'execution_token' => null,
+        'leased_until' => null,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+
+    DB::table('swarm_contexts')->insert([
+        'run_id' => 'dry-run-cancelled',
+        'input' => 'input',
+        'data' => json_encode([]),
+        'metadata' => json_encode([]),
+        'artifacts' => json_encode([]),
+        'expires_at' => $expired,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+
+    DB::table('swarm_artifacts')->insert([
+        'run_id' => 'dry-run-cancelled',
+        'name' => 'agent_output',
+        'content' => json_encode('output'),
+        'metadata' => json_encode([]),
+        'step_agent_class' => null,
+        'expires_at' => $expired,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+
+    DB::table('swarm_durable_runs')->insert([
+        'run_id' => 'dry-run-cancelled',
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'cancelled',
+        'next_step_index' => 0,
+        'current_step_index' => null,
+        'total_steps' => 1,
+        'timeout_at' => $future,
+        'step_timeout_seconds' => 300,
+        'execution_token' => null,
+        'leased_until' => null,
+        'pause_requested_at' => null,
+        'cancel_requested_at' => $expired,
+        'queue_connection' => null,
+        'queue_name' => null,
+        'finished_at' => $expired,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+
+    $historyBefore = DB::table('swarm_run_histories')->count();
+
+    Artisan::call('swarm:prune', ['--dry-run' => true]);
+
+    $output = Artisan::output();
+
+    expect($output)->toContain('Would prune')
+        ->and($output)->toContain('1 history')
+        ->and($output)->toContain('1 context')
+        ->and($output)->toContain('1 artifact');
+    expect(DB::table('swarm_run_histories')->count())->toBe($historyBefore);
+    expect(DB::table('swarm_run_histories')->where('run_id', 'dry-run-cancelled')->exists())->toBeTrue();
+});
+
+test('prune exits without deleting when retention.prevent_prune is enabled', function () {
+    config(['swarm.retention.prevent_prune' => true]);
+
+    $expired = Carbon::now('UTC')->subMinute();
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'prevent-prune-run',
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'cancelled',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => $expired,
+        'expires_at' => $expired,
+        'execution_token' => null,
+        'leased_until' => null,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+
+    Artisan::call('swarm:prune');
+
+    $output = Artisan::output();
+
+    expect($output)->toContain('disabled')
+        ->and($output)->toContain('prevent_prune');
+    expect(DB::table('swarm_run_histories')->where('run_id', 'prevent-prune-run')->exists())->toBeTrue();
+
+    config(['swarm.retention.prevent_prune' => false]);
+});
+
+test('prune dry-run still runs when retention.prevent_prune is enabled', function () {
+    config(['swarm.retention.prevent_prune' => true]);
+
+    $expired = Carbon::now('UTC')->subMinute();
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'prevent-prune-dry-run',
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'cancelled',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => $expired,
+        'expires_at' => $expired,
+        'execution_token' => null,
+        'leased_until' => null,
+        'created_at' => $expired,
+        'updated_at' => $expired,
+    ]);
+
+    Artisan::call('swarm:prune', ['--dry-run' => true]);
+
+    $output = Artisan::output();
+
+    expect($output)->toContain('Would prune')->not->toContain('disabled');
+    expect(DB::table('swarm_run_histories')->where('run_id', 'prevent-prune-dry-run')->exists())->toBeTrue();
+
+    config(['swarm.retention.prevent_prune' => false]);
+});
+
 test('prune removes expired durable branch rows while preserving active runs', function () {
     $expired = Carbon::now('UTC')->subMinute();
     $future = Carbon::now('UTC')->addHour();
