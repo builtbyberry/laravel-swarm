@@ -17,8 +17,8 @@ php artisan swarm:prune
 
 The command prunes the history, context, artifact, stream replay, durable
 runtime, durable node-output, durable branch, signal, wait, label, detail,
-progress, and child-run tables in bounded chunks to avoid long-running table
-locks on large datasets.
+progress, child-run, and durable webhook idempotency tables in bounded chunks to
+avoid long-running table locks on large datasets.
 
 Laravel Swarm protects active runs across persistence stores. While a run is
 `pending`, `running`, `waiting`, or `paused`, its history, context, artifact,
@@ -29,6 +29,12 @@ History pruning only removes expired terminal rows (`completed`, `failed`, and
 `cancelled`). Context and artifact pruning skip rows that belong to active runs.
 Durable runtime pruning removes terminal runtime rows once their matching
 history row is expired.
+
+Durable webhook idempotency pruning removes rows tied to expired terminal run
+history. It also removes stale no-run `failed` or `reserved` rows using
+`swarm.durable.webhooks.idempotency_ttl`, which is configured through
+`SWARM_WEBHOOK_IDEMPOTENCY_TTL`. Completed rows with a `run_id` remain aligned
+with durable history retention.
 
 `swarm:prune` is schema-aware. If the history table is missing, the command
 skips all pruning because active-run safety depends on history. If history

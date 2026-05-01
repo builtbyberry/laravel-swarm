@@ -131,7 +131,7 @@ class SwarmPruneCommand extends Command
                         ->whereIn('status', ['completed', 'failed', 'cancelled']);
                 });
             } elseif ($role === 'durable_webhook_idempotency') {
-                $staleCutoff = now()->subSeconds((int) $config->get('swarm.context.ttl', 3600));
+                $staleCutoff = now()->subSeconds((int) $config->get('swarm.durable.webhooks.idempotency_ttl', 3600));
 
                 $query->where(function ($query) use ($historyTable, $staleCutoff): void {
                     $query->where(function ($query) use ($historyTable): void {

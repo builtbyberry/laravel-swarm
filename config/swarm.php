@@ -102,6 +102,7 @@ return [
         'webhooks' => [
             'enabled' => env('SWARM_WEBHOOKS_ENABLED', false),
             'prefix' => env('SWARM_WEBHOOKS_PREFIX', 'swarm/webhooks'),
+            'idempotency_ttl' => (int) env('SWARM_WEBHOOK_IDEMPOTENCY_TTL', 3600),
             'auth' => [
                 'driver' => env('SWARM_WEBHOOK_AUTH_DRIVER', 'signed'),
                 'secret' => env('SWARM_WEBHOOK_SECRET'),

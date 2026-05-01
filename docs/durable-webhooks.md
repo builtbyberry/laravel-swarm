@@ -19,6 +19,7 @@ Production defaults use signed requests:
     'webhooks' => [
         'enabled' => env('SWARM_WEBHOOKS_ENABLED', false),
         'prefix' => env('SWARM_WEBHOOKS_PREFIX', 'swarm/webhooks'),
+        'idempotency_ttl' => (int) env('SWARM_WEBHOOK_IDEMPOTENCY_TTL', 3600),
         'auth' => [
             'driver' => env('SWARM_WEBHOOK_AUTH_DRIVER', 'signed'),
             'secret' => env('SWARM_WEBHOOK_SECRET'),
@@ -48,7 +49,6 @@ and same request body can reclaim only that failed reservation; active
 blocked while allowing failed ingress attempts to be retried.
 
 `swarm:prune` removes stale failed or abandoned no-run webhook idempotency rows
-using `swarm.context.ttl` as an operational cleanup fallback. That setting is
-reused for cleanup only; it is not a dedicated webhook idempotency retention
-control. If webhook ingress becomes a major production surface, prefer adding an
-explicit retention setting for these rows.
+using `swarm.durable.webhooks.idempotency_ttl`. Completed idempotency rows tied
+to a durable run follow durable history retention instead, so matching retries
+can return the original run ID while that history is retained.
