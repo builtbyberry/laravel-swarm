@@ -277,21 +277,8 @@ Queued swarms remain the lightweight queue mode. One queued job represents one s
 
 This is the right fit for normal background swarm work in Laravel. It is not durable multi-job orchestration, and it is not intended to replace a workflow engine for very long-lived pipelines.
 
-Queued `then()` and `catch()` callbacks remain available for compatibility, but
-they are deprecated for real queued execution. Those closures are serialized
-into the queue payload, which can capture more application state than intended,
-fail serialization unexpectedly, or leak sensitive data into queue storage.
-
-```php
-ArticlePipeline::make()
-    ->queue('Draft a blog outline about Laravel queues.')
-    ->then(function (\BuiltByBerry\LaravelSwarm\Responses\SwarmResponse $response) {
-        //
-    })
-    ->catch(function (\Throwable $exception) {
-        //
-    });
-```
+Queued swarms are event-driven. Listen to `SwarmCompleted` and `SwarmFailed`
+instead of serializing callbacks into queue payloads.
 
 Like Laravel AI, the queued swarm response proxies the underlying pending dispatch, so you may continue chaining queue configuration methods such as `onConnection()` and `onQueue()` before the job is actually dispatched.
 
@@ -461,13 +448,12 @@ Broadcast helpers do not retry or buffer delivery. If Laravel broadcasting
 throws while a helper is consuming the stream, live `broadcast()` /
 `broadcastNow()` rethrow the transport exception and `broadcastOnQueue()` lets
 the queued job fail. If delivery fails before terminal completion is yielded,
-run history is marked failed and queued `then()` callbacks do not run.
+run history is marked failed.
 
 If delivery fails while broadcasting the terminal `swarm_stream_end` event, the
 helper or queued job still fails, but swarm execution has already completed:
 history remains completed, and persisted replay may include the terminal event.
-Queued `then()` callbacks still do not run because the broadcast job failed. Use
-Laravel's broadcast and queue infrastructure for transport retries.
+Use Laravel's broadcast and queue infrastructure for transport retries.
 
 Persisted replay of the exact emitted timeline is opt-in (`storeForReplay()` or
 `swarm.streaming.replay.enabled`); playback uses `SwarmHistory::replay($runId)`.
@@ -649,8 +635,8 @@ To customize how swarm state is stored, bind your own implementations against th
 - Forgetting to schedule `swarm:recover` for durable workflows.
 - Storing secrets in metadata. Capture flags redact captured inputs and
   outputs, not developer-supplied metadata.
-- Treating queued `then()` / `catch()` callbacks as the production integration
-  point. Prefer lifecycle events and persisted status.
+- Treating queued jobs as callback-driven workflows. Prefer lifecycle events and
+  persisted status.
 
 ## Documentation
 

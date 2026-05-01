@@ -271,11 +271,22 @@ class HierarchicalRunner
         }
 
         $nodeOutputs = $this->durableNodeOutputsForCursor($state, $plan, $cursor);
+        $branchUsage = [];
         foreach ($branches as $branch) {
             if (($branch['status'] ?? null) === 'completed' && is_string($branch['node_id'] ?? null) && is_string($branch['output'] ?? null)) {
                 $nodeOutputs[$branch['node_id']] = $branch['output'];
             }
+
+            if (($branch['status'] ?? null) === 'completed' && is_array($branch['usage'] ?? null)) {
+                $branchUsage = $this->mergeUsage($branchUsage, $branch['usage']);
+            }
         }
+        $nodeOutputs = array_merge(
+            is_array($state->context->data['hierarchical_node_outputs'] ?? null)
+                ? $state->context->data['hierarchical_node_outputs']
+                : [],
+            $nodeOutputs,
+        );
 
         $cursor['executed_node_ids'][] = $parallel->id;
         $cursor['completed_node_ids'][] = $parallel->id;
@@ -298,6 +309,12 @@ class HierarchicalRunner
 
         $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
         $this->applyDurableCursorToContext($state, $cursor);
+        $state->context->mergeMetadata([
+            'usage' => $this->mergeUsage(
+                is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [],
+                $branchUsage,
+            ),
+        ]);
 
         $steps = [];
         $history = $state->historyStore->find($state->context->runId);
@@ -310,9 +327,6 @@ class HierarchicalRunner
         $executedNodeIds = is_array($state->context->metadata['executed_node_ids'] ?? null) ? $state->context->metadata['executed_node_ids'] : [];
         $executedAgentClasses = is_array($state->context->metadata['executed_agent_classes'] ?? null) ? $state->context->metadata['executed_agent_classes'] : [];
         $parallelGroups = is_array($state->context->metadata['parallel_groups'] ?? null) ? $state->context->metadata['parallel_groups'] : [];
-        $nodeOutputs = is_array($state->context->data['hierarchical_node_outputs'] ?? null)
-            ? $state->context->data['hierarchical_node_outputs']
-            : $nodeOutputs;
         $nextIndex = $priorStepCount;
 
         $deferral = null;
@@ -393,10 +407,12 @@ class HierarchicalRunner
         array $nodeOutputs,
         string $finalOutput,
     ): SwarmResponse {
+        $executedSteps = count($executedAgentClasses) + 1;
+
         $state->context
             ->mergeData([
                 'last_output' => $finalOutput,
-                'steps' => count($steps),
+                'steps' => $executedSteps,
                 'hierarchical_node_outputs' => $nodeOutputs,
             ])
             ->mergeMetadata([
@@ -406,7 +422,7 @@ class HierarchicalRunner
                 'executed_node_ids' => $executedNodeIds,
                 'executed_agent_classes' => $executedAgentClasses,
                 'parallel_groups' => $parallelGroups,
-                'executed_steps' => count($steps),
+                'executed_steps' => $executedSteps,
                 'execution_mode' => $state->executionMode->value,
             ]);
 
@@ -426,7 +442,7 @@ class HierarchicalRunner
                 'executed_node_ids' => $executedNodeIds,
                 'executed_agent_classes' => $executedAgentClasses,
                 'parallel_groups' => $parallelGroups,
-                'executed_steps' => count($steps),
+                'executed_steps' => $executedSteps,
                 'execution_mode' => $state->executionMode->value,
             ],
         );

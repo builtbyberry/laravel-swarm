@@ -232,25 +232,6 @@ test('queued swarm retries do not re-run completed database-backed executions', 
     FakeEditor::assertPrompted('writer-out');
 });
 
-test('queued swarm duplicate completion does not replay deprecated then callbacks', function () {
-    config()->set('swarm.persistence.driver', 'database');
-    Artisan::call('migrate:fresh', ['--database' => 'testing']);
-
-    $state = (object) ['callbacks' => 0];
-    $context = RunContext::from('queued-task', 'duplicate-callback-run-id');
-
-    $job = (new InvokeSwarm(FakeSequentialSwarm::class, $context->toQueuePayload()))
-        ->then(function (SwarmResponse $response) use ($state): void {
-            expect($response->output)->toBe('editor-out');
-            $state->callbacks++;
-        });
-
-    $job->handle(app(SwarmRunner::class));
-    $job->handle(app(SwarmRunner::class));
-
-    expect($state->callbacks)->toBe(1);
-});
-
 test('queued swarm retries do not restart failed database-backed executions', function () {
     config()->set('swarm.persistence.driver', 'database');
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
@@ -533,32 +514,10 @@ test('queued swarm dispatches started events with queue execution mode', functio
         && $event->executionMode === 'queue');
 });
 
-test('queued swarm completion callbacks run through the pending dispatch path', function () {
-    $state = (object) ['response' => null];
-
-    $queued = FakeSequentialSwarm::make()
-        ->queue('queued-task')
-        ->then(function (SwarmResponse $response) use ($state): void {
-            $state->response = $response;
-        });
-
-    $job = $queued->getJob();
-    preventQueuedSwarmRedispatch($queued);
-    $job->handle(app(SwarmRunner::class));
-
-    expect($state->response)->toBeInstanceOf(SwarmResponse::class);
-    expect($state->response?->output)->toBe('editor-out');
-});
-
 test('queued swarm response preserves fluency after queue configuration methods', function () {
-    $state = (object) ['response' => null];
-
     $queued = FakeSequentialSwarm::make()
         ->queue('queued-task')
-        ->onQueue('swarm-testing')
-        ->then(function (SwarmResponse $response) use ($state): void {
-            $state->response = $response;
-        });
+        ->onQueue('swarm-testing');
 
     expect($queued)->toBeInstanceOf(QueuedSwarmResponse::class);
     expect($queued->runId)->not->toBeNull();
@@ -568,8 +527,9 @@ test('queued swarm response preserves fluency after queue configuration methods'
     preventQueuedSwarmRedispatch($queued);
     $job->handle(app(SwarmRunner::class));
 
-    expect($state->response)->toBeInstanceOf(SwarmResponse::class);
-    expect($state->response?->output)->toBe('editor-out');
+    $history = app(SwarmHistory::class)->find($queued->runId);
+    expect($history['status'])->toBe('completed');
+    expect($history['output'])->toBe('editor-out');
 });
 
 test('queued swarm response returns raw values for non dispatch proxy methods', function () {
@@ -578,50 +538,21 @@ test('queued swarm response returns raw values for non dispatch proxy methods', 
     expect($queued->getJob())->toBeInstanceOf(InvokeSwarm::class);
 });
 
-test('queued swarm failure callbacks run through the pending dispatch path', function () {
-    $state = (object) ['exception_class' => null, 'exception_message' => null];
-    $queued = FailingQueuedSwarm::make()
-        ->queue('queued-task')
-        ->catch(function (Throwable $exception) use ($state): void {
-            $state->exception_class = $exception::class;
-            $state->exception_message = $exception->getMessage();
-        });
-    $job = $queued->getJob();
-    preventQueuedSwarmRedispatch($queued);
-
-    try {
-        $job->handle(app(SwarmRunner::class));
-
-        $this->fail('Expected the queued swarm to throw.');
-    } catch (RuntimeException $exception) {
-        $job->failed($exception);
-        expect($exception->getMessage())->toBe('Queued swarm failed.');
-    }
-
-    expect($state->exception_class)->toBe(RuntimeException::class);
-    expect($state->exception_message)->toBe('Queued swarm failed.');
-});
-
 test('queued swarms resolve a fresh instance from the container when handled', function () {
-    $state = (object) ['response' => null];
-
     $resolvedOutput = new ResolvedSwarmOutput;
     $resolvedOutput->value = 'resolved-output';
 
     app()->instance(ResolvedSwarmOutput::class, $resolvedOutput);
 
-    $queued = DependencyInjectedQueuedSwarm::make()
-        ->queue('queued-task')
-        ->then(function (SwarmResponse $response) use ($state): void {
-            $state->response = $response;
-        });
+    $queued = DependencyInjectedQueuedSwarm::make()->queue('queued-task');
 
     $job = $queued->getJob();
     preventQueuedSwarmRedispatch($queued);
     $job->handle(app(SwarmRunner::class));
 
-    expect($state->response)->toBeInstanceOf(SwarmResponse::class);
-    expect($state->response?->output)->toBe('resolved-output');
+    $history = app(SwarmHistory::class)->find($queued->runId);
+    expect($history['status'])->toBe('completed');
+    expect($history['output'])->toBe('resolved-output');
 });
 
 test('queue fails fast for swarms with runtime constructor state', function () {

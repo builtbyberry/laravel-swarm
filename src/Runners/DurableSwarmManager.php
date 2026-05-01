@@ -184,9 +184,26 @@ class DurableSwarmManager
             $boundary->branchDefinitions,
         );
 
-        $context->mergeMetadata([
-            'queue_hierarchical_waiting_parallel' => true,
-        ]);
+        $context
+            ->mergeData([
+                'steps' => count($boundary->stepsSoFar),
+                'hierarchical_node_outputs' => $boundary->nodeOutputs,
+            ])
+            ->mergeMetadata([
+                'topology' => Topology::Hierarchical->value,
+                'coordinator_agent_class' => $boundary->coordinatorClass,
+                'route_plan_start' => $boundary->routeCursor['route_plan_start'] ?? null,
+                'current_node_id' => $boundary->parentParallelNodeId,
+                'completed_node_ids' => $boundary->routeCursor['completed_node_ids'] ?? [],
+                'executed_node_ids' => $boundary->executedNodeIds,
+                'executed_agent_classes' => $boundary->executedAgentClasses,
+                'parallel_groups' => $boundary->parallelGroups,
+                'executed_steps' => count($boundary->stepsSoFar),
+                'total_steps' => $boundary->totalSteps,
+                'usage' => $boundary->mergedUsage,
+                'execution_mode' => ExecutionMode::Queue->value,
+                'queue_hierarchical_waiting_parallel' => true,
+            ]);
 
         $this->durableRuns->waitForBranches($runId, new BranchWaitPayload(
             executionToken: $token,

@@ -91,8 +91,8 @@ ArticlePipeline::make()
 `broadcast()` consumes the stream immediately and broadcasts each
 `SwarmStreamEvent` through Laravel broadcasting. `broadcastNow()` uses immediate
 delivery. `broadcastOnQueue()` dispatches a worker that streams the swarm once,
-broadcasts each event immediately from the worker, and passes the final
-`StreamedSwarmResponse` to queued `then()` callbacks.
+broadcasts each event immediately from the worker, and records completion
+through normal swarm history and lifecycle events.
 
 These are stream-event helpers, not lifecycle broadcasting for every topology.
 They are sequential-only for the same reason `stream()` is sequential-only. For
@@ -103,13 +103,12 @@ Broadcast helpers do not retry or buffer transport delivery. If Laravel
 broadcasting throws while the helper is consuming the stream, live `broadcast()`
 / `broadcastNow()` rethrow the transport exception and `broadcastOnQueue()` lets
 the queued job fail. If delivery fails before terminal completion is yielded,
-run history is marked failed and queued `then()` callbacks do not run.
+run history is marked failed.
 
 If delivery fails while broadcasting the terminal `swarm_stream_end` event, the
 helper or queued job still fails, but swarm execution has already completed:
 history remains completed, and persisted replay may include the terminal event.
-Queued `then()` callbacks still do not run because the broadcast job failed. Use
-Laravel's broadcast and queue infrastructure for transport retries.
+Use Laravel's broadcast and queue infrastructure for transport retries.
 
 ## Stream Event Types
 

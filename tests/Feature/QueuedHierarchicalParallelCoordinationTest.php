@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FailingPromptAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
@@ -101,11 +102,80 @@ function qhpcParallelPlan(): array
     ];
 }
 
+function qhpcPreParallelOutputPlan(): array
+{
+    return [
+        'start_at' => 'writer_node',
+        'nodes' => [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'pre-parallel-worker',
+                'next' => 'parallel_node',
+            ],
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['editor_node'],
+                'next' => 'researcher_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'branch-worker',
+            ],
+            'researcher_node' => [
+                'type' => 'worker',
+                'agent' => FakeResearcher::class,
+                'prompt' => 'combine-results',
+                'with_outputs' => [
+                    'pre' => 'writer_node',
+                    'branch' => 'editor_node',
+                ],
+                'next' => 'finish_node',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'researcher_node',
+            ],
+        ],
+    ];
+}
+
+function qhpcPreParallelFinishOutputPlan(): array
+{
+    return [
+        'start_at' => 'writer_node',
+        'nodes' => [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'pre-parallel-worker',
+                'next' => 'parallel_node',
+            ],
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['editor_node'],
+                'next' => 'finish_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'branch-worker',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'writer_node',
+            ],
+        ],
+    ];
+}
+
 beforeEach(function () {
     configureQueuedHierarchicalParallelRuntime();
     FakeHierarchicalCoordinator::fake([qhpcParallelPlan()]);
     FakeWriter::fake(['writer-out']);
     FakeEditor::fake(['editor-out']);
+    FakeResearcher::fake(['researcher-out']);
 });
 
 test('queued hierarchical parallel multi_worker defers branches then completes on resume', function () {
@@ -130,9 +200,88 @@ test('queued hierarchical parallel multi_worker defers branches then completes o
     $history = app(RunHistoryStore::class)->find('qhpc-multi-1');
     expect($history['status'])->toBe('completed');
     expect($history['metadata']['execution_mode'])->toBe('queue');
+    expect($history['metadata']['executed_steps'])->toBe(3);
+    expect($history['metadata']['executed_node_ids'])->toBe(['parallel_node', 'writer_node', 'editor_node', 'finish_node']);
+    expect($history['metadata']['executed_agent_classes'])->toBe([FakeWriter::class, FakeEditor::class]);
+    expect($history['metadata']['parallel_groups'])->toBe([
+        ['node_id' => 'parallel_node', 'branches' => ['writer_node', 'editor_node']],
+    ]);
+    expect($history['usage'])->not->toBe([]);
+    expect($history['metadata']['usage'])->toBe($history['usage']);
 
     FakeWriter::assertPrompted('writer-branch');
     FakeEditor::assertPrompted('editor-branch');
+});
+
+test('queued hierarchical parallel multi_worker preserves pre parallel outputs and accounting across resume', function () {
+    FakeHierarchicalCoordinator::fake([qhpcPreParallelOutputPlan()]);
+    FakeWriter::fake(['pre-writer-out']);
+    FakeEditor::fake(['editor-out']);
+    FakeResearcher::fake(['researcher-out']);
+
+    $context = RunContext::from('queued-hierarchical-task', 'qhpc-pre-parallel-1');
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+
+    $waitingContext = app(ContextStore::class)->find('qhpc-pre-parallel-1');
+    expect($waitingContext['data']['hierarchical_node_outputs'])->toBe([
+        'writer_node' => 'pre-writer-out',
+    ]);
+    expect($waitingContext['metadata']['executed_steps'])->toBe(2);
+    expect($waitingContext['metadata']['executed_agent_classes'])->toBe([FakeWriter::class]);
+
+    $manager = app(DurableSwarmManager::class);
+    $branch = DB::table('swarm_durable_branches')->where('run_id', 'qhpc-pre-parallel-1')->first();
+    expect($branch)->not->toBeNull();
+
+    (new AdvanceDurableBranch('qhpc-pre-parallel-1', (string) $branch->branch_id))->handle($manager);
+    (new ResumeQueuedHierarchicalSwarm('qhpc-pre-parallel-1'))->handle(app(QueuedHierarchicalCoordinator::class));
+
+    $expectedResearchPrompt = "combine-results\n\nNamed outputs:\n[pre]\npre-writer-out\n\n[branch]\neditor-out";
+    FakeResearcher::assertPrompted($expectedResearchPrompt);
+
+    $history = app(RunHistoryStore::class)->find('qhpc-pre-parallel-1');
+    expect($history['status'])->toBe('completed');
+    expect($history['output'])->toBe('researcher-out');
+    expect($history['metadata']['execution_mode'])->toBe('queue');
+    expect($history['metadata']['executed_steps'])->toBe(4);
+    expect($history['metadata']['executed_node_ids'])->toBe(['writer_node', 'parallel_node', 'editor_node', 'researcher_node', 'finish_node']);
+    expect($history['metadata']['executed_agent_classes'])->toBe([FakeWriter::class, FakeEditor::class, FakeResearcher::class]);
+    expect($history['metadata']['parallel_groups'])->toBe([
+        ['node_id' => 'parallel_node', 'branches' => ['editor_node']],
+    ]);
+    expect($history['context']['data']['hierarchical_node_outputs'])->toBe([
+        'writer_node' => 'pre-writer-out',
+        'editor_node' => 'editor-out',
+        'researcher_node' => 'researcher-out',
+    ]);
+    expect($history['usage'])->not->toBe([]);
+    expect($history['metadata']['usage'])->toBe($history['usage']);
+});
+
+test('queued hierarchical parallel multi_worker resolves finish outputs from pre parallel workers after resume', function () {
+    FakeHierarchicalCoordinator::fake([qhpcPreParallelFinishOutputPlan()]);
+    FakeWriter::fake(['pre-writer-out']);
+    FakeEditor::fake(['editor-out']);
+
+    $runId = 'qhpc-pre-parallel-finish-1';
+    $context = RunContext::from('queued-hierarchical-task', $runId);
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+
+    $manager = app(DurableSwarmManager::class);
+    $branch = DB::table('swarm_durable_branches')->where('run_id', $runId)->first();
+    expect($branch)->not->toBeNull();
+
+    (new AdvanceDurableBranch($runId, (string) $branch->branch_id))->handle($manager);
+    (new ResumeQueuedHierarchicalSwarm($runId))->handle(app(QueuedHierarchicalCoordinator::class));
+
+    $history = app(RunHistoryStore::class)->find($runId);
+    expect($history['status'])->toBe('completed');
+    expect($history['output'])->toBe('pre-writer-out');
+    expect($history['metadata']['executed_steps'])->toBe(3);
+    expect($history['context']['data']['hierarchical_node_outputs'])->toBe([
+        'writer_node' => 'pre-writer-out',
+        'editor_node' => 'editor-out',
+    ]);
 });
 
 function staleCoordinationRun(string $runId): void

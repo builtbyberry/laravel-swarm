@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Jobs;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
-use BuiltByBerry\LaravelSwarm\Jobs\Concerns\InvokesQueuedSwarmCallbacks;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Bus\Queueable;
@@ -18,7 +17,6 @@ use Illuminate\Queue\SerializesModels;
 class InvokeSwarm implements ShouldQueue
 {
     use InteractsWithQueue;
-    use InvokesQueuedSwarmCallbacks;
     use Queueable;
     use SerializesModels;
 
@@ -42,7 +40,7 @@ class InvokeSwarm implements ShouldQueue
             throw new SwarmException("Unable to resolve queued swarm [{$this->swarmClass}] from the container.");
         }
 
-        $this->withCallbacks(fn () => $runner->runQueued($swarm, $context));
+        $runner->runQueued($swarm, $context);
     }
 
     /**

@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
-use Closure;
 use Illuminate\Foundation\Bus\PendingDispatch;
-use Laravel\Ai\FakePendingDispatch;
 
 class QueuedSwarmResponse
 {
@@ -14,38 +12,6 @@ class QueuedSwarmResponse
         protected PendingDispatch $dispatchable,
         public readonly ?string $runId = null,
     ) {}
-
-    /**
-     * Register a callback to invoke when the swarm completes.
-     *
-     * @deprecated For queued swarms, prefer listening for SwarmCompleted events instead of serializing closures into the job payload.
-     */
-    public function then(Closure $callback): self
-    {
-        if ($this->dispatchable instanceof FakePendingDispatch) {
-            return $this;
-        }
-
-        $this->dispatchable->getJob()->then($callback);
-
-        return $this;
-    }
-
-    /**
-     * Register a callback to invoke if the swarm fails.
-     *
-     * @deprecated For queued swarms, prefer listening for SwarmFailed events instead of serializing closures into the job payload.
-     */
-    public function catch(Closure $callback): self
-    {
-        if ($this->dispatchable instanceof FakePendingDispatch) {
-            return $this;
-        }
-
-        $this->dispatchable->getJob()->catch($callback);
-
-        return $this;
-    }
 
     /**
      * Proxy missing method calls to the pending dispatch instance.

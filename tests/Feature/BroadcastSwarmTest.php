@@ -172,23 +172,16 @@ test('broadcast on queue dispatches broadcast job and preserves pending dispatch
     preventQueuedBroadcastSwarmRedispatch($queued);
 });
 
-test('broadcast job streams once broadcasts immediately and passes streamed response to queued callbacks', function () {
+test('broadcast job streams once and broadcasts immediately', function () {
     Event::fake([AnonymousEvent::class]);
-    $state = (object) ['response' => null];
 
     $queued = FakeSequentialSwarm::make()
-        ->broadcastOnQueue('queued-broadcast-task', new Channel('swarm.run'))
-        ->then(function (StreamedSwarmResponse $response) use ($state): void {
-            $state->response = $response;
-        });
+        ->broadcastOnQueue('queued-broadcast-task', new Channel('swarm.run'));
 
     $job = $queued->getJob();
     preventQueuedBroadcastSwarmRedispatch($queued);
 
     $job->handle(app(SwarmRunner::class));
-
-    expect($state->response)->toBeInstanceOf(StreamedSwarmResponse::class);
-    expect($state->response?->output)->toBe('editor-out');
 
     FakeResearcher::assertPrompted('queued-broadcast-task');
     FakeWriter::assertPrompted('research-out');
@@ -293,19 +286,15 @@ test('terminal broadcast now transport failures fail delivery but preserve compl
     expect($transport->events)->toContain('swarm_stream_end');
 });
 
-test('queued broadcast transport failures fail the job and skip then callbacks', function () {
+test('queued broadcast transport failures fail the job', function () {
     $transport = fakeFailingBroadcastTransport();
     $runId = 'queued-broadcast-transport-failure-run-id';
-    $state = (object) ['thenCalled' => false];
 
     $queued = FakeSequentialSwarm::make()
         ->broadcastOnQueue(
             RunContext::from('queued-broadcast-failure-task', $runId),
             new Channel('swarm.run'),
-        )
-        ->then(function () use ($state): void {
-            $state->thenCalled = true;
-        });
+        );
 
     $job = $queued->getJob();
     preventQueuedBroadcastSwarmRedispatch($queued);
@@ -316,7 +305,6 @@ test('queued broadcast transport failures fail the job and skip then callbacks',
     $history = app(SwarmHistory::class)->find($runId);
 
     expect($history['status'])->toBe('failed');
-    expect($state->thenCalled)->toBeFalse();
     expect($transport->events)->toContain('swarm_text_delta');
     expect($transport->events)->not->toContain('swarm_stream_end');
 });
@@ -324,16 +312,12 @@ test('queued broadcast transport failures fail the job and skip then callbacks',
 test('terminal queued broadcast transport failures fail the job but preserve completed run history', function () {
     $transport = fakeFailingBroadcastTransport('swarm_stream_end');
     $runId = 'queued-broadcast-terminal-transport-failure-run-id';
-    $state = (object) ['thenCalled' => false];
 
     $queued = FakeSequentialSwarm::make()
         ->broadcastOnQueue(
             RunContext::from('queued-broadcast-terminal-failure-task', $runId),
             new Channel('swarm.run'),
-        )
-        ->then(function () use ($state): void {
-            $state->thenCalled = true;
-        });
+        );
 
     $job = $queued->getJob();
     preventQueuedBroadcastSwarmRedispatch($queued);
@@ -345,6 +329,5 @@ test('terminal queued broadcast transport failures fail the job but preserve com
 
     expect($history['status'])->toBe('completed');
     expect($history['output'])->toBe('editor-out');
-    expect($state->thenCalled)->toBeFalse();
     expect($transport->events)->toContain('swarm_stream_end');
 });
