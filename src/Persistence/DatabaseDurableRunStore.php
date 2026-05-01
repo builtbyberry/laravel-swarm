@@ -1525,11 +1525,68 @@ class DatabaseDurableRunStore implements DurableRunStore
             $conflict = $mapped['request_hash'] !== $requestHash;
             $duplicate = ! $conflict && $mapped['status'] === 'completed';
 
+            if ($conflict) {
+                return [
+                    'reserved' => false,
+                    'duplicate' => false,
+                    'conflict' => true,
+                    'in_flight' => false,
+                    'record' => $mapped,
+                ];
+            }
+
+            if ($duplicate) {
+                return [
+                    'reserved' => false,
+                    'duplicate' => true,
+                    'conflict' => false,
+                    'in_flight' => false,
+                    'record' => $mapped,
+                ];
+            }
+
+            if ($mapped['status'] === 'failed') {
+                $updated = $this->webhookIdempotencyTable()
+                    ->where('scope', $scope)
+                    ->where('idempotency_key', $idempotencyKey)
+                    ->where('request_hash', $requestHash)
+                    ->where('status', 'failed')
+                    ->update([
+                        'status' => 'reserved',
+                        'run_id' => null,
+                        'response_payload' => null,
+                        'completed_at' => null,
+                        'updated_at' => $timestamp,
+                    ]);
+
+                if ($updated === 1) {
+                    return [
+                        'reserved' => true,
+                        'duplicate' => false,
+                        'conflict' => false,
+                        'in_flight' => false,
+                        'record' => null,
+                    ];
+                }
+
+                /** @var object|null $record */
+                $record = $this->webhookIdempotencyTable()
+                    ->where('scope', $scope)
+                    ->where('idempotency_key', $idempotencyKey)
+                    ->first();
+
+                if ($record === null) {
+                    throw new SwarmException('Unable to reserve swarm webhook idempotency key.');
+                }
+
+                $mapped = $this->mapWebhookIdempotency($record);
+            }
+
             return [
                 'reserved' => false,
-                'duplicate' => $duplicate,
-                'conflict' => $conflict,
-                'in_flight' => ! $conflict && ! $duplicate,
+                'duplicate' => false,
+                'conflict' => false,
+                'in_flight' => true,
                 'record' => $mapped,
             ];
         }
@@ -1548,6 +1605,19 @@ class DatabaseDurableRunStore implements DurableRunStore
                 'response_payload' => $this->encodeJson($responsePayload),
                 'completed_at' => $timestamp,
                 'updated_at' => $timestamp,
+            ]);
+    }
+
+    public function failWebhookIdempotency(string $scope, string $idempotencyKey): void
+    {
+        $this->webhookIdempotencyTable()
+            ->where('scope', $scope)
+            ->where('idempotency_key', $idempotencyKey)
+            ->where('status', 'reserved')
+            ->whereNull('run_id')
+            ->update([
+                'status' => 'failed',
+                'updated_at' => Carbon::now('UTC'),
             ]);
     }
 

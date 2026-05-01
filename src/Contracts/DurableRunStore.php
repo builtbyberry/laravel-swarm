@@ -260,4 +260,6 @@ interface DurableRunStore
      * @param  array<string, mixed>  $responsePayload
      */
     public function completeWebhookIdempotency(string $scope, string $idempotencyKey, string $runId, array $responsePayload): void;
+
+    public function failWebhookIdempotency(string $scope, string $idempotencyKey): void;
 }

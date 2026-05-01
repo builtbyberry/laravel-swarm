@@ -1968,7 +1968,7 @@ class DurableSwarmManager
     protected function failurePayload(Throwable $exception): array
     {
         return [
-            'message' => $exception->getMessage(),
+            'message' => $this->capture->failureMessage($exception),
             'class' => $exception::class,
         ];
     }

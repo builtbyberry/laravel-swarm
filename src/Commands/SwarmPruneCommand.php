@@ -58,7 +58,7 @@ class SwarmPruneCommand extends Command
                 continue;
             }
 
-            $deleted[$name] = $this->pruneTable($connection, $name, $table, $tables['history']);
+            $deleted[$name] = $this->pruneTable($connection, $config, $name, $table, $tables['history']);
         }
 
         $this->components->info(sprintf(
@@ -98,7 +98,7 @@ class SwarmPruneCommand extends Command
         return self::SUCCESS;
     }
 
-    protected function pruneTable(Connection $connection, string $role, string $table, string $historyTable): int
+    protected function pruneTable(Connection $connection, ConfigRepository $config, string $role, string $table, string $historyTable): int
     {
         $deleted = 0;
 
@@ -131,13 +131,23 @@ class SwarmPruneCommand extends Command
                         ->whereIn('status', ['completed', 'failed', 'cancelled']);
                 });
             } elseif ($role === 'durable_webhook_idempotency') {
-                $query->whereNotNull('run_id')
-                    ->whereIn('run_id', function ($subquery) use ($historyTable): void {
-                        $subquery->from($historyTable)
-                            ->select('run_id')
-                            ->where('expires_at', '<', now())
-                            ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                $staleCutoff = now()->subSeconds((int) $config->get('swarm.context.ttl', 3600));
+
+                $query->where(function ($query) use ($historyTable, $staleCutoff): void {
+                    $query->where(function ($query) use ($historyTable): void {
+                        $query->whereNotNull('run_id')
+                            ->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                                $subquery->from($historyTable)
+                                    ->select('run_id')
+                                    ->where('expires_at', '<', now())
+                                    ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                            });
+                    })->orWhere(function ($query) use ($staleCutoff): void {
+                        $query->whereNull('run_id')
+                            ->whereIn('status', ['failed', 'reserved'])
+                            ->where('updated_at', '<', $staleCutoff);
                     });
+                });
             } else {
                 $query->where('expires_at', '<', now())
                     ->whereNotIn('run_id', function ($subquery) use ($historyTable): void {

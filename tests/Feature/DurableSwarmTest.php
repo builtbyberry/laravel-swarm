@@ -2138,6 +2138,24 @@ test('durable child start failures release the parent wait with failed child sta
         ->and($parentContext['metadata']['durable_child_runs'][$child['child_run_id']])->not->toHaveKey('failure');
 });
 
+test('durable child start failures redact lineage failure messages when capture is disabled', function () {
+    config()->set('swarm.capture.outputs', false);
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+
+    config()->set('swarm.limits.max_input_bytes', 1);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    $child = $manager->inspect($response->runId)->children[0];
+
+    expect($child['status'])->toBe('failed')
+        ->and($child['failure']['class'])->toBe(SwarmException::class)
+        ->and($child['failure']['message'])->toBe('[redacted]');
+});
+
 test('durable child recovery does not create a second child run when dispatch marker is missing', function () {
     FakeResearcher::fake(['parent-step']);
 
@@ -2311,6 +2329,87 @@ test('webhook start idempotency rejects in flight and mismatched duplicate reque
     $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], $differentHeaders, $differentPayload)
         ->assertConflict()
         ->assertJsonPath('message', 'Idempotency key was already used with a different request payload.');
+});
+
+test('webhook start idempotency reclaims failed reservations for matching retries only', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'signed');
+    config()->set('swarm.durable.webhooks.auth.secret', 'secret');
+
+    SwarmWebhooks::routes([FakeSequentialSwarm::class]);
+
+    $payload = json_encode(['input' => 'webhook-task'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) time();
+    $headers = [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+        'HTTP_X_SWARM_TIMESTAMP' => $timestamp,
+        'HTTP_X_SWARM_SIGNATURE' => hash_hmac('sha256', $timestamp.'.'.$payload, 'secret'),
+        'HTTP_IDEMPOTENCY_KEY' => 'failed-start',
+    ];
+
+    config()->set('swarm.limits.max_input_bytes', 1);
+    $this->withoutExceptionHandling();
+
+    expect(fn () => $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], $headers, $payload))
+        ->toThrow(SwarmException::class);
+
+    $failedReservation = DB::table('swarm_durable_webhook_idempotency')
+        ->where('idempotency_key', 'failed-start')
+        ->first();
+
+    expect($failedReservation->status)->toBe('failed')
+        ->and($failedReservation->run_id)->toBeNull();
+
+    $this->withExceptionHandling();
+
+    $differentPayload = json_encode(['input' => 'different-task'], JSON_THROW_ON_ERROR);
+    $differentTimestamp = (string) time();
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], array_merge($headers, [
+        'HTTP_X_SWARM_TIMESTAMP' => $differentTimestamp,
+        'HTTP_X_SWARM_SIGNATURE' => hash_hmac('sha256', $differentTimestamp.'.'.$differentPayload, 'secret'),
+    ]), $differentPayload)
+        ->assertConflict()
+        ->assertJsonPath('message', 'Idempotency key was already used with a different request payload.');
+
+    config()->set('swarm.limits.max_input_bytes', null);
+    $this->travel(2)->seconds();
+
+    $retryTimestamp = (string) time();
+    $retry = $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], array_merge($headers, [
+        'HTTP_X_SWARM_TIMESTAMP' => $retryTimestamp,
+        'HTTP_X_SWARM_SIGNATURE' => hash_hmac('sha256', $retryTimestamp.'.'.$payload, 'secret'),
+    ]), $payload);
+
+    $retry->assertAccepted()->assertJsonStructure(['run_id']);
+
+    $completedReservation = DB::table('swarm_durable_webhook_idempotency')
+        ->where('idempotency_key', 'failed-start')
+        ->first();
+
+    expect($completedReservation->status)->toBe('completed')
+        ->and($completedReservation->run_id)->toBe($retry->json('run_id'))
+        ->and($completedReservation->updated_at)->not->toBe($failedReservation->updated_at);
+});
+
+test('swarm prune removes stale no run webhook idempotency reservations', function () {
+    config()->set('swarm.context.ttl', 60);
+
+    app(DurableRunStore::class)->reserveWebhookIdempotency('start:'.FakeSequentialSwarm::class, 'stale-failed', 'hash-a');
+    app(DurableRunStore::class)->failWebhookIdempotency('start:'.FakeSequentialSwarm::class, 'stale-failed');
+    app(DurableRunStore::class)->reserveWebhookIdempotency('start:'.FakeSequentialSwarm::class, 'stale-reserved', 'hash-b');
+    app(DurableRunStore::class)->reserveWebhookIdempotency('start:'.FakeSequentialSwarm::class, 'fresh-reserved', 'hash-c');
+
+    DB::table('swarm_durable_webhook_idempotency')
+        ->whereIn('idempotency_key', ['stale-failed', 'stale-reserved'])
+        ->update(['updated_at' => now('UTC')->subMinutes(10)]);
+
+    Artisan::call('swarm:prune');
+
+    expect(DB::table('swarm_durable_webhook_idempotency')->where('idempotency_key', 'stale-failed')->exists())->toBeFalse()
+        ->and(DB::table('swarm_durable_webhook_idempotency')->where('idempotency_key', 'stale-reserved')->exists())->toBeFalse()
+        ->and(DB::table('swarm_durable_webhook_idempotency')->where('idempotency_key', 'fresh-reserved')->exists())->toBeTrue();
 });
 
 test('swarm webhooks require signed requests and dispatch durable starts', function () {

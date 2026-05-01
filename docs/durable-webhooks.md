@@ -34,3 +34,21 @@ only in `local` and `testing` environments.
 
 Start and signal endpoints accept `Idempotency-Key` so provider retries do not
 duplicate durable starts or run signals.
+
+Start idempotency keys are stored in the durable webhook idempotency table. A
+successful start marks the key as `completed` and later matching retries return
+the original run ID. Concurrent matching retries while the first request is still
+reserved return `409` as in-flight, and the same key with a different request
+body returns `409` as a conflict.
+
+If a start request fails after reserving an idempotency key but before creating a
+durable run, the reservation is marked `failed`. A later retry with the same key
+and same request body can reclaim only that failed reservation; active
+`reserved` rows are never reclaimed. This keeps duplicate concurrent delivery
+blocked while allowing failed ingress attempts to be retried.
+
+`swarm:prune` removes stale failed or abandoned no-run webhook idempotency rows
+using `swarm.context.ttl` as an operational cleanup fallback. That setting is
+reused for cleanup only; it is not a dedicated webhook idempotency retention
+control. If webhook ingress becomes a major production surface, prefer adding an
+explicit retention setting for these rows.

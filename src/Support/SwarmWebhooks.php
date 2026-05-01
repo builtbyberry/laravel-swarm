@@ -14,6 +14,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
+use Throwable;
 
 class SwarmWebhooks
 {
@@ -80,13 +81,22 @@ class SwarmWebhooks
                     }
                 }
 
-                $swarm = app(Application::class)->make($swarmClass);
+                try {
+                    $swarm = app(Application::class)->make($swarmClass);
 
-                if (! $swarm instanceof Swarm) {
-                    throw new SwarmException("Unable to resolve webhook swarm [{$swarmClass}].");
+                    if (! $swarm instanceof Swarm) {
+                        throw new SwarmException("Unable to resolve webhook swarm [{$swarmClass}].");
+                    }
+
+                    $response = app(SwarmRunner::class)->dispatchDurable($swarm, $request->all());
+                } catch (Throwable $exception) {
+                    if ($idempotencyKey !== null) {
+                        app(DurableRunStore::class)->failWebhookIdempotency($scope, $idempotencyKey);
+                    }
+
+                    throw $exception;
                 }
 
-                $response = app(SwarmRunner::class)->dispatchDurable($swarm, $request->all());
                 $payload = ['run_id' => $response->runId];
 
                 if ($idempotencyKey !== null) {
