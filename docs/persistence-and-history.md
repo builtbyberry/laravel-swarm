@@ -118,6 +118,9 @@ durable runs, database-backed persistence also exposes a durable runtime record
 with operational state such as route progress, node state, leases, attempts,
 operator controls, recovery markers, and failure metadata. Use that runtime
 record as an additional inspection surface for active and terminal durable runs.
+Durable labels, details, waits, signals, progress records, and child swarm
+lineage live in companion runtime tables so dashboards can filter and inspect
+runs without parsing prompts or route plans.
 
 ```php
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -144,10 +147,13 @@ Laravel Swarm also includes read-only inspection commands:
 php artisan swarm:status
 php artisan swarm:status --run-id=<run-id>
 php artisan swarm:history --swarm="App\\Ai\\Swarms\\ArticlePipeline" --status=completed --limit=10
+php artisan swarm:inspect <run-id> --json
+php artisan swarm:progress <run-id>
 ```
 
 Use `swarm:status` for a quick current view. Use `swarm:history` when you
-want filtered history.
+want filtered history. Use `swarm:inspect` and `swarm:progress` for durable
+operator state.
 
 ## Choosing A Persistence Driver
 

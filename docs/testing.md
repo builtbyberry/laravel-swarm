@@ -30,6 +30,24 @@ ArticlePipeline::assertStreamed('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertDispatchedDurably('Draft a blog outline about Laravel queues.');
 ```
 
+Durable operator features should be tested through the manager or response
+helpers:
+
+```php
+$response = ApprovalSwarm::make()->dispatchDurable('review document');
+
+app(DurableSwarmManager::class)->wait($response->runId, 'approval_received');
+
+$result = $response->signal('approval_received', ['approved' => true], 'approval-1');
+
+expect($result->accepted)->toBeTrue();
+expect($response->inspect()->waits[0]['status'])->toBe('signalled');
+```
+
+Webhook tests should sign the exact raw request body with
+`hash_hmac('sha256', $timestamp.'.'.$body, $secret)` and assert unsigned
+requests are rejected.
+
 Streaming behavior and event types are documented in [Streaming](streaming.md).
 
 Faked streams are lazy, so `assertStreamed()` records after the stream response

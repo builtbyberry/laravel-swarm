@@ -3,6 +3,10 @@
 Use `dispatchDurable()` when a swarm needs checkpointed execution instead of a
 single long-running queue job.
 
+Durable execution is Swarm-native checkpointing at agent-step boundaries. It is
+not deterministic workflow replay and does not introduce generator/yield
+workflow syntax.
+
 `queue()` remains the lightweight background mode. One queued job runs the
 whole swarm.
 
@@ -218,6 +222,22 @@ Treat recovery like workflow supervision, not like pruning. A stranded durable
 run should not wait until tomorrow's maintenance window.
 Recovery covers both stale parent or branch leases and the crash window after a
 branch checkpoint commits but before the parent join job is dispatched.
+It also releases timed-out durable run waits so a waiting run can continue with
+a timeout outcome.
+
+## Durable Operator Surfaces
+
+Durable runs can now carry indexed labels, structured details, latest progress
+records, signals, waits, and child swarm lineage. Use `swarm:inspect <run-id>
+--json` for the full dashboard-ready shape, and `swarm:progress <run-id>` for
+latest progress records.
+
+See:
+
+- [Durable Waits And Signals](durable-waits-and-signals.md)
+- [Durable Retries And Progress](durable-retries-and-progress.md)
+- [Durable Child Swarms](durable-child-swarms.md)
+- [Durable Webhooks](durable-webhooks.md)
 
 ## Timeouts And Database Requirements
 

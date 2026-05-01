@@ -390,6 +390,12 @@ gc_collect_cycles();
 For the durable runtime model, operator commands, and recovery scheduling, see
 [Durable Execution](docs/durable-execution.md).
 
+Durable runs also expose Swarm-native operator surfaces for long-running AI
+work: [waits and signals](docs/durable-waits-and-signals.md), [retries and
+progress](docs/durable-retries-and-progress.md), [child swarms](docs/durable-child-swarms.md),
+and [authenticated webhooks](docs/durable-webhooks.md). These are checkpointed
+agent-step controls, not deterministic workflow replay.
+
 ## Streaming A Swarm
 
 Use `stream()` for typed step and token events (SSE, live progress, or custom
@@ -647,6 +653,10 @@ To customize how swarm state is stored, bind your own implementations against th
 - [Structured Input](docs/structured-input.md)
 - [Persistence And History](docs/persistence-and-history.md)
 - [Durable Execution](docs/durable-execution.md)
+- [Durable Waits And Signals](docs/durable-waits-and-signals.md)
+- [Durable Retries And Progress](docs/durable-retries-and-progress.md)
+- [Durable Child Swarms](docs/durable-child-swarms.md)
+- [Durable Webhooks](docs/durable-webhooks.md)
 - [Testing](docs/testing.md)
 - [Hierarchical Routing](docs/hierarchical-routing.md)
 - [Pulse](docs/pulse.md)

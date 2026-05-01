@@ -16,8 +16,9 @@ php artisan swarm:prune
 ```
 
 The command prunes the history, context, artifact, stream replay, durable
-runtime, durable node-output, and durable branch tables in bounded chunks to
-avoid long-running table locks on large datasets.
+runtime, durable node-output, durable branch, signal, wait, label, detail,
+progress, and child-run tables in bounded chunks to avoid long-running table
+locks on large datasets.
 
 Laravel Swarm protects active runs across persistence stores. While a run is
 `pending`, `running`, `waiting`, or `paused`, its history, context, artifact,
@@ -86,6 +87,8 @@ step because a worker crashed or exited at the wrong moment. For durable
 parallel work, recovery also releases waiting parents whose branch rows are all
 terminal, covering the crash window between a branch checkpoint and parent join
 dispatch.
+For durable run waits, recovery releases timed-out waits back to pending so the
+next durable step can observe a timeout outcome.
 
 Prune-based retention is complementary to queue design, not a substitute for
 it. The built-in lightweight queue mode is a good fit for normal background
