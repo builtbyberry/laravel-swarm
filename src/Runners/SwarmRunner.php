@@ -214,28 +214,7 @@ class SwarmRunner
             return null;
         }
 
-        $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
-        $capturedResponse = $this->limits->response($this->capture->response($response));
-
-        try {
-            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
-        } catch (LostSwarmLeaseException) {
-            return null;
-        }
-
-        $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
-        $this->events->dispatch(new SwarmCompleted(
-            runId: $context->runId,
-            swarmClass: $swarm::class,
-            topology: $topology->value,
-            output: $capturedResponse->output,
-            durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-            metadata: $capturedResponse->metadata,
-            artifacts: $capturedResponse->artifacts,
-            executionMode: $executionMode->value,
-        ));
-
-        return $response;
+        return $this->finalizeSuccessfulSwarmExecution($state, $swarm, $topology, $executionMode, $response, $startedAt, $contextTtl);
     }
 
     public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
@@ -605,7 +584,25 @@ class SwarmRunner
             }
         }
 
-        $response = $this->normalizeCompletionResponse($outcome, $context, $topology->value);
+        return $this->finalizeSuccessfulSwarmExecution($state, $swarm, $topology, ExecutionMode::Queue, $outcome, $startedAt, $contextTtl);
+    }
+
+    /**
+     * Normalize capture limits, persist terminal history, terminal context, and emit SwarmCompleted.
+     *
+     * @return SwarmResponse|null null when the queued execution lease was lost during completion.
+     */
+    protected function finalizeSuccessfulSwarmExecution(
+        SwarmExecutionState $state,
+        Swarm $swarm,
+        Topology $topology,
+        ExecutionMode $executionMode,
+        SwarmResponse $response,
+        float $startedAt,
+        int $contextTtl,
+    ): ?SwarmResponse {
+        $context = $state->context;
+        $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
         $capturedResponse = $this->limits->response($this->capture->response($response));
 
         try {
@@ -623,7 +620,7 @@ class SwarmRunner
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $capturedResponse->metadata,
             artifacts: $capturedResponse->artifacts,
-            executionMode: ExecutionMode::Queue->value,
+            executionMode: $executionMode->value,
         ));
 
         return $response;
