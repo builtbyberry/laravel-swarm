@@ -229,8 +229,10 @@ a timeout outcome.
 
 Durable runs can now carry indexed labels, structured details, latest progress
 records, signals, waits, and child swarm lineage. Use `swarm:inspect <run-id>
---json` for the full dashboard-ready shape, and `swarm:progress <run-id>` for
-latest progress records.
+--json` for a full operator-oriented snapshot of a single run, and
+`swarm:progress <run-id>` for latest progress records. List-heavy dashboards
+should aggregate or cache the underlying durable tables instead of calling full
+inspect for every row.
 
 See:
 
