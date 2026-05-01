@@ -40,7 +40,9 @@ class DurableRunRecorder
                 'timed_out' => str_contains(strtolower($exception->getMessage()), 'timeout'),
             ]);
             $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
-            $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $token, $stepLeaseSeconds);
+            $historyRow = $this->historyStore->find($runId);
+            $historyToken = is_array($historyRow) ? ($historyRow['execution_token'] ?? null) : null;
+            $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $historyToken, $stepLeaseSeconds);
         });
     }
 
