@@ -107,7 +107,7 @@ class SequentialStreamRunner
     /**
      * @return \Generator<int, SwarmStreamEvent, mixed, SwarmResponse>
      */
-    protected function execute(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, ?int &$startedAt): \Generator
+    protected function execute(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, ?float &$startedAt): \Generator
     {
         $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
         $this->historyStore->start($context->runId, $swarm::class, $state->topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
