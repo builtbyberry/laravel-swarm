@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
@@ -22,6 +23,13 @@ use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\FakePendingDispatch;
 
+/**
+ * Test double that records calls for assertions.
+ *
+ * {@see queue()} and {@see assertQueued()} capture dispatch intent only: they do not run {@see SwarmRunner}
+ * or simulate coordinated hierarchical multi_worker parallel joins (branch execution, durable coordination state, resume jobs).
+ * Cover that behavior with persisted integration/feature tests instead.
+ */
 class SwarmFake implements Swarm
 {
     /**

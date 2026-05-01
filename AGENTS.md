@@ -90,8 +90,8 @@ Laravel Swarm persists run context, artifacts, and run history through configura
 Public Artisan commands:
 
 - `php artisan make:swarm`
-- `php artisan swarm:status`
-- `php artisan swarm:history`
+- `php artisan swarm:status` (includes a **Phase** column: `parallel_join` when a hierarchical coordinated queue run is waiting on parallel branches)
+- `php artisan swarm:history` (same **Phase** column)
 - `php artisan swarm:prune`
 - `php artisan swarm:pause <run-id>`
 - `php artisan swarm:resume <run-id>`
@@ -113,6 +113,7 @@ Pulse is aggregate observability. For live per-run operations feeds, listen to L
 - `SwarmRunner` resolves attributes via reflection and falls back to `config('swarm.*')`.
 - `Runnable::make()` returns `mixed` so a bound `SwarmFake` can be returned.
 - `SwarmFake` intercepts `prompt()`, `run()`, `queue()`, `stream()`, `broadcast()`, `broadcastNow()`, `broadcastOnQueue()`, and `dispatchDurable()` and records assertions. Stream fakes stay lazy and record only when iterated or consumed by broadcast helpers. Broadcast helpers reuse existing buckets: `broadcast()` / `broadcastNow()` satisfy `assertStreamed()`, and `broadcastOnQueue()` satisfies `assertQueued()`.
+- **Testing limits:** `SwarmFake::queue()` records dispatch intent only; it does not execute `SwarmRunner`, simulate coordinated hierarchical `multi_worker` branch jobs, durable coordination rows, or `ResumeQueuedHierarchicalSwarm`. Validate that path with database-backed feature tests (see `tests/Feature/QueuedHierarchicalParallelCoordinationTest.php`).
 - Queued and parallel safety checks should fail before dispatch when a swarm or worker cannot be container-resolved safely.
 - Timeouts are best-effort orchestration deadlines checked before and between steps. They do not hard-cancel an in-flight provider call.
 

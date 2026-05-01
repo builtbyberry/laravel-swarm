@@ -318,6 +318,17 @@ for a durable branch fan-out example.
 
 **Pause:** while a coordinated `queue()` run is `waiting` on parallel branches, `swarm:pause` / `DurableSwarmManager::pause()` may pause the coordination row (same durable runtime surface as hierarchical durable waits). Resume dispatches `ResumeQueuedHierarchicalSwarm` when the join is ready, matching durable waiting semantics.
 
+### Troubleshooting stuck coordinated `queue()` runs
+
+Use this checklist when a run stays `waiting` longer than expected:
+
+1. **Run history:** Confirm `status` is `waiting` and metadata includes `queue_hierarchical_waiting_parallel`. Continuation leases use that flag together with history state (`DatabaseRunHistoryStore::acquireQueuedRunContinuationLease`).
+2. **Durable coordination row:** Inspect `swarm_durable_runs` for the run ID—check `coordination_profile` (queue hierarchical parallel), `status`, `current_node_id`, and `next_step_index`.
+3. **Branches:** Inspect `swarm_durable_branches` for the same run ID—each branch should move to a terminal state (`completed`, `failed`, or `cancelled`) before the primary run can join and dispatch `ResumeQueuedHierarchicalSwarm`.
+4. **Expected flow:** `running` → `waiting` at the parallel node while branches execute → resume job → `completed` or terminal failure. If branches finished but the parent never resumed, run `php artisan swarm:recover` on a schedule (same guidance as durable hierarchical joins); recovery releases stale waiting joins when branch rows are already terminal.
+
+`php artisan swarm:status` and `php artisan swarm:history` include a **Phase** column: coordinated parallel waits show `parallel_join` while other rows show `—`.
+
 ## History And Metadata
 
 Hierarchical runs persist graph-aware metadata such as:
