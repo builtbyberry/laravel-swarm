@@ -28,11 +28,36 @@ class DatabaseDurableRunStore implements DurableRunStore
     public function create(array $payload): void
     {
         $timestamp = Carbon::now('UTC');
+        $runId = (string) $payload['run_id'];
+
+        $routePlan = $payload['route_plan'] ?? null;
+        $nodeStates = $payload['node_states'] ?? null;
+        $failure = $payload['failure'] ?? null;
+        $retryPolicy = $payload['retry_policy'] ?? null;
+
+        unset($payload['route_plan'], $payload['node_states'], $payload['failure'], $payload['retry_policy']);
 
         $this->table()->insert(array_merge($payload, [
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
         ]));
+
+        if ($routePlan !== null || $failure !== null || $retryPolicy !== null) {
+            $this->upsertRunState($runId, [
+                'route_plan' => is_string($routePlan) ? json_decode($routePlan, true) : $routePlan,
+                'failure' => is_string($failure) ? json_decode($failure, true) : $failure,
+                'retry_policy' => is_string($retryPolicy) ? json_decode($retryPolicy, true) : $retryPolicy,
+                'route_plan_projected' => false,
+            ]);
+        }
+
+        if (is_array($nodeStates)) {
+            foreach ($nodeStates as $nid => $state) {
+                if (is_string($nid) && is_array($state)) {
+                    $this->persistMergedNodeState($runId, $nid, $state);
+                }
+            }
+        }
     }
 
     public function find(string $runId): ?array
@@ -44,6 +69,9 @@ class DatabaseDurableRunStore implements DurableRunStore
             return null;
         }
 
+        $runState = $this->runStateRow($runId);
+        $nodeStates = $this->loadNodeStatesMap($runId);
+
         return [
             'run_id' => $record->run_id,
             'swarm_class' => $record->swarm_class,
@@ -54,13 +82,13 @@ class DatabaseDurableRunStore implements DurableRunStore
             'next_step_index' => (int) $record->next_step_index,
             'current_step_index' => $record->current_step_index !== null ? (int) $record->current_step_index : null,
             'total_steps' => (int) $record->total_steps,
-            'route_plan' => $this->decodeJson($record->route_plan, null),
+            'route_plan' => $runState !== null ? $this->decodeJson($runState->route_plan ?? null, null) : null,
             'route_cursor' => $this->decodeJson($record->route_cursor, null),
             'route_start_node_id' => $record->route_start_node_id ?? null,
             'current_node_id' => $record->current_node_id ?? null,
             'completed_node_ids' => $this->decodeJson($record->completed_node_ids ?? null, []),
-            'node_states' => $this->decodeJson($record->node_states ?? null, []),
-            'failure' => $this->decodeJson($record->failure ?? null, null),
+            'node_states' => $nodeStates,
+            'failure' => $runState !== null ? $this->decodeJson($runState->failure ?? null, null) : null,
             'timeout_at' => $record->timeout_at,
             'step_timeout_seconds' => (int) $record->step_timeout_seconds,
             'attempts' => (int) ($record->attempts ?? 0),
@@ -79,7 +107,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             'waiting_since' => $record->waiting_since ?? null,
             'wait_timeout_at' => $record->wait_timeout_at ?? null,
             'last_progress_at' => $record->last_progress_at ?? null,
-            'retry_policy' => $this->decodeJson($record->retry_policy ?? null, null),
+            'retry_policy' => $runState !== null ? $this->decodeJson($runState->retry_policy ?? null, null) : null,
             'retry_attempt' => (int) ($record->retry_attempt ?? 0),
             'next_retry_at' => $record->next_retry_at ?? null,
             'parent_run_id' => $record->parent_run_id ?? null,
@@ -110,13 +138,10 @@ class DatabaseDurableRunStore implements DurableRunStore
             'next_step_index',
             'current_step_index',
             'total_steps',
-            'route_plan',
             'route_cursor',
             'route_start_node_id',
             'current_node_id',
             'completed_node_ids',
-            'node_states',
-            'failure',
             'timeout_at',
             'step_timeout_seconds',
             'attempts',
@@ -135,7 +160,6 @@ class DatabaseDurableRunStore implements DurableRunStore
             'waiting_since',
             'wait_timeout_at',
             'last_progress_at',
-            'retry_policy',
             'retry_attempt',
             'next_retry_at',
             'parent_run_id',
@@ -148,6 +172,25 @@ class DatabaseDurableRunStore implements DurableRunStore
 
         if (! $schema->hasColumns($table, $requiredColumns)) {
             throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for lease ownership and recovery.");
+        }
+
+        $nodeStatesTable = (string) $this->config->get('swarm.tables.durable_node_states', 'swarm_durable_node_states');
+        $runStateTable = (string) $this->config->get('swarm.tables.durable_run_state', 'swarm_durable_run_state');
+
+        if (! $schema->hasTable($nodeStatesTable)) {
+            throw new SwarmException("Database-backed durable swarms require the [{$nodeStatesTable}] table.");
+        }
+
+        if (! $schema->hasColumns($nodeStatesTable, ['run_id', 'node_id', 'state', 'created_at', 'updated_at'])) {
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$nodeStatesTable}] for per-node durable state.");
+        }
+
+        if (! $schema->hasTable($runStateTable)) {
+            throw new SwarmException("Database-backed durable swarms require the [{$runStateTable}] table.");
+        }
+
+        if (! $schema->hasColumns($runStateTable, ['run_id', 'route_plan', 'route_plan_projected', 'failure', 'retry_policy', 'created_at', 'updated_at'])) {
+            throw new SwarmException("Database-backed durable swarms require runtime columns on [{$runStateTable}] for durable route and failure state.");
         }
 
         $nodeOutputTable = (string) $this->config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs');
@@ -276,16 +319,19 @@ class DatabaseDurableRunStore implements DurableRunStore
         $now = Carbon::now('UTC');
         $nodeId = $this->currentNodeIdFor($runId, $currentStepIndex);
 
-        $this->guardedUpdate($runId, $executionToken, [
-            'status' => 'running',
-            'current_step_index' => $currentStepIndex,
-            'current_node_id' => $nodeId,
-            'node_states' => $this->encodeJson($this->mergeNodeState($runId, $nodeId, [
+        $this->connection->transaction(function () use ($runId, $executionToken, $currentStepIndex, $nodeId, $now): void {
+            $this->guardedUpdate($runId, $executionToken, [
+                'status' => 'running',
+                'current_step_index' => $currentStepIndex,
+                'current_node_id' => $nodeId,
+            ]);
+            $merged = $this->mergeNodeState($runId, $nodeId, [
                 'status' => 'running',
                 'step_index' => $currentStepIndex,
                 'started_at' => $now->toJSON(),
-            ])),
-        ]);
+            ], null);
+            $this->persistMergedNodeState($runId, $nodeId, $merged);
+        });
     }
 
     public function releaseForNextStep(string $runId, string $executionToken, int $nextStepIndex): void
@@ -294,17 +340,20 @@ class DatabaseDurableRunStore implements DurableRunStore
         $nodeId = $run !== null ? $this->nodeIdForRun($run, (int) ($run['current_step_index'] ?? max($nextStepIndex - 1, 0))) : 'step:'.max($nextStepIndex - 1, 0);
         $completedNodeIds = $this->completedNodeIdsWith($run, $nodeId);
 
-        $this->guardedUpdate($runId, $executionToken, [
-            'status' => 'pending',
-            'next_step_index' => $nextStepIndex,
-            'completed_node_ids' => $this->encodeJson($completedNodeIds),
-            'node_states' => $this->encodeJson($this->mergeNodeState($runId, $nodeId, [
+        $this->connection->transaction(function () use ($runId, $executionToken, $nextStepIndex, $completedNodeIds, $nodeId, $run): void {
+            $this->guardedUpdate($runId, $executionToken, [
+                'status' => 'pending',
+                'next_step_index' => $nextStepIndex,
+                'completed_node_ids' => $this->encodeJson($completedNodeIds),
+                'execution_token' => null,
+                'leased_until' => null,
+            ]);
+            $merged = $this->mergeNodeState($runId, $nodeId, [
                 'status' => 'completed',
                 'finished_at' => Carbon::now('UTC')->toJSON(),
-            ], $run)),
-            'execution_token' => null,
-            'leased_until' => null,
-        ]);
+            ], $run);
+            $this->persistMergedNodeState($runId, $nodeId, $merged);
+        });
     }
 
     public function waitForBranches(string $runId, BranchWaitPayload $payload): void
@@ -341,11 +390,6 @@ class DatabaseDurableRunStore implements DurableRunStore
                 'next_step_index' => $nextStepIndex,
                 'current_step_index' => null,
                 'current_node_id' => $parentNodeId,
-                'node_states' => $this->encodeJson($this->mergeNodeState($runId, $parentNodeId, [
-                    'status' => 'waiting',
-                    'step_index' => $nextStepIndex,
-                    'started_at' => $timestamp->toJSON(),
-                ], $run)),
                 'execution_token' => null,
                 'leased_until' => null,
             ];
@@ -356,10 +400,6 @@ class DatabaseDurableRunStore implements DurableRunStore
                 $values['completed_node_ids'] = $this->encodeJson($routeCursor['completed_node_ids'] ?? []);
             }
 
-            if ($routePlan !== null) {
-                $values['route_plan'] = $this->encodeJson($routePlan);
-            }
-
             if ($totalSteps !== null) {
                 $values['total_steps'] = $totalSteps;
             }
@@ -368,7 +408,21 @@ class DatabaseDurableRunStore implements DurableRunStore
                 $this->insertBranchRows($runId, $branches, $timestamp, $expiresAt);
             }
 
+            if ($routePlan !== null) {
+                $this->upsertRunState($runId, [
+                    'route_plan' => $routePlan,
+                    'route_plan_projected' => false,
+                ]);
+            }
+
             $this->guardedUpdate($runId, $executionToken, $values);
+
+            $merged = $this->mergeNodeState($runId, $parentNodeId, [
+                'status' => 'waiting',
+                'step_index' => $nextStepIndex,
+                'started_at' => $timestamp->toJSON(),
+            ], $run);
+            $this->persistMergedNodeState($runId, $parentNodeId, $merged);
         });
     }
 
@@ -476,15 +530,11 @@ class DatabaseDurableRunStore implements DurableRunStore
             $run = $this->find($runId);
             $completedNodeId = $nodeOutput['node_id'] ?? ($nextStepIndex === 1 ? 'coordinator' : null);
 
-            if (is_string($completedNodeId)) {
-                $values['node_states'] = $this->encodeJson($this->mergeNodeState($runId, $completedNodeId, [
-                    'status' => 'completed',
-                    'finished_at' => $timestamp->toJSON(),
-                ], $run));
-            }
-
             if ($routePlan !== null) {
-                $values['route_plan'] = $this->encodeJson($routePlan);
+                $this->upsertRunState($runId, [
+                    'route_plan' => $routePlan,
+                    'route_plan_projected' => false,
+                ]);
             }
 
             if ($totalSteps !== null) {
@@ -492,6 +542,14 @@ class DatabaseDurableRunStore implements DurableRunStore
             }
 
             $this->guardedUpdate($runId, $executionToken, $values);
+
+            if (is_string($completedNodeId)) {
+                $merged = $this->mergeNodeState($runId, $completedNodeId, [
+                    'status' => 'completed',
+                    'finished_at' => $timestamp->toJSON(),
+                ], $run);
+                $this->persistMergedNodeState($runId, $completedNodeId, $merged);
+            }
         });
     }
 
@@ -719,15 +777,19 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function scheduleRetry(string $runId, string $executionToken, array $policy, int $attempt, ?\DateTimeInterface $nextRetryAt): void
     {
-        $this->guardedUpdate($runId, $executionToken, [
-            'status' => 'pending',
-            'retry_policy' => $this->encodeJson($policy),
-            'retry_attempt' => $attempt,
-            'next_retry_at' => $nextRetryAt,
-            'failure' => null,
-            'execution_token' => null,
-            'leased_until' => null,
-        ]);
+        $this->connection->transaction(function () use ($runId, $executionToken, $policy, $attempt, $nextRetryAt): void {
+            $this->guardedUpdate($runId, $executionToken, [
+                'status' => 'pending',
+                'retry_attempt' => $attempt,
+                'next_retry_at' => $nextRetryAt,
+                'execution_token' => null,
+                'leased_until' => null,
+            ]);
+            $this->upsertRunState($runId, [
+                'retry_policy' => $policy,
+                'failure' => null,
+            ]);
+        });
     }
 
     public function markPaused(string $runId, string $executionToken): void
@@ -736,16 +798,21 @@ class DatabaseDurableRunStore implements DurableRunStore
         $nodeId = $run !== null ? $this->nodeIdForRun($run, (int) ($run['current_step_index'] ?? $run['next_step_index'] ?? 0)) : null;
         $now = Carbon::now('UTC');
 
-        $this->guardedUpdate($runId, $executionToken, [
-            'status' => 'paused',
-            'paused_at' => $now,
-            'node_states' => $this->encodeJson($this->mergeNodeState($runId, $nodeId, [
+        $this->connection->transaction(function () use ($runId, $executionToken, $nodeId, $run, $now): void {
+            $this->guardedUpdate($runId, $executionToken, [
                 'status' => 'paused',
-                'finished_at' => $now->toJSON(),
-            ], $run)),
-            'execution_token' => null,
-            'leased_until' => null,
-        ]);
+                'paused_at' => $now,
+                'execution_token' => null,
+                'leased_until' => null,
+            ]);
+            if ($nodeId !== null) {
+                $merged = $this->mergeNodeState($runId, $nodeId, [
+                    'status' => 'paused',
+                    'finished_at' => $now->toJSON(),
+                ], $run);
+                $this->persistMergedNodeState($runId, $nodeId, $merged);
+            }
+        });
     }
 
     public function markCancelled(string $runId, string $executionToken): void
@@ -774,6 +841,7 @@ class DatabaseDurableRunStore implements DurableRunStore
 
         $run = $this->find($runId);
         $nodeId = is_string($run['current_node_id'] ?? null) ? $run['current_node_id'] : null;
+        $mergeNodeId = $nodeId ?? 'waiting';
 
         $updated = $this->table()
             ->where('run_id', $runId)
@@ -783,16 +851,18 @@ class DatabaseDurableRunStore implements DurableRunStore
                 'status' => 'paused',
                 'pause_requested_at' => $now,
                 'paused_at' => $now,
-                'node_states' => $this->encodeJson($this->mergeNodeState($runId, $nodeId ?? 'waiting', [
-                    'status' => 'paused',
-                    'finished_at' => $now->toJSON(),
-                ], $run)),
                 'execution_token' => null,
                 'leased_until' => null,
                 'updated_at' => $now,
             ]);
 
         if ($updated === 1) {
+            $merged = $this->mergeNodeState($runId, $mergeNodeId, [
+                'status' => 'paused',
+                'finished_at' => $now->toJSON(),
+            ], $run);
+            $this->persistMergedNodeState($runId, $mergeNodeId, $merged);
+
             return true;
         }
 
@@ -843,11 +913,14 @@ class DatabaseDurableRunStore implements DurableRunStore
                     'finished_at' => $now,
                     'execution_token' => null,
                     'leased_until' => null,
-                    'route_plan' => $routePlanProjection !== null ? $this->encodeJson($routePlanProjection) : null,
                     'updated_at' => $now,
                 ]);
 
             if ($updated === 1) {
+                $this->upsertRunState($runId, [
+                    'route_plan' => $routePlanProjection,
+                    'route_plan_projected' => $routePlanProjection !== null,
+                ]);
                 $this->cancelBranches($runId);
                 $this->nodeOutputTable()->where('run_id', $runId)->delete();
             }
@@ -1823,16 +1896,11 @@ class DatabaseDurableRunStore implements DurableRunStore
                 'status' => $status,
                 'execution_token' => null,
                 'leased_until' => null,
-                'route_plan' => $routePlanProjection !== null ? $this->encodeJson($routePlanProjection) : null,
                 'finished_at' => $now,
             ];
 
             if ($status === 'cancelled') {
                 $values['cancelled_at'] = $now;
-            }
-
-            if ($failure !== null) {
-                $values['failure'] = $this->encodeJson($failure);
             }
 
             if ($status === 'failed' && ($failure['timed_out'] ?? false) === true) {
@@ -1843,15 +1911,24 @@ class DatabaseDurableRunStore implements DurableRunStore
                 if ($status === 'completed') {
                     $values['completed_node_ids'] = $this->encodeJson($this->completedNodeIdsWith($run, $nodeId));
                 }
-
-                $values['node_states'] = $this->encodeJson($this->mergeNodeState($runId, $nodeId, [
-                    'status' => $status,
-                    'finished_at' => $now->toJSON(),
-                    'failure' => $failure,
-                ], $run));
             }
 
             $this->guardedUpdate($runId, $executionToken, $values);
+
+            $this->upsertRunState($runId, [
+                'route_plan' => $routePlanProjection,
+                'route_plan_projected' => $routePlanProjection !== null,
+                'failure' => $failure,
+            ]);
+
+            if ($nodeId !== null) {
+                $merged = $this->mergeNodeState($runId, $nodeId, [
+                    'status' => $status,
+                    'finished_at' => $now->toJSON(),
+                    'failure' => $failure,
+                ], $run);
+                $this->persistMergedNodeState($runId, $nodeId, $merged);
+            }
 
             if (in_array($status, ['failed', 'cancelled'], true)) {
                 $this->cancelBranches($runId);
@@ -1935,12 +2012,15 @@ class DatabaseDurableRunStore implements DurableRunStore
         }
 
         $nodeId = $this->nodeIdForRun($run, $stepIndex);
-        $this->guardedUpdate($runId, $executionToken, [
-            'current_node_id' => $nodeId,
-            'node_states' => $this->encodeJson($this->mergeNodeState($runId, $nodeId, array_merge([
+        $this->connection->transaction(function () use ($runId, $executionToken, $nodeId, $stepIndex, $state, $run): void {
+            $this->guardedUpdate($runId, $executionToken, [
+                'current_node_id' => $nodeId,
+            ]);
+            $merged = $this->mergeNodeState($runId, $nodeId, array_merge([
                 'step_index' => $stepIndex,
-            ], $state), $run)),
-        ]);
+            ], $state), $run);
+            $this->persistMergedNodeState($runId, $nodeId, $merged);
+        });
     }
 
     protected function currentNodeIdFor(string $runId, int $stepIndex): string
@@ -1981,17 +2061,134 @@ class DatabaseDurableRunStore implements DurableRunStore
     /**
      * @param  array<string, mixed>  $state
      * @param  array<string, mixed>|null  $run
-     * @return array<string, array<string, mixed>>
+     * @return array<string, mixed>
      */
     protected function mergeNodeState(string $runId, string $nodeId, array $state, ?array $run = null): array
     {
-        $run ??= $this->find($runId);
-        $states = is_array($run['node_states'] ?? null) ? $run['node_states'] : [];
-        $existing = is_array($states[$nodeId] ?? null) ? $states[$nodeId] : [];
+        if ($run !== null) {
+            $states = is_array($run['node_states'] ?? null) ? $run['node_states'] : [];
+            $existing = is_array($states[$nodeId] ?? null) ? $states[$nodeId] : [];
+        } else {
+            $existing = $this->nodeStateFor($runId, $nodeId);
+        }
 
-        $states[$nodeId] = array_filter(array_merge($existing, ['node_id' => $nodeId], $state), static fn (mixed $value): bool => $value !== null);
+        return array_filter(array_merge($existing, ['node_id' => $nodeId], $state), static fn (mixed $value): bool => $value !== null);
+    }
 
-        return $states;
+    /**
+     * @return array<string, mixed>
+     */
+    protected function nodeStateFor(string $runId, string $nodeId): array
+    {
+        /** @var object|null $row */
+        $row = $this->nodeStateTable()->where('run_id', $runId)->where('node_id', $nodeId)->first();
+
+        if ($row === null) {
+            return [];
+        }
+
+        return $this->decodeJson($row->state ?? null, []);
+    }
+
+    /**
+     * @param  array<string, mixed>  $mergedState
+     */
+    protected function persistMergedNodeState(string $runId, string $nodeId, array $mergedState): void
+    {
+        $timestamp = Carbon::now('UTC');
+        $this->nodeStateTable()->upsert(
+            [
+                [
+                    'run_id' => $runId,
+                    'node_id' => $nodeId,
+                    'state' => $this->encodeJson($mergedState),
+                    'created_at' => $timestamp,
+                    'updated_at' => $timestamp,
+                ],
+            ],
+            ['run_id', 'node_id'],
+            ['state', 'updated_at'],
+        );
+    }
+
+    protected function runStateRow(string $runId): ?object
+    {
+        /** @var object|null $row */
+        $row = $this->runStateTable()->where('run_id', $runId)->first();
+
+        return $row;
+    }
+
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    protected function loadNodeStatesMap(string $runId): array
+    {
+        return $this->nodeStateTable()
+            ->where('run_id', $runId)
+            ->orderBy('id')
+            ->get()
+            ->mapWithKeys(function (object $row): array {
+                $decoded = $this->decodeJson($row->state ?? null, []);
+
+                return [(string) $row->node_id => is_array($decoded) ? $decoded : []];
+            })
+            ->all();
+    }
+
+    /**
+     * @param  array{
+     *     route_plan?: mixed,
+     *     failure?: mixed,
+     *     retry_policy?: mixed,
+     *     route_plan_projected?: bool
+     * }  $patch
+     */
+    protected function upsertRunState(string $runId, array $patch): void
+    {
+        $timestamp = Carbon::now('UTC');
+        /** @var object|null $existing */
+        $existing = $this->runStateTable()->where('run_id', $runId)->first();
+
+        $routePlan = $existing !== null ? $this->decodeJson($existing->route_plan ?? null, null) : null;
+        $failure = $existing !== null ? $this->decodeJson($existing->failure ?? null, null) : null;
+        $retryPolicy = $existing !== null ? $this->decodeJson($existing->retry_policy ?? null, null) : null;
+        $projected = $existing !== null && (bool) ($existing->route_plan_projected ?? false);
+
+        if (array_key_exists('route_plan', $patch)) {
+            $routePlan = $patch['route_plan'];
+        }
+        if (array_key_exists('failure', $patch)) {
+            $failure = $patch['failure'];
+        }
+        if (array_key_exists('retry_policy', $patch)) {
+            $retryPolicy = $patch['retry_policy'];
+        }
+        if (array_key_exists('route_plan_projected', $patch)) {
+            $projected = (bool) $patch['route_plan_projected'];
+        }
+
+        $this->runStateTable()->updateOrInsert(
+            ['run_id' => $runId],
+            [
+                'route_plan' => $routePlan === null ? null : $this->encodeJson($routePlan),
+                'failure' => $failure === null ? null : $this->encodeJson($failure),
+                'retry_policy' => $retryPolicy === null ? null : $this->encodeJson($retryPolicy),
+                'route_plan_projected' => $projected,
+                'created_at' => $existing !== null ? $existing->created_at : $timestamp,
+                'updated_at' => $timestamp,
+            ],
+        );
+    }
+
+    protected function nodeStateTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_node_states', 'swarm_durable_node_states'));
+    }
+
+    protected function runStateTable()
+    {
+        return $this->connection->table((string) $this->config->get('swarm.tables.durable_run_state', 'swarm_durable_run_state'));
     }
 
     protected function table()

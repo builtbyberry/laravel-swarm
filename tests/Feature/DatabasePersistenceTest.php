@@ -74,6 +74,15 @@ test('database migrations add composite indexes for durable recovery scans', fun
         ->and(Schema::hasIndex('swarm_durable_branches', 'swarm_durable_branches_recovery_idx'))->toBeTrue();
 });
 
+test('durable runs split migration adds side state tables and removes wide json columns from swarm_durable_runs', function () {
+    expect(Schema::hasTable('swarm_durable_node_states'))->toBeTrue()
+        ->and(Schema::hasTable('swarm_durable_run_state'))->toBeTrue()
+        ->and(Schema::hasColumn('swarm_durable_runs', 'route_plan'))->toBeFalse()
+        ->and(Schema::hasColumn('swarm_durable_runs', 'node_states'))->toBeFalse()
+        ->and(Schema::hasColumn('swarm_durable_runs', 'failure'))->toBeFalse()
+        ->and(Schema::hasColumn('swarm_durable_runs', 'retry_policy'))->toBeFalse();
+});
+
 test('database context store persists the same context shape as cache', function () {
     $store = app(DatabaseContextStore::class);
     $context = RunContext::from([

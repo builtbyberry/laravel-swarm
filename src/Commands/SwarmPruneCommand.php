@@ -36,6 +36,8 @@ class SwarmPruneCommand extends Command
             'stream_events' => (string) $config->get('swarm.tables.stream_events', 'swarm_stream_events'),
             'contexts' => (string) $config->get('swarm.tables.contexts', 'swarm_contexts'),
             'artifacts' => (string) $config->get('swarm.tables.artifacts', 'swarm_artifacts'),
+            'durable_node_states' => (string) $config->get('swarm.tables.durable_node_states', 'swarm_durable_node_states'),
+            'durable_run_state' => (string) $config->get('swarm.tables.durable_run_state', 'swarm_durable_run_state'),
             'durable_node_outputs' => (string) $config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs'),
             'durable_branches' => (string) $config->get('swarm.tables.durable_branches', 'swarm_durable_branches'),
             'durable_signals' => (string) $config->get('swarm.tables.durable_signals', 'swarm_durable_signals'),
@@ -92,9 +94,11 @@ class SwarmPruneCommand extends Command
             $counts['stream_events'],
         ));
         $this->components->info(sprintf(
-            '%s %d durable runtime, %d durable node output, and %d durable branch record(s).',
+            '%s %d durable runtime, %d durable node state, %d durable run state, %d durable node output, and %d durable branch record(s).',
             $verb,
             $counts['durable'],
+            $counts['durable_node_states'],
+            $counts['durable_run_state'],
             $counts['durable_node_outputs'],
             $counts['durable_branches'],
         ));
@@ -132,7 +136,7 @@ class SwarmPruneCommand extends Command
                         ->where('expires_at', '<', now())
                         ->whereIn('status', ['completed', 'failed', 'cancelled']);
                 });
-        } elseif (in_array($role, ['durable_signals', 'durable_waits', 'durable_labels', 'durable_details', 'durable_progress'], true)) {
+        } elseif (in_array($role, ['durable_node_states', 'durable_run_state', 'durable_signals', 'durable_waits', 'durable_labels', 'durable_details', 'durable_progress'], true)) {
             $query->whereIn('run_id', function ($subquery) use ($historyTable): void {
                 $subquery->from($historyTable)
                     ->select('run_id')
