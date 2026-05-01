@@ -36,6 +36,10 @@ Every implementation decision must follow existing Laravel and Laravel AI conven
 - `laravel/pint` ^1.0
 - Optional `laravel/pulse` integration
 
+## Dependency And Upgrade Path
+
+Swarm sits directly on **PHP**, **Laravel**, and **`laravel/ai`** with semver ranges. The package **cannot fully insulate** applications from upstream API, streaming, or provider contract shifts. Treat **Laravel** and **`laravel/ai` bumps** (minor or patch) as **integration-test events**: run your automated suite and any swarm-heavy smoke paths after resolving Composer updates. **This package’s changelog** is the contract for Swarm-owned breaking or behavior changes; it does not replace verifying your app against new Laravel or Laravel AI releases.
+
 ## Package Shape
 
 Keep the mental model high-level rather than mirroring every file:

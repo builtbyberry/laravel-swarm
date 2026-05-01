@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Documentation
+
+- Documented dependency and upgrade expectations for PHP, Laravel, and
+  `laravel/ai` in `README.md` and `AGENTS.md` (integration testing after Composer
+  bumps; changelog covers Swarm-owned changes only).
+
 ### Added
 
 - **Coordinated hierarchical parallel for `queue()`:** optional
