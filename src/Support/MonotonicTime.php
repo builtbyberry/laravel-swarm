@@ -6,13 +6,15 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 class MonotonicTime
 {
-    public static function now(): int
+    public static function now(): float
     {
-        return hrtime(true);
+        return (float) hrtime(true);
     }
 
-    public static function elapsedMilliseconds(int $startedAt): int
+    public static function elapsedMilliseconds(float $startedAt): int
     {
-        return max(1, intdiv(self::now() - $startedAt + 999_999, 1_000_000));
+        $deltaNs = self::now() - $startedAt + 999_999;
+
+        return max(1, intdiv((int) $deltaNs, 1_000_000));
     }
 }

@@ -173,7 +173,7 @@ class SequentialStreamRunner
         }
     }
 
-    protected function failStream(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, Throwable $exception, ?int $startedAt): SwarmStreamError
+    protected function failStream(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, Throwable $exception, ?float $startedAt): SwarmStreamError
     {
         $this->historyStore->fail($context->runId, $exception, $contextTtl);
         $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
