@@ -36,14 +36,16 @@ then exits successfully without deleting rows. **`--dry-run` still runs** so you
 can inspect counts while pruning is disabled.
 
 The command prunes the history, context, artifact, stream replay, durable
-runtime, durable node-output, durable branch, signal, wait, label, detail,
-progress, child-run, and durable webhook idempotency tables in bounded chunks to
-avoid long-running table locks on large datasets.
+runtime, durable node state, durable run state, durable node-output, durable
+branch, signal, wait, label, detail, progress, child-run, and durable webhook
+idempotency tables in bounded chunks to avoid long-running table locks on large
+datasets.
 
 Laravel Swarm protects active runs across persistence stores. While a run is
 `pending`, `running`, `waiting`, or `paused`, its history, context, artifact,
-stream replay, durable runtime, node-output, and branch rows are not pruned,
-even if their retention window has elapsed.
+stream replay, durable runtime, durable node state, durable run state,
+node-output, and branch rows are not pruned, even if their retention window has
+elapsed.
 
 History pruning only removes expired terminal rows (`completed`, `failed`, and
 `cancelled`). Context and artifact pruning skip rows that belong to active runs.
@@ -126,13 +128,34 @@ stretching `queue()` beyond what one job should own.
 
 Swarm database tables are sized for operational throughput. List and aggregation
 queries should use **run history** plus **typed durable columns** and
-**satellite tables** (labels, waits, signals, progress, child runs, branches).
+**satellite tables** (labels, waits, signals, progress, child runs, branches,
+`swarm_durable_run_state`, `swarm_durable_node_states`).
 Avoid driving dashboards from SQL filters or sorts on arbitrary JSON paths in
-`swarm_durable_runs`; that pattern scales poorly and fights indexing.
+checkpoint side tables or the main durable row; that pattern scales poorly and
+fights indexing.
 
 See [Operational queries at scale](durable-execution.md#operational-queries-at-scale)
 in `docs/durable-execution.md` for the fields the package treats as safe
 operational predicates.
+
+## Durable storage growth and archival
+
+Durable execution spreads state across `swarm_durable_runs` (scheduler and lease
+columns), `swarm_durable_run_state` (route plan and run-level failure / retry
+policy), `swarm_durable_node_states` (per-node snapshots), and existing side
+tables for branches, waits, signals, and node outputs. **Prune expired history**
+on a schedule so terminal rows and their companion durable tables are reclaimed;
+`swarm:prune` already targets these roles in bounded batches.
+
+For regulated or long-retention environments, **pruning is not an audit archive**:
+export terminal history, context, artifacts, and any durable side rows you need
+for compliance before TTL expiry, or stream lifecycle events into an
+append-only application store.
+
+**Partitioning** (for example by time or tenant) is not built into the package.
+If a single logical table outgrows comfortable maintenance windows after pruning
+and archival, plan an application-specific partitioning or archival tier before
+expecting database-native partitioning alone to solve throughput.
 
 ## Production Checklist
 

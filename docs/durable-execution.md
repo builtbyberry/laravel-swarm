@@ -151,10 +151,13 @@ can build run inspectors, operator dashboards, and recovery tools without
 depending only on terminal history rows.
 
 For hierarchical durable runs, Laravel Swarm stores the route cursor, route
-start node, current node, completed node IDs, and per-node state. While a run
-is active, the durable runtime record also keeps the validated route plan so
-recovery can continue the route. Active route plans can contain worker prompts
-and should be treated as sensitive operational storage.
+start node, current node, and completed node IDs on `swarm_durable_runs`, keeps
+the validated route plan and run-level failure / retry policy in
+`swarm_durable_run_state`, and stores per-node snapshots in
+`swarm_durable_node_states` so the hot durable row stays narrow for lease and
+scheduler updates. While a run is active, the validated route plan enables
+recovery to continue the route. Active route plans can contain worker prompts and
+should be treated as sensitive operational storage.
 
 When a hierarchical durable run completes, fails, or is cancelled, Laravel
 Swarm replaces the raw route plan with an inspection-safe projection. The
@@ -171,9 +174,11 @@ That waiting state is a durable branch boundary: recovery can release it to the
 join step after terminal branch checkpoints, and pause, resume, or cancel can
 operate without an active parent step job.
 
-For all durable runs, the runtime record also tracks execution mode, attempts,
-lease timestamps, recovery counters, pause/resume/cancel timestamps, timeout
-state, and failure metadata.
+For all durable runs, the main durable row tracks execution mode, attempts,
+lease timestamps, recovery counters, pause/resume/cancel timestamps, and
+timeout state; run-level failure metadata and retry policy live in
+`swarm_durable_run_state` and are merged into `DurableRunStore::find()` for
+inspection.
 
 `SwarmHistory` remains the stable inspection API for run history, output,
 steps, usage, timing, and terminal failure details. The durable runtime record
@@ -189,8 +194,9 @@ settings.
 
 Operator dashboards and high-volume list views should filter and sort using
 **typed columns** on `swarm_durable_runs` and **satellite tables** (labels,
-waits, signals, progress, child runs, branches), not SQL predicates on JSON
-paths inside the main durable row.
+waits, signals, progress, child runs, branches, `swarm_durable_run_state`,
+`swarm_durable_node_states`), not SQL predicates on JSON paths across large
+result sets.
 
 Laravel Swarm’s recovery, retry, and join helpers query only typed fields. For
 your own dashboards, treat these as the supported operational dimensions:
@@ -210,11 +216,13 @@ your own dashboards, treat these as the supported operational dimensions:
 - **Labels:** query `swarm_durable_labels` by `key` and the typed value columns
   (`value_string`, `value_integer`, `value_float`, `value_boolean`, `value_type`)
 
-JSON columns on `swarm_durable_runs` (`route_plan`, `route_cursor`,
-`completed_node_ids`, `node_states`, `failure`, `retry_policy`) hold checkpoint
-state. Load them **after** narrowing by `run_id` or the filters above—for
-example when hydrating a detail view—not as the primary `WHERE` clause across a
-large table.
+Checkpoint JSON for hierarchical routing and per-node progress lives in
+`swarm_durable_run_state` (`route_plan`, `failure`, `retry_policy`) and
+`swarm_durable_node_states` (`state` per `node_id`), not on the hot
+`swarm_durable_runs` row. The main durable row still carries `route_cursor` and
+`completed_node_ids` for scheduler joins. Load JSON payloads **after** narrowing
+by `run_id` or the typed filters above—for example when hydrating a detail
+view—not as the primary `WHERE` clause across a large table.
 
 For listing finished work, prefer **run history** (`SwarmHistory` /
 `swarm_run_histories`) and combine it with durable tables when you need live

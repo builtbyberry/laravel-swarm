@@ -6,6 +6,19 @@ Laravel Swarm follows [semantic versioning](https://semver.org/) for its own API
 
 Swarm does **not** fully isolate you from **PHP**, **Laravel**, or **[Laravel AI](https://github.com/laravel/ai)**. Treat Composer upgrades that touch those dependencies as **integration-test events** for your app. The changelog documents Swarm’s contract; it does not replace verifying behavior against new upstream releases.
 
+## Unreleased: durable runtime schema split
+
+Run `php artisan migrate` after updating the package. The migration creates
+`swarm_durable_node_states` and `swarm_durable_run_state`, migrates existing
+`route_plan`, `node_states`, `failure`, and `retry_policy` values from
+`swarm_durable_runs`, then drops those columns. `DurableRunStore::find()` and
+related inspection APIs keep the same PHP array shape; only the physical layout
+changes.
+
+If you override table names, publish `config/swarm.php` and set
+`SWARM_DURABLE_NODE_STATES_TABLE` / `SWARM_DURABLE_RUN_STATE_TABLE` when you rename
+the new tables.
+
 ## Upgrading Laravel AI
 
 `laravel/ai` is required in the **^0.6** range today and is **pre-1.0**. Public contracts, streaming behavior, and provider integrations can change between releases without the stability guarantees of a stable major line.

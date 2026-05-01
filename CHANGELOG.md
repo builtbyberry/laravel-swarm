@@ -4,6 +4,13 @@
 
 ### Added
 
+- Migration `2026_05_02_000001_split_swarm_durable_runs_state_into_side_tables`
+  adds `swarm_durable_node_states` and `swarm_durable_run_state`, moves
+  `route_plan`, `node_states`, `failure`, and `retry_policy` off `swarm_durable_runs`,
+  and copies existing data before dropping the old columns. Config keys
+  `swarm.tables.durable_node_states` and `swarm.tables.durable_run_state` (with
+  `SWARM_DURABLE_NODE_STATES_TABLE` / `SWARM_DURABLE_RUN_STATE_TABLE`) name these
+  tables.
 - `swarm:prune --dry-run` reports how many rows would be deleted in each table
   category without performing deletes.
 - `swarm.retention.prevent_prune` (`SWARM_PREVENT_PRUNE`) to disable destructive
@@ -12,8 +19,10 @@
 ### Documentation
 
 - Documented durable operational query surfaces at scale: typed columns and
-  satellite tables vs JSON checkpoint columns (`docs/durable-execution.md`), plus
-  high-volume dashboard guidance in `docs/maintenance.md`.
+  satellite tables (including `swarm_durable_run_state` and
+  `swarm_durable_node_states`) vs JSON checkpoint storage (`docs/durable-execution.md`),
+  plus durable storage growth, archival, and partitioning posture in
+  `docs/maintenance.md`.
 - Clarified that swarm persistence is operational (mutable / pruneable), not an
   immutable compliance archive; documented dry-run, prevent-prune, and audit-sink
   guidance in `docs/maintenance.md`, `docs/persistence-and-history.md`, and the

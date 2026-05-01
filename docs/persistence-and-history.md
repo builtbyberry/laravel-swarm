@@ -127,9 +127,11 @@ durable runs, database-backed persistence also exposes a durable runtime record
 with operational state such as route progress, node state, leases, attempts,
 operator controls, recovery markers, and failure metadata. Use that runtime
 record as an additional inspection surface for active and terminal durable runs.
-Durable labels, details, waits, signals, progress records, and child swarm
-lineage live in companion runtime tables so dashboards can filter and inspect
-runs without parsing prompts or route plans.
+Durable labels, details, waits, signals, progress records, child swarm lineage,
+`swarm_durable_run_state` (route plan and run-level failure / retry policy), and
+`swarm_durable_node_states` (per-node execution snapshots) live in companion
+runtime tables so dashboards can filter and inspect runs without parsing
+prompts or route plans on the hot durable row.
 
 ```php
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
