@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
+use BuiltByBerry\LaravelSwarm\Support\SwarmRunPhase;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -28,12 +29,13 @@ class SwarmStatusCommand extends Command
         }
 
         $this->table(
-            ['Run ID', 'Swarm', 'Topology', 'Status', 'Steps', 'Duration'],
+            ['Run ID', 'Swarm', 'Topology', 'Status', 'Phase', 'Steps', 'Duration'],
             array_map(fn (array $run): array => [
                 $run['run_id'],
                 class_basename($run['swarm_class']),
                 $run['topology'],
                 $run['status'],
+                SwarmRunPhase::cliLabel($run),
                 count($run['steps'] ?? []),
                 $this->formatDuration($run),
             ], $runs),

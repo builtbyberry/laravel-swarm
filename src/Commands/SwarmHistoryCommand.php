@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
+use BuiltByBerry\LaravelSwarm\Support\SwarmRunPhase;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -43,12 +44,13 @@ class SwarmHistoryCommand extends Command
         }
 
         $this->table(
-            ['Run ID', 'Swarm', 'Topology', 'Status', 'Steps', 'Started'],
+            ['Run ID', 'Swarm', 'Topology', 'Status', 'Phase', 'Steps', 'Started'],
             array_map(fn (array $run): array => [
                 $run['run_id'],
                 class_basename($run['swarm_class']),
                 $run['topology'],
                 $run['status'],
+                SwarmRunPhase::cliLabel($run),
                 count($run['steps'] ?? []),
                 isset($run['started_at']) ? Carbon::parse($run['started_at'], 'UTC')->setTimezone(config('app.timezone'))->toDateTimeString() : 'n/a',
             ], $runs),
