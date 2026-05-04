@@ -4,6 +4,9 @@
 
 ### Added
 
+- GitHub Actions test workflow enables PCOV and runs `composer test:coverage`
+  so CI fails when line coverage for `src/` drops below the configured minimum
+  (see `composer.json` script `test:coverage`).
 - Migration `2026_05_02_000001_split_swarm_durable_runs_state_into_side_tables`
   adds `swarm_durable_node_states` and `swarm_durable_run_state`, moves
   `route_plan`, `node_states`, `failure`, and `retry_policy` off `swarm_durable_runs`,

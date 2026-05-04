@@ -28,6 +28,11 @@ composer lint
 composer analyse
 ```
 
+Continuous integration runs `composer test:coverage`, which requires a code
+coverage driver (PCOV or Xdebug). Install PCOV for PHP locally when you want to
+match CI or debug coverage failures; otherwise `composer test` remains the
+default fast path without coverage.
+
 If you run PHPStan directly, use the same command as CI:
 
 ```bash
