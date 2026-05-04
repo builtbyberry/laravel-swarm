@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -34,6 +35,7 @@ class DurableManagerCollaboratorFactory
         SequentialRunner $sequential,
         HierarchicalRunner $hierarchicalRunner,
         DurableRunRecorder $recorder,
+        SwarmStepRecorder $stepsRecorder,
         Connection $connection,
         SwarmCapture $capture,
         SwarmPayloadLimits $limits,
@@ -121,6 +123,21 @@ class DurableManagerCollaboratorFactory
             'retryHandler' => $retryHandler,
             'hierarchical' => $hierarchical,
         ]);
+        $branchAdvancer = $this->application->makeWith(DurableBranchAdvancer::class, [
+            'durableRuns' => $durableRuns,
+            'historyStore' => $historyStore,
+            'contextStore' => $contextStore,
+            'artifactRepository' => $artifactRepository,
+            'events' => $events,
+            'stepsRecorder' => $stepsRecorder,
+            'connection' => $connection,
+            'capture' => $capture,
+            'application' => $application,
+            'runs' => $runContext,
+            'branches' => $branches,
+            'hierarchical' => $hierarchical,
+            'retryHandler' => $retryHandler,
+        ]);
 
         return new DurableManagerCollaborators(
             runContext: $runContext,
@@ -132,6 +149,7 @@ class DurableManagerCollaboratorFactory
             recovery: $recovery,
             hierarchical: $hierarchical,
             advancer: $advancer,
+            branchAdvancer: $branchAdvancer,
         );
     }
 }

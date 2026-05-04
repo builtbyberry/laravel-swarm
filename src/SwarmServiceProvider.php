@@ -43,6 +43,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRetryHandler;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchAdvancer;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableStepAdvancer;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
@@ -98,6 +99,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->bind(DurableRecoveryCoordinator::class);
         $this->app->bind(DurableHierarchicalCoordinator::class);
         $this->app->bind(DurableStepAdvancer::class);
+        $this->app->bind(DurableBranchAdvancer::class);
         $this->app->singleton(DurableRunInspector::class);
         $this->app->singleton(DurableSignalHandler::class);
         $this->app->singleton(DurableRetryHandler::class);

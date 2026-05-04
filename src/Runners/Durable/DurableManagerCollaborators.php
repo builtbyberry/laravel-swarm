@@ -16,5 +16,6 @@ class DurableManagerCollaborators
         public DurableRecoveryCoordinator $recovery,
         public DurableHierarchicalCoordinator $hierarchical,
         public DurableStepAdvancer $advancer,
+        public DurableBranchAdvancer $branchAdvancer,
     ) {}
 }
