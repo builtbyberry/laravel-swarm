@@ -165,7 +165,9 @@ class SwarmServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        if (LaravelSwarm::$runsMigrations) {
+            $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        }
 
         if (class_exists(Pulse::class)) {
             $this->loadViewsFrom(__DIR__.'/../resources/views', 'swarm');
