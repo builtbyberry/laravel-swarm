@@ -27,7 +27,6 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmChildStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
-use BuiltByBerry\LaravelSwarm\Events\SwarmProgressRecorded;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
@@ -43,6 +42,7 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRetryPolicy;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
@@ -85,6 +85,7 @@ class DurableSwarmManager
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
         protected Application $application,
+        protected DurableRunInspector $inspector,
     ) {}
 
     /**
@@ -279,29 +280,12 @@ class DurableSwarmManager
      */
     public function find(string $runId): ?array
     {
-        return $this->durableRuns->find($runId);
+        return $this->inspector->find($runId);
     }
 
     public function inspect(string $runId): DurableRunDetail
     {
-        $run = $this->durableRuns->find($runId);
-
-        if ($run === null) {
-            throw new SwarmException("Durable run [{$runId}] was not found.");
-        }
-
-        return new DurableRunDetail(
-            runId: $runId,
-            run: $run,
-            history: $this->historyStore->find($runId),
-            labels: $this->durableRuns->labels($runId),
-            details: $this->durableRuns->details($runId),
-            waits: $this->durableRuns->waits($runId),
-            signals: $this->durableRuns->signals($runId),
-            progress: $this->durableRuns->progress($runId),
-            children: $this->durableRuns->childRuns($runId),
-            branches: $this->durableRuns->branchesFor($runId),
-        );
+        return $this->inspector->inspect($runId);
     }
 
     /**
@@ -310,10 +294,7 @@ class DurableSwarmManager
      */
     public function inspectByLabels(array $labels, int $limit = 50): array
     {
-        return array_map(
-            fn (string $runId): DurableRunDetail => $this->inspect($runId),
-            $this->durableRuns->runIdsForLabels($labels, $limit),
-        );
+        return $this->inspector->inspectByLabels($labels, $limit);
     }
 
     /**
@@ -321,8 +302,7 @@ class DurableSwarmManager
      */
     public function updateLabels(string $runId, array $labels): void
     {
-        $this->requireRun($runId);
-        $this->durableRuns->updateLabels($runId, $labels);
+        $this->inspector->updateLabels($runId, $labels);
     }
 
     /**
@@ -330,8 +310,7 @@ class DurableSwarmManager
      */
     public function updateDetails(string $runId, array $details): void
     {
-        $this->requireRun($runId);
-        $this->durableRuns->updateDetails($runId, $this->durablePayload($details));
+        $this->inspector->updateDetails($runId, $details);
     }
 
     public function signal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
@@ -411,15 +390,7 @@ class DurableSwarmManager
      */
     public function recordProgress(string $runId, ?string $branchId = null, array $progress = []): void
     {
-        $this->requireRun($runId);
-        $progress = $this->durablePayload($progress);
-        $this->durableRuns->recordProgress($runId, $branchId, $progress);
-
-        $this->events->dispatch(new SwarmProgressRecorded(
-            runId: $runId,
-            branchId: $branchId,
-            progress: $progress,
-        ));
+        $this->inspector->recordProgress($runId, $branchId, $progress);
     }
 
     public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null): DurableChildRun
