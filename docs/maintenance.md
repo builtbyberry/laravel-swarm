@@ -70,6 +70,26 @@ If you override `swarm.tables.*`, the prune command respects those configured
 table roles directly. It does not rely on default table-name patterns to decide
 which rows are safe to delete.
 
+### Foreign-key constraints and prune order
+
+The package migration
+`2026_05_04_000001_add_run_id_foreign_keys_to_swarm_tables` adds `ON DELETE CASCADE`
+foreign keys from every child table to its parent (`swarm_run_histories` for the
+history family, `swarm_durable_runs` for the durable family). The prune command
+deletes parents before children, so the cascade fires on already-targeted rows
+and does not produce orphan rows or constraint errors.
+
+`swarm_durable_runs.parent_run_id` and `swarm_durable_webhook_idempotency.run_id`
+use `ON DELETE SET NULL` so a pruned parent does not block child-run or
+idempotency-record retention. `swarm_durable_child_runs.child_run_id` has **no
+foreign key**: the referenced durable run may be pruned on its own retention
+timeline without affecting the parent's child-run registry.
+
+**Custom table names:** If you publish and rename any of these tables, your
+published migration copies must include the equivalent `ON DELETE CASCADE` /
+`ON DELETE SET NULL` constraints. Without them, orphan rows can accumulate once
+the default FKs are removed from the original table names.
+
 ## Migration Notes
 
 Laravel Swarm's package migrations are intentionally simple Laravel migrations.

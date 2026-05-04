@@ -88,6 +88,7 @@ Laravel Swarm persists run context, artifacts, and run history through configura
 - Cache and database drivers are supported; database persistence uses package migrations loaded by the service provider.
 - Capture lives under `swarm.capture.inputs` and `swarm.capture.outputs`. Treat prompts, outputs, lifecycle events, streamed reasoning/tool payloads, and automatic step artifacts as sensitive. With output capture off, streamed tool/reasoning payloads redact values to `[redacted]` while preserving keys where applicable.
 - Database retention is prune-based. Expired database rows remain queryable until `swarm:prune` runs, and active runs are protected from partial pruning.
+- `run_id` referential integrity is enforced at the database level: all child tables carry `ON DELETE CASCADE` FKs to their parent (`swarm_run_histories` for the history family, `swarm_durable_runs` for the durable family). `parent_run_id` (self-reference), `signal_id`, and `webhook_idempotency.run_id` use `ON DELETE SET NULL`; `child_run_id` has no FK.
 
 ## Commands And Operations
 

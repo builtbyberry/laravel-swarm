@@ -44,6 +44,17 @@
   guidance in `docs/maintenance.md`, `docs/persistence-and-history.md`, and the
   README production checklist.
 
+### Changed
+
+- **Schema hardening:** Migration `2026_05_04_000001_add_run_id_foreign_keys_to_swarm_tables`
+  adds database-level `ON DELETE CASCADE` / `ON DELETE SET NULL` foreign keys
+  across all `run_id` edges (history family and durable family). The prune
+  command's parent-before-children delete order is unchanged and remains
+  compatible with the new constraints.
+- Fixed write-order bug in `SequentialStreamRunner`: the history row is now
+  created before the context row, matching the ordering enforced by the new FK
+  constraint.
+
 ### Security
 
 - Hardened durable webhook `token` auth when `swarm.durable.webhooks.auth.token`
