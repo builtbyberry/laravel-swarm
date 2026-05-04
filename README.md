@@ -659,8 +659,22 @@ To customize how swarm state is stored, bind your own implementations against th
   Use `php artisan swarm:prune --dry-run` before tightening schedules, set
   `SWARM_PREVENT_PRUNE` when package pruning must not delete rows, and build
   immutable or long-lived audit evidence outside Swarm if compliance requires it.
-- Review capture settings before running customer, compliance, or regulated
-  data through swarms.
+- **Capture defaults are conservative** (`swarm.capture.*` default to `false` in
+  shipped `config/swarm.php`): full prompts, outputs, automatic step artifacts, and
+  rich active-context snapshots are not persisted unless you opt in via config
+  or `SWARM_CAPTURE_*`. Review and set capture flags before running customer,
+  compliance, or regulated data through swarms.
+- **`queue()` and `dispatchDurable()` require `active_context`:** with the
+  shipped default `active_context` off, those modes fail at dispatch. Set
+  `SWARM_CAPTURE_ACTIVE_CONTEXT=true` (or the config equivalent) for queued or
+  durable swarms; you can still leave input/output/artifact capture off for
+  redacted history.
+- **Database persistence sealing:** when `swarm.persistence.driver` is
+  `database`, `encrypt_at_rest` defaults to **true** and seals designated string
+  columns with Laravel’s encrypter (`APP_KEY`). Disable with
+  `SWARM_ENCRYPT_AT_REST=false` only if you rely on other encryption layers.
+  Plan `APP_KEY` rotation with your data—rotating the key without re-encryption
+  leaves existing sealed rows unreadable. See [Persistence And History](docs/persistence-and-history.md).
 - Build a run inspector or dashboard around `run_id`, lifecycle events,
   `SwarmHistory`, and durable runtime state.
 - Correlate logs and traces across workers using `run_id` (and queue job ids

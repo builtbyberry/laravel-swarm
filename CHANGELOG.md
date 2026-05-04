@@ -35,7 +35,9 @@
 - **Breaking:** `swarm.capture.*` defaults are now **false** for `inputs`,
   `outputs`, `artifacts`, and `active_context`. Applications that depend on
   persisted prompts and outputs must set the corresponding `SWARM_CAPTURE_*`
-  environment variables or config entries to `true`.
+  environment variables or config entries to `true`. Applications using
+  `queue()` or `dispatchDurable()` must enable `active_context` (dispatch fails
+  otherwise).
 - **Breaking (extend-only):** `DatabaseContextStore`, `DatabaseRunHistoryStore`,
   and `DatabaseDurableRunStore` constructors accept `SwarmPersistenceCipher`;
   custom subclasses or manual construction must pass the cipher from the
@@ -60,6 +62,10 @@
   immutable compliance archive; documented dry-run, prevent-prune, and audit-sink
   guidance in `docs/maintenance.md`, `docs/persistence-and-history.md`, and the
   README production checklist.
+- Updated `docs/persistence-and-history.md` and the README production checklist
+  for conservative capture defaults, the `active_context` requirement for
+  `queue()` / `dispatchDurable()`, and database encrypter-backed sealing
+  (`encrypt_at_rest`, `APP_KEY` rotation).
 
 ### Changed
 

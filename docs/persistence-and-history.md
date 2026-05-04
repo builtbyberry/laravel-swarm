@@ -41,8 +41,8 @@ When output capture is enabled, Laravel Swarm also creates an automatic
 several places: the step history, the final history output, the run context's
 artifact list, and the artifact repository table or cache entry. This
 duplication is intentional so each inspection surface is useful on its own, but
-teams with sensitive prompts or outputs should review the capture settings
-below before enabling production persistence.
+teams with sensitive prompts or outputs should review capture and database
+sealing settings below before persisting customer or regulated data.
 
 Run history also includes timing fields for inspection and duration
 calculations:
@@ -180,6 +180,12 @@ Set the global persistence driver in `config/swarm.php`:
 ```php
 'persistence' => [
     'driver' => 'database', // or 'cache'
+    /*
+     * When the driver is `database`, this defaults to true: sensitive string
+     * columns are sealed with Laravel's encrypter (APP_KEY). See "Encryption
+     * at rest" under Privacy And Data Capture.
+     */
+    'encrypt_at_rest' => true, // or false / env('SWARM_ENCRYPT_AT_REST')
 ],
 ```
 
@@ -192,13 +198,13 @@ Individual stores can override the global driver if needed:
 'artifacts' => [
     'driver' => 'cache',
 ],
-    'streaming' => [
-        'replay' => [
-            'enabled' => false,
-            'driver' => 'database',
-            'failure_policy' => 'fail', // or 'continue'
-        ],
+'streaming' => [
+    'replay' => [
+        'enabled' => false,
+        'driver' => 'database',
+        'failure_policy' => 'fail', // or 'continue'
     ],
+],
 ```
 
 Per-store drivers should only be set when you intentionally want an override.
@@ -247,6 +253,31 @@ the same history, context, and artifact records.
 Database TTL is prune-based retention. Expired rows remain queryable until you
 run the prune command described in [Maintenance](maintenance.md).
 
+### Encryption at rest (database persistence)
+
+When `swarm.persistence.driver` is `database`, `swarm.persistence.encrypt_at_rest`
+defaults to **true**. Laravel Swarm then seals selected sensitive **string**
+columns (for example persisted context `input`, run history final `output` and
+per-step agent I/O, durable branch input and output, hierarchical node outputs,
+and child durable run outputs plus top-level `input` inside stored
+`context_payload` JSON) using Laravel’s encrypter and your application
+`APP_KEY`—the same family of primitive as encrypted Eloquent casts. Stored
+values are prefixed (`sw0:`) so older plaintext rows remain readable.
+
+Set `SWARM_ENCRYPT_AT_REST=false` only when you intentionally rely on
+database- or infrastructure-level encryption instead of application-layer
+sealing. Rotating `APP_KEY` without a re-encryption plan leaves existing sealed
+rows unreadable; treat key rotation like any other encrypted-at-rest data.
+
+This feature does **not** replace transparent database encryption (TDE),
+volume encryption, or an immutable compliance archive. It reduces exposure if
+the database files or backups leak without the application key.
+
+When encryption at rest is enabled, `RunHistoryStore::findMatching` skips SQL
+JSON-path prefilters on persisted context (ciphertext is not equality-stable in
+SQL). PHP-side `PersistedRunContextMatcher` filtering still applies after rows
+are loaded.
+
 While a run is still `running`, Laravel Swarm keeps the run coherent across
 history, context, and artifact storage. Active database-backed runs are not
 partially pruned out of one store while they are still in flight.
@@ -260,17 +291,21 @@ names, publish the migrations and update them to match `swarm.tables.*`.
 ## Privacy And Data Capture
 
 Swarm prompts and outputs often contain customer text, documents, or other
-sensitive data. By default, Laravel Swarm captures inputs and outputs in
-lifecycle events, run history, and automatic step artifacts because that gives
-developers useful inspection data.
+sensitive data. Shipped defaults are **conservative**: `swarm.capture.inputs`,
+`outputs`, `artifacts`, and `active_context` default to **false** in
+`config/swarm.php`, so full prompts, agent outputs, automatic step artifacts, and
+rich active context snapshots are **not** persisted or emitted in capture-shaped
+fields unless you opt in. That reduces accidental PII in history, context, and
+events when you turn on database persistence.
 
-You can disable input or output capture in `config/swarm.php`:
+**Opt in** when you want full inspection data (for example internal tooling or
+non-production environments):
 
 ```php
 'capture' => [
-    'inputs' => false,
-    'outputs' => false,
-    'artifacts' => false,
+    'inputs' => true,
+    'outputs' => true,
+    'artifacts' => true,
     'active_context' => true,
 ],
 ```
@@ -278,9 +313,9 @@ You can disable input or output capture in `config/swarm.php`:
 Or with environment variables:
 
 ```bash
-SWARM_CAPTURE_INPUTS=false
-SWARM_CAPTURE_OUTPUTS=false
-SWARM_CAPTURE_ARTIFACTS=false
+SWARM_CAPTURE_INPUTS=true
+SWARM_CAPTURE_OUTPUTS=true
+SWARM_CAPTURE_ARTIFACTS=true
 SWARM_CAPTURE_ACTIVE_CONTEXT=true
 ```
 
@@ -307,10 +342,17 @@ Swarm emits and persists for later inspection.
 
 `active_context` controls the runtime context store used while a swarm is in
 flight. When it is `false`, synchronous and streamed swarms store a redacted
-runtime context snapshot instead of raw task state. Queued and durable swarms
-require active runtime context persistence so workers can continue or recover
-the run; Laravel Swarm fails before dispatch if `active_context` is disabled for
-those modes. This setting is not encryption and it is not a replay mechanism.
+runtime context snapshot instead of raw task state.
+
+**Queued (`queue()`) and durable (`dispatchDurable()`) execution require raw
+active runtime context** so workers can continue or recover the run. With the
+shipped default `active_context` **false**, those modes **fail before dispatch**
+with a clear configuration error. Set `swarm.capture.active_context` to `true`
+(or `SWARM_CAPTURE_ACTIVE_CONTEXT=true`) for any app that uses queued or durable
+swarms; you can still leave `inputs`, `outputs`, and `artifacts` capture disabled
+if you want redacted history while keeping worker-safe runtime context.
+
+This setting is not encryption and it is not a replay mechanism.
 Use input/output/artifact capture settings to control terminal history, stream
 replay, and event capture.
 
@@ -395,16 +437,21 @@ rewriting one growing JSON document on every step. That reduces write
 amplification, but it does not make persistence free. A completed step can still
 write run history, the active context snapshot, and automatic artifacts.
 
-For cost-sensitive or regulated production workflows, start with automatic
-artifact capture disabled unless step-output artifacts are required for
-inspection:
+The package defaults already minimize persisted prompts and outputs. For
+cost-sensitive or regulated production, keep `inputs`, `outputs`, and `artifacts`
+off unless you explicitly need them for support or analytics. When you need
+step output in history without persisting full prompts, a common pattern is
+outputs on, inputs off, artifacts off—still tune to your data classification.
+
+Any application using **`queue()` or `dispatchDurable()`** must set
+`active_context` **true** regardless of the other capture flags.
 
 ```php
 'capture' => [
     'inputs' => false,
     'outputs' => true,
     'artifacts' => false,
-    'active_context' => true,
+    'active_context' => true, // required for queue() and dispatchDurable()
 ],
 ```
 
@@ -429,5 +476,6 @@ the normalized step table name as well.
 If you publish the package migrations, update the table names there as well so
 your schema matches your runtime configuration.
 
-Most applications can use the package defaults without customizing the
-persistence contracts directly.
+Most applications can use the package persistence defaults without customizing
+the storage contracts directly. If you use queued or durable swarms, enable
+`active_context` in config or environment variables so dispatch is permitted.
