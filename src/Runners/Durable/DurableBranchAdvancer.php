@@ -18,11 +18,13 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
+use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Carbon;
 use Laravel\Ai\Contracts\Agent;
 use Throwable;
@@ -46,10 +48,10 @@ class DurableBranchAdvancer
     ) {}
 
     /**
-     * @param  callable(string, string, ?string, ?string): \Illuminate\Foundation\Bus\PendingDispatch  $dispatchBranch
-     * @param  callable(string, int, ?string, ?string): \Illuminate\Foundation\Bus\PendingDispatch     $dispatchStep
-     * @param  callable(array<string, mixed>): void                                                    $dispatchQueuedResume
-     * @param  callable(array<string, mixed>, string, \BuiltByBerry\LaravelSwarm\Support\RunContext, int, ?string, callable): void $failCurrentRun
+     * @param  callable(string, string, ?string, ?string): PendingDispatch  $dispatchBranch
+     * @param  callable(string, int, ?string, ?string): PendingDispatch  $dispatchStep
+     * @param  callable(array<string, mixed>): void  $dispatchQueuedResume
+     * @param  callable(array<string, mixed>, string, RunContext, int, ?string, callable): void  $failCurrentRun
      */
     public function advanceBranch(
         string $runId,

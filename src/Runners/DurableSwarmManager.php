@@ -49,7 +49,6 @@ use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Carbon;
 use JsonException;
 use ReflectionClass;
-use Throwable;
 
 class DurableSwarmManager
 {
