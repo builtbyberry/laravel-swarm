@@ -14,6 +14,9 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use ReflectionClass;
 
+/**
+ * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ */
 class DurableBoundaryCoordinator
 {
     public function __construct(
@@ -89,6 +92,9 @@ class DurableBoundaryCoordinator
         return false;
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     protected function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey, callable $dispatchStep): DurableChildRun
     {
         return $this->children->dispatchChildSwarm(

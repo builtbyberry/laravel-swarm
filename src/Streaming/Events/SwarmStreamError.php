@@ -7,7 +7,6 @@ namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 final class SwarmStreamError extends SwarmStreamEvent
 {
     /**
-     * @param  class-string|null  $exceptionClass
      * @param  array<string, mixed>  $metadata
      */
     public function __construct(

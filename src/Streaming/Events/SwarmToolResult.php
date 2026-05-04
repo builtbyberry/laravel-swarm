@@ -8,9 +8,6 @@ use Laravel\Ai\Responses\Data\ToolResult;
 
 final class SwarmToolResult extends SwarmStreamEvent
 {
-    /**
-     * @param  class-string  $agentClass
-     */
     public function __construct(
         public string $id,
         public string $runId,

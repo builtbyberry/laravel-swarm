@@ -19,11 +19,15 @@ class SwarmStatusCommand extends Command
 
     public function handle(SwarmHistory $history): int
     {
-        $runId = $this->argument('runId') ?: $this->option('run-id');
-        $runs = $runId ? array_filter([$history->find((string) $runId)]) : $history->latest(10);
+        $runIdArg = $this->argument('runId');
+        $runIdOption = $this->option('run-id');
+        $runId = is_string($runIdArg) && $runIdArg !== ''
+            ? $runIdArg
+            : (is_string($runIdOption) && $runIdOption !== '' ? $runIdOption : null);
+        $runs = $runId !== null ? array_filter([$history->find($runId)]) : $history->latest(10);
 
         if ($runs === []) {
-            $this->components->info($runId ? "No swarm run found for run ID [{$runId}]." : 'No swarm runs found.');
+            $this->components->info($runId !== null ? "No swarm run found for run ID [{$runId}]." : 'No swarm runs found.');
 
             return self::SUCCESS;
         }
@@ -44,6 +48,9 @@ class SwarmStatusCommand extends Command
         return self::SUCCESS;
     }
 
+    /**
+     * @param  array<string, mixed>  $run
+     */
     protected function formatDuration(array $run): string
     {
         $startedAt = isset($run['started_at']) ? Carbon::parse($run['started_at'], 'UTC') : null;

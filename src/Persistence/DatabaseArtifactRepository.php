@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Support\ArtifactPayload;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 
 class DatabaseArtifactRepository implements ArtifactRepository
 {
@@ -76,7 +77,7 @@ class DatabaseArtifactRepository implements ArtifactRepository
         }
     }
 
-    protected function table()
+    protected function table(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.artifacts', 'swarm_artifacts'));
     }

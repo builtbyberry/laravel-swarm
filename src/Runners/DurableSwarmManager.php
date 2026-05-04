@@ -43,6 +43,9 @@ use Illuminate\Foundation\Bus\PendingDispatch;
 // intentionally NOT constructor-injected. They are built by DurableManagerCollaboratorFactory
 // so that all graph members share a single DurableRunContext and DurablePayloadCapture instance.
 
+/**
+ * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ */
 class DurableSwarmManager
 {
     protected DurableSignalHandler $signalHandler;
@@ -199,6 +202,9 @@ class DurableSwarmManager
         $this->inspector->recordProgress($runId, $branchId, $progress);
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null): DurableChildRun
     {
         return $this->children->dispatchChildSwarm(
@@ -309,15 +315,22 @@ class DurableSwarmManager
             $branchId,
             $this->dispatchBranchCallback(),
             $this->dispatchStepCallback(),
+            /** @param array<string, mixed> $run */
             function (array $run): void {
                 $this->dispatchQueuedHierarchicalResume($run);
             },
+            /**
+             * @param  array<string, mixed>  $run
+             */
             function (array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId, callable $dispatchStep): void {
                 $this->advancer->failCurrentRunFromBranchFailures($run, $token, $context, $stepLeaseSeconds, $parentNodeId, $dispatchStep);
             },
         );
     }
 
+    /**
+     * @param  array<string, mixed>  $run
+     */
     protected function dispatchWaitingBoundary(array $run, bool $dispatchRecoverableBranches = false): void
     {
         $this->hierarchicalCoordinator->dispatchWaitingBoundary(
@@ -325,6 +338,7 @@ class DurableSwarmManager
             $dispatchRecoverableBranches,
             $this->dispatchStepCallback(),
             $this->dispatchBranchCallback(),
+            /** @param array<string, mixed> $run */
             function (array $run): void {
                 $this->dispatchQueuedHierarchicalResume($run);
             },
@@ -339,6 +353,9 @@ class DurableSwarmManager
         $this->jobs->dispatchQueuedHierarchicalResume($run);
     }
 
+    /**
+     * @param  array<string, mixed>  $run
+     */
     protected function enterDeclaredDurableBoundary(array $run, Swarm $swarm, RunContext $context, int $nextStepIndex): bool
     {
         return $this->boundary->enterDeclaredBoundary($run, $swarm, $context, $this->dispatchStepCallback());

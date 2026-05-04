@@ -22,6 +22,8 @@ class InvokeSwarm implements ShouldQueue
 
     /**
      * Create a new job instance.
+     *
+     * @param  array<string, mixed>  $task
      */
     public function __construct(
         public string $swarmClass,

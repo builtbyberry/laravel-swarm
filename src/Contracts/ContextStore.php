@@ -11,5 +11,8 @@ interface ContextStore
 {
     public function put(RunContext $context, int $ttlSeconds): void;
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function find(string $runId): ?array;
 }

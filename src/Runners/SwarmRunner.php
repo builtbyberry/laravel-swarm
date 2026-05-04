@@ -50,6 +50,10 @@ use ReflectionType;
 use ReflectionUnionType;
 use Throwable;
 
+/**
+ * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ */
 class SwarmRunner
 {
     public function __construct(
@@ -71,16 +75,25 @@ class SwarmRunner
         protected QueuedHierarchicalCoordinator $queuedHierarchicalCoordinator,
     ) {}
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function run(Swarm $swarm, string|array|RunContext $task): SwarmResponse
     {
         return $this->runWithExecutionMode($swarm, $task, ExecutionMode::Run);
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function runQueued(Swarm $swarm, string|array|RunContext $task): ?SwarmResponse
     {
         return $this->runWithExecutionMode($swarm, $task, ExecutionMode::Queue);
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     protected function runWithExecutionMode(Swarm $swarm, string|array|RunContext $task, ExecutionMode $executionMode): ?SwarmResponse
     {
         $startedAt = MonotonicTime::now();
@@ -217,11 +230,18 @@ class SwarmRunner
         return $this->finalizeSuccessfulSwarmExecution($state, $swarm, $topology, $executionMode, $response, $startedAt, $contextTtl);
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
     {
         return $this->sequentialStream->stream($swarm, $task);
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     * @param  SwarmBroadcastChannels  $channels
+     */
     public function broadcast(Swarm $swarm, string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
     {
         return $this->stream($swarm, $task)
@@ -230,6 +250,9 @@ class SwarmRunner
             });
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function queue(Swarm $swarm, string|array|RunContext $task): QueuedSwarmResponse
     {
         $this->validateForDispatch($swarm);
@@ -252,6 +275,10 @@ class SwarmRunner
         return new QueuedSwarmResponse($pendingDispatch, $context->runId);
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     * @param  SwarmBroadcastChannels  $channels
+     */
     public function broadcastOnQueue(Swarm $swarm, string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
     {
         $this->ensureStreamableTopology($swarm);
@@ -275,6 +302,9 @@ class SwarmRunner
         return new QueuedSwarmResponse($pendingDispatch, $context->runId);
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function dispatchDurable(Swarm $swarm, string|array|RunContext $task): DurableSwarmResponse
     {
         $this->ensureSwarmHasAgents($swarm);
@@ -328,6 +358,9 @@ class SwarmRunner
         return max($timeoutSeconds * 2, 300);
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     protected function checkInputPayload(string|array|RunContext $task, RunContext $context, ExecutionMode $executionMode): void
     {
         if ($task instanceof RunContext || in_array($executionMode, [ExecutionMode::Queue, ExecutionMode::Durable], true)) {

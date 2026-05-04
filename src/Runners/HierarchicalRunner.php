@@ -759,7 +759,11 @@ class HierarchicalRunner
                     foreach ($node->branches as $branchNodeId) {
                         /** @var HierarchicalWorkerNode $branch */
                         $branch = $plan->node($branchNodeId);
-                        $this->resolveParallelWorker($state->swarm::class, $branch->agentClass);
+                        $workerClass = $branch->agentClass;
+                        if (! is_subclass_of($workerClass, Agent::class)) {
+                            throw new SwarmException("Hierarchical parallel worker [{$workerClass}] must be a Laravel AI agent class.");
+                        }
+                        $this->resolveParallelWorker($state->swarm::class, $workerClass);
                         $input = $this->composePrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
 
                         $this->stepsRecorder->started($state, $nextIndex + count($branchDefinitions), $branch->agentClass, $input);
@@ -954,6 +958,7 @@ class HierarchicalRunner
     }
 
     /**
+     * @param  array<string, mixed>  $cursor
      * @param  array<string, string>  $nodeOutputs
      */
     protected function advanceDurableCursorToNextWorker(SwarmExecutionState $state, HierarchicalRoutePlan $plan, array &$cursor, array $nodeOutputs): void
@@ -1116,6 +1121,9 @@ class HierarchicalRunner
         ]);
     }
 
+    /**
+     * @param  array<string, string>  $nodeOutputs
+     */
     protected function resolveOutputFromNode(HierarchicalFinishNode $node, array $nodeOutputs): string
     {
         $sourceNodeId = $node->outputFrom;

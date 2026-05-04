@@ -22,6 +22,9 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Throwable;
 
+/**
+ * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ */
 class DurableChildSwarmCoordinator
 {
     protected mixed $afterChildIntentHook = null;
@@ -44,6 +47,9 @@ class DurableChildSwarmCoordinator
         $this->afterChildIntentHook = $hook;
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null, ?callable $dispatchStep = null): DurableChildRun
     {
         $parent = $this->runs->requireRun($parentRunId);

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -11,16 +12,19 @@ use Symfony\Component\Console\Attribute\AsCommand;
 #[AsCommand(name: 'swarm:inspect')]
 class SwarmInspectCommand extends Command
 {
+    use ResolvesStringConsoleInput;
+
     protected $signature = 'swarm:inspect {runId : The durable run ID} {--json : Output JSON}';
 
     protected $description = 'Inspect durable swarm run operational state';
 
     public function handle(DurableSwarmManager $manager): int
     {
-        $detail = $manager->inspect((string) $this->argument('runId'))->toArray();
+        $detail = $manager->inspect($this->argumentString('runId'))->toArray();
 
         if ($this->option('json')) {
-            $this->line(json_encode($detail, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            $encoded = json_encode($detail, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+            $this->line($encoded !== false ? $encoded : '{}');
 
             return self::SUCCESS;
         }

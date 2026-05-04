@@ -18,6 +18,9 @@ class SwarmHistory
         protected StreamEventStore $streamEvents,
     ) {}
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function find(string $runId): ?array
     {
         return $this->historyStore->find($runId);

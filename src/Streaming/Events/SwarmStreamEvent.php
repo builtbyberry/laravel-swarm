@@ -58,22 +58,32 @@ abstract class SwarmStreamEvent extends StreamEvent
         return new StreamedEvent($this->type(), $this->toArray());
     }
 
+    /**
+     * @param  array<string, mixed>  $payload
+     */
     protected static function stringValue(array $payload, string $key, string $default = ''): string
     {
         return is_string($payload[$key] ?? null) ? $payload[$key] : $default;
     }
 
+    /**
+     * @param  array<string, mixed>  $payload
+     */
     protected static function intValue(array $payload, string $key, int $default = 0): int
     {
         return is_int($payload[$key] ?? null) ? $payload[$key] : $default;
     }
 
+    /**
+     * @param  array<string, mixed>  $payload
+     */
     protected static function nullableIntValue(array $payload, string $key): ?int
     {
         return is_int($payload[$key] ?? null) ? $payload[$key] : null;
     }
 
     /**
+     * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */
     protected static function arrayValue(array $payload, string $key): array

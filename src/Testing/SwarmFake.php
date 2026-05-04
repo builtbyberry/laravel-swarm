@@ -20,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Testing\Assert as PHPUnit;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\FakePendingDispatch;
 
 /**
@@ -28,6 +29,11 @@ use Laravel\Ai\FakePendingDispatch;
  * {@see queue()} and {@see assertQueued()} capture dispatch intent only: they do not run {@see SwarmRunner}
  * or simulate coordinated hierarchical multi_worker parallel joins (branch execution, durable coordination state, resume jobs).
  * Cover that behavior with persisted integration/feature tests instead.
+ *
+ * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type SwarmAssertTask from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type SwarmStructuredSubset from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  */
 class SwarmFake implements Swarm
 {
@@ -77,6 +83,8 @@ class SwarmFake implements Swarm
 
     /**
      * Required by the Swarm contract — not used during faking.
+     *
+     * @return array<int, Agent>
      */
     public function agents(): array
     {
@@ -85,6 +93,8 @@ class SwarmFake implements Swarm
 
     /**
      * Intercept a prompt call and record it.
+     *
+     * @param  SwarmTaskInput  $task
      */
     public function prompt(string|array|RunContext $task): SwarmResponse
     {
@@ -100,6 +110,8 @@ class SwarmFake implements Swarm
 
     /**
      * Intercept a run call and record it.
+     *
+     * @param  SwarmTaskInput  $task
      */
     public function run(string|array|RunContext $task): SwarmResponse
     {
@@ -108,6 +120,8 @@ class SwarmFake implements Swarm
 
     /**
      * Intercept a queue call and record it.
+     *
+     * @param  SwarmTaskInput  $task
      */
     public function queue(string|array|RunContext $task): QueuedSwarmResponse
     {
@@ -116,6 +130,9 @@ class SwarmFake implements Swarm
         return new QueuedSwarmResponse(new FakePendingDispatch, 'fake-run-id');
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function dispatchDurable(string|array|RunContext $task): DurableSwarmResponse
     {
         $this->recordedDurable[] = $task;
@@ -132,6 +149,9 @@ class SwarmFake implements Swarm
         $this->recordedDurableOperations['signals'][] = compact('name', 'payload', 'idempotencyKey');
     }
 
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
     public function recordDurableWait(string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = []): self
     {
         $this->recordedDurableOperations['waits'][] = compact('name', 'reason', 'timeoutSeconds', 'metadata');
@@ -139,6 +159,9 @@ class SwarmFake implements Swarm
         return $this;
     }
 
+    /**
+     * @param  array<string, mixed>  $progress
+     */
     public function recordDurableProgress(array $progress, ?string $branchId = null): self
     {
         $this->recordedDurableOperations['progress'][] = compact('progress', 'branchId');
@@ -146,6 +169,9 @@ class SwarmFake implements Swarm
         return $this;
     }
 
+    /**
+     * @param  array<string, mixed>  $labels
+     */
     public function recordDurableLabels(array $labels): self
     {
         $this->recordedDurableOperations['labels'][] = $labels;
@@ -153,6 +179,9 @@ class SwarmFake implements Swarm
         return $this;
     }
 
+    /**
+     * @param  array<string, mixed>  $details
+     */
     public function recordDurableDetails(array $details): self
     {
         $this->recordedDurableOperations['details'][] = $details;
@@ -160,6 +189,9 @@ class SwarmFake implements Swarm
         return $this;
     }
 
+    /**
+     * @param  array<string, mixed>  $policy
+     */
     public function recordDurableRetry(array $policy): self
     {
         $this->recordedDurableOperations['retries'][] = $policy;
@@ -167,6 +199,9 @@ class SwarmFake implements Swarm
         return $this;
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function recordDurableChildSwarm(string $childSwarmClass, string|array|RunContext $task): self
     {
         $this->recordedDurableOperations['children'][] = compact('childSwarmClass', 'task');
@@ -200,6 +235,8 @@ class SwarmFake implements Swarm
 
     /**
      * Intercept a stream call and record it.
+     *
+     * @param  SwarmTaskInput  $task
      */
     public function stream(string|array|RunContext $task): StreamableSwarmResponse
     {
@@ -262,6 +299,9 @@ class SwarmFake implements Swarm
 
     /**
      * Intercept a broadcast call and record it as a stream.
+     *
+     * @param  SwarmTaskInput  $task
+     * @param  SwarmBroadcastChannels  $channels
      */
     public function broadcast(string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
     {
@@ -273,6 +313,9 @@ class SwarmFake implements Swarm
 
     /**
      * Intercept an immediate broadcast call and record it as a stream.
+     *
+     * @param  SwarmTaskInput  $task
+     * @param  SwarmBroadcastChannels  $channels
      */
     public function broadcastNow(string|array|RunContext $task, Channel|array $channels): StreamableSwarmResponse
     {
@@ -281,6 +324,9 @@ class SwarmFake implements Swarm
 
     /**
      * Intercept a queued broadcast call and record it as queued.
+     *
+     * @param  SwarmTaskInput  $task
+     * @param  SwarmBroadcastChannels  $channels
      */
     public function broadcastOnQueue(string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
     {
@@ -289,6 +335,8 @@ class SwarmFake implements Swarm
 
     /**
      * Assert the swarm was prompted with the given task.
+     *
+     * @param  SwarmAssertTask  $task
      */
     public function assertPrompted(string|array|callable $task): void
     {
@@ -297,6 +345,8 @@ class SwarmFake implements Swarm
 
     /**
      * Assert the swarm was run with the given task.
+     *
+     * @param  SwarmAssertTask  $task
      */
     public function assertRan(string|array|callable $task): void
     {
@@ -342,6 +392,8 @@ class SwarmFake implements Swarm
 
     /**
      * Assert the swarm was queued with the given task.
+     *
+     * @param  SwarmAssertTask  $task
      */
     public function assertQueued(string|array|callable $task): void
     {
@@ -377,6 +429,9 @@ class SwarmFake implements Swarm
         );
     }
 
+    /**
+     * @param  SwarmAssertTask  $task
+     */
     public function assertDispatchedDurably(string|array|callable $task): void
     {
         if (is_callable($task)) {
@@ -418,6 +473,9 @@ class SwarmFake implements Swarm
         $this->assertRecordedDurableOperation('waits', $name, 'name', 'durable wait');
     }
 
+    /**
+     * @param  SwarmStructuredSubset|callable  $progress
+     */
     public function assertDurableProgressRecorded(array|callable $progress): void
     {
         if (is_callable($progress)) {
@@ -432,16 +490,25 @@ class SwarmFake implements Swarm
         );
     }
 
+    /**
+     * @param  SwarmStructuredSubset|callable  $labels
+     */
     public function assertDurableLabels(array|callable $labels): void
     {
         $this->assertRecordedDurableArraySubset('labels', $labels, 'durable labels');
     }
 
+    /**
+     * @param  SwarmStructuredSubset|callable  $details
+     */
     public function assertDurableDetails(array|callable $details): void
     {
         $this->assertRecordedDurableArraySubset('details', $details, 'durable details');
     }
 
+    /**
+     * @param  SwarmStructuredSubset|callable  $policy
+     */
     public function assertDurableRetryScheduled(array|callable $policy): void
     {
         $this->assertRecordedDurableArraySubset('retries', $policy, 'durable retry');
@@ -454,6 +521,8 @@ class SwarmFake implements Swarm
 
     /**
      * Assert the swarm was streamed with the given task.
+     *
+     * @param  SwarmAssertTask  $task
      */
     public function assertStreamed(string|array|callable $task): void
     {
@@ -491,6 +560,8 @@ class SwarmFake implements Swarm
 
     /**
      * Resolve the fake response for the given task.
+     *
+     * @param  SwarmTaskInput  $task
      */
     protected function resolveResponse(string|array|RunContext $task): string
     {
@@ -522,6 +593,9 @@ class SwarmFake implements Swarm
         );
     }
 
+    /**
+     * @param  SwarmStructuredSubset|callable  $expected
+     */
     protected function assertRecordedDurableArraySubset(string $bucket, array|callable $expected, string $label): void
     {
         if (is_callable($expected)) {

@@ -13,7 +13,6 @@ use JsonSerializable;
 final class SwarmStep implements Arrayable, JsonSerializable
 {
     /**
-     * @param  class-string  $agentClass
      * @param  array<int, SwarmArtifact>  $artifacts
      * @param  array<string, mixed>  $metadata
      */

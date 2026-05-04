@@ -21,6 +21,9 @@ class DurableRunInspector
         protected DurableRunContext $runs,
     ) {}
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function find(string $runId): ?array
     {
         return $this->durableRuns->find($runId);

@@ -8,7 +8,7 @@ class DurableRetryPolicy
 {
     /**
      * @param  array<int, int>  $backoffSeconds
-     * @param  array<int, class-string<\Throwable>>  $nonRetryable
+     * @param  array<int, string>  $nonRetryable
      */
     public function __construct(
         public readonly int $maxAttempts = 1,
@@ -29,7 +29,7 @@ class DurableRetryPolicy
     }
 
     /**
-     * @return array{max_attempts: int, backoff_seconds: array<int, int>, non_retryable: array<int, class-string<\Throwable>>}
+     * @return array{max_attempts: int, backoff_seconds: array<int, int>, non_retryable: array<int, string>}
      */
     public function toArray(): array
     {

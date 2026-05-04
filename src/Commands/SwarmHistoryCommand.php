@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Support\SwarmRunPhase;
 use Illuminate\Console\Command;
@@ -13,23 +14,27 @@ use Symfony\Component\Console\Attribute\AsCommand;
 #[AsCommand(name: 'swarm:history')]
 class SwarmHistoryCommand extends Command
 {
+    use ResolvesStringConsoleInput;
+
     protected $signature = 'swarm:history {--swarm=} {--status=} {--limit=25}';
 
     protected $description = 'List persisted swarm runs with optional filters';
 
     public function handle(SwarmHistory $history): int
     {
-        $limit = (int) $this->option('limit');
+        $limit = $this->optionInt('limit', 25);
         $swarm = $this->option('swarm');
         $status = $this->option('status');
+        $swarmStr = is_string($swarm) ? $swarm : null;
+        $statusStr = is_string($status) ? $status : null;
 
-        if ($swarm !== null || $status !== null) {
-            $query = $swarm !== null
-                ? $history->forSwarm((string) $swarm)
-                : $history->withStatus((string) $status);
+        if ($swarmStr !== null || $statusStr !== null) {
+            $query = $swarmStr !== null
+                ? $history->forSwarm($swarmStr)
+                : $history->withStatus($statusStr ?? '');
 
-            if ($status !== null) {
-                $query = $query->withStatus((string) $status);
+            if ($statusStr !== null) {
+                $query = $query->withStatus($statusStr);
             }
 
             $runs = $query->limit($limit)->get();

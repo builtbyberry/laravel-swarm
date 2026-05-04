@@ -91,6 +91,9 @@ class CacheRunHistoryStore implements RunHistoryStore
         $this->store()->put($this->key($runId), $history, $ttlSeconds);
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function find(string $runId): ?array
     {
         /** @var array<string, mixed>|null $history */

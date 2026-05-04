@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 class PlainData
 {
     /**
+     * @param  array<int|string, mixed>  $value
      * @return array<mixed>
      */
     public static function array(array $value, string $path = 'value'): array

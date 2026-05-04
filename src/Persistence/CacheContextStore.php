@@ -25,6 +25,9 @@ class CacheContextStore implements ContextStore
         $this->store()->put($this->key($context->runId), $context->toArray(), $ttlSeconds);
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function find(string $runId): ?array
     {
         /** @var array<string, mixed>|null $context */

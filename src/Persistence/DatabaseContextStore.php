@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 
 class DatabaseContextStore implements ContextStore
 {
@@ -42,6 +43,9 @@ class DatabaseContextStore implements ContextStore
         );
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function find(string $runId): ?array
     {
         /** @var object|null $record */
@@ -74,7 +78,7 @@ class DatabaseContextStore implements ContextStore
         }
     }
 
-    protected function table()
+    protected function table(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.contexts', 'swarm_contexts'));
     }

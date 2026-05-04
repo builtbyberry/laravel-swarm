@@ -16,6 +16,9 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
+/**
+ * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ */
 class BroadcastSwarm implements ShouldQueue
 {
     use InteractsWithQueue;
@@ -24,6 +27,9 @@ class BroadcastSwarm implements ShouldQueue
 
     /**
      * Create a new job instance.
+     *
+     * @param  array<string, mixed>  $task
+     * @param  SwarmBroadcastChannels  $channels
      */
     public function __construct(
         public string $swarmClass,

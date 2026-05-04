@@ -19,6 +19,13 @@ use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use ReflectionClass;
 
+/**
+ * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type SwarmAssertTask from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type SwarmFakeResponses from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type SwarmStructuredSubset from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ */
 trait Runnable
 {
     /**
@@ -48,6 +55,8 @@ trait Runnable
 
     /**
      * Invoke the swarm with a given prompt or structured task.
+     *
+     * @param  SwarmTaskInput  $task
      */
     public function prompt(string|array|RunContext $task): SwarmResponse
     {
@@ -58,6 +67,8 @@ trait Runnable
      * Run the swarm with the given task.
      *
      * This method is retained as a compatibility alias for prompt().
+     *
+     * @param  SwarmTaskInput  $task
      */
     public function run(string|array|RunContext $task): SwarmResponse
     {
@@ -66,6 +77,8 @@ trait Runnable
 
     /**
      * Stream the swarm, yielding typed stream events for SSE.
+     *
+     * @param  SwarmTaskInput  $task
      */
     public function stream(string|array|RunContext $task): StreamableSwarmResponse
     {
@@ -74,6 +87,9 @@ trait Runnable
 
     /**
      * Broadcast typed stream events for the swarm.
+     *
+     * @param  SwarmTaskInput  $task
+     * @param  SwarmBroadcastChannels  $channels
      */
     public function broadcast(string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
     {
@@ -82,6 +98,9 @@ trait Runnable
 
     /**
      * Broadcast typed stream events immediately.
+     *
+     * @param  SwarmTaskInput  $task
+     * @param  SwarmBroadcastChannels  $channels
      */
     public function broadcastNow(string|array|RunContext $task, Channel|array $channels): StreamableSwarmResponse
     {
@@ -90,6 +109,8 @@ trait Runnable
 
     /**
      * Queue the swarm to run in the background.
+     *
+     * @param  SwarmTaskInput  $task
      */
     public function queue(string|array|RunContext $task): QueuedSwarmResponse
     {
@@ -98,12 +119,18 @@ trait Runnable
 
     /**
      * Queue the swarm stream and broadcast each event from the worker.
+     *
+     * @param  SwarmTaskInput  $task
+     * @param  SwarmBroadcastChannels  $channels
      */
     public function broadcastOnQueue(string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->broadcastOnQueue($this, $task, $channels);
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function dispatchDurable(string|array|RunContext $task): DurableSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->dispatchDurable($this, $task);
@@ -111,6 +138,8 @@ trait Runnable
 
     /**
      * Register a fake for this swarm during testing.
+     *
+     * @param  SwarmFakeResponses  $responses
      */
     public static function fake(array|callable|null $responses = null): SwarmFakeInstance
     {
@@ -123,6 +152,8 @@ trait Runnable
 
     /**
      * Assert the swarm was prompted with the given task.
+     *
+     * @param  SwarmAssertTask  $task
      */
     public static function assertPrompted(string|array|callable $task): void
     {
@@ -157,6 +188,8 @@ trait Runnable
 
     /**
      * Assert the swarm was run with the given task.
+     *
+     * @param  SwarmAssertTask  $task
      */
     public static function assertRan(string|array|callable $task): void
     {
@@ -191,6 +224,8 @@ trait Runnable
 
     /**
      * Assert the swarm was queued with the given task.
+     *
+     * @param  SwarmAssertTask  $task
      */
     public static function assertQueued(string|array|callable $task): void
     {
@@ -223,6 +258,9 @@ trait Runnable
         $resolved->assertNeverQueued();
     }
 
+    /**
+     * @param  SwarmAssertTask  $task
+     */
     public static function assertDispatchedDurably(string|array|callable $task): void
     {
         $resolved = Container::getInstance()->make(static::class);
@@ -263,24 +301,36 @@ trait Runnable
         $resolved->assertDurableWaited($name);
     }
 
+    /**
+     * @param  SwarmStructuredSubset|callable  $progress
+     */
     public static function assertDurableProgressRecorded(array|callable $progress): void
     {
         $resolved = static::resolvedFakeForDurableAssertion('assertDurableProgressRecorded');
         $resolved->assertDurableProgressRecorded($progress);
     }
 
+    /**
+     * @param  SwarmStructuredSubset|callable  $labels
+     */
     public static function assertDurableLabels(array|callable $labels): void
     {
         $resolved = static::resolvedFakeForDurableAssertion('assertDurableLabels');
         $resolved->assertDurableLabels($labels);
     }
 
+    /**
+     * @param  SwarmStructuredSubset|callable  $details
+     */
     public static function assertDurableDetails(array|callable $details): void
     {
         $resolved = static::resolvedFakeForDurableAssertion('assertDurableDetails');
         $resolved->assertDurableDetails($details);
     }
 
+    /**
+     * @param  SwarmStructuredSubset|callable  $policy
+     */
     public static function assertDurableRetryScheduled(array|callable $policy): void
     {
         $resolved = static::resolvedFakeForDurableAssertion('assertDurableRetryScheduled');
@@ -308,6 +358,8 @@ trait Runnable
 
     /**
      * Assert the swarm was streamed with the given task.
+     *
+     * @param  SwarmAssertTask  $task
      */
     public static function assertStreamed(string|array|callable $task): void
     {
@@ -340,6 +392,9 @@ trait Runnable
         $resolved->assertNeverStreamed();
     }
 
+    /**
+     * @param  string|SwarmStructuredSubset|callable|null  $run
+     */
     public static function assertPersisted(string|array|callable|null $run = null, ?string $status = null): void
     {
         $history = Container::getInstance()->make(SwarmHistory::class);

@@ -26,9 +26,9 @@ class QueuedHierarchicalCoordinator
     /**
      * First segment of a queued hierarchical run (InvokeSwarm entry).
      *
-     * @return SwarmResponse|QueueHierarchicalParallelBoundary|null null when deferred to branch jobs
+     * @return SwarmResponse|null null when deferred to parallel branch jobs (boundary handled internally)
      */
-    public function runInvokeSegment(SwarmExecutionState $state): SwarmResponse|QueueHierarchicalParallelBoundary|null
+    public function runInvokeSegment(SwarmExecutionState $state): ?SwarmResponse
     {
         $outcome = $this->hierarchicalRunner->runQueuedWithCoordination($state);
 

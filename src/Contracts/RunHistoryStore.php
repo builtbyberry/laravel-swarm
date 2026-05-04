@@ -23,6 +23,9 @@ interface RunHistoryStore
 
     public function fail(string $runId, Throwable $exception, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void;
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function find(string $runId): ?array;
 
     /**

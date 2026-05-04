@@ -291,6 +291,10 @@ class SequentialRunner
         );
     }
 
+    /**
+     * @param  array<int|string, mixed>|null  $summary
+     * @return array<int|string, mixed>|null
+     */
     protected function captureReasoningSummary(?array $summary): ?array
     {
         if ($summary === null || $this->capture->capturesOutputs()) {

@@ -259,6 +259,9 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         }
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function find(string $runId): ?array
     {
         /** @var object|null $record */
@@ -313,6 +316,9 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             ->all();
     }
 
+    /**
+     * @param  array<string, mixed>  $values
+     */
     protected function update(string $runId, array $values, ?string $executionToken = null, ?int $leaseSeconds = null): int
     {
         $timestamp = Carbon::now('UTC');
@@ -333,16 +339,19 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         return $query->update($values);
     }
 
-    protected function table()
+    protected function table(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.history', 'swarm_run_histories'));
     }
 
-    protected function stepTable()
+    protected function stepTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.history_steps', 'swarm_run_steps'));
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     protected function mapRecord(object $record): array
     {
         $steps = $this->stepsForRecord($record);

@@ -6,9 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
 final class SwarmStepStart extends SwarmStreamEvent
 {
-    /**
-     * @param  class-string  $agentClass
-     */
     public function __construct(
         public string $id,
         public string $runId,

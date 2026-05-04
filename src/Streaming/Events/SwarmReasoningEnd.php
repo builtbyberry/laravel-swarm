@@ -7,8 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 final class SwarmReasoningEnd extends SwarmStreamEvent
 {
     /**
-     * @param  class-string  $agentClass
-     * @param  array<int, string>|null  $summary
+     * @param  array<int|string, mixed>|null  $summary
      */
     public function __construct(
         public string $id,

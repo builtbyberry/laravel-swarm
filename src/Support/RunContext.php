@@ -381,6 +381,9 @@ class RunContext
         return $payload;
     }
 
+    /**
+     * @param  list<array<string, mixed>>|array<int, mixed>  $artifacts
+     */
     protected static function validateArtifactsPayload(array $artifacts, string $path): void
     {
         foreach ($artifacts as $index => $artifact) {

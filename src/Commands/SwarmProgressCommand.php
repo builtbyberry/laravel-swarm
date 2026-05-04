@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -11,13 +12,15 @@ use Symfony\Component\Console\Attribute\AsCommand;
 #[AsCommand(name: 'swarm:progress')]
 class SwarmProgressCommand extends Command
 {
+    use ResolvesStringConsoleInput;
+
     protected $signature = 'swarm:progress {runId : The durable run ID}';
 
     protected $description = 'Show durable swarm progress records';
 
     public function handle(DurableSwarmManager $manager): int
     {
-        $detail = $manager->inspect((string) $this->argument('runId'));
+        $detail = $manager->inspect($this->argumentString('runId'));
 
         if ($detail->progress === []) {
             $this->components->info('No progress has been recorded for this durable run.');

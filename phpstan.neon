@@ -2,10 +2,19 @@ includes:
     - vendor/larastan/larastan/extension.neon
 
 parameters:
-    level: 5
+    level: 7
     treatPhpDocTypesAsCertain: false
     paths:
         - src
         - database/migrations
         - tests/Fixtures
     tmpDir: storage/phpstan
+    ignoreErrors:
+        # Query builder rows are stdClass; naming every column shape across durable/history stores is not practical.
+        -
+            identifier: property.notFound
+            paths:
+                - src/Persistence/DatabaseDurableRunStore.php
+                - src/Persistence/DatabaseRunHistoryStore.php
+                - src/Persistence/DatabaseContextStore.php
+                - src/Pulse/Livewire/SwarmSteps.php

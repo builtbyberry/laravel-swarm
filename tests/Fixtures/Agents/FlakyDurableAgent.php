@@ -15,15 +15,17 @@ use Laravel\Ai\Responses\StreamableAgentResponse;
 use RuntimeException;
 use Stringable;
 
+/**
+ * @phpstan-import-type LaravelAiAgentAttachments from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type LaravelAiAgentProvider from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ */
 class FlakyDurableAgent implements Agent
 {
     public static int $attempts = 0;
 
     public static int $failuresBeforeSuccess = 1;
 
-    /**
-     * @var class-string<\Throwable>|null
-     */
     public static ?string $exceptionClass = RuntimeException::class;
 
     public static function reset(int $failuresBeforeSuccess = 1, ?string $exceptionClass = RuntimeException::class): void
@@ -38,6 +40,10 @@ class FlakyDurableAgent implements Agent
         return 'You are flaky for durable retry tests.';
     }
 
+    /**
+     * @param  LaravelAiAgentAttachments  $attachments
+     * @param  LaravelAiAgentProvider  $provider
+     */
     public function prompt(string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
         self::$attempts++;
@@ -45,32 +51,59 @@ class FlakyDurableAgent implements Agent
         if (self::$attempts <= self::$failuresBeforeSuccess) {
             $class = self::$exceptionClass ?? RuntimeException::class;
 
+            if (! is_a($class, \Throwable::class, true)) {
+                throw new RuntimeException('flaky durable failure');
+            }
+
             throw new $class('flaky durable failure');
         }
 
         return new AgentResponse('flaky-invocation', 'flaky-success', new Usage, new Meta);
     }
 
+    /**
+     * @param  LaravelAiAgentAttachments  $attachments
+     * @param  LaravelAiAgentProvider  $provider
+     */
     public function stream(string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
         throw new RuntimeException('Streaming is not supported in this test fixture.');
     }
 
+    /**
+     * @param  LaravelAiAgentAttachments  $attachments
+     * @param  LaravelAiAgentProvider  $provider
+     */
     public function queue(string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): QueuedAgentResponse
     {
         throw new RuntimeException('Queueing is not supported in this test fixture.');
     }
 
+    /**
+     * @param  SwarmBroadcastChannels  $channels
+     * @param  LaravelAiAgentAttachments  $attachments
+     * @param  LaravelAiAgentProvider  $provider
+     */
     public function broadcast(string $prompt, Channel|array $channels, array $attachments = [], bool $now = false, Lab|array|string|null $provider = null, ?string $model = null): StreamableAgentResponse
     {
         throw new RuntimeException('Broadcasting is not supported in this test fixture.');
     }
 
+    /**
+     * @param  SwarmBroadcastChannels  $channels
+     * @param  LaravelAiAgentAttachments  $attachments
+     * @param  LaravelAiAgentProvider  $provider
+     */
     public function broadcastNow(string $prompt, Channel|array $channels, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): StreamableAgentResponse
     {
         throw new RuntimeException('Broadcasting is not supported in this test fixture.');
     }
 
+    /**
+     * @param  SwarmBroadcastChannels  $channels
+     * @param  LaravelAiAgentAttachments  $attachments
+     * @param  LaravelAiAgentProvider  $provider
+     */
     public function broadcastOnQueue(string $prompt, Channel|array $channels, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): QueuedAgentResponse
     {
         throw new RuntimeException('Broadcast queueing is not supported in this test fixture.');

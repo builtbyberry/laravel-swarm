@@ -9,6 +9,9 @@ namespace BuiltByBerry\LaravelSwarm\Support;
  */
 final class SwarmRunPhase
 {
+    /**
+     * @param  array<string, mixed>  $run
+     */
     public static function cliLabel(array $run): string
     {
         $topology = (string) ($run['topology'] ?? '');

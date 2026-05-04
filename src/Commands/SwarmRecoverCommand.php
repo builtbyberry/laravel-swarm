@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -11,16 +12,21 @@ use Symfony\Component\Console\Attribute\AsCommand;
 #[AsCommand(name: 'swarm:recover')]
 class SwarmRecoverCommand extends Command
 {
+    use ResolvesStringConsoleInput;
+
     protected $signature = 'swarm:recover {--run-id=} {--swarm=} {--limit=50}';
 
     protected $description = 'Redispatch recoverable durable swarm runs';
 
     public function handle(DurableSwarmManager $manager): int
     {
+        $runIdOption = $this->option('run-id');
+        $swarmOption = $this->option('swarm');
+
         $runIds = $manager->recover(
-            runId: $this->option('run-id') ? (string) $this->option('run-id') : null,
-            swarmClass: $this->option('swarm') ? (string) $this->option('swarm') : null,
-            limit: (int) $this->option('limit'),
+            runId: is_string($runIdOption) && $runIdOption !== '' ? $runIdOption : null,
+            swarmClass: is_string($swarmOption) && $swarmOption !== '' ? $swarmOption : null,
+            limit: $this->optionInt('limit', 50),
         );
 
         if ($runIds === []) {

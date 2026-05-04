@@ -14,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 
 class DatabaseDurableRunStore implements DurableRunStore
@@ -1759,6 +1760,9 @@ class DatabaseDurableRunStore implements DurableRunStore
             ]);
     }
 
+    /**
+     * @param  array<string, mixed>  $values
+     */
     protected function guardedUpdate(string $runId, string $executionToken, array $values): void
     {
         $now = Carbon::now('UTC');
@@ -1776,6 +1780,9 @@ class DatabaseDurableRunStore implements DurableRunStore
         }
     }
 
+    /**
+     * @param  array<string, mixed>  $values
+     */
     protected function guardedBranchUpdate(string $runId, string $branchId, string $executionToken, array $values): void
     {
         $now = Carbon::now('UTC');
@@ -2182,32 +2189,32 @@ class DatabaseDurableRunStore implements DurableRunStore
         );
     }
 
-    protected function nodeStateTable()
+    protected function nodeStateTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_node_states', 'swarm_durable_node_states'));
     }
 
-    protected function runStateTable()
+    protected function runStateTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_run_state', 'swarm_durable_run_state'));
     }
 
-    protected function table()
+    protected function table(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs'));
     }
 
-    protected function contextTable()
+    protected function contextTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.contexts', 'swarm_contexts'));
     }
 
-    protected function nodeOutputTable()
+    protected function nodeOutputTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_node_outputs', 'swarm_durable_node_outputs'));
     }
 
-    protected function branchTable()
+    protected function branchTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_branches', 'swarm_durable_branches'));
     }
@@ -2394,37 +2401,37 @@ class DatabaseDurableRunStore implements DurableRunStore
         ];
     }
 
-    protected function signalTable()
+    protected function signalTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_signals', 'swarm_durable_signals'));
     }
 
-    protected function waitTable()
+    protected function waitTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_waits', 'swarm_durable_waits'));
     }
 
-    protected function labelTable()
+    protected function labelTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_labels', 'swarm_durable_labels'));
     }
 
-    protected function detailTable()
+    protected function detailTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_details', 'swarm_durable_details'));
     }
 
-    protected function progressTable()
+    protected function progressTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_progress', 'swarm_durable_progress'));
     }
 
-    protected function childRunTable()
+    protected function childRunTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs'));
     }
 
-    protected function webhookIdempotencyTable()
+    protected function webhookIdempotencyTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'));
     }

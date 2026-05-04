@@ -7,7 +7,6 @@ namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 final class SwarmStreamStart extends SwarmStreamEvent
 {
     /**
-     * @param  class-string  $swarmClass
      * @param  array<string, mixed>  $metadata
      */
     public function __construct(

@@ -32,6 +32,9 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
 use Throwable;
 
+/**
+ * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ */
 class SequentialStreamRunner
 {
     public function __construct(
@@ -47,6 +50,9 @@ class SequentialStreamRunner
         protected SwarmAttributeResolver $resolver,
     ) {}
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
     {
         $topology = $this->resolver->resolveTopology($swarm);
@@ -250,6 +256,9 @@ class SequentialStreamRunner
         );
     }
 
+    /**
+     * @param  SwarmTaskInput  $task
+     */
     protected function checkInputPayload(string|array|RunContext $task, RunContext $context): void
     {
         if ($task instanceof RunContext) {

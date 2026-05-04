@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 
 class DatabaseStreamEventStore implements StreamEventStore
@@ -47,7 +48,7 @@ class DatabaseStreamEventStore implements StreamEventStore
         }
     }
 
-    protected function table()
+    protected function table(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events'));
     }
