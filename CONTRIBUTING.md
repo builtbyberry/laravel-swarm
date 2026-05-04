@@ -40,6 +40,12 @@ If you run PHPStan directly, use the same command as CI:
 vendor/bin/phpstan analyse --memory-limit=2G --no-progress
 ```
 
+Static analysis is configured at **level 7** in `phpstan.neon` (Larastan
+extension). A narrow `property.notFound` ignore applies only to database query
+row objects in the large durable/history persistence classes and the Pulse
+`SwarmSteps` Livewire card, where enumerating every dynamic column as a typed
+shape would not be practical.
+
 `composer lint` is the non-mutating Pint check. Use `composer format` only when
 you intentionally want Pint to rewrite files.
 

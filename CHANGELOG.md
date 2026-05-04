@@ -32,6 +32,10 @@
 
 ### Changed
 
+- Larastan/PHPStan analysis now runs at **level 7** (`phpstan.neon`). A minimal
+  `property.notFound` ignore is scoped to database row `stdClass` access in
+  `DatabaseDurableRunStore`, `DatabaseRunHistoryStore`, `DatabaseContextStore`,
+  and `Pulse\Livewire\SwarmSteps` only.
 - **Breaking:** `swarm.capture.*` defaults are now **false** for `inputs`,
   `outputs`, `artifacts`, and `active_context`. Applications that depend on
   persisted prompts and outputs must set the corresponding `SWARM_CAPTURE_*`
