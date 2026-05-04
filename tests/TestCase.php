@@ -92,6 +92,7 @@ abstract class TestCase extends Orchestra
         $app['config']->set('pulse.storage.database.connection', 'testing');
         $app['config']->set('pulse.ingest.driver', 'storage');
         $app['config']->set('swarm.persistence.driver', 'cache');
+        $app['config']->set('queue.connections.durable-test', ['driver' => 'null']);
     }
 
     protected function defineDatabaseMigrations(): void

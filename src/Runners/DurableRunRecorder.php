@@ -10,9 +10,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
-use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Throwable;
 
@@ -22,13 +22,13 @@ use Throwable;
 class DurableRunRecorder
 {
     public function __construct(
-        protected ConfigRepository $config,
         protected DurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
         protected ContextStore $contextStore,
         protected ArtifactRepository $artifactRepository,
         protected Connection $connection,
         protected SwarmCapture $capture,
+        protected DurableRunContext $runs,
     ) {}
 
     public function fail(string $runId, string $token, Throwable $exception, RunContext $context, int $stepLeaseSeconds): void
@@ -119,6 +119,6 @@ class DurableRunRecorder
 
     protected function ttlSeconds(): int
     {
-        return (int) $this->config->get('swarm.context.ttl', 3600);
+        return $this->runs->ttlSeconds();
     }
 }

@@ -15,7 +15,6 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRetryPolicy;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
-use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 use ReflectionClass;
@@ -24,11 +23,11 @@ use Throwable;
 class DurableRetryHandler
 {
     public function __construct(
-        protected ConfigRepository $config,
         protected DurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
         protected Connection $connection,
         protected SwarmCapture $capture,
+        protected DurableRunContext $runs,
     ) {}
 
     /**
@@ -57,7 +56,7 @@ class DurableRetryHandler
                 $this->historyStore->syncDurableState($run['run_id'], 'pending', $this->capture->context($context), array_merge($context->metadata, [
                     'durable_retry_attempt' => $attempt,
                     'durable_next_retry_at' => $nextRetryAt->toJSON(),
-                ]), $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
+                ]), $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
             });
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
             return ['scheduled' => true, 'dispatchStep' => null];
@@ -174,10 +173,5 @@ class DurableRetryHandler
         }
 
         return false;
-    }
-
-    protected function ttlSeconds(): int
-    {
-        return (int) $this->config->get('swarm.context.ttl', 3600);
     }
 }

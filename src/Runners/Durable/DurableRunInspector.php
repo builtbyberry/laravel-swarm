@@ -9,7 +9,6 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmProgressRecorded;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
-use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Events\Dispatcher;
 
 class DurableRunInspector
@@ -18,7 +17,8 @@ class DurableRunInspector
         protected DurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
         protected Dispatcher $events,
-        protected SwarmCapture $capture,
+        protected DurablePayloadCapture $payloads,
+        protected DurableRunContext $runs,
     ) {}
 
     public function find(string $runId): ?array
@@ -65,7 +65,7 @@ class DurableRunInspector
      */
     public function updateLabels(string $runId, array $labels): void
     {
-        $this->requireRun($runId);
+        $this->runs->requireRun($runId);
         $this->durableRuns->updateLabels($runId, $labels);
     }
 
@@ -74,8 +74,8 @@ class DurableRunInspector
      */
     public function updateDetails(string $runId, array $details): void
     {
-        $this->requireRun($runId);
-        $this->durableRuns->updateDetails($runId, $this->durablePayload($details));
+        $this->runs->requireRun($runId);
+        $this->durableRuns->updateDetails($runId, $this->payloads->payload($details));
     }
 
     /**
@@ -83,8 +83,8 @@ class DurableRunInspector
      */
     public function recordProgress(string $runId, ?string $branchId = null, array $progress = []): void
     {
-        $this->requireRun($runId);
-        $progress = $this->durablePayload($progress);
+        $this->runs->requireRun($runId);
+        $progress = $this->payloads->payload($progress);
         $this->durableRuns->recordProgress($runId, $branchId, $progress);
 
         $this->events->dispatch(new SwarmProgressRecorded(
@@ -92,47 +92,5 @@ class DurableRunInspector
             branchId: $branchId,
             progress: $progress,
         ));
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    public function requireRun(string $runId): array
-    {
-        $run = $this->durableRuns->find($runId);
-
-        if ($run === null) {
-            throw new SwarmException("Durable run [{$runId}] was not found.");
-        }
-
-        return $run;
-    }
-
-    protected function durablePayload(mixed $payload): mixed
-    {
-        if ($this->capture->capturesInputs() && $this->capture->capturesOutputs()) {
-            return $payload;
-        }
-
-        if (is_array($payload)) {
-            return $this->redactArray($payload);
-        }
-
-        return SwarmCapture::REDACTED;
-    }
-
-    /**
-     * @param  array<mixed>  $payload
-     * @return array<mixed>
-     */
-    protected function redactArray(array $payload): array
-    {
-        $redacted = [];
-
-        foreach ($payload as $key => $value) {
-            $redacted[$key] = is_array($value) ? $this->redactArray($value) : SwarmCapture::REDACTED;
-        }
-
-        return $redacted;
     }
 }
