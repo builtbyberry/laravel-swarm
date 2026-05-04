@@ -577,6 +577,27 @@ test('durable sequential swarms complete one step per job', function () {
         ->and($history['steps'])->toHaveCount(3);
 });
 
+test('durable sequential advance dispatches next step through manager seam', function () {
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
+    {
+        /** @var array<int, int> */
+        public array $stepDispatches = [];
+
+        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
+        {
+            $this->stepDispatches[] = $stepIndex;
+
+            return noopPendingDispatch();
+        }
+    };
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    expect($manager->stepDispatches)->toBe([1])
+        ->and($manager->find($response->runId)['next_step_index'])->toBe(1);
+});
+
 test('durable hierarchical swarms persist the validated route cursor before worker execution', function () {
     FakeHierarchicalCoordinator::fake([
         durableHierarchicalPlan('writer_node', [
@@ -771,6 +792,52 @@ test('durable hierarchical swarms fan out parallel branches and join with group 
             ['node_id' => 'parallel_node', 'branches' => ['writer_node', 'editor_node']],
         ])
         ->and($history['context']['metadata']['executed_node_ids'])->toBe(['parallel_node', 'writer_node', 'editor_node', 'finish_node']);
+});
+
+test('durable hierarchical branch wait dispatches branches through manager seam', function () {
+    FakeHierarchicalCoordinator::fake([
+        durableHierarchicalPlan('parallel_node', [
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['writer_node', 'editor_node'],
+                'next' => 'finish_node',
+            ],
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-branch',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-branch',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'editor_node',
+            ],
+        ]),
+    ]);
+
+    $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
+    {
+        /** @var array<int, string> */
+        public array $branchDispatches = [];
+
+        public function dispatchBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch
+        {
+            $this->branchDispatches[] = $branchId;
+
+            return noopPendingDispatch();
+        }
+    };
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
+
+    expect($manager->branchDispatches)->toBe(['parallel_node:writer_node', 'parallel_node:editor_node'])
+        ->and($manager->find($response->runId)['status'])->toBe('waiting');
 });
 
 test('durable hierarchical recovery reruns the same worker after a crash before checkpoint', function () {
