@@ -92,6 +92,11 @@ abstract class TestCase extends Orchestra
         $app['config']->set('pulse.storage.database.connection', 'testing');
         $app['config']->set('pulse.ingest.driver', 'storage');
         $app['config']->set('swarm.persistence.driver', 'cache');
+        $app['config']->set('swarm.persistence.encrypt_at_rest', false);
+        $app['config']->set('swarm.capture.inputs', true);
+        $app['config']->set('swarm.capture.outputs', true);
+        $app['config']->set('swarm.capture.artifacts', true);
+        $app['config']->set('swarm.capture.active_context', true);
         $app['config']->set('queue.connections.durable-test', ['driver' => 'null']);
     }
 

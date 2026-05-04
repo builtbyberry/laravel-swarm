@@ -19,6 +19,7 @@ class DatabaseContextStore implements ContextStore
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
+        protected SwarmPersistenceCipher $cipher,
     ) {}
 
     public function put(RunContext $context, int $ttlSeconds): void
@@ -26,7 +27,7 @@ class DatabaseContextStore implements ContextStore
         $contextPayload = $context->toArray();
         $payload = [
             'run_id' => $contextPayload['run_id'],
-            'input' => $contextPayload['input'],
+            'input' => $this->cipher->seal($contextPayload['input']),
             'data' => $this->encodeJson($contextPayload['data']),
             'metadata' => $this->encodeJson($contextPayload['metadata']),
             'artifacts' => $this->encodeJson($contextPayload['artifacts']),
@@ -52,7 +53,7 @@ class DatabaseContextStore implements ContextStore
 
         return [
             'run_id' => $record->run_id,
-            'input' => $record->input,
+            'input' => $this->cipher->open((string) $record->input),
             'data' => $this->decodeJson($record->data, []),
             'metadata' => $this->decodeJson($record->metadata, []),
             'artifacts' => $this->decodeJson($record->artifacts, []),

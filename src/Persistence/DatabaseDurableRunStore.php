@@ -23,6 +23,7 @@ class DatabaseDurableRunStore implements DurableRunStore
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
+        protected SwarmPersistenceCipher $cipher,
     ) {}
 
     public function create(array $payload): void
@@ -374,7 +375,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             $this->contextTable()->upsert([
                 [
                     'run_id' => $contextPayload['run_id'],
-                    'input' => $contextPayload['input'],
+                    'input' => $this->cipher->seal($contextPayload['input']),
                     'data' => $this->encodeJson($contextPayload['data']),
                     'metadata' => $this->encodeJson($contextPayload['metadata']),
                     'artifacts' => $this->encodeJson($contextPayload['artifacts']),
@@ -454,7 +455,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->whereIn('node_id', $nodeIds)
             ->orderBy('id')
             ->get()
-            ->mapWithKeys(static fn (object $record): array => [(string) $record->node_id => (string) $record->output])
+            ->mapWithKeys(fn (object $record): array => [(string) $record->node_id => $this->cipher->open((string) $record->output)])
             ->all();
     }
 
@@ -466,7 +467,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             [
                 'run_id' => $runId,
                 'node_id' => $nodeId,
-                'output' => $output,
+                'output' => $this->cipher->seal($output),
                 'created_at' => $timestamp,
                 'updated_at' => $timestamp,
                 'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
@@ -494,7 +495,7 @@ class DatabaseDurableRunStore implements DurableRunStore
                     [
                         'run_id' => $runId,
                         'node_id' => $nodeOutput['node_id'],
-                        'output' => $nodeOutput['output'],
+                        'output' => $this->cipher->seal((string) $nodeOutput['output']),
                         'created_at' => $timestamp,
                         'updated_at' => $timestamp,
                         'expires_at' => $expiresAt,
@@ -506,7 +507,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             $this->contextTable()->upsert([
                 [
                     'run_id' => $contextPayload['run_id'],
-                    'input' => $contextPayload['input'],
+                    'input' => $this->cipher->seal($contextPayload['input']),
                     'data' => $this->encodeJson($contextPayload['data']),
                     'metadata' => $this->encodeJson($contextPayload['metadata']),
                     'artifacts' => $this->encodeJson($contextPayload['artifacts']),
@@ -648,7 +649,7 @@ class DatabaseDurableRunStore implements DurableRunStore
     {
         $this->guardedBranchUpdate($runId, $branchId, $executionToken, [
             'status' => 'completed',
-            'output' => $output,
+            'output' => $this->cipher->seal($output),
             'usage' => $this->encodeJson($usage),
             'duration_ms' => $durationMs,
             'failure' => null,
@@ -1504,7 +1505,7 @@ class DatabaseDurableRunStore implements DurableRunStore
                 'child_run_id' => $childRunId,
                 'child_swarm_class' => $childSwarmClass,
                 'wait_name' => $waitName,
-                'context_payload' => $this->encodeJson($contextPayload),
+                'context_payload' => $this->encodeJson($this->cipher->sealContextTopLevelInput($contextPayload)),
                 'status' => 'pending',
                 'output' => null,
                 'failure' => null,
@@ -1541,7 +1542,7 @@ class DatabaseDurableRunStore implements DurableRunStore
     {
         $this->childRunTable()->where('child_run_id', $childRunId)->update([
             'status' => $status,
-            'output' => $output,
+            'output' => $output !== null ? $this->cipher->seal($output) : null,
             'failure' => $failure !== null ? $this->encodeJson($failure) : null,
             'updated_at' => Carbon::now('UTC'),
         ]);
@@ -1854,7 +1855,7 @@ class DatabaseDurableRunStore implements DurableRunStore
                 'agent_class' => $branch['agent_class'],
                 'parent_node_id' => $branch['parent_node_id'] ?? null,
                 'status' => 'pending',
-                'input' => $branch['input'],
+                'input' => $this->cipher->seal((string) $branch['input']),
                 'output' => null,
                 'usage' => null,
                 'metadata' => $this->encodeJson($branch['metadata'] ?? []),
@@ -2250,8 +2251,8 @@ class DatabaseDurableRunStore implements DurableRunStore
             'agent_class' => $record->agent_class,
             'parent_node_id' => $record->parent_node_id,
             'status' => $record->status,
-            'input' => (string) $record->input,
-            'output' => $record->output !== null ? (string) $record->output : null,
+            'input' => $this->cipher->open((string) $record->input),
+            'output' => $record->output !== null ? $this->cipher->open((string) $record->output) : null,
             'usage' => $this->decodeJson($record->usage ?? null, []),
             'metadata' => $this->decodeJson($record->metadata ?? null, []),
             'failure' => $this->decodeJson($record->failure ?? null, null),
@@ -2364,9 +2365,9 @@ class DatabaseDurableRunStore implements DurableRunStore
             'child_run_id' => $record->child_run_id,
             'child_swarm_class' => $record->child_swarm_class,
             'wait_name' => $record->wait_name,
-            'context_payload' => $this->decodeJson($record->context_payload ?? null, []),
+            'context_payload' => $this->cipher->openContextTopLevelInput($this->decodeJson($record->context_payload ?? null, [])),
             'status' => $record->status,
-            'output' => $record->output,
+            'output' => $record->output !== null ? $this->cipher->open((string) $record->output) : null,
             'failure' => $this->decodeJson($record->failure ?? null, null),
             'dispatched_at' => $record->dispatched_at ?? null,
             'terminal_event_dispatched_at' => $record->terminal_event_dispatched_at ?? null,

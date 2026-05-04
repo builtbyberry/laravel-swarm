@@ -134,22 +134,22 @@ class SwarmCapture
 
     public function capturesInputs(): bool
     {
-        return (bool) $this->config->get('swarm.capture.inputs', true);
+        return (bool) $this->config->get('swarm.capture.inputs', false);
     }
 
     public function capturesOutputs(): bool
     {
-        return (bool) $this->config->get('swarm.capture.outputs', true);
+        return (bool) $this->config->get('swarm.capture.outputs', false);
     }
 
     public function capturesArtifacts(): bool
     {
-        return $this->capturesOutputs() && (bool) $this->config->get('swarm.capture.artifacts', true);
+        return $this->capturesOutputs() && (bool) $this->config->get('swarm.capture.artifacts', false);
     }
 
     public function capturesActiveContext(): bool
     {
-        return (bool) $this->config->get('swarm.capture.active_context', true);
+        return (bool) $this->config->get('swarm.capture.active_context', false);
     }
 
     public function capturesFailures(): bool

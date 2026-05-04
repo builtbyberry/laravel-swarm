@@ -4,6 +4,12 @@
 
 ### Added
 
+- `swarm.persistence.encrypt_at_rest` (`SWARM_ENCRYPT_AT_REST`), defaulting to
+  **true** when `swarm.persistence.driver` is `database`, seals sensitive string
+  columns in database-backed context, run history, and durable stores using
+  Laravel’s encrypter (`APP_KEY`). Values are prefixed (`sw0:`) so plaintext
+  rows remain readable; disable only when relying on other encryption layers.
+- `SwarmPersistenceCipher` encapsulates seal/open helpers for persistence stores.
 - Configurable queue reliability for durable advance jobs: `AdvanceDurableSwarm`
   and `AdvanceDurableBranch` implement `tries()`, `timeout()`, and `backoff()`
   from `swarm.durable.job.*` (`SWARM_DURABLE_JOB_TRIES`,
@@ -23,6 +29,17 @@
   category without performing deletes.
 - `swarm.retention.prevent_prune` (`SWARM_PREVENT_PRUNE`) to disable destructive
   pruning while still allowing `--dry-run`.
+
+### Changed
+
+- **Breaking:** `swarm.capture.*` defaults are now **false** for `inputs`,
+  `outputs`, `artifacts`, and `active_context`. Applications that depend on
+  persisted prompts and outputs must set the corresponding `SWARM_CAPTURE_*`
+  environment variables or config entries to `true`.
+- **Breaking (extend-only):** `DatabaseContextStore`, `DatabaseRunHistoryStore`,
+  and `DatabaseDurableRunStore` constructors accept `SwarmPersistenceCipher`;
+  custom subclasses or manual construction must pass the cipher from the
+  container.
 
 ### Documentation
 

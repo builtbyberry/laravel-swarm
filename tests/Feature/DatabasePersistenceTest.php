@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
@@ -1287,4 +1288,22 @@ test('database-backed assert persisted uses explicit input data and metadata mat
         FakeSequentialSwarm::assertPersisted(['draft_id' => 42]);
         FakeSequentialSwarm::assertPersisted(['metadata' => ['campaign' => 'content-calendar']]);
     })->not->toThrow(AssertionFailedError::class);
+});
+
+test('database context store seals persisted input when encrypt at rest is enabled', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(ContextStore::class);
+
+    $store = app(ContextStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+
+    $store->put(RunContext::from('classified-prompt', $runId), 3600);
+
+    $raw = DB::table('swarm_contexts')->where('run_id', $runId)->value('input');
+    expect($raw)->toStartWith('sw0:');
+
+    expect($store->find($runId)['input'])->toBe('classified-prompt');
 });

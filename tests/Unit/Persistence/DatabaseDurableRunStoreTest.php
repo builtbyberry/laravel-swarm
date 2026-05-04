@@ -5,7 +5,6 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
 
 beforeEach(function () {
     Artisan::call('migrate:fresh', ['--database' => 'testing']);

@@ -30,6 +30,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         protected Connection $connection,
         protected ConfigRepository $config,
         protected SwarmCapture $capture,
+        protected SwarmPersistenceCipher $cipher,
     ) {}
 
     public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void
@@ -164,7 +165,10 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         $history['steps'][] = $step->toArray();
 
         $updated = $this->update($runId, [
-            'steps' => $this->encodeJson($history['steps']),
+            'steps' => $this->encodeJson(array_map(
+                fn (array $storedStep): array => $this->cipher->sealStepIo($storedStep),
+                $history['steps'],
+            )),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
         ], $executionToken, $leaseSeconds);
 
@@ -177,7 +181,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     {
         $updated = $this->update($runId, [
             'status' => 'completed',
-            'output' => $response->output,
+            'output' => $this->cipher->seal($response->output),
             'usage' => $this->encodeJson($response->usage),
             'context' => $this->encodeJson($response->context?->toArray()),
             'artifacts' => $this->encodeJson(array_map(static fn ($artifact): array => $artifact->toArray(), $response->artifacts)),
@@ -219,7 +223,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     {
         $values = [
             'status' => $status,
-            'context' => $this->encodeJson($context->toArray()),
+            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($context->toArray())),
             'metadata' => $this->encodeJson($metadata),
             'artifacts' => $this->encodeJson(array_map(static fn ($artifact): array => $artifact->toArray(), $context->artifacts)),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
@@ -277,7 +281,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             $query->where('status', $status);
         }
 
-        if ($contextSubset !== null) {
+        if ($contextSubset !== null && ! $this->cipher->enabled()) {
             $this->applyContextSubsetFilters($query, $contextSubset);
         }
 
@@ -348,10 +352,10 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'swarm_class' => $record->swarm_class,
             'topology' => $record->topology,
             'status' => $record->status,
-            'context' => $this->decodeJson($record->context, []),
+            'context' => $this->cipher->openContextTopLevelInput($this->decodeJson($record->context, [])),
             'metadata' => $this->decodeJson($record->metadata, []),
             'steps' => $steps,
-            'output' => $record->output,
+            'output' => $record->output !== null ? $this->cipher->open((string) $record->output) : null,
             'usage' => $this->decodeJson($record->usage, []),
             'error' => $this->decodeJson($record->error, null),
             'artifacts' => $this->decodeJson($record->artifacts, []),
@@ -373,7 +377,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'swarm_class' => $swarmClass,
             'topology' => $topology,
             'status' => 'running',
-            'context' => $this->encodeJson($context->toArray()),
+            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($context->toArray())),
             'metadata' => $this->encodeJson($metadata),
             'steps' => $this->encodeJson([]),
             'output' => null,
@@ -515,8 +519,8 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             ->map(fn (object $record): array => [
                 'step_index' => (int) $record->step_index,
                 'agent_class' => $record->agent_class,
-                'input' => $record->input,
-                'output' => $record->output,
+                'input' => $this->cipher->open((string) $record->input),
+                'output' => $this->cipher->open((string) $record->output),
                 'artifacts' => $this->decodeJson($record->artifacts, []),
                 'metadata' => $this->decodeJson($record->metadata, []),
             ])
@@ -529,7 +533,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     protected function stepPayload(string $runId, SwarmStep $step, int $ttlSeconds): array
     {
         $timestamp = Carbon::now('UTC');
-        $payload = $step->toArray();
+        $payload = $this->cipher->sealStepIo($step->toArray());
         $stepIndex = $step->metadata['index'] ?? null;
 
         if (! is_int($stepIndex)) {
@@ -562,7 +566,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
                 continue;
             }
 
-            $steps[$this->stepSortIndex($step, count($steps))] = $step;
+            $steps[$this->stepSortIndex($step, count($steps))] = $this->cipher->openStepIo($step);
         }
 
         foreach ($this->normalizedSteps($record->run_id) as $step) {

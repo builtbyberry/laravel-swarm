@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 
+$swarmPersistenceDriver = env('SWARM_PERSISTENCE_DRIVER', 'cache');
+
 return [
     'topology' => env('SWARM_TOPOLOGY', Topology::Sequential->value),
 
@@ -23,14 +25,27 @@ return [
     ],
 
     'persistence' => [
-        'driver' => env('SWARM_PERSISTENCE_DRIVER', 'cache'),
+        'driver' => $swarmPersistenceDriver,
+        /*
+         * When the persistence driver is database, sensitive string columns (prompts,
+         * agent outputs, branch I/O, etc.) are sealed with Laravel's encrypter (APP_KEY).
+         * Override with SWARM_ENCRYPT_AT_REST=false only when you rely solely on database-level encryption.
+         */
+        'encrypt_at_rest' => filter_var(
+            env('SWARM_ENCRYPT_AT_REST', $swarmPersistenceDriver === 'database'),
+            FILTER_VALIDATE_BOOLEAN
+        ),
     ],
 
+    /*
+     * Capture controls what is persisted into history, context, and response payloads.
+     * Defaults are conservative: opt in when you want full prompts and outputs stored.
+     */
     'capture' => [
-        'inputs' => env('SWARM_CAPTURE_INPUTS', true),
-        'outputs' => env('SWARM_CAPTURE_OUTPUTS', true),
-        'artifacts' => env('SWARM_CAPTURE_ARTIFACTS', true),
-        'active_context' => env('SWARM_CAPTURE_ACTIVE_CONTEXT', true),
+        'inputs' => env('SWARM_CAPTURE_INPUTS', false),
+        'outputs' => env('SWARM_CAPTURE_OUTPUTS', false),
+        'artifacts' => env('SWARM_CAPTURE_ARTIFACTS', false),
+        'active_context' => env('SWARM_CAPTURE_ACTIVE_CONTEXT', false),
     ],
 
     'limits' => [

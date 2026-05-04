@@ -21,6 +21,7 @@ use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -967,7 +968,7 @@ test('durable hierarchical completion rolls back terminal scrub when terminal co
 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
 
-    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config')) extends DatabaseContextStore
+    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config'), app(SwarmPersistenceCipher::class)) extends DatabaseContextStore
     {
         public function put(RunContext $context, int $ttlSeconds): void
         {
@@ -1010,7 +1011,7 @@ test('durable hierarchical workers load only requested node outputs', function (
         ]),
     ]);
 
-    $store = new class(app('db')->connection(), app('config')) extends DatabaseDurableRunStore
+    $store = new class(app('db')->connection(), app('config'), app(SwarmPersistenceCipher::class)) extends DatabaseDurableRunStore
     {
         /** @var array<int, array<int, string>> */
         public array $requestedNodeIds = [];
@@ -1711,7 +1712,7 @@ test('dispatch durable fails without leaving persisted state behind when the his
 });
 
 test('dispatch durable rolls startup writes back when a later startup write fails', function () {
-    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config')) extends DatabaseContextStore
+    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config'), app(SwarmPersistenceCipher::class)) extends DatabaseContextStore
     {
         public function put(RunContext $context, int $ttlSeconds): void
         {
@@ -1908,7 +1909,7 @@ test('durable pause rolls runtime state back when history sync fails', function 
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
     $runId = $response->runId;
 
-    app()->instance(DatabaseRunHistoryStore::class, new class(app('db')->connection(), app('config'), app(SwarmCapture::class)) extends DatabaseRunHistoryStore
+    app()->instance(DatabaseRunHistoryStore::class, new class(app('db')->connection(), app('config'), app(SwarmCapture::class), app(SwarmPersistenceCipher::class)) extends DatabaseRunHistoryStore
     {
         public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished, ?string $executionToken = null, ?int $leaseSeconds = null): void
         {
@@ -1935,7 +1936,7 @@ test('durable resume rolls runtime state back when history sync fails', function
 
     app(DurableSwarmManager::class)->pause($runId);
 
-    app()->instance(DatabaseRunHistoryStore::class, new class(app('db')->connection(), app('config'), app(SwarmCapture::class)) extends DatabaseRunHistoryStore
+    app()->instance(DatabaseRunHistoryStore::class, new class(app('db')->connection(), app('config'), app(SwarmCapture::class), app(SwarmPersistenceCipher::class)) extends DatabaseRunHistoryStore
     {
         public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished, ?string $executionToken = null, ?int $leaseSeconds = null): void
         {
@@ -1967,7 +1968,7 @@ test('in flight durable pause rolls runtime state back when history sync fails',
             'updated_at' => now('UTC'),
         ]);
 
-    app()->instance(DatabaseRunHistoryStore::class, new class(app('db')->connection(), app('config'), app(SwarmCapture::class)) extends DatabaseRunHistoryStore
+    app()->instance(DatabaseRunHistoryStore::class, new class(app('db')->connection(), app('config'), app(SwarmCapture::class), app(SwarmPersistenceCipher::class)) extends DatabaseRunHistoryStore
     {
         public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished, ?string $executionToken = null, ?int $leaseSeconds = null): void
         {

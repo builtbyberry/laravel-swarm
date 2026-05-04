@@ -1,0 +1,122 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BuiltByBerry\LaravelSwarm\Persistence;
+
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Encryption\Encrypter;
+
+/**
+ * Application-level encryption for sensitive string columns written by database
+ * persistence drivers, mirroring Laravel's Encrypter usage (same as encrypted casts).
+ */
+class SwarmPersistenceCipher
+{
+    public const PREFIX = 'sw0:';
+
+    public function __construct(
+        protected ConfigRepository $config,
+        protected Encrypter $encrypter,
+    ) {}
+
+    public function enabled(): bool
+    {
+        if (! (bool) $this->config->get('swarm.persistence.encrypt_at_rest', false)) {
+            return false;
+        }
+
+        return (string) $this->config->get('swarm.persistence.driver', 'cache') === 'database';
+    }
+
+    public function seal(?string $value): ?string
+    {
+        if ($value === null || $value === '' || ! $this->enabled()) {
+            return $value;
+        }
+
+        return self::PREFIX.$this->encrypter->encryptString($value);
+    }
+
+    public function open(?string $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return $value;
+        }
+
+        if (! str_starts_with($value, self::PREFIX)) {
+            return $value;
+        }
+
+        try {
+            return $this->encrypter->decryptString(substr($value, strlen(self::PREFIX)));
+        } catch (DecryptException) {
+            return $value;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    public function sealContextTopLevelInput(array $row): array
+    {
+        if (! $this->enabled()) {
+            return $row;
+        }
+
+        if (isset($row['input']) && is_string($row['input'])) {
+            $row['input'] = $this->seal($row['input']);
+        }
+
+        return $row;
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    public function openContextTopLevelInput(array $row): array
+    {
+        if (isset($row['input']) && is_string($row['input'])) {
+            $row['input'] = $this->open($row['input']);
+        }
+
+        return $row;
+    }
+
+    /**
+     * @param  array<string, mixed>  $step
+     * @return array<string, mixed>
+     */
+    public function sealStepIo(array $step): array
+    {
+        if (! $this->enabled()) {
+            return $step;
+        }
+
+        foreach (['input', 'output'] as $key) {
+            if (isset($step[$key]) && is_string($step[$key])) {
+                $step[$key] = $this->seal($step[$key]);
+            }
+        }
+
+        return $step;
+    }
+
+    /**
+     * @param  array<string, mixed>  $step
+     * @return array<string, mixed>
+     */
+    public function openStepIo(array $step): array
+    {
+        foreach (['input', 'output'] as $key) {
+            if (isset($step[$key]) && is_string($step[$key])) {
+                $step[$key] = $this->open($step[$key]);
+            }
+        }
+
+        return $step;
+    }
+}
