@@ -70,7 +70,8 @@
         "analyse": "vendor/bin/phpstan analyse --memory-limit=2G --no-progress",
         "format": "vendor/bin/pint",
         "lint": "vendor/bin/pint --test",
-        "test": "vendor/bin/pest tests/Feature tests/Unit"
+        "test": "vendor/bin/pest tests/Feature tests/Unit",
+        "test:coverage": "vendor/bin/pest tests/Feature tests/Unit --coverage --min=70"
     },
     "config": {
         "sort-packages": true,
