@@ -14,6 +14,21 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Carbon;
 
+/**
+ * Shared context helper for the durable manager graph.
+ *
+ * This class is intentionally stateless — it delegates entirely to immutable
+ * constructor dependencies (ConfigRepository, DurableRunStore, ContextStore,
+ * DatabaseRunHistoryStore). It is safe to construct multiple times with the
+ * same underlying services; all instances will behave identically.
+ *
+ * Do NOT add mutable, run-scoped, or request-scoped fields here. Any such
+ * addition would break the single-construction-path contract enforced by
+ * DurableManagerCollaboratorFactory, where one DurableRunContext instance
+ * is shared across every manager collaborator.
+ *
+ * @internal
+ */
 class DurableRunContext
 {
     public function __construct(
