@@ -24,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurablePayloadCapture;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRetryHandler;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
@@ -95,6 +96,49 @@ function noopPendingDispatch(): PendingDispatch
 
         public function __destruct() {}
     };
+}
+
+function recordingDurableJobDispatcher(?RuntimeException $stepException = null): DurableJobDispatcher
+{
+    return new class(app('config'), $stepException) extends DurableJobDispatcher
+    {
+        /** @var array<int, int> */
+        public array $stepDispatches = [];
+
+        /** @var array<int, string> */
+        public array $branchDispatches = [];
+
+        public function __construct($config, protected ?RuntimeException $stepException)
+        {
+            parent::__construct($config);
+        }
+
+        public function dispatchStep(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
+        {
+            $this->stepDispatches[] = $stepIndex;
+
+            if ($this->stepException !== null) {
+                throw $this->stepException;
+            }
+
+            return noopPendingDispatch();
+        }
+
+        public function dispatchBranch(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch
+        {
+            $this->branchDispatches[] = $branchId;
+
+            return noopPendingDispatch();
+        }
+    };
+}
+
+function durableManagerWithJobDispatcher(DurableJobDispatcher $dispatcher): DurableSwarmManager
+{
+    app()->bind(DurableJobDispatcher::class, fn (): DurableJobDispatcher => $dispatcher);
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    return app(DurableSwarmManager::class);
 }
 
 function durableHierarchicalPlan(string $startAt, array $nodes): array
@@ -577,24 +621,14 @@ test('durable sequential swarms complete one step per job', function () {
         ->and($history['steps'])->toHaveCount(3);
 });
 
-test('durable sequential advance dispatches next step through manager seam', function () {
+test('durable sequential advance dispatches next step through durable job dispatcher', function () {
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, int> */
-        public array $stepDispatches = [];
-
-        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->stepDispatches[] = $stepIndex;
-
-            return noopPendingDispatch();
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
 
-    expect($manager->stepDispatches)->toBe([1])
+    expect($dispatcher->stepDispatches)->toBe([1])
         ->and($manager->find($response->runId)['next_step_index'])->toBe(1);
 });
 
@@ -794,7 +828,7 @@ test('durable hierarchical swarms fan out parallel branches and join with group 
         ->and($history['context']['metadata']['executed_node_ids'])->toBe(['parallel_node', 'writer_node', 'editor_node', 'finish_node']);
 });
 
-test('durable hierarchical branch wait dispatches branches through manager seam', function () {
+test('durable hierarchical branch wait dispatches branches through durable job dispatcher', function () {
     FakeHierarchicalCoordinator::fake([
         durableHierarchicalPlan('parallel_node', [
             'parallel_node' => [
@@ -820,23 +854,13 @@ test('durable hierarchical branch wait dispatches branches through manager seam'
     ]);
 
     $response = FakeHierarchicalFullSwarm::make()->dispatchDurable('durable-hierarchical-task');
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, string> */
-        public array $branchDispatches = [];
-
-        public function dispatchBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->branchDispatches[] = $branchId;
-
-            return noopPendingDispatch();
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
     (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
 
-    expect($manager->branchDispatches)->toBe(['parallel_node:writer_node', 'parallel_node:editor_node'])
+    expect($dispatcher->branchDispatches)->toBe(['parallel_node:writer_node', 'parallel_node:editor_node'])
         ->and($manager->find($response->runId)['status'])->toBe('waiting');
 });
 
@@ -1489,13 +1513,7 @@ test('durable recovery markers advance only after redispatch succeeds', function
     $manager = app(DurableSwarmManager::class);
     $before = $manager->find($runId);
 
-    $throwingManager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            throw new RuntimeException('Redispatch failed.');
-        }
-    };
+    $throwingManager = durableManagerWithJobDispatcher(recordingDurableJobDispatcher(new RuntimeException('Redispatch failed.')));
 
     expect(fn () => $throwingManager->recover(runId: $runId))
         ->toThrow(RuntimeException::class, 'Redispatch failed.');
@@ -1554,23 +1572,13 @@ test('durable recovery dispatches due retry runs only once per recovery window',
 
     $this->travel(61)->seconds();
 
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, int> */
-        public array $stepDispatches = [];
-
-        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->stepDispatches[] = $stepIndex;
-
-            return noopPendingDispatch();
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     $manager->recover(runId: $response->runId);
     $manager->recover(runId: $response->runId);
 
-    expect($manager->stepDispatches)->toBe([0])
+    expect($dispatcher->stepDispatches)->toBe([0])
         ->and($manager->find($response->runId)['next_retry_at'])->toBeNull();
 });
 
@@ -1589,23 +1597,13 @@ test('durable recovery dispatches stale branches only once per recovery window',
             'updated_at' => now('UTC')->subMinutes(10),
         ]);
 
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, string> */
-        public array $branchDispatches = [];
-
-        public function dispatchBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->branchDispatches[] = $branchId;
-
-            return parent::dispatchBranchJob($runId, $branchId, $connection, $queue);
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     $manager->recover(runId: $runId);
     $manager->recover(runId: $runId);
 
-    expect($manager->branchDispatches)->toBe(['parallel:0']);
+    expect($dispatcher->branchDispatches)->toBe(['parallel:0']);
 });
 
 test('durable recovery dispatches due retry branches only once per recovery window', function () {
@@ -1622,41 +1620,21 @@ test('durable recovery dispatches due retry branches only once per recovery wind
 
     $this->travel(61)->seconds();
 
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, string> */
-        public array $branchDispatches = [];
-
-        public function dispatchBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->branchDispatches[] = $branchId;
-
-            return parent::dispatchBranchJob($runId, $branchId, $connection, $queue);
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     $manager->recover(runId: $runId);
     $manager->recover(runId: $runId);
 
-    expect($manager->branchDispatches)->toBe(['parallel:1'])
+    expect($dispatcher->branchDispatches)->toBe(['parallel:1'])
         ->and(app(DurableRunStore::class)->findBranch($runId, 'parallel:1')['next_retry_at'])->toBeNull();
 });
 
 test('durable recovery dispatches timed out waits only once per recovery window', function () {
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
 
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, int> */
-        public array $stepDispatches = [];
-
-        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->stepDispatches[] = $stepIndex;
-
-            return parent::dispatchStepJob($runId, $stepIndex, $connection, $queue);
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     $manager->wait($response->runId, 'timed_wait', 'Timed wait', 60);
     $this->travel(61)->seconds();
@@ -1664,7 +1642,7 @@ test('durable recovery dispatches timed out waits only once per recovery window'
     $manager->recover(runId: $response->runId);
     $manager->recover(runId: $response->runId);
 
-    expect($manager->stepDispatches)->toBe([0])
+    expect($dispatcher->stepDispatches)->toBe([0])
         ->and($manager->inspect($response->runId)->waits[0]['status'])->toBe('timed_out');
 });
 
@@ -1798,32 +1776,12 @@ test('durable waiting runs pause immediately and resume branch work without join
 
     $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
     $runId = $response->runId;
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, string> */
-        public array $branchDispatches = [];
-
-        /** @var array<int, int> */
-        public array $stepDispatches = [];
-
-        public function dispatchBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->branchDispatches[] = $branchId;
-
-            return parent::dispatchBranchJob($runId, $branchId, $connection, $queue);
-        }
-
-        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->stepDispatches[] = $stepIndex;
-
-            return parent::dispatchStepJob($runId, $stepIndex, $connection, $queue);
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
-    $manager->branchDispatches = [];
-    $manager->stepDispatches = [];
+    $dispatcher->branchDispatches = [];
+    $dispatcher->stepDispatches = [];
 
     DB::table('swarm_durable_branches')
         ->where('run_id', $runId)
@@ -1854,28 +1812,18 @@ test('durable waiting runs pause immediately and resume branch work without join
 
     expect($manager->find($runId)['status'])->toBe('waiting')
         ->and(app(SwarmHistory::class)->find($runId)['status'])->toBe('waiting')
-        ->and($manager->branchDispatches)->toContain('parallel:1')
-        ->and($manager->branchDispatches)->not->toContain('parallel:0')
-        ->and($manager->branchDispatches)->not->toContain('parallel:2')
-        ->and($manager->stepDispatches)->not->toContain(3);
+        ->and($dispatcher->branchDispatches)->toContain('parallel:1')
+        ->and($dispatcher->branchDispatches)->not->toContain('parallel:0')
+        ->and($dispatcher->branchDispatches)->not->toContain('parallel:2')
+        ->and($dispatcher->stepDispatches)->not->toContain(3);
     Event::assertDispatched(SwarmResumed::class, fn (SwarmResumed $event) => $event->runId === $runId);
 });
 
 test('durable waiting resume dispatches the join when all branches are terminal', function () {
     $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
     $runId = $response->runId;
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, int> */
-        public array $stepDispatches = [];
-
-        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->stepDispatches[] = $stepIndex;
-
-            return noopPendingDispatch();
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
 
@@ -1896,28 +1844,18 @@ test('durable waiting resume dispatches the join when all branches are terminal'
 
     expect($manager->find($runId)['status'])->toBe('pending')
         ->and($manager->find($runId)['next_step_index'])->toBe(3)
-        ->and($manager->stepDispatches)->toContain(3);
+        ->and($dispatcher->stepDispatches)->toContain(3);
 });
 
-test('durable pending resume dispatches through manager seam', function () {
+test('durable pending resume dispatches through durable job dispatcher', function () {
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, int> */
-        public array $stepDispatches = [];
-
-        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->stepDispatches[] = $stepIndex;
-
-            return noopPendingDispatch();
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     $manager->pause($response->runId);
     $manager->resume($response->runId);
 
-    expect($manager->stepDispatches)->toBe([0]);
+    expect($dispatcher->stepDispatches)->toBe([0]);
 });
 
 test('durable waiting cancel immediately cancels parent and non terminal branches', function () {
@@ -2141,18 +2079,8 @@ test('durable waits accept idempotent signals and release the run', function () 
 
 test('durable wait timeout recovery uses concrete wait rows when a later wait has no timeout', function () {
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, int> */
-        public array $stepDispatches = [];
-
-        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->stepDispatches[] = $stepIndex;
-
-            return parent::dispatchStepJob($runId, $stepIndex, $connection, $queue);
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     $manager->wait($response->runId, 'timed_wait', 'Timed wait', 60);
     $manager->wait($response->runId, 'manual_wait', 'Manual wait');
@@ -2164,7 +2092,7 @@ test('durable wait timeout recovery uses concrete wait rows when a later wait ha
 
     expect($manager->find($response->runId)['status'])->toBe('waiting')
         ->and($manager->find($response->runId)['wait_timeout_at'])->toBeNull()
-        ->and($manager->stepDispatches)->toBe([])
+        ->and($dispatcher->stepDispatches)->toBe([])
         ->and($waits[0]['status'])->toBe('timed_out')
         ->and($waits[1]['status'])->toBe('waiting');
 });
@@ -2304,7 +2232,7 @@ test('durable child swarms record lineage', function () {
         ->and($detail->children[0]['child_run_id'])->toBe($child->childRunId);
 });
 
-test('durable child terminal reconciliation dispatches through manager seam', function () {
+test('durable child terminal reconciliation dispatches through durable job dispatcher', function () {
     $response = FakeSequentialSwarm::make()->dispatchDurable('parent-task');
     $childContext = RunContext::fromTask('child-task');
     $waitName = 'child:'.$childContext->runId;
@@ -2312,22 +2240,12 @@ test('durable child terminal reconciliation dispatches through manager seam', fu
     app(DurableRunStore::class)->createChildRun($response->runId, $childContext->runId, FakeSequentialSwarm::class, $waitName, $childContext->toArray());
     app(DurableRunStore::class)->updateChildRun($childContext->runId, 'completed', 'child-output');
 
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class), app(DurableRetryHandler::class)) extends DurableSwarmManager
-    {
-        /** @var array<int, int> */
-        public array $stepDispatches = [];
-
-        public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
-        {
-            $this->stepDispatches[] = $stepIndex;
-
-            return noopPendingDispatch();
-        }
-    };
+    $dispatcher = recordingDurableJobDispatcher();
+    $manager = durableManagerWithJobDispatcher($dispatcher);
 
     $manager->recover(runId: $response->runId);
 
-    expect($manager->stepDispatches)->toBe([0]);
+    expect($dispatcher->stepDispatches)->toBe([0]);
 });
 
 test('durable retry schedules backoff and recovers after due time', function () {

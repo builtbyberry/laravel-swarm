@@ -40,6 +40,7 @@ class DurableManagerCollaboratorFactory
         SwarmCapture $capture,
         SwarmPayloadLimits $limits,
         Application $application,
+        DurableSignalHandler $signalHandler,
         DurableRetryHandler $retryHandler,
     ): DurableManagerCollaborators {
         $runContext = $this->application->makeWith(DurableRunContext::class, [
@@ -57,6 +58,17 @@ class DurableManagerCollaboratorFactory
         $branches = $this->application->makeWith(DurableBranchCoordinator::class, [
             'config' => $config,
         ]);
+        $starter = $this->application->makeWith(DurableSwarmStarter::class, [
+            'config' => $config,
+            'durableRuns' => $durableRuns,
+            'historyStore' => $historyStore,
+            'contextStore' => $contextStore,
+            'connection' => $connection,
+            'capture' => $capture,
+            'limits' => $limits,
+            'runs' => $runContext,
+            'jobs' => $jobs,
+        ]);
         $children = $this->application->makeWith(DurableChildSwarmCoordinator::class, [
             'durableRuns' => $durableRuns,
             'historyStore' => $historyStore,
@@ -68,6 +80,21 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'payloads' => $payloads,
             'jobs' => $jobs,
+        ]);
+        $queuedHierarchical = $this->application->makeWith(QueuedHierarchicalDurableCoordinator::class, [
+            'config' => $config,
+            'durableRuns' => $durableRuns,
+            'historyStore' => $historyStore,
+            'contextStore' => $contextStore,
+            'capture' => $capture,
+            'runs' => $runContext,
+            'branches' => $branches,
+            'jobs' => $jobs,
+        ]);
+        $boundary = $this->application->makeWith(DurableBoundaryCoordinator::class, [
+            'durableRuns' => $durableRuns,
+            'signals' => $signalHandler,
+            'children' => $children,
         ]);
         $lifecycle = $this->application->makeWith(DurableLifecycleController::class, [
             'durableRuns' => $durableRuns,
@@ -143,6 +170,9 @@ class DurableManagerCollaboratorFactory
             runContext: $runContext,
             payloads: $payloads,
             jobs: $jobs,
+            starter: $starter,
+            queuedHierarchical: $queuedHierarchical,
+            boundary: $boundary,
             branches: $branches,
             children: $children,
             lifecycle: $lifecycle,
