@@ -28,6 +28,30 @@ class DatabaseInvalidPayloadValue
     public string $value = 'sensitive';
 }
 
+function insertMinimalHistoryRow(string $runId, string $status = 'completed', ?Carbon $expiresAt = null, ?Carbon $finishedAt = null): void
+{
+    $now = Carbon::now('UTC');
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => $runId,
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => $status,
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => $finishedAt ?? ($status === 'completed' ? $now : null),
+        'expires_at' => $expiresAt ?? $now->copy()->addHour(),
+        'execution_token' => null,
+        'leased_until' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+}
+
 function insertPrunableBranchRow(string $runId, string $branchId, Carbon $expiresAt, string $status = 'completed'): void
 {
     DB::table('swarm_durable_branches')->insert([
@@ -84,6 +108,7 @@ test('durable runs split migration adds side state tables and removes wide json 
 });
 
 test('database context store persists the same context shape as cache', function () {
+    insertMinimalHistoryRow('context-run-id');
     $store = app(DatabaseContextStore::class);
     $context = RunContext::from([
         'input' => 'database-task',
@@ -110,6 +135,7 @@ test('database context store persists the same context shape as cache', function
 });
 
 test('database context store persists long task inputs', function () {
+    insertMinimalHistoryRow('long-context-run-id');
     $store = app(DatabaseContextStore::class);
     $longInput = str_repeat('Laravel Swarm long prompt. ', 4000);
     $context = RunContext::from($longInput, 'long-context-run-id');
@@ -162,6 +188,7 @@ test('database context store rejects invalid artifact metadata before persistenc
 });
 
 test('database artifact repository persists explicit json payloads', function () {
+    insertMinimalHistoryRow('artifact-run-id');
     $repository = app(DatabaseArtifactRepository::class);
 
     $repository->storeMany('artifact-run-id', [
@@ -505,7 +532,11 @@ test('swarm prune does not delete supporting rows when history table is missing'
     $expired = Carbon::now('UTC')->subMinute();
     $future = Carbon::now('UTC')->addHour();
 
-    Schema::dropIfExists('swarm_run_histories');
+    // Disable FK enforcement while setting up a degraded-schema fixture:
+    // SQLite 3.26+ would cascade-delete child rows when the parent table is
+    // dropped while FK enforcement is ON.  We disable it here to faithfully
+    // simulate rows that existed before the parent table was torn down.
+    DB::statement('PRAGMA foreign_keys = OFF');
 
     DB::table('swarm_contexts')->insert([
         'run_id' => 'orphan-context',
@@ -527,6 +558,10 @@ test('swarm prune does not delete supporting rows when history table is missing'
         'created_at' => $expired,
         'updated_at' => $expired,
     ]);
+
+    Schema::dropIfExists('swarm_run_histories');
+
+    DB::statement('PRAGMA foreign_keys = ON');
     DB::table('swarm_durable_runs')->insert([
         'run_id' => 'orphan-durable',
         'swarm_class' => 'ExampleSwarm',
@@ -893,6 +928,14 @@ test('database persistence repositories honor overridden table names when matchi
 
 test('swarm prune removes expired database persistence rows and preserves active rows', function () {
     $now = Carbon::now('UTC');
+
+    // Parent history rows for context and artifact run IDs that are not covered
+    // by the history batch below; these are completed rows so they do not block
+    // context/artifact pruning via the active-status guard.
+    insertMinimalHistoryRow('expired-context', 'completed', $now->copy()->subMinute(), $now->copy()->subMinute());
+    insertMinimalHistoryRow('active-context', 'completed', $now->copy()->addMinute(), $now->copy()->subMinute());
+    insertMinimalHistoryRow('expired-artifact', 'completed', $now->copy()->subMinute(), $now->copy()->subMinute());
+    insertMinimalHistoryRow('active-artifact', 'completed', $now->copy()->addMinute(), $now->copy()->subMinute());
 
     DB::table('swarm_contexts')->insert([
         [

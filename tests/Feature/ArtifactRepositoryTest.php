@@ -8,11 +8,17 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 
 class ArtifactInvalidPayloadValue
 {
     public string $value = 'sensitive';
 }
+
+beforeEach(function () {
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+});
 
 function artifactRepositories(): array
 {
@@ -22,10 +28,38 @@ function artifactRepositories(): array
     ];
 }
 
+function insertArtifactParentHistoryRow(string $runId): void
+{
+    $now = now('UTC');
+    DB::table('swarm_run_histories')->insertOrIgnore([
+        'run_id' => $runId,
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => null,
+        'expires_at' => $now->copy()->addHour(),
+        'execution_token' => null,
+        'leased_until' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+}
+
 test('artifact repositories persist normalized array and swarm artifact payloads', function () {
     foreach (artifactRepositories() as $driver => $repository) {
         /** @var ArtifactRepository $repository */
         $runId = "valid-artifacts-{$driver}";
+
+        if ($driver === 'database') {
+            insertArtifactParentHistoryRow($runId);
+        }
 
         $repository->storeMany($runId, [
             [
