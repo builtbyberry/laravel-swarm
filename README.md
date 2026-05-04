@@ -114,11 +114,24 @@ Laravel Swarm loads its package migrations automatically through the service pro
 php artisan migrate
 ```
 
-The package migrations are always loaded and create the default swarm tables
-even when the current persistence driver is `cache`. If you want custom table
-names, publish the migrations and update them to match `swarm.tables.*`.
-Published migrations use Laravel's package migration publishing flow, so their
-filenames receive fresh application migration timestamps.
+The package migrations are loaded by default and create the swarm tables regardless of which persistence driver is configured. If you want custom table names, publish the migrations and update them to match `swarm.tables.*`. Published migrations use Laravel's package migration publishing flow, so their filenames receive fresh application migration timestamps.
+
+**Skipping migrations when using cache persistence**
+
+If you are using only the `cache` persistence driver and do not want the swarm tables created in your database, call `LaravelSwarm::ignoreMigrations()` from your `AppServiceProvider::register()` method:
+
+```php
+use BuiltByBerry\LaravelSwarm\LaravelSwarm;
+
+public function register(): void
+{
+    LaravelSwarm::ignoreMigrations();
+}
+```
+
+This mirrors the opt-out idiom used by Cashier, Sanctum, Passport, Horizon, and Telescope. It must be called from `register()` (not `boot()`) so it runs before `SwarmServiceProvider::boot()`.
+
+The `swarm-migrations` publish tag remains available regardless of this setting. If you later switch to database persistence, remove the `ignoreMigrations()` call (or publish the migrations explicitly with `vendor:publish --tag=swarm-migrations`) and run `php artisan migrate`.
 
 Publish the package configuration if you want to customize defaults:
 

@@ -96,6 +96,23 @@ Laravel Swarm's package migrations are intentionally simple Laravel migrations.
 For most applications the swarm persistence tables are operational tables with
 short retention windows, so standard package migration workflows are enough.
 
+**Opting out of migration autoloading**
+
+The package loads its migrations automatically by default regardless of the configured persistence driver. If your application uses only the `cache` persistence driver and you do not want the swarm tables created, call `LaravelSwarm::ignoreMigrations()` from `AppServiceProvider::register()`:
+
+```php
+use BuiltByBerry\LaravelSwarm\LaravelSwarm;
+
+public function register(): void
+{
+    LaravelSwarm::ignoreMigrations();
+}
+```
+
+This follows the same idiom as Cashier, Sanctum, Passport, Horizon, and Telescope. The `swarm-migrations` publish tag remains available regardless, so the migrations can still be published and customized if needed.
+
+If you later switch to the `database` persistence driver, remove the `ignoreMigrations()` call and run `php artisan migrate`. Alternatively, publish the migrations with `php artisan vendor:publish --tag=swarm-migrations` and manage them from your application's migration directory.
+
 The v0.1.5 migration widens `swarm_contexts.input` from `text` to `longText` so
 structured and durable prompts are not truncated by database context
 persistence. On a heavily populated MySQL or MariaDB table, even a widening

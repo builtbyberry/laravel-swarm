@@ -4,6 +4,7 @@
 
 ### Added
 
+- `LaravelSwarm::ignoreMigrations()` lets applications skip the package's migration autoload, mirroring the first-party Laravel idiom used by Cashier, Sanctum, Passport, Horizon, and Telescope. Default behavior is unchanged. The `swarm-migrations` publish tag remains available regardless, so cache-only deployments can stay table-free until they need database persistence.
 - `swarm.persistence.encrypt_at_rest` (`SWARM_ENCRYPT_AT_REST`), defaulting to
   **true** when `swarm.persistence.driver` is `database`, seals sensitive string
   columns in database-backed context, run history, and durable stores using

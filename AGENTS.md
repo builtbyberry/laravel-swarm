@@ -123,6 +123,7 @@ Pulse is aggregate observability. For live per-run operations feeds, listen to L
 - **Testing limits:** `SwarmFake::queue()` records dispatch intent only; it does not execute `SwarmRunner`, simulate coordinated hierarchical `multi_worker` branch jobs, durable coordination rows, or `ResumeQueuedHierarchicalSwarm`. Validate that path with database-backed feature tests (see `tests/Feature/QueuedHierarchicalParallelCoordinationTest.php`).
 - Queued and parallel safety checks should fail before dispatch when a swarm or worker cannot be container-resolved safely.
 - Timeouts are best-effort orchestration deadlines checked before and between steps. They do not hard-cancel an in-flight provider call.
+- `BuiltByBerry\LaravelSwarm\LaravelSwarm` is the plain helper class for package-level static toggles and overrides (Cashier/Sanctum/Passport/Horizon/Telescope idiom). Add to it for things like service-provider opt-outs (`ignoreMigrations()`), Eloquent model overrides if the package adopts them, or first-party dashboard auth callbacks if one ships later. Do **not** mirror configuration that already lives in `config/swarm.php` — pick one home for each setting.
 
 ## Review Method
 
