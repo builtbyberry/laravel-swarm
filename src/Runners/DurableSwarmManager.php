@@ -6,10 +6,8 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Attributes\DurableDetails;
 use BuiltByBerry\LaravelSwarm\Attributes\DurableLabels;
-use BuiltByBerry\LaravelSwarm\Attributes\DurableRetry;
 use BuiltByBerry\LaravelSwarm\Attributes\DurableWait;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
-use BuiltByBerry\LaravelSwarm\Contracts\ConfiguresDurableRetries;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DispatchesChildSwarms;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -38,9 +36,9 @@ use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
-use BuiltByBerry\LaravelSwarm\Responses\DurableRetryPolicy;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRetryHandler;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -87,6 +85,7 @@ class DurableSwarmManager
         protected Application $application,
         protected DurableRunInspector $inspector,
         protected DurableSignalHandler $signalHandler,
+        protected DurableRetryHandler $retryHandler,
     ) {}
 
     /**
@@ -832,7 +831,12 @@ class DurableSwarmManager
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
             return;
         } catch (Throwable $exception) {
-            if ($this->scheduleRunRetryIfAllowed($run, $swarm, $context, $token, $stepLeaseSeconds, $expectedStepIndex, $exception)) {
+            $retry = $this->retryHandler->scheduleRunRetryIfAllowed($run, $swarm, $context, $token, $stepLeaseSeconds, $expectedStepIndex, $exception);
+            if ($retry['scheduled']) {
+                if ($retry['dispatchStep'] !== null) {
+                    $this->dispatchStepJob($retry['dispatchStep']['runId'], $retry['dispatchStep']['stepIndex'], $retry['dispatchStep']['connection'], $retry['dispatchStep']['queue']);
+                }
+
                 return;
             }
 
@@ -1111,7 +1115,12 @@ class DurableSwarmManager
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
             return;
         } catch (Throwable $exception) {
-            if ($this->scheduleBranchRetryIfAllowed($run, $branch, $swarm, $context, $token, $exception)) {
+            $retry = $this->retryHandler->scheduleBranchRetryIfAllowed($run, $branch, $swarm, $context, $token, $exception);
+            if ($retry['scheduled']) {
+                if ($retry['dispatchBranch'] !== null) {
+                    $this->dispatchBranchJob($retry['dispatchBranch']['runId'], $retry['dispatchBranch']['branchId'], $retry['dispatchBranch']['connection'], $retry['dispatchBranch']['queue']);
+                }
+
                 return;
             }
 
@@ -1598,127 +1607,6 @@ class DurableSwarmManager
         if ($details !== []) {
             $context->withDetails($details[0]->newInstance()->details);
         }
-    }
-
-    protected function scheduleRunRetryIfAllowed(array $run, Swarm $swarm, RunContext $context, string $token, int $stepLeaseSeconds, int $stepIndex, Throwable $exception): bool
-    {
-        $policy = $this->resolveRetryPolicy($swarm, $this->agentClassForStep($swarm, $run, $stepIndex));
-
-        if ($policy === null || $this->isNonRetryable($policy, $exception)) {
-            return false;
-        }
-
-        $attempt = ((int) ($run['retry_attempt'] ?? 0)) + 1;
-
-        if ($attempt > $policy->maxAttempts) {
-            return false;
-        }
-
-        $nextRetryAt = Carbon::now('UTC')->addSeconds($policy->delayForAttempt($attempt));
-
-        try {
-            $this->connection->transaction(function () use ($run, $token, $policy, $attempt, $nextRetryAt, $context, $stepLeaseSeconds): void {
-                $this->durableRuns->scheduleRetry($run['run_id'], $token, $policy->toArray(), $attempt, $nextRetryAt);
-                $this->historyStore->syncDurableState($run['run_id'], 'pending', $this->capture->context($context), array_merge($context->metadata, [
-                    'durable_retry_attempt' => $attempt,
-                    'durable_next_retry_at' => $nextRetryAt->toJSON(),
-                ]), $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
-            });
-        } catch (LostDurableLeaseException|LostSwarmLeaseException) {
-            return true;
-        }
-
-        if ($policy->delayForAttempt($attempt) === 0) {
-            $this->dispatchStepJob($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
-        }
-
-        return true;
-    }
-
-    protected function scheduleBranchRetryIfAllowed(array $run, array $branch, Swarm $swarm, RunContext $context, string $token, Throwable $exception): bool
-    {
-        $policy = $this->resolveRetryPolicy($swarm, (string) $branch['agent_class']);
-
-        if ($policy === null || $this->isNonRetryable($policy, $exception)) {
-            return false;
-        }
-
-        $attempt = ((int) ($branch['retry_attempt'] ?? 0)) + 1;
-
-        if ($attempt > $policy->maxAttempts) {
-            return false;
-        }
-
-        $nextRetryAt = Carbon::now('UTC')->addSeconds($policy->delayForAttempt($attempt));
-
-        try {
-            $this->durableRuns->scheduleBranchRetry($run['run_id'], (string) $branch['branch_id'], $token, $policy->toArray(), $attempt, $nextRetryAt);
-        } catch (LostDurableLeaseException|LostSwarmLeaseException) {
-            return true;
-        }
-
-        if ($policy->delayForAttempt($attempt) === 0) {
-            $this->dispatchBranchJob($run['run_id'], (string) $branch['branch_id'], $branch['queue_connection'] ?? $run['queue_connection'], $branch['queue_name'] ?? $run['queue_name']);
-        }
-
-        return true;
-    }
-
-    protected function resolveRetryPolicy(Swarm $swarm, ?string $agentClass = null): ?DurableRetryPolicy
-    {
-        if ($agentClass !== null && $swarm instanceof ConfiguresDurableRetries) {
-            $policy = $swarm->durableAgentRetryPolicy($agentClass);
-
-            if ($policy instanceof DurableRetryPolicy) {
-                return $policy;
-            }
-        }
-
-        if ($agentClass !== null && class_exists($agentClass)) {
-            $attributes = (new ReflectionClass($agentClass))->getAttributes(DurableRetry::class);
-
-            if ($attributes !== []) {
-                $retry = $attributes[0]->newInstance();
-
-                return new DurableRetryPolicy($retry->maxAttempts, $retry->backoffSeconds, $retry->nonRetryable);
-            }
-        }
-
-        if ($swarm instanceof ConfiguresDurableRetries) {
-            return $swarm->durableRetryPolicy();
-        }
-
-        $attributes = (new ReflectionClass($swarm))->getAttributes(DurableRetry::class);
-
-        if ($attributes !== []) {
-            $retry = $attributes[0]->newInstance();
-
-            return new DurableRetryPolicy($retry->maxAttempts, $retry->backoffSeconds, $retry->nonRetryable);
-        }
-
-        return null;
-    }
-
-    protected function isNonRetryable(DurableRetryPolicy $policy, Throwable $exception): bool
-    {
-        foreach ($policy->nonRetryable as $class) {
-            if (is_a($exception, $class)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    protected function agentClassForStep(Swarm $swarm, array $run, int $stepIndex): ?string
-    {
-        if ($run['topology'] === Topology::Sequential->value) {
-            $agents = $swarm->agents();
-
-            return isset($agents[$stepIndex]) ? $agents[$stepIndex]::class : null;
-        }
-
-        return null;
     }
 
     protected function enterDeclaredDurableBoundary(array $run, Swarm $swarm, RunContext $context, int $nextStepIndex): bool
