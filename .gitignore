@@ -4,6 +4,9 @@
 /tmp
 /dev
 
+# Internal package-review notes (not part of the distributed package)
+/docs/reviews/
+
 /.phpunit.cache
 /.phpunit.result.cache
 /.pest
