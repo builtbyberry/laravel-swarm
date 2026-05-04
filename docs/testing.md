@@ -44,6 +44,28 @@ expect($result->accepted)->toBeTrue();
 expect($response->inspect()->waits[0]['status'])->toBe('signalled');
 ```
 
+## Database-backed durable execution
+
+`SwarmFake` records dispatch intent for `dispatchDurable()`; it does **not**
+execute `DurableSwarmManager`, simulate hierarchical coordination rows, or run
+durable jobs. When you need to prove leases, checkpoints, retries, branch joins,
+or job redispatch behavior, use **feature-style tests** with database
+persistence and migrations loaded (see the package `TestCase` and
+`tests/Feature/DurableSwarmTest.php`).
+
+Common patterns:
+
+- Bind a test double for `BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher`
+  **before** resolving `DurableSwarmManager` so you can assert how many
+  `AdvanceDurableSwarm` / `AdvanceDurableBranch` dispatches occurred or inject
+  controlled failures.
+- Bind `BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder` if you need to spy
+  checkpoint writes; the service provider documents `makeWith` parameters.
+
+For the full collaborator graph, container singleton rules, and which types
+must not be registered globally, read
+[Durable Runtime Architecture](durable-runtime-architecture.md).
+
 Webhook tests should sign the exact raw request body with
 `hash_hmac('sha256', $timestamp.'.'.$body, $secret)` and assert unsigned
 requests are rejected.

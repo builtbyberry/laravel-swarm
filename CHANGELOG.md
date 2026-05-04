@@ -21,6 +21,10 @@
 
 ### Documentation
 
+- Added [Durable Runtime Architecture](docs/durable-runtime-architecture.md)
+  describing the `DurableSwarmManager` facade, `Runners/Durable` collaborators,
+  factory-built graph, queue jobs, container lifetime rules, testing patterns, and
+  cross-links from durable topic guides, persistence, testing, and README.
 - Documented durable operational query surfaces at scale: typed columns and
   satellite tables (including `swarm_durable_run_state` and
   `swarm_durable_node_states`) vs JSON checkpoint storage (`docs/durable-execution.md`),

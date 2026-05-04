@@ -139,6 +139,11 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 $runtime = app(DurableRunStore::class)->find($runId);
 ```
 
+During execution, writes to this operational surface are coordinated by
+`DurableSwarmManager` and its internal collaborators (not ad-hoc writes from
+application code). For how those pieces fit together, see
+[Durable Runtime Architecture](durable-runtime-architecture.md).
+
 This durable operational state is only available with database-backed durable
 execution. Cache-backed persistence keeps recent history visibility, but it does
 not provide the durable runtime table or durable leases.

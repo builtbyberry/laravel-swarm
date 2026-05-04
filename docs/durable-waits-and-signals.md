@@ -40,3 +40,7 @@ Use `swarm:signal` for operator-driven continuation:
 ```bash
 php artisan swarm:signal <run-id> approval_received --payload='{"approved":true}' --idempotency-key=approval-123
 ```
+
+Signal and wait persistence flow through the same factory-built durable graph as
+step advancement. For collaborators and container rules, see
+[Durable Runtime Architecture](durable-runtime-architecture.md).

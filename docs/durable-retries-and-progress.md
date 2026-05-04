@@ -32,3 +32,7 @@ php artisan swarm:inspect <run-id> --json
 Progress payloads can contain sensitive operational detail and follow the same
 retention and redaction expectations as durable context, route plans, and branch
 outputs.
+
+`recordProgress()` is delegated through `DurableSwarmManager` to the inspection
+path of the durable graph. For the code map, see
+[Durable Runtime Architecture](durable-runtime-architecture.md).

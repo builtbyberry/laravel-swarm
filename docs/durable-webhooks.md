@@ -52,3 +52,6 @@ blocked while allowing failed ingress attempts to be retried.
 using `swarm.durable.webhooks.idempotency_ttl`. Completed idempotency rows tied
 to a durable run follow durable history retention instead, so matching retries
 can return the original run ID while that history is retained.
+
+For how webhook-driven signals join the durable manager graph, see
+[Durable Runtime Architecture](durable-runtime-architecture.md).

@@ -19,6 +19,17 @@ If you override table names, publish `config/swarm.php` and set
 `SWARM_DURABLE_NODE_STATES_TABLE` / `SWARM_DURABLE_RUN_STATE_TABLE` when you rename
 the new tables.
 
+## Unreleased: `DurableSwarmManager` surface trim
+
+`DurableSwarmManager` no longer exposes `create()`, `dispatchStepJob()`, or
+`dispatchBranchJob()`. Run row creation happens through `DurableRunStore` during
+the normal start path, and durable step/branch jobs are built by
+`BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher`. Typical
+application code should keep using `dispatchDurable()` and operator methods on
+the manager; see
+[docs/durable-runtime-architecture.md](docs/durable-runtime-architecture.md) for
+the full map and testing notes.
+
 ## Upgrading Laravel AI
 
 `laravel/ai` is required in the **^0.6** range today and is **pre-1.0**. Public contracts, streaming behavior, and provider integrations can change between releases without the stability guarantees of a stable major line.

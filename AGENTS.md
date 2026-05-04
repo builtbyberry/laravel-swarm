@@ -54,7 +54,7 @@ Keep the mental model high-level rather than mirroring every file:
 - `src/Responses` — sync, queued, durable, streamable, artifact, response, and step DTOs.
 - `src/Streaming` — typed swarm stream events aligned with Laravel AI stream events.
 - `src/Routing` — hierarchical route plan objects and validation.
-- `src/Runners` — topology runners, sequential stream runner, durable manager, SwarmRunner, step recorder.
+- `src/Runners` — topology runners, sequential stream runner, `DurableSwarmManager` (facade over `src/Runners/Durable/*` collaborators), SwarmRunner, step recorder; see `docs/durable-runtime-architecture.md`.
 - `src/Support` — `RunContext`, history query helpers, capture helpers, monotonic time, and runtime support objects.
 - `src/Testing` — fakes and assertions.
 - `database/migrations` — package-managed persistence and durable runtime tables.

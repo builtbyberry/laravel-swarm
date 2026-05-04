@@ -26,3 +26,6 @@ copied into the parent runtime context.
 Parent cancellation cancels active child durable runs by default. Child outputs
 and failures are sensitive and follow the same capture, redaction, and pruning
 rules as other durable operational records.
+
+For how child dispatch fits into the durable manager graph, see
+[Durable Runtime Architecture](durable-runtime-architecture.md).

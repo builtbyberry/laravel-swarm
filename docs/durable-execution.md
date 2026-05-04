@@ -44,6 +44,18 @@ with independent leases, then join before continuing to the next route node.
 Top-level parallel swarms use the same branch runtime and join into the same
 combined output shape as synchronous `prompt()`.
 
+### Runtime architecture and code map
+
+`DurableSwarmManager` is the **application-facing facade** for operator actions,
+signals, waits, inspection, and the queue jobs that call `advance()` /
+`advanceBranch()`. The heavy lifting lives in focused classes under
+`src/Runners/Durable/`, constructed together by `DurableManagerCollaboratorFactory`
+so a single run shares one `DurableRunContext` and consistent capture behavior.
+
+For a full collaborator table, container lifetime rules, job dispatch flow, test
+patterns, and upgrade notes for removed manager methods, read
+[Durable Runtime Architecture](durable-runtime-architecture.md).
+
 Durable parallel branch failures are configurable with
 `swarm.durable.parallel.failure_policy` or the
 `#[DurableParallelFailurePolicy]` attribute. The default is `collect_failures`,
@@ -279,6 +291,7 @@ inspect for every row.
 
 See:
 
+- [Durable Runtime Architecture](durable-runtime-architecture.md) — code map, container rules, testing hooks
 - [Durable Waits And Signals](durable-waits-and-signals.md)
 - [Durable Retries And Progress](durable-retries-and-progress.md)
 - [Durable Child Swarms](durable-child-swarms.md)

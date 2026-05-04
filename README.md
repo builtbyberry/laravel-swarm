@@ -395,7 +395,10 @@ gc_collect_cycles();
 ```
 
 For the durable runtime model, operator commands, and recovery scheduling, see
-[Durable Execution](docs/durable-execution.md).
+[Durable Execution](docs/durable-execution.md). For the PHP layout (manager
+facade, collaborators under `src/Runners/Durable/`, container rules, and feature
+test patterns), see
+[Durable Runtime Architecture](docs/durable-runtime-architecture.md).
 
 Durable runs also expose Swarm-native operator surfaces for long-running AI
 work: [waits and signals](docs/durable-waits-and-signals.md), [retries and
@@ -664,6 +667,7 @@ To customize how swarm state is stored, bind your own implementations against th
 - [Structured Input](docs/structured-input.md)
 - [Persistence And History](docs/persistence-and-history.md)
 - [Durable Execution](docs/durable-execution.md)
+- [Durable Runtime Architecture](docs/durable-runtime-architecture.md)
 - [Durable Waits And Signals](docs/durable-waits-and-signals.md)
 - [Durable Retries And Progress](docs/durable-retries-and-progress.md)
 - [Durable Child Swarms](docs/durable-child-swarms.md)
