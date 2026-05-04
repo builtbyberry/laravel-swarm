@@ -4,6 +4,11 @@
 
 ### Added
 
+- Configurable queue reliability for durable advance jobs: `AdvanceDurableSwarm`
+  and `AdvanceDurableBranch` implement `tries()`, `timeout()`, and `backoff()`
+  from `swarm.durable.job.*` (`SWARM_DURABLE_JOB_TRIES`,
+  `SWARM_DURABLE_JOB_TIMEOUT_MARGIN_SECONDS`, `SWARM_DURABLE_JOB_BACKOFF_SECONDS`).
+  Job timeout is `swarm.durable.step_timeout` plus the configured margin.
 - GitHub Actions test workflow enables PCOV and runs `composer test:coverage`
   so CI fails when line coverage for `src/` drops below the configured minimum
   (see `composer.json` script `test:coverage`).

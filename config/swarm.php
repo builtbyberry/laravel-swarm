@@ -94,6 +94,18 @@ return [
 
     'durable' => [
         'step_timeout' => (int) env('SWARM_DURABLE_STEP_TIMEOUT', 300),
+        /*
+         * AdvanceDurableSwarm / AdvanceDurableBranch queue settings.
+         * Job timeout is step_timeout + timeout_margin_seconds (not a separate absolute cap).
+         */
+        'job' => [
+            'tries' => (int) env('SWARM_DURABLE_JOB_TRIES', 3),
+            'timeout_margin_seconds' => (int) env('SWARM_DURABLE_JOB_TIMEOUT_MARGIN_SECONDS', 60),
+            'backoff_seconds' => array_values(array_filter(array_map(
+                static fn (string $part): int => (int) trim($part),
+                explode(',', (string) env('SWARM_DURABLE_JOB_BACKOFF_SECONDS', '10,30,60'))
+            ), static fn (int $n): bool => $n > 0)) ?: [10, 30, 60],
+        ],
         'parallel' => [
             'failure_policy' => env('SWARM_DURABLE_PARALLEL_FAILURE_POLICY', 'collect_failures'),
             'queue' => [

@@ -310,6 +310,17 @@ value must be a positive integer number of seconds:
 SWARM_DURABLE_STEP_TIMEOUT=300
 ```
 
+`AdvanceDurableSwarm` and `AdvanceDurableBranch` declare explicit queue
+settings derived from config:
+
+- `SWARM_DURABLE_JOB_TRIES` (`swarm.durable.job.tries`, default `3`)
+- `SWARM_DURABLE_JOB_TIMEOUT_MARGIN_SECONDS` (`swarm.durable.job.timeout_margin_seconds`, default `60`) — job `timeout()` is **step timeout + this margin** so the worker survives the step lease window with headroom for dispatch bookkeeping
+- `SWARM_DURABLE_JOB_BACKOFF_SECONDS` (`swarm.durable.job.backoff_seconds`) — comma-separated positive integers, default `10,30,60`
+
+Align the queue worker `--timeout` and the connection `retry_after` with these
+values and your longest provider calls; see [Maintenance](maintenance.md) for
+the production checklist.
+
 Durable execution requires the database-backed persistence stores and the
 durable runtime table. It is intentionally not available with cache-backed
 swarm persistence.

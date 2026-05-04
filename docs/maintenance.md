@@ -172,9 +172,16 @@ For production database persistence:
 - use a dedicated queue for durable workflows that should not compete with
   ordinary application jobs
 - set the queue worker timeout above the longest expected provider call for one
-  step
+  step, and at or above `AdvanceDurableSwarm` / `AdvanceDurableBranch`
+  `timeout()` (`swarm.durable.step_timeout` +
+  `swarm.durable.job.timeout_margin_seconds`)
 - set the queue connection `retry_after` above the worker timeout and above
-  `swarm.durable.step_timeout`
+  `swarm.durable.step_timeout` (and therefore above the durable advance job
+  timeout, which adds the configured margin on top of the step window)
+- tune durable advance job retries with `swarm.durable.job.tries` and
+  `swarm.durable.job.backoff_seconds` (`SWARM_DURABLE_JOB_TRIES`,
+  `SWARM_DURABLE_JOB_BACKOFF_SECONDS`) so transient failures do not fall back to
+  queue-worker defaults silently
 - keep retention windows short for high-volume or sensitive workflows
 - disable automatic artifact capture for cost-sensitive or regulated workflows
   unless step-output artifacts are required for inspection

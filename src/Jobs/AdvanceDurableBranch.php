@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Jobs;
 
+use BuiltByBerry\LaravelSwarm\Jobs\Concerns\ConfiguresDurableAdvanceJob;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -12,6 +13,7 @@ use Illuminate\Queue\SerializesModels;
 
 class AdvanceDurableBranch implements ShouldQueue
 {
+    use ConfiguresDurableAdvanceJob;
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
