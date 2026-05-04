@@ -19,6 +19,22 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 
+/**
+ * Builds the coherent durable manager subgraph.
+ *
+ * This factory is the single point of construction for the entire DurableSwarmManager
+ * collaborator graph. It instantiates one DurableRunContext and one DurablePayloadCapture
+ * and passes them into every collaborator in the following order:
+ *
+ *   runContext → payloads → signalHandler / retryHandler → inspector → recorder → rest
+ *
+ * Every service that belongs to DurableSwarmManager must receive its DurableRunContext
+ * from this factory — never from the container — so that the whole graph shares a single
+ * instance. DurableSignalHandler, DurableRetryHandler, DurableRunInspector, and
+ * DurableRunRecorder must not be registered as container singletons.
+ *
+ * @internal
+ */
 class DurableManagerCollaboratorFactory
 {
     public function __construct(
@@ -34,14 +50,11 @@ class DurableManagerCollaboratorFactory
         Dispatcher $events,
         SequentialRunner $sequential,
         HierarchicalRunner $hierarchicalRunner,
-        DurableRunRecorder $recorder,
         SwarmStepRecorder $stepsRecorder,
         Connection $connection,
         SwarmCapture $capture,
         SwarmPayloadLimits $limits,
         Application $application,
-        DurableSignalHandler $signalHandler,
-        DurableRetryHandler $retryHandler,
     ): DurableManagerCollaborators {
         $runContext = $this->application->makeWith(DurableRunContext::class, [
             'config' => $config,
@@ -51,6 +64,38 @@ class DurableManagerCollaboratorFactory
         ]);
         $payloads = $this->application->makeWith(DurablePayloadCapture::class, [
             'capture' => $capture,
+        ]);
+        $signalHandler = $this->application->makeWith(DurableSignalHandler::class, [
+            'durableRuns' => $durableRuns,
+            'historyStore' => $historyStore,
+            'contextStore' => $contextStore,
+            'events' => $events,
+            'capture' => $capture,
+            'runs' => $runContext,
+            'payloads' => $payloads,
+        ]);
+        $retryHandler = $this->application->makeWith(DurableRetryHandler::class, [
+            'durableRuns' => $durableRuns,
+            'historyStore' => $historyStore,
+            'connection' => $connection,
+            'capture' => $capture,
+            'runs' => $runContext,
+        ]);
+        $inspector = $this->application->makeWith(DurableRunInspector::class, [
+            'durableRuns' => $durableRuns,
+            'historyStore' => $historyStore,
+            'events' => $events,
+            'payloads' => $payloads,
+            'runs' => $runContext,
+        ]);
+        $recorder = $this->application->makeWith(DurableRunRecorder::class, [
+            'durableRuns' => $durableRuns,
+            'historyStore' => $historyStore,
+            'contextStore' => $contextStore,
+            'artifactRepository' => $artifactRepository,
+            'connection' => $connection,
+            'capture' => $capture,
+            'runs' => $runContext,
         ]);
         $jobs = $this->application->makeWith(DurableJobDispatcher::class, [
             'config' => $config,
@@ -169,6 +214,10 @@ class DurableManagerCollaboratorFactory
         return new DurableManagerCollaborators(
             runContext: $runContext,
             payloads: $payloads,
+            signalHandler: $signalHandler,
+            retryHandler: $retryHandler,
+            inspector: $inspector,
+            recorder: $recorder,
             jobs: $jobs,
             starter: $starter,
             queuedHierarchical: $queuedHierarchical,

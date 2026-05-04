@@ -10,7 +10,6 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
-use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -41,7 +40,6 @@ function configureQueuedHierarchicalParallelRuntime(): void
     app()->forgetInstance(RunHistoryStore::class);
     app()->forgetInstance(DurableRunStore::class);
     app()->forgetInstance(SwarmRunner::class);
-    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(QueuedHierarchicalCoordinator::class);
     app()->forgetInstance(DurableSwarmManager::class);
 }

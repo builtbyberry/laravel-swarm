@@ -25,21 +25,13 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurablePayloadCapture;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRetryHandler;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
-use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
-use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
-use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
-use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use BuiltByBerry\LaravelSwarm\Support\SwarmWebhooks;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
@@ -62,7 +54,6 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RetryableDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RetryableParallelDurableSwarm;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Database\Schema\Builder;
-use Illuminate\Events\Dispatcher;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -81,7 +72,6 @@ function configureDurableRuntime(): void
     app()->forgetInstance(RunHistoryStore::class);
     app()->forgetInstance(DurableRunStore::class);
     app()->forgetInstance(SwarmRunner::class);
-    app()->forgetInstance(DurableRunRecorder::class);
 
     app()->forgetInstance(DurableSwarmManager::class);
 }
@@ -986,7 +976,6 @@ test('durable hierarchical completion rolls back terminal scrub when terminal co
             throw new RuntimeException('Simulated terminal context persistence failure.');
         }
     });
-    app()->forgetInstance(DurableRunRecorder::class);
 
     app()->forgetInstance(DurableSwarmManager::class);
 
@@ -1035,7 +1024,6 @@ test('durable hierarchical workers load only requested node outputs', function (
     };
 
     app()->instance(DurableRunStore::class, $store);
-    app()->forgetInstance(DurableRunRecorder::class);
 
     app()->forgetInstance(DurableSwarmManager::class);
     app()->forgetInstance(SwarmRunner::class);
@@ -1289,7 +1277,6 @@ test('durable workers stop cleanly when lease ownership is lost before context p
             return $this->inner->find($runId);
         }
     });
-    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
 
     Event::fake([SwarmCompleted::class]);
@@ -1333,7 +1320,6 @@ test('durable workers stop cleanly when the lease expires before context persist
             return $this->inner->find($runId);
         }
     });
-    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
 
     Event::fake([SwarmCompleted::class]);
@@ -1379,7 +1365,6 @@ test('durable workers stop cleanly when lease ownership is lost before next step
             return $this->inner->all($runId);
         }
     });
-    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
 
     Event::fake([SwarmCompleted::class]);
@@ -1410,21 +1395,40 @@ test('durable workers stop cleanly when lease ownership is lost before terminal 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
     (new AdvanceDurableSwarm($runId, 1))->handle($manager);
 
-    $recorder = app(DurableRunRecorder::class);
+    // Build the inner recorder explicitly so the spy can delegate to it.
+    // DurableRunContext is stateless, so a fresh container-resolved instance is
+    // behaviourally equivalent to the factory's shared instance.
+    //
+    // bind() overrides makeWith inside the factory when the manager is re-resolved
+    // below; the closure receives ['runs' => $runContext] as $params.
+    //
+    // If DurableRunRecorder's constructor signature changes, update this call site
+    // and the factory's makeWith block in DurableManagerCollaboratorFactory.
+    $innerRecorder = new DurableRunRecorder(
+        app(DurableRunStore::class),
+        app(DatabaseRunHistoryStore::class),
+        app(ContextStore::class),
+        app(ArtifactRepository::class),
+        app('db')->connection(),
+        app(SwarmCapture::class),
+        app(DurableRunContext::class),
+    );
 
-    app()->instance(DurableRunRecorder::class, new class($recorder, $runId) extends DurableRunRecorder
-    {
-        public function __construct(
-            protected DurableRunRecorder $inner,
-            protected string $runId,
-        ) {}
-
-        public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null): void
+    app()->bind(DurableRunRecorder::class, function ($app, $params) use ($innerRecorder, $runId) {
+        return new class($innerRecorder, $runId) extends DurableRunRecorder
         {
-            stealDurableLease($this->runId);
+            public function __construct(
+                protected DurableRunRecorder $inner,
+                protected string $runId,
+            ) {}
 
-            $this->inner->complete($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step);
-        }
+            public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null): void
+            {
+                stealDurableLease($this->runId);
+
+                $this->inner->complete($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step);
+            }
+        };
     });
     app()->forgetInstance(DurableSwarmManager::class);
 
@@ -1716,7 +1720,6 @@ test('dispatch durable rolls startup writes back when a later startup write fail
             throw new RuntimeException('Simulated context persistence failure after startup write.');
         }
     });
-    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
     app()->forgetInstance(SwarmRunner::class);
 
@@ -1914,7 +1917,6 @@ test('durable pause rolls runtime state back when history sync fails', function 
             throw new RuntimeException('Simulated pause history sync failure.');
         }
     });
-    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
 
     expect(fn () => app(DurableSwarmManager::class)->pause($runId))
@@ -1942,7 +1944,6 @@ test('durable resume rolls runtime state back when history sync fails', function
             throw new RuntimeException('Simulated resume history sync failure.');
         }
     });
-    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
 
     expect(fn () => app(DurableSwarmManager::class)->resume($runId))
@@ -1977,7 +1978,6 @@ test('in flight durable pause rolls runtime state back when history sync fails',
             }
         }
     });
-    app()->forgetInstance(DurableRunRecorder::class);
     app()->forgetInstance(DurableSwarmManager::class);
 
     expect(fn () => (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class)))
@@ -2144,17 +2144,15 @@ test('durable lifecycle events redact context metadata when capture is disabled'
     $context = RunContext::fromTask('secret-input')
         ->mergeMetadata(['secret' => 'value', 'nested' => ['token' => 'abc']]);
     $response = FakeSequentialSwarm::make()->dispatchDurable($context);
-    $events = new Dispatcher(app());
     $capturedWaiting = null;
     $capturedPaused = null;
-    $events->listen(SwarmWaiting::class, function (SwarmWaiting $event) use (&$capturedWaiting): void {
+    Event::listen(SwarmWaiting::class, function (SwarmWaiting $event) use (&$capturedWaiting): void {
         $capturedWaiting = $event;
     });
-    $events->listen(SwarmPaused::class, function (SwarmPaused $event) use (&$capturedPaused): void {
+    Event::listen(SwarmPaused::class, function (SwarmPaused $event) use (&$capturedPaused): void {
         $capturedPaused = $event;
     });
-    $signalHandler = new DurableSignalHandler(app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), $events, app(SwarmCapture::class), app(DurableRunContext::class), app(DurablePayloadCapture::class));
-    $manager = new DurableSwarmManager(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), $events, app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), $signalHandler, app(DurableRetryHandler::class));
+    $manager = app(DurableSwarmManager::class);
 
     $manager->wait($response->runId, 'manual_wait', 'Manual wait');
     $manager->pause($response->runId);

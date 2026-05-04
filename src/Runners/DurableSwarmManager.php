@@ -39,8 +39,20 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Illuminate\Foundation\Bus\PendingDispatch;
 
+// DurableSignalHandler, DurableRetryHandler, DurableRunInspector, and DurableRunRecorder are
+// intentionally NOT constructor-injected. They are built by DurableManagerCollaboratorFactory
+// so that all graph members share a single DurableRunContext and DurablePayloadCapture instance.
+
 class DurableSwarmManager
 {
+    protected DurableSignalHandler $signalHandler;
+
+    protected DurableRetryHandler $retryHandler;
+
+    protected DurableRunInspector $inspector;
+
+    protected DurableRunRecorder $recorder;
+
     protected DurableJobDispatcher $jobs;
 
     protected DurableSwarmStarter $starter;
@@ -72,15 +84,11 @@ class DurableSwarmManager
         protected Dispatcher $events,
         protected SequentialRunner $sequential,
         protected HierarchicalRunner $hierarchical,
-        protected DurableRunRecorder $recorder,
         protected SwarmStepRecorder $stepsRecorder,
         protected Connection $connection,
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
         protected Application $application,
-        protected DurableRunInspector $inspector,
-        protected DurableSignalHandler $signalHandler,
-        protected DurableRetryHandler $retryHandler,
     ) {
         $collaborators = $this->application->make(DurableManagerCollaboratorFactory::class)->make(
             $this->config,
@@ -91,16 +99,17 @@ class DurableSwarmManager
             $this->events,
             $this->sequential,
             $this->hierarchical,
-            $this->recorder,
             $this->stepsRecorder,
             $this->connection,
             $this->capture,
             $this->limits,
             $this->application,
-            $this->signalHandler,
-            $this->retryHandler,
         );
 
+        $this->signalHandler = $collaborators->signalHandler;
+        $this->retryHandler = $collaborators->retryHandler;
+        $this->inspector = $collaborators->inspector;
+        $this->recorder = $collaborators->recorder;
         $this->jobs = $collaborators->jobs;
         $this->starter = $collaborators->starter;
         $this->queuedHierarchical = $collaborators->queuedHierarchical;

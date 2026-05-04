@@ -41,10 +41,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableLifecycleController;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableManagerCollaboratorFactory;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurablePayloadCapture;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRecoveryCoordinator;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRetryHandler;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableStepAdvancer;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSwarmStarter;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\QueuedHierarchicalDurableCoordinator;
@@ -91,7 +88,32 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(SwarmRunner::class);
         $this->app->singleton(SwarmHistory::class);
         $this->app->singleton(SwarmEventRecorder::class);
-        $this->app->singleton(DurableRunRecorder::class);
+
+        // Durable manager graph — single construction path.
+        //
+        // DurableManagerCollaboratorFactory::make() is the sole owner of the coherent
+        // manager subgraph. It builds one DurableRunContext and one DurablePayloadCapture
+        // and passes them into every collaborator, including DurableSignalHandler,
+        // DurableRetryHandler, DurableRunInspector, and DurableRunRecorder.
+        //
+        // Singletons: factory (stateless orchestrator) + manager (entry point).
+        //
+        // Bind (transient): step-scoped collaborators built by the factory via makeWith.
+        //   DurableRunContext and DurablePayloadCapture are bound so tests can resolve them
+        //   directly when building collaborators in isolation; do NOT add mutable run-scoped
+        //   state to either without revisiting factory ownership.
+        //
+        // Not registered: DurableSignalHandler, DurableRetryHandler, DurableRunInspector.
+        //   These are built exclusively inside the factory and must not be registered as
+        //   container singletons — their only valid lifetime is inside the manager graph.
+        //
+        // DurableRunRecorder is registered as bind (not singleton) so tests can intercept
+        //   it before the first DurableSwarmManager resolution:
+        //
+        //   app()->bind(DurableRunRecorder::class, fn ($app, $params) => new Spy($params));
+        //
+        //   The factory passes ['runs' => $runContext] as $params when calling makeWith, so
+        //   closure overrides receive the shared DurableRunContext instance if they need it.
         $this->app->singleton(DurableManagerCollaboratorFactory::class);
         $this->app->bind(DurablePayloadCapture::class);
         $this->app->bind(DurableJobDispatcher::class);
@@ -106,9 +128,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->bind(DurableHierarchicalCoordinator::class);
         $this->app->bind(DurableStepAdvancer::class);
         $this->app->bind(DurableBranchAdvancer::class);
-        $this->app->singleton(DurableRunInspector::class);
-        $this->app->singleton(DurableSignalHandler::class);
-        $this->app->singleton(DurableRetryHandler::class);
+        $this->app->bind(DurableRunRecorder::class);
         $this->app->singleton(DurableSwarmManager::class);
         $this->app->singleton(DurableRunStore::class, DatabaseDurableRunStore::class);
 

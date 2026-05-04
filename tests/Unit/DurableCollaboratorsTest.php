@@ -16,27 +16,17 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBoundaryCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurablePayloadCapture;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRetryHandler;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSwarmStarter;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\QueuedHierarchicalDurableCoordinator;
-use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
-use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\QueueHierarchicalParallelBoundary;
-use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
-use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
-use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
-use Illuminate\Events\Dispatcher as EventDispatcher;
 use Illuminate\Foundation\Bus\PendingDispatch;
 
 #[DurableLabels(['tenant' => 'acme'])]
@@ -69,9 +59,7 @@ function configureDurableCollaboratorRuntime(): void
     app()->forgetInstance(ArtifactRepository::class);
     app()->forgetInstance(RunHistoryStore::class);
     app()->forgetInstance(DurableRunStore::class);
-    app()->forgetInstance(DurableSwarmStarter::class);
-    app()->forgetInstance(DurableBoundaryCoordinator::class);
-    app()->forgetInstance(QueuedHierarchicalDurableCoordinator::class);
+    app()->forgetInstance(DurableSwarmManager::class);
 }
 
 function durableCollaboratorNoopDispatch(): PendingDispatch
@@ -140,45 +128,20 @@ test('durable boundary coordinator enters declared wait once and skips open wait
         ->and($waits[0]['status'])->toBe('waiting');
 });
 
-test('durable manager reuses injected signal handler for declared boundary coordinator', function () {
+test('factory shares signal handler instance between manager and boundary coordinator', function () {
     configureDurableCollaboratorRuntime();
 
-    $events = new EventDispatcher(app());
-    $signalHandler = new DurableSignalHandler(
-        app(DurableRunStore::class),
-        app(DatabaseRunHistoryStore::class),
-        app(ContextStore::class),
-        $events,
-        app(SwarmCapture::class),
-        app(DurableRunContext::class),
-        app(DurablePayloadCapture::class),
-    );
+    $manager = app(DurableSwarmManager::class);
 
-    $manager = new DurableSwarmManager(
-        app('config'),
-        app(DurableRunStore::class),
-        app(DatabaseRunHistoryStore::class),
-        app(ContextStore::class),
-        app(ArtifactRepository::class),
-        $events,
-        app(SequentialRunner::class),
-        app(HierarchicalRunner::class),
-        app(DurableRunRecorder::class),
-        app(SwarmStepRecorder::class),
-        app('db')->connection(),
-        app(SwarmCapture::class),
-        app(SwarmPayloadLimits::class),
-        app(),
-        app(DurableRunInspector::class),
-        $signalHandler,
-        app(DurableRetryHandler::class),
-    );
+    $signalHandlerProp = new ReflectionProperty($manager, 'signalHandler');
+    $signalHandlerInManager = $signalHandlerProp->getValue($manager);
 
-    $boundaryProperty = new ReflectionProperty($manager, 'boundary');
-    $boundary = $boundaryProperty->getValue($manager);
-    $signalsProperty = new ReflectionProperty($boundary, 'signals');
+    $boundaryProp = new ReflectionProperty($manager, 'boundary');
+    $boundary = $boundaryProp->getValue($manager);
 
-    expect($signalsProperty->getValue($boundary))->toBe($signalHandler);
+    $signalsProp = new ReflectionProperty($boundary, 'signals');
+
+    expect($signalsProp->getValue($boundary))->toBe($signalHandlerInManager);
 });
 
 test('queued hierarchical durable coordinator creates coordination run and dispatches branches', function () {
