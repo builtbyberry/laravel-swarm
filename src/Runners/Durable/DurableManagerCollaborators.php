@@ -14,5 +14,7 @@ class DurableManagerCollaborators
         public DurableChildSwarmCoordinator $children,
         public DurableLifecycleController $lifecycle,
         public DurableRecoveryCoordinator $recovery,
+        public DurableHierarchicalCoordinator $hierarchical,
+        public DurableStepAdvancer $advancer,
     ) {}
 }

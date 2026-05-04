@@ -54,6 +54,23 @@ class DurableRunContext
     }
 
     /**
+     * @param  array<string, mixed>  $run
+     */
+    public function hasTimedOut(array $run): bool
+    {
+        return Carbon::parse($run['timeout_at'], 'UTC')->isPast();
+    }
+
+    public function validateStepTimeoutSeconds(int $seconds): int
+    {
+        if ($seconds <= 0) {
+            throw new SwarmException('Durable swarm step timeout must be a positive integer.');
+        }
+
+        return $seconds;
+    }
+
+    /**
      * Public lifecycle events keep `execution_mode: queue` for coordinated queued hierarchical runs.
      *
      * @param  array<string, mixed>  $run
