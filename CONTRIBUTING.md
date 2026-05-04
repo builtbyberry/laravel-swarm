@@ -1,9 +1,10 @@
 # Contributing
 
-Thanks for taking the time to improve Laravel Swarm. This package is still
-early, and changes should preserve the Laravel-native feel described in the
-README: familiar public verbs, small surface area, explicit configuration, and
-clear operational behavior.
+Thanks for taking the time to improve Laravel Swarm. Tagged releases are
+published on [Packagist](https://packagist.org/packages/builtbyberry/laravel-swarm).
+Changes should preserve the Laravel-native feel described in the README:
+familiar public verbs, small surface area, explicit configuration, and clear
+operational behavior.
 
 ## Local Setup
 

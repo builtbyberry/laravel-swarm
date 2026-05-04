@@ -87,6 +87,21 @@ lifecycle events or inspect persisted history for the eventual result.
 composer require builtbyberry/laravel-swarm
 ```
 
+Tagged releases (`v0.1.x`) are available on [Packagist](https://packagist.org/packages/builtbyberry/laravel-swarm). The command above resolves the latest stable release by default.
+
+If you need to track the development branch before the next tag, use the explicit dev constraint and ensure your application's `composer.json` allows it:
+
+```bash
+composer require builtbyberry/laravel-swarm:dev-main
+```
+
+```json
+"minimum-stability": "dev",
+"prefer-stable": true
+```
+
+Pinning to a tagged release is recommended for production. See [UPGRADING.md](UPGRADING.md) for version-to-version guidance.
+
 ### Dependency stability and Laravel AI
 
 Swarm depends on **pre-stable** [`laravel/ai`](https://github.com/laravel/ai) **^0.6** (see [Requirements](#requirements)). Treat **Composer bumps** to `laravel/ai` or Laravel as **integration-test events**: run your suite and swarm-heavy paths after updates. This package uses `"minimum-stability": "dev"` with `"prefer-stable": true` in its [`composer.json`](composer.json); your application may need compatible Composer stability settings when resolving pre-stable transitive packages.

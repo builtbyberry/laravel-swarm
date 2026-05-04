@@ -157,6 +157,10 @@ If a single logical table outgrows comfortable maintenance windows after pruning
 and archival, plan an application-specific partitioning or archival tier before
 expecting database-native partitioning alone to solve throughput.
 
+## Release Checklist
+
+Before cutting a release tag, work through the checklist in [CONTRIBUTING.md § Release Discipline](../CONTRIBUTING.md#release-discipline).
+
 ## Production Checklist
 
 For production database persistence:
