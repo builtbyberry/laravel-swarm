@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\LaravelSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -148,3 +149,28 @@ test('invalid per-store persistence driver fails clearly', function () {
     expect(fn () => app(ContextStore::class))
         ->toThrow(InvalidArgumentException::class, 'Laravel Swarm: invalid persistence driver [redis]. Supported drivers: cache, database.');
 });
+
+test('package migrations are autoloaded by default', function () {
+    $migrationPath = realpath(__DIR__.'/../../database/migrations');
+
+    expect(array_map('realpath', app('migrator')->paths()))->toContain($migrationPath);
+});
+
+test('LaravelSwarm::ignoreMigrations() skips migration autoloading', function () {
+    LaravelSwarm::ignoreMigrations();
+
+    $pathsBefore = app('migrator')->paths();
+
+    (new SwarmServiceProvider($this->app))->boot();
+
+    expect(app('migrator')->paths())->toBe($pathsBefore);
+})->after(fn () => LaravelSwarm::$runsMigrations = true);
+
+test('swarm-migrations publish tag resolves even when ignoreMigrations() was called', function () {
+    LaravelSwarm::ignoreMigrations();
+
+    $paths = SwarmServiceProvider::pathsToPublish(SwarmServiceProvider::class, 'swarm-migrations');
+    $migrationPath = realpath(__DIR__.'/../../database/migrations');
+
+    expect(array_map('realpath', array_keys($paths)))->toContain($migrationPath);
+})->after(fn () => LaravelSwarm::$runsMigrations = true);
