@@ -41,6 +41,10 @@
   is blank during a request: configuration is validated before comparison so an
   empty bearer token cannot match a blank secret. Missing or incorrect bearer
   tokens still return HTTP 401.
+- Added feature tests proving `auth.driver=none` throws during route registration
+  in non-local/non-testing environments and that unauthenticated requests succeed
+  only in `local`/`testing`. Expanded `docs/durable-webhooks.md` with an
+  explicit warning that `none` must never be used in production or staging.
 
 ## v0.1.11 - 2026-05-01
 

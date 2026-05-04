@@ -33,6 +33,14 @@ signature is HMAC SHA-256 over `timestamp.raw_body`. Missing secrets, stale
 timestamps, and invalid signatures fail closed. The `none` driver is accepted
 only in `local` and `testing` environments.
 
+> **Warning — never use `none` in production or staging.** Setting
+> `SWARM_WEBHOOK_AUTH_DRIVER=none` in any environment other than `local` or
+> `testing` causes `SwarmWebhooks::routes()` to throw a `SwarmException` during
+> route registration, so the application will not expose webhook routes at all.
+> This is intentional: unauthenticated webhook ingress allows any caller to
+> trigger durable runs or send signals. Use `signed` (default) or `token` for
+> all production and staging deployments.
+
 Start and signal endpoints accept `Idempotency-Key` so provider retries do not
 duplicate durable starts or run signals.
 

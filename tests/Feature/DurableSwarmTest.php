@@ -2826,3 +2826,35 @@ test('swarm webhooks token auth rejects blank config and invalid bearer tokens',
 
     $this->withExceptionHandling();
 });
+
+test('webhook none driver throws on route registration outside local and testing environments', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'none');
+
+    $original = app()->environment();
+
+    try {
+        app()->detectEnvironment(fn () => 'production');
+
+        expect(fn () => SwarmWebhooks::routes([FakeSequentialSwarm::class]))
+            ->toThrow(SwarmException::class, 'Unauthenticated swarm webhooks are only allowed in local and testing environments.');
+    } finally {
+        app()->detectEnvironment(fn () => $original);
+    }
+});
+
+test('webhook none driver registers routes and accepts unauthenticated requests in testing', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'none');
+
+    SwarmWebhooks::routes([FakeSequentialSwarm::class]);
+
+    $payload = json_encode(['input' => 'none-auth-task'], JSON_THROW_ON_ERROR);
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+    ], $payload)
+        ->assertAccepted()
+        ->assertJsonStructure(['run_id']);
+});
