@@ -28,7 +28,6 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
-use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaitTimedOut;
@@ -43,6 +42,7 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableRetryPolicy;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
@@ -86,6 +86,7 @@ class DurableSwarmManager
         protected SwarmPayloadLimits $limits,
         protected Application $application,
         protected DurableRunInspector $inspector,
+        protected DurableSignalHandler $signalHandler,
     ) {}
 
     /**
@@ -315,51 +316,14 @@ class DurableSwarmManager
 
     public function signal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
     {
-        $run = $this->requireRun($runId);
-        $capturedPayload = $this->durablePayload($payload);
-        $signal = $this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey);
-        $accepted = false;
+        $outcome = $this->signalHandler->signal($runId, $name, $payload, $idempotencyKey);
 
-        if (($signal['duplicate'] ?? false) !== true && $run['status'] === 'waiting') {
-            $accepted = $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id']);
-
-            if ($accepted) {
-                $context = $this->loadContext($runId);
-                $signals = is_array($context->metadata['durable_signals'] ?? null) ? $context->metadata['durable_signals'] : [];
-                $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
-                $signals[$name] = ['payload' => $capturedPayload, 'signal_id' => $signal['id']];
-                $outcomes[$name] = ['status' => 'signalled', 'payload' => $capturedPayload, 'timed_out' => false];
-                $context->mergeMetadata([
-                    'durable_signals' => $signals,
-                    'durable_wait_outcomes' => $outcomes,
-                ]);
-                $this->contextStore->put($this->capture->activeContext($context), $this->ttlSeconds());
-                $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
-
-                $updated = $this->requireRun($runId);
-                if ($updated['status'] === 'pending') {
-                    $this->dispatchStepJob($runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
-                }
-            }
+        if ($outcome['dispatchStep'] !== null) {
+            $step = $outcome['dispatchStep'];
+            $this->dispatchStepJob($step['runId'], $step['stepIndex'], $step['connection'], $step['queue']);
         }
 
-        $this->events->dispatch(new SwarmSignalled(
-            runId: $runId,
-            swarmClass: $run['swarm_class'],
-            topology: $run['topology'],
-            signalName: $name,
-            accepted: $accepted,
-            executionMode: $this->publicLifecycleExecutionMode($run),
-        ));
-
-        return new DurableSignalResult(
-            runId: $runId,
-            name: $name,
-            status: $accepted ? 'accepted' : (string) ($signal['status'] ?? 'recorded'),
-            accepted: $accepted,
-            duplicate: (bool) ($signal['duplicate'] ?? false),
-            signal: $signal,
-        );
+        return $outcome['result'];
     }
 
     /**
@@ -367,22 +331,7 @@ class DurableSwarmManager
      */
     public function wait(string $runId, string $name, ?string $reason = null, ?int $timeoutSeconds = null, array $metadata = []): void
     {
-        $run = $this->requireRun($runId);
-        $metadata = $this->durablePayload($metadata);
-        $this->durableRuns->createWait($runId, $name, $reason, $timeoutSeconds, $metadata);
-
-        $context = $this->loadContext($runId);
-        $this->historyStore->syncDurableState($runId, 'waiting', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
-
-        $this->events->dispatch(new SwarmWaiting(
-            runId: $runId,
-            swarmClass: $run['swarm_class'],
-            topology: $run['topology'],
-            waitName: $name,
-            reason: $reason,
-            metadata: $this->capturedEventMetadata($context),
-            executionMode: $this->publicLifecycleExecutionMode($run),
-        ));
+        $this->signalHandler->wait($runId, $name, $reason, $timeoutSeconds, $metadata);
     }
 
     /**

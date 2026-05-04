@@ -25,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSignalHandler;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
@@ -1406,7 +1407,7 @@ test('durable recovery markers advance only after redispatch succeeds', function
     $manager = app(DurableSwarmManager::class);
     $before = $manager->find($runId);
 
-    $throwingManager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class)) extends DurableSwarmManager
+    $throwingManager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class)) extends DurableSwarmManager
     {
         public function dispatchStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
         {
@@ -1471,7 +1472,7 @@ test('durable recovery dispatches due retry runs only once per recovery window',
 
     $this->travel(61)->seconds();
 
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class)) extends DurableSwarmManager
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class)) extends DurableSwarmManager
     {
         /** @var array<int, int> */
         public array $stepDispatches = [];
@@ -1506,7 +1507,7 @@ test('durable recovery dispatches stale branches only once per recovery window',
             'updated_at' => now('UTC')->subMinutes(10),
         ]);
 
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class)) extends DurableSwarmManager
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class)) extends DurableSwarmManager
     {
         /** @var array<int, string> */
         public array $branchDispatches = [];
@@ -1539,7 +1540,7 @@ test('durable recovery dispatches due retry branches only once per recovery wind
 
     $this->travel(61)->seconds();
 
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class)) extends DurableSwarmManager
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class)) extends DurableSwarmManager
     {
         /** @var array<int, string> */
         public array $branchDispatches = [];
@@ -1562,7 +1563,7 @@ test('durable recovery dispatches due retry branches only once per recovery wind
 test('durable recovery dispatches timed out waits only once per recovery window', function () {
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
 
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class)) extends DurableSwarmManager
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class)) extends DurableSwarmManager
     {
         /** @var array<int, int> */
         public array $stepDispatches = [];
@@ -1715,7 +1716,7 @@ test('durable waiting runs pause immediately and resume branch work without join
 
     $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
     $runId = $response->runId;
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class)) extends DurableSwarmManager
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class)) extends DurableSwarmManager
     {
         /** @var array<int, string> */
         public array $branchDispatches = [];
@@ -1781,7 +1782,7 @@ test('durable waiting runs pause immediately and resume branch work without join
 test('durable waiting resume dispatches the join when all branches are terminal', function () {
     $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
     $runId = $response->runId;
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class)) extends DurableSwarmManager
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class)) extends DurableSwarmManager
     {
         /** @var array<int, int> */
         public array $stepDispatches = [];
@@ -2037,7 +2038,7 @@ test('durable waits accept idempotent signals and release the run', function () 
 
 test('durable wait timeout recovery uses concrete wait rows when a later wait has no timeout', function () {
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
-    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class)) extends DurableSwarmManager
+    $manager = new class(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), app('events'), app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), app(DurableSignalHandler::class)) extends DurableSwarmManager
     {
         /** @var array<int, int> */
         public array $stepDispatches = [];
@@ -2121,7 +2122,8 @@ test('durable lifecycle events redact context metadata when capture is disabled'
     $events->listen(SwarmPaused::class, function (SwarmPaused $event) use (&$capturedPaused): void {
         $capturedPaused = $event;
     });
-    $manager = new DurableSwarmManager(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), $events, app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class));
+    $signalHandler = new DurableSignalHandler(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), $events, app(SwarmCapture::class));
+    $manager = new DurableSwarmManager(app('config'), app(DurableRunStore::class), app(DatabaseRunHistoryStore::class), app(ContextStore::class), app(ArtifactRepository::class), $events, app(SequentialRunner::class), app(HierarchicalRunner::class), app(DurableRunRecorder::class), app(SwarmStepRecorder::class), app('db')->connection(), app(SwarmCapture::class), app(SwarmPayloadLimits::class), app(), app(DurableRunInspector::class), $signalHandler);
 
     $manager->wait($response->runId, 'manual_wait', 'Manual wait');
     $manager->pause($response->runId);
