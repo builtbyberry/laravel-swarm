@@ -49,7 +49,7 @@ Keep the mental model high-level rather than mirroring every file:
 - `src/Concerns` / `src/Contracts` — public swarm trait and storage/runtime contracts.
 - `src/Events` — lifecycle events for started, step started/completed, completed, failed, paused, resumed, and cancelled.
 - `src/Jobs` — queued and durable execution jobs.
-- `src/Persistence` — cache and database context, artifact, durable run, run history, and stream replay stores.
+- `src/Persistence` — cache and database context, artifact, durable run, run history, and stream replay stores; `SwarmPersistenceCipher` seals designated string columns when database persistence uses encrypter-backed at-rest sealing.
 - `src/Pulse` — optional Pulse recorders, cards, and key helpers.
 - `src/Responses` — sync, queued, durable, streamable, artifact, response, and step DTOs.
 - `src/Streaming` — typed swarm stream events aligned with Laravel AI stream events.
@@ -86,7 +86,9 @@ Laravel Swarm persists run context, artifacts, and run history through configura
 - `ContextStore`, `ArtifactRepository`, `RunHistoryStore`, `StreamEventStore`, and `DurableRunStore` are the persistence contracts.
 - `SwarmHistory` provides application and console inspection over persisted runs.
 - Cache and database drivers are supported; database persistence uses package migrations loaded by the service provider.
-- Capture lives under `swarm.capture.inputs` and `swarm.capture.outputs`. Treat prompts, outputs, lifecycle events, streamed reasoning/tool payloads, and automatic step artifacts as sensitive. With output capture off, streamed tool/reasoning payloads redact values to `[redacted]` while preserving keys where applicable.
+- **Capture defaults** — Shipped `config/swarm.php` defaults `swarm.capture.inputs`, `outputs`, `artifacts`, and `active_context` to **false** so prompts and agent payloads are not persisted unless the application opts in (`SWARM_CAPTURE_*` or config). Treat prompts, outputs, lifecycle events, streamed reasoning/tool payloads, and automatic step artifacts as sensitive whenever capture is enabled. With output capture off, streamed tool/reasoning payloads redact values to `[redacted]` while preserving keys where applicable.
+- **Encryption at rest (package scope)** — When `swarm.persistence.driver` is `database`, `swarm.persistence.encrypt_at_rest` defaults to **true**. Designated sensitive string columns (for example context `input`, history final `output` and per-step I/O, durable branch I/O, hierarchical node outputs, child run outputs and nested `context_payload` input) are sealed with Laravel’s encrypter (`APP_KEY`), same primitive family as encrypted casts. Stored values use a `sw0:` prefix before the ciphertext so legacy plaintext rows still read correctly. Set `SWARM_ENCRYPT_AT_REST=false` only when you intentionally rely on database- or volume-level encryption instead. Rotating `APP_KEY` without re-encrypting leaves existing rows undecipherable; plan key rotation with your operational model. This is application-level sealing, not a claim of transparent database (TDE) encryption.
+- When encrypt-at-rest is enabled, `RunHistoryStore::findMatching` skips SQL JSON-path prefiltering on persisted context (randomized ciphertext cannot satisfy equality predicates in SQL); PHP-side `PersistedRunContextMatcher` still applies after rows are loaded.
 - Database retention is prune-based. Expired database rows remain queryable until `swarm:prune` runs, and active runs are protected from partial pruning.
 - `run_id` referential integrity is enforced at the database level: all child tables carry `ON DELETE CASCADE` FKs to their parent (`swarm_run_histories` for the history family, `swarm_durable_runs` for the durable family). `parent_run_id` (self-reference), `signal_id`, and `webhook_idempotency.run_id` use `ON DELETE SET NULL`; `child_run_id` has no FK.
 
@@ -177,6 +179,8 @@ composer lint
 composer analyse
 composer format
 ```
+
+The package `TestCase` sets `swarm.capture.*` to **true** and `swarm.persistence.encrypt_at_rest` to **false** so the suite exercises full persisted payloads without coupling every test to the conservative production defaults.
 
 If running phpstan directly, use:
 
