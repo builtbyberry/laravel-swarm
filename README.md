@@ -634,7 +634,7 @@ accidentally re-emit prompt or input data. If your application needs the context
 inside the current PHP process, read `$response->context` directly and choose
 which fields to expose.
 
-Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted`, `SwarmCompleted`, and `SwarmFailed` include an `executionMode` payload so listeners can distinguish `run`, `stream`, `queue`, and `durable` invocations. Synchronous `prompt()` calls are recorded with the existing `run` execution mode for compatibility.
+Laravel Swarm dispatches lifecycle events at each stage of execution — swarm started, step started, step completed, swarm completed, and swarm failed. `SwarmStarted`, `SwarmCompleted`, and `SwarmFailed` include an `executionMode` payload so listeners can distinguish `run`, `stream`, `queue`, and `durable` invocations. Synchronous `prompt()` calls are recorded with the existing `run` execution mode for compatibility. For logging, tracing, and queue correlation patterns (including `run_id`), see [Observability: Logging And Tracing](docs/observability-logging-tracing.md).
 
 Run context, artifacts, and run history are persisted automatically using the configured driver. Stream event replay is stored only when `swarm.streaming.replay.enabled` is true or a stream response calls `storeForReplay()`. Replay write failures use `swarm.streaming.replay.failure_policy`, which defaults to `fail`. The database driver stores records durably in package-managed tables. The cache driver is lighter and respects TTL settings.
 
@@ -663,6 +663,8 @@ To customize how swarm state is stored, bind your own implementations against th
   data through swarms.
 - Build a run inspector or dashboard around `run_id`, lifecycle events,
   `SwarmHistory`, and durable runtime state.
+- Correlate logs and traces across workers using `run_id` (and queue job ids
+  where applicable); see [Observability: Logging And Tracing](docs/observability-logging-tracing.md).
 - Use Pulse for aggregate observability when your app already runs Pulse.
 
 ## Common Mistakes
@@ -687,6 +689,7 @@ To customize how swarm state is stored, bind your own implementations against th
 - [Durable Retries And Progress](docs/durable-retries-and-progress.md)
 - [Durable Child Swarms](docs/durable-child-swarms.md)
 - [Durable Webhooks](docs/durable-webhooks.md)
+- [Observability: Logging And Tracing](docs/observability-logging-tracing.md)
 - [Testing](docs/testing.md)
 - [Hierarchical Routing](docs/hierarchical-routing.md)
 - [Pulse](docs/pulse.md)

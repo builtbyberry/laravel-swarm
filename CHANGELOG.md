@@ -21,6 +21,10 @@
 
 ### Documentation
 
+- Added [Observability: Logging And Tracing](docs/observability-logging-tracing.md)
+  with lifecycle event reference, structured logging examples, optional tracing
+  hook guidance (dependency-free), queue correlation notes, and README
+  production checklist cross-link.
 - Added [Durable Runtime Architecture](docs/durable-runtime-architecture.md)
   describing the `DurableSwarmManager` facade, `Runners/Durable` collaborators,
   factory-built graph, queue jobs, container lifetime rules, testing patterns, and
