@@ -33,6 +33,15 @@ signature is HMAC SHA-256 over `timestamp.raw_body`. Missing secrets, stale
 timestamps, and invalid signatures fail closed. The `none` driver is accepted
 only in `local` and `testing` environments.
 
+For application-owned authentication, set `SWARM_WEBHOOK_AUTH_DRIVER=callback`
+and configure `swarm.durable.webhooks.auth.callback`. The callback receives the
+`Illuminate\Http\Request` and must return strict `true` to authorize the request.
+Any other return value fails with HTTP 401. Supported callback shapes are native
+PHP callables already present in config, invokable class names resolved through
+the container, and `Class@method` strings resolved through the container.
+Invalid or blank callback configuration fails during `SwarmWebhooks::routes()`
+so routes are not exposed with a broken authenticator.
+
 > **Warning — never use `none` in production or staging.** Setting
 > `SWARM_WEBHOOK_AUTH_DRIVER=none` in any environment other than `local` or
 > `testing` causes `SwarmWebhooks::routes()` to throw a `SwarmException` during

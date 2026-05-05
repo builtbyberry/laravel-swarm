@@ -40,6 +40,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyDurableAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Support\ResolvedSwarmOutput;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Support\WebhookAuthCallbacks;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ChildDispatchingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableWaitAttributeSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingParallelChildDispatchingSwarm;
@@ -2830,6 +2832,79 @@ test('swarm webhooks token auth rejects blank config and invalid bearer tokens',
     $this->withExceptionHandling();
 });
 
+test('swarm webhooks callback auth supports invokable classes resolved through the container', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'callback');
+    config()->set('swarm.durable.webhooks.auth.callback', WebhookAuthCallbacks::class);
+
+    SwarmWebhooks::routes([FakeSequentialSwarm::class]);
+
+    $payload = json_encode(['input' => 'callback-auth-task'], JSON_THROW_ON_ERROR);
+    $baseHeaders = [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+    ];
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], $baseHeaders, $payload)
+        ->assertUnauthorized();
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], array_merge($baseHeaders, [
+        'HTTP_X_TEST_WEBHOOK_AUTH' => 'allow',
+    ]), $payload)->assertAccepted()->assertJsonStructure(['run_id']);
+});
+
+test('swarm webhooks callback auth supports class at method callbacks resolved through the container', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'callback');
+    config()->set('swarm.durable.webhooks.auth.callback', WebhookAuthCallbacks::class.'@authorize');
+
+    SwarmWebhooks::routes([FakeSequentialSwarm::class]);
+
+    $payload = json_encode(['input' => 'callback-method-auth-task'], JSON_THROW_ON_ERROR);
+    $baseHeaders = [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+    ];
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], $baseHeaders, $payload)
+        ->assertUnauthorized();
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], array_merge($baseHeaders, [
+        'HTTP_X_TEST_WEBHOOK_METHOD' => 'allow',
+    ]), $payload)->assertAccepted()->assertJsonStructure(['run_id']);
+});
+
+test('swarm webhooks callback auth rejects non true callback results', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'callback');
+    config()->set('swarm.durable.webhooks.auth.callback', WebhookAuthCallbacks::class.'@deny');
+
+    SwarmWebhooks::routes([FakeSequentialSwarm::class]);
+
+    $payload = json_encode(['input' => 'callback-denied-task'], JSON_THROW_ON_ERROR);
+
+    $this->call('POST', '/swarm/webhooks/start/fake-sequential-swarm', [], [], [], [
+        'CONTENT_TYPE' => 'application/json',
+        'HTTP_ACCEPT' => 'application/json',
+    ], $payload)->assertUnauthorized();
+});
+
+test('swarm webhooks callback auth fails closed for invalid callback configuration', function (mixed $callback, string $message) {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'callback');
+    config()->set('swarm.durable.webhooks.auth.callback', $callback);
+
+    expect(fn () => SwarmWebhooks::routes([FakeSequentialSwarm::class]))
+        ->toThrow(SwarmException::class, $message);
+})->with([
+    'blank callback' => [null, 'Callback swarm webhooks require [SWARM_WEBHOOK_AUTH_CALLBACK].'],
+    'malformed type' => [123, 'Callback swarm webhooks require a callable, invokable class, or Class@method string.'],
+    'missing class' => ['MissingWebhookCallback', 'Invalid swarm webhook auth callback [MissingWebhookCallback]. Expected an invokable class or Class@method.'],
+    'missing method class' => [MissingWebhookCallback::class.'@authorize', 'Invalid swarm webhook auth callback [MissingWebhookCallback@authorize]. Expected Class@method.'],
+    'non invokable class' => [ResolvedSwarmOutput::class, 'Invalid swarm webhook auth callback ['.ResolvedSwarmOutput::class.']. Class is not invokable.'],
+    'missing method' => [WebhookAuthCallbacks::class.'@missing', 'Invalid swarm webhook auth callback ['.WebhookAuthCallbacks::class.'@missing]. Method is not callable.'],
+]);
+
 test('webhook none driver throws on route registration outside local and testing environments', function () {
     config()->set('swarm.durable.webhooks.enabled', true);
     config()->set('swarm.durable.webhooks.auth.driver', 'none');
@@ -2844,6 +2919,14 @@ test('webhook none driver throws on route registration outside local and testing
     } finally {
         app()->detectEnvironment(fn () => $original);
     }
+});
+
+test('webhook auth rejects unsupported drivers during route registration', function () {
+    config()->set('swarm.durable.webhooks.enabled', true);
+    config()->set('swarm.durable.webhooks.auth.driver', 'unknown');
+
+    expect(fn () => SwarmWebhooks::routes([FakeSequentialSwarm::class]))
+        ->toThrow(SwarmException::class, 'Unsupported swarm webhook auth driver [unknown].');
 });
 
 test('webhook none driver registers routes and accepts unauthenticated requests in testing', function () {

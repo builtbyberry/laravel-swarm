@@ -164,21 +164,19 @@ class SwarmWebhooks
     {
         $driver = (string) config('swarm.durable.webhooks.auth.driver', 'signed');
 
-        if ($driver === 'none') {
-            if (! app()->environment(['local', 'testing'])) {
-                throw new SwarmException('Unauthenticated swarm webhooks are only allowed in local and testing environments.');
-            }
-
-            return;
-        }
-
-        if ($driver === 'signed' && blank(config('swarm.durable.webhooks.auth.secret'))) {
-            throw new SwarmException('Signed swarm webhooks require [SWARM_WEBHOOK_SECRET].');
-        }
-
-        if ($driver === 'token' && blank(config('swarm.durable.webhooks.auth.token'))) {
-            throw new SwarmException('Token swarm webhooks require [SWARM_WEBHOOK_TOKEN].');
-        }
+        match ($driver) {
+            'signed' => blank(config('swarm.durable.webhooks.auth.secret'))
+                ? throw new SwarmException('Signed swarm webhooks require [SWARM_WEBHOOK_SECRET].')
+                : null,
+            'token' => blank(config('swarm.durable.webhooks.auth.token'))
+                ? throw new SwarmException('Token swarm webhooks require [SWARM_WEBHOOK_TOKEN].')
+                : null,
+            'callback' => self::resolveAuthCallback(config('swarm.durable.webhooks.auth.callback')),
+            'none' => app()->environment(['local', 'testing'])
+                ? null
+                : throw new SwarmException('Unauthenticated swarm webhooks are only allowed in local and testing environments.'),
+            default => throw new SwarmException("Unsupported swarm webhook auth driver [{$driver}]."),
+        };
     }
 
     protected static function authenticate(Request $request): void
@@ -238,10 +236,54 @@ class SwarmWebhooks
 
     protected static function authenticateCallback(Request $request, ConfigRepository $config): void
     {
-        $callback = $config->get('swarm.durable.webhooks.auth.callback');
+        $callback = self::resolveAuthCallback($config->get('swarm.durable.webhooks.auth.callback'));
 
-        if (! is_callable($callback) || $callback($request) !== true) {
+        if ($callback($request) !== true) {
             abort(401);
         }
+    }
+
+    protected static function resolveAuthCallback(mixed $callback): callable
+    {
+        if (is_callable($callback)) {
+            return $callback;
+        }
+
+        if (blank($callback)) {
+            throw new SwarmException('Callback swarm webhooks require [SWARM_WEBHOOK_AUTH_CALLBACK].');
+        }
+
+        if (! is_string($callback)) {
+            throw new SwarmException('Callback swarm webhooks require a callable, invokable class, or Class@method string.');
+        }
+
+        if (str_contains($callback, '@')) {
+            [$class, $method] = array_pad(explode('@', $callback, 2), 2, '');
+
+            if ($class === '' || $method === '' || ! class_exists($class)) {
+                throw new SwarmException("Invalid swarm webhook auth callback [{$callback}]. Expected Class@method.");
+            }
+
+            $instance = app(Application::class)->make($class);
+            $resolved = [$instance, $method];
+
+            if (! is_callable($resolved)) {
+                throw new SwarmException("Invalid swarm webhook auth callback [{$callback}]. Method is not callable.");
+            }
+
+            return $resolved;
+        }
+
+        if (! class_exists($callback)) {
+            throw new SwarmException("Invalid swarm webhook auth callback [{$callback}]. Expected an invokable class or Class@method.");
+        }
+
+        $instance = app(Application::class)->make($callback);
+
+        if (! is_callable($instance)) {
+            throw new SwarmException("Invalid swarm webhook auth callback [{$callback}]. Class is not invokable.");
+        }
+
+        return $instance;
     }
 }

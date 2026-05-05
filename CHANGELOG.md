@@ -1,250 +1,77 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 - 2026-05-05
 
 ### Added
 
-- **`PersistenceDecryptFailurePolicy::parse()`** — distinguishes invalid non-empty
-  **`decrypt_failure_policy`** strings from explicit **`null_with_log`**; optional one-time
-  warning when **`swarm.persistence.warn_on_invalid_decrypt_failure_policy`** is **`true`**
-  (env **`SWARM_WARN_ON_INVALID_DECRYPT_FAILURE_POLICY`**, default **`true`**).
-- **`PersistenceDecryptFailurePolicy`** enum and **`swarm.persistence.decrypt_failure_policy`**
-  (`SWARM_PERSISTENCE_DECRYPT_FAILURE_POLICY`), default **`null_with_log`**: when decrypting
-  sealed (`sw0:`) persistence values fails, log a warning without ciphertext and return
-  **`null`** for that field. **`legacy`** restores returning the stored bytes unchanged;
-  **`throw`** rethrows the decryption exception.
-- **Durable operational query contract** — `docs/durable-execution.md` now defines
-  the supported predicate surface (typed columns and satellite tables),
-  package-maintained commands and Pulse behavior, cache-driver exclusion,
-  application-owned projection pattern (`SwarmStepCompleted` /
-  `SwarmCompleted`), recovery index references, and anti-patterns for JSON-path
-  fleet queries. `docs/maintenance.md` cross-links the contract for high-volume
-  dashboards (read replicas / projections) and reiterates cache-driver limits.
-- Regression test `tests/Unit/DurableOperationalQueryContractStaticTest.php` that
-  fails if `whereJson*` / `JSON_EXTRACT` / `json_extract(` reappears under
-  `src/Persistence/`, `src/Commands/`, `src/Runners/`, and `src/Pulse/` (scoped
-  operational paths, not all of `src/`). The check is substring-based and
-  intentionally **non-exhaustive**; docs describe CI coverage limits.
+- Durable workflow controls: native wait/signal, pause/resume/cancel/recover,
+  progress, labels/details, child swarms, authenticated webhooks, webhook
+  idempotency retention, and operator commands including `swarm:inspect`,
+  `swarm:progress`, `swarm:signal`, and `swarm:health`.
+- Durable runtime hardening: multi-wait timeout recovery, retry dispatch
+  deduplication, configurable durable job tries/timeouts/backoff, coordinated
+  hierarchical parallel execution for `queue()` via `multi_worker`, durable
+  state side tables, and database-level run-id foreign keys.
+- Enterprise evidence and telemetry hooks: `SwarmAuditSink`,
+  `SwarmTelemetrySink`, schema-versioned evidence envelopes, lifecycle and
+  operator evidence categories, queue timing telemetry, stream/broadcast event
+  telemetry, and metadata allowlists.
+- Persistence and retention controls: `swarm:prune --dry-run`,
+  `swarm.retention.prevent_prune`, database encrypt-at-rest sealing with
+  `sw0:` prefixes, decrypt failure policy configuration, and cache/database
+  readiness probes.
+- Release-quality guardrails: `LaravelSwarm::ignoreMigrations()`, PHPStan level
+  7, coverage and process-concurrency CI lanes, serializing concurrency test
+  coverage, and `composer test:process-concurrency`.
+- Webhook callback auth is now a release-ready driver. `callback` supports
+  native callables, invokable classes resolved through the container, and
+  `Class@method` strings resolved through the container; only strict `true`
+  authorizes a request.
 
 ### Changed
 
-- **`SwarmPersistenceCipher`** — injects **`Psr\Log\LoggerInterface`**; decrypt failures use
-  **`swarm.persistence.decrypt_failure_policy`** instead of always returning opaque ciphertext
-  strings on failure (minor behavior change; see **UPGRADING.md**).
-- **GitHub Actions** — the **lowest** dependency matrix runs **`composer test:coverage`**,
-  **`composer test:process-concurrency:ci`**, and **`composer lint`**, matching **stable-latest**
-  (see **CONTRIBUTING.md**).
-- **Documentation** — **README.md** (Composer stability), **UPGRADING.md** (decrypt policy,
-  JSON vs sealed strings, minimum-stability), **`config/swarm.php`** (JSON column note).
-- **Durable query contract static test** — In addition to scoped
-  `whereJson*` / `JSON_EXTRACT` / `json_extract(` checks, `src/Persistence/`
-  is scanned for quoted Laravel JSON column path strings in `where(` /
-  `orderBy(` / `orderByAsc` / `orderByDesc` calls. Docs describe remaining
-  non-exhaustive gaps (`whereRaw`, comments, dynamic columns).
-- **Testing** — Added an opt-in Pest lane, `composer test:process-concurrency`,
-  that runs parallel and hierarchical parallel smoke tests against Laravel’s
-  `process` concurrency driver (real subprocess workers), with deterministic
-  skips when `proc_open` or the driver is unavailable. GitHub Actions runs
-  `composer test:process-concurrency:ci` (same tests with `--fail-on-skipped`)
-  on both dependency matrix rows so skipped tests cannot pass CI silently. The
-  default `composer test` path remains on the `sync` driver with existing
-  serialization-mock coverage.
-
-### Added
-
-- **Observability correlation contract** — `SwarmTelemetrySink` (contract) and
-  `NoOpSwarmTelemetrySink` (default no-op binding) provide a dependency-free
-  structured telemetry surface for `run_id` correlation across lifecycle events,
-  package queue jobs (`InvokeSwarm`, `BroadcastSwarm`, `AdvanceDurableSwarm`,
-  `AdvanceDurableBranch`, `ResumeQueuedHierarchicalSwarm`), and per-event
-  `stream.event` / `broadcast.event` boundaries from the streaming runtime.
-- `SwarmTelemetryDispatcher` enriches payloads with `schema_version`, `category`,
-  and `occurred_at`, isolates sink failures per `swarm.observability.failure_policy`
-  (`SWARM_OBSERVABILITY_FAILURE_POLICY`), and supports `swarm.observability.metadata_allowlist`
-  (`SWARM_OBSERVABILITY_METADATA_ALLOWLIST`). Master switches: `swarm.observability.enabled`
-  (`SWARM_OBSERVABILITY_ENABLED`) and `swarm.observability.listen_to_events`
-  (`SWARM_OBSERVABILITY_LISTEN_EVENTS`) to disable the lifecycle/queue listener
-  subscription without unbinding the sink.
-- `SwarmTelemetryEventListener` (subscribed when `listen_to_events` is true) maps
-  swarm lifecycle events and filtered Laravel queue events into telemetry categories;
-  audit-only categories (`command.*`, `webhook.*`, durable checkpoint/completion
-  internals, etc.) are not duplicated here by design.
-- Package-owned queue jobs now emit first-class `job.started`, `job.completed`,
-  and `job.failed` telemetry from inside the job handler. Terminal job telemetry
-  includes worker-attempt `duration_ms`; package-created jobs also include
-  nullable `queue_wait_ms` and `total_elapsed_ms` for queue latency analysis.
-- Shared `BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope` helper for
-  `schema_version` / `occurred_at` formatting and metadata allowlist normalization;
-  `SwarmAuditDispatcher` delegates to it without changing audit behavior.
-- [Observability Correlation Contract](docs/observability-correlation-contract.md)
-  — category reference, redaction notes, and OpenTelemetry adapter sketch.
-- **Audit evidence contract** — `SwarmAuditSink` (contract) and `NoOpSwarmAuditSink`
-  (default no-op binding) provide a first-class, stable evidence emission surface
-  for regulated adopters. Bind `SwarmAuditSink` in your service provider to route
-  normalized evidence records to an append-only table, SIEM export, queue listener,
-  or object-storage archive without making Swarm operational tables immutable.
-- `SwarmAuditDispatcher` routes evidence through the bound sink, enriches every
-  payload with `schema_version`, `category`, and `occurred_at`, and isolates sink
-  exceptions according to `swarm.audit.failure_policy` (`SWARM_AUDIT_FAILURE_POLICY`).
-  Supported policies: `swallow` (default — silent discard) and `log` (record via
-  application logger). Sink failures never propagate into swarm execution.
-- `swarm.audit.metadata_allowlist` (`SWARM_AUDIT_METADATA_ALLOWLIST`) controls
-  which top-level run or step metadata values may be emitted in audit evidence.
-  Evidence includes `metadata_keys` by default, while arbitrary metadata values
-  are omitted unless allowlisted.
-- Stable evidence categories emitted across the runtime:
-  - **Run lifecycle:** `run.started`, `run.completed`, `run.failed` (from
-    `SwarmRunner` and `SequentialStreamRunner` — sync, queued, streamed, and
-    hierarchical parallel join paths).
-  - **Step lifecycle:** `step.started`, `step.completed` (from `SwarmStepRecorder`).
-  - **Durable state transitions:** `durable.checkpointed`,
-    `durable.checkpointed_hierarchical`, `durable.paused`, `durable.pause_requested`,
-    `durable.resumed`, `durable.cancelled`, `durable.cancel_requested`,
-    `durable.completed`, `durable.failed` (from `DurableRunRecorder` and
-    `DurableLifecycleController`).
-  - **Durable wait and signal:** `wait.created`, `signal.received` (from
-    `DurableSignalHandler`; includes `accepted` vs recorded-only semantics).
-  - **Operator commands:** `command.pause`, `command.resume`, `command.cancel`,
-    `command.recover`, `command.prune` — all include `actor: "artisan"`;
-    pause/resume/cancel/recover emit failed attempts with `exception_class`;
-    `command.prune` includes per-table row counts, `dry_run`, and `prevent_prune`.
-  - **Webhook idempotency:** `webhook.start_accepted`, `webhook.start_duplicate`,
-    `webhook.start_conflict`, `webhook.start_in_flight`, `webhook.start_failed`,
-    `webhook.signal_received` (from `SwarmWebhooks`).
-- `swarm.audit.failure_policy` config key and `SWARM_AUDIT_FAILURE_POLICY` env.
-- `swarm.audit.metadata_allowlist` config key and
-  `SWARM_AUDIT_METADATA_ALLOWLIST` env.
-- [Audit Evidence Contract](docs/audit-evidence-contract.md) — full payload schema,
-  category reference, common correlation fields, capture/redaction alignment notes,
-  versioning contract, custom sink examples (database, queue, S3), and production
-  checklist for regulated environments.
-- `LaravelSwarm::ignoreMigrations()` lets applications skip the package's migration autoload, mirroring the first-party Laravel idiom used by Cashier, Sanctum, Passport, Horizon, and Telescope. Default behavior is unchanged. The `swarm-migrations` publish tag remains available regardless, so cache-only deployments can stay table-free until they need database persistence.
-- `swarm.persistence.encrypt_at_rest` (`SWARM_ENCRYPT_AT_REST`), defaulting to
-  **true** when `swarm.persistence.driver` is `database`, seals sensitive string
-  columns in database-backed context, run history, and durable stores using
-  Laravel’s encrypter (`APP_KEY`). Values are prefixed (`sw0:`) so plaintext
-  rows remain readable; disable only when relying on other encryption layers.
-- `SwarmPersistenceCipher` encapsulates seal/open helpers for persistence stores.
-- Configurable queue reliability for durable advance jobs: `AdvanceDurableSwarm`
-  and `AdvanceDurableBranch` implement `tries()`, `timeout()`, and `backoff()`
-  from `swarm.durable.job.*` (`SWARM_DURABLE_JOB_TRIES`,
-  `SWARM_DURABLE_JOB_TIMEOUT_MARGIN_SECONDS`, `SWARM_DURABLE_JOB_BACKOFF_SECONDS`).
-  Job timeout is `swarm.durable.step_timeout` plus the configured margin.
-- GitHub Actions test workflow enables PCOV and runs `composer test:coverage`
-  so CI fails when line coverage for `src/` drops below the configured minimum
-  (see `composer.json` script `test:coverage`).
-- Migration `2026_05_02_000001_split_swarm_durable_runs_state_into_side_tables`
-  adds `swarm_durable_node_states` and `swarm_durable_run_state`, moves
-  `route_plan`, `node_states`, `failure`, and `retry_policy` off `swarm_durable_runs`,
-  and copies existing data before dropping the old columns. Config keys
-  `swarm.tables.durable_node_states` and `swarm.tables.durable_run_state` (with
-  `SWARM_DURABLE_NODE_STATES_TABLE` / `SWARM_DURABLE_RUN_STATE_TABLE`) name these
-  tables.
-- `swarm:prune --dry-run` reports how many rows would be deleted in each table
-  category without performing deletes.
-- `swarm.retention.prevent_prune` (`SWARM_PREVENT_PRUNE`) to disable destructive
-  pruning while still allowing `--dry-run`.
-- `swarm:health` verifies the configured context, artifact, history, and stream
-  replay stores before production traffic reaches a swarm run. Pass `--durable`
-  to also validate durable runtime database tables.
-- Cache-backed context, artifact, history, and stream replay stores now expose
-  lightweight readiness probes that write, read, and remove temporary cache keys.
-
-### Changed
-
-- Durable step advancement internals are split into focused collaborators for
-  execution setup, sequential advancement, top-level parallel advancement,
-  checkpoint dispatch, and terminal handling. `DurableSwarmManager`, durable
-  jobs, events, responses, persistence shapes, and public APIs are unchanged.
-- Completed database run-history context now seals `context.input` with
-  `swarm.persistence.encrypt_at_rest`, matching the existing start/history
-  encryption contract.
-- Hardened parallel runner test coverage with a serializing concurrency driver
-  that validates worker callbacks cross Laravel's concurrency serialization
-  boundary without capturing live agent instance state.
-- GitHub Actions now tests both stable-latest and lowest dependency lanes for
-  the declared PHP 8.5 / Laravel 13 support range. The stable-latest lane keeps
-  coverage and Pint checks; the lowest lane runs tests and static analysis.
-- Larastan/PHPStan analysis now runs at **level 7** (`phpstan.neon`). A minimal
-  `property.notFound` ignore is scoped to database row `stdClass` access in
-  `DatabaseDurableRunStore`, `DatabaseRunHistoryStore`, `DatabaseContextStore`,
-  and `Pulse\Livewire\SwarmSteps` only.
-- **Breaking:** `swarm.capture.*` defaults are now **false** for `inputs`,
-  `outputs`, `artifacts`, and `active_context`. Applications that depend on
-  persisted prompts and outputs must set the corresponding `SWARM_CAPTURE_*`
-  environment variables or config entries to `true`. Applications using
-  `queue()` or `dispatchDurable()` must enable `active_context` (dispatch fails
-  otherwise).
+- **Breaking:** `swarm.capture.inputs`, `outputs`, `artifacts`, and
+  `active_context` now default to **false**. Enable the needed
+  `SWARM_CAPTURE_*` values for persisted prompts/outputs; queued and durable
+  execution require `active_context=true`.
 - **Breaking (extend-only):** `DatabaseContextStore`, `DatabaseRunHistoryStore`,
-  and `DatabaseDurableRunStore` constructors accept `SwarmPersistenceCipher`;
-  custom subclasses or manual construction must pass the cipher from the
-  container.
+  and `DatabaseDurableRunStore` constructors now accept
+  `SwarmPersistenceCipher`; custom subclasses or manual construction must pass
+  the cipher from the container.
+- `SwarmPersistenceCipher` now injects `Psr\Log\LoggerInterface`; decrypt
+  failures follow `swarm.persistence.decrypt_failure_policy`
+  (`null_with_log`, `legacy`, or `throw`) instead of always returning opaque
+  ciphertext.
+- Durable step advancement internals were decomposed into focused collaborators
+  while preserving public manager, job, event, response, and persistence
+  contracts.
+- Completed database run-history context now seals `context.input`, and
+  `SequentialStreamRunner` now writes history before context to satisfy FK
+  ordering.
+- GitHub Actions now covers stable-latest and lowest dependency lanes for the
+  PHP 8.5 / Laravel 13 support range, with coverage, Pint, PHPStan, and
+  process-concurrency checks.
 
 ### Documentation
 
-- Added [Observability: Logging And Tracing](docs/observability-logging-tracing.md)
-  with lifecycle event reference, structured logging examples, optional tracing
-  hook guidance (dependency-free), queue correlation notes, and README
-  production checklist cross-link.
-- Added [Durable Runtime Architecture](docs/durable-runtime-architecture.md)
-  describing the `DurableSwarmManager` facade, `Runners/Durable` collaborators,
-  factory-built graph, queue jobs, container lifetime rules, testing patterns, and
-  cross-links from durable topic guides, persistence, testing, and README.
-- Documented durable operational query surfaces at scale: typed columns and
-  satellite tables (including `swarm_durable_run_state` and
-  `swarm_durable_node_states`) vs JSON checkpoint storage (`docs/durable-execution.md`),
-  plus durable storage growth, archival, and partitioning posture in
-  `docs/maintenance.md`.
-- Clarified that swarm persistence is operational (mutable / pruneable), not an
-  immutable compliance archive; documented dry-run, prevent-prune, and audit-sink
-  guidance in `docs/maintenance.md`, `docs/persistence-and-history.md`, and the
-  README production checklist.
-- Updated `docs/persistence-and-history.md` and the README production checklist
-  for conservative capture defaults, the `active_context` requirement for
-  `queue()` / `dispatchDurable()`, and database encrypter-backed sealing
-  (`encrypt_at_rest`, `APP_KEY` rotation).
-- Expanded [UPGRADING.md](UPGRADING.md) into the canonical operator checklist
-  for Composer upgrades, migrations, published config, contract changes, and
-  recommended swarm smoke tests.
-- Clarified `UPGRADING.md` foreign-key migration guidance for existing installs:
-  back up first, inspect child-table orphans, and reconcile them before applying
-  constraints.
-- Added README badges for Packagist version, downloads, tests, license, and PHP
-  requirement, and clarified that `AGENTS.md` / `CLAUDE.md` are AI-agent context
-  while `CONTRIBUTING.md` remains the human contributor entrypoint.
-
-### Changed
-
-- **Schema hardening:** Migration `2026_05_04_000001_add_run_id_foreign_keys_to_swarm_tables`
-  adds database-level `ON DELETE CASCADE` / `ON DELETE SET NULL` foreign keys
-  across all `run_id` edges (history family and durable family). The prune
-  command's parent-before-children delete order is unchanged and remains
-  compatible with the new constraints.
-- Fixed write-order bug in `SequentialStreamRunner`: the history row is now
-  created before the context row, matching the ordering enforced by the new FK
-  constraint.
+- Added or expanded guides for upgrading, durable runtime architecture,
+  workflow operations, durable webhooks, observability logging/tracing,
+  observability correlation, audit evidence, operational query contracts,
+  persistence/privacy, migration/FK safety, and production maintenance.
+- Clarified Composer stability expectations for `laravel/ai`, release
+  discipline, README badges, Packagist guidance, and human contributor entry
+  points.
+- Removed internal package-review notes from distributed documentation; release
+  docs now include only user-facing and contributor-facing package guidance.
 
 ### Security
 
-- Hardened durable webhook `token` auth when `swarm.durable.webhooks.auth.token`
-  is blank during a request: configuration is validated before comparison so an
-  empty bearer token cannot match a blank secret. Missing or incorrect bearer
-  tokens still return HTTP 401.
-- Added feature tests proving `auth.driver=none` throws during route registration
-  in non-local/non-testing environments and that unauthenticated requests succeed
-  only in `local`/`testing`. Expanded `docs/durable-webhooks.md` with an
-  explicit warning that `none` must never be used in production or staging.
-
-## v0.1.11 - 2026-05-01
-
-### Documentation
-
-- Added [UPGRADING.md](UPGRADING.md) with Laravel AI upgrade flow, application-level
-  pinning, and Composer stability notes.
-- Expanded [README.md](README.md) installation guidance on pre-stable `laravel/ai`,
-  `minimum-stability` / `prefer-stable`, and links to `UPGRADING.md`.
-- Clarified [CONTRIBUTING.md](CONTRIBUTING.md) release discipline: smoke-test
-  `laravel/ai` updates before widening its semver range in package `composer.json`.
+- Hardened durable webhook token auth so blank configured tokens cannot match
+  blank bearer tokens.
+- `auth.driver=none` fails during route registration outside `local` and
+  `testing`, unsupported webhook auth drivers fail during route registration,
+  and callback auth now fails closed for blank, malformed, missing, or
+  non-callable callback configuration.
 
 ## v0.1.10 - 2026-05-01
 
