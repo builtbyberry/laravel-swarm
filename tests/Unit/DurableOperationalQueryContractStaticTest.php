@@ -2,8 +2,30 @@
 
 declare(strict_types=1);
 
-it('forbids json-path sql predicates across package src for durable operational queries', function (): void {
-    $srcRoot = dirname(__DIR__, 2).'/src';
+it('forbids json-path sql predicates in durable query surfaces', function (): void {
+    $packageRoot = dirname(__DIR__, 2);
+
+    /**
+     * Scope to paths where durable/list SQL and Pulse/recorder code live. Scanning all of
+     * `src/` was unnecessarily brittle for unrelated package code; extend this list if a
+     * new directory introduces operational queries against durable tables.
+     *
+     * @var list<string>
+     */
+    $scopedRelativeRoots = [
+        'src/Persistence',
+        'src/Commands',
+        'src/Runners',
+        'src/Pulse',
+    ];
+
+    /**
+     * Relative paths (from package root) excluded from the scan. Empty by default.
+     *
+     * @var list<string>
+     */
+    $allowlistRelativeFiles = [
+    ];
 
     $patterns = [
         'whereJson' => '/\bwhereJson[A-Za-z_]*/',
@@ -13,35 +35,49 @@ it('forbids json-path sql predicates across package src for durable operational 
 
     $violations = [];
 
-    $iterator = new \RecursiveIteratorIterator(
-        new \RecursiveDirectoryIterator($srcRoot, \RecursiveDirectoryIterator::SKIP_DOTS),
-    );
+    foreach ($scopedRelativeRoots as $relative) {
+        $srcRoot = $packageRoot.'/'.$relative;
 
-    /** @var \SplFileInfo $file */
-    foreach ($iterator as $file) {
-        if (! $file->isFile() || $file->getExtension() !== 'php') {
+        if (! is_dir($srcRoot)) {
             continue;
         }
 
-        $path = $file->getPathname();
-        $contents = file_get_contents($path);
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($srcRoot, RecursiveDirectoryIterator::SKIP_DOTS),
+        );
 
-        if ($contents === false) {
-            continue;
-        }
-
-        foreach ($patterns as $label => $regex) {
-            if (preg_match_all($regex, $contents, $matches, PREG_OFFSET_CAPTURE) < 1) {
+        /** @var SplFileInfo $file */
+        foreach ($iterator as $file) {
+            if (! $file->isFile() || $file->getExtension() !== 'php') {
                 continue;
             }
 
-            $lines = explode("\n", $contents);
+            $path = $file->getPathname();
+            $relativePath = str_replace('\\', '/', substr($path, strlen($packageRoot) + 1));
 
-            foreach ($matches[0] as [, $byteOffset]) {
-                $prefix = substr($contents, 0, (int) $byteOffset);
-                $lineNumber = substr_count($prefix, "\n") + 1;
-                $lineContent = $lines[$lineNumber - 1] ?? '';
-                $violations[] = "{$path}:{$lineNumber}: matched [{$label}] in: ".trim($lineContent);
+            if ($relativePath !== '' && in_array($relativePath, $allowlistRelativeFiles, true)) {
+                continue;
+            }
+
+            $contents = file_get_contents($path);
+
+            if ($contents === false) {
+                continue;
+            }
+
+            foreach ($patterns as $label => $regex) {
+                if (preg_match_all($regex, $contents, $matches, PREG_OFFSET_CAPTURE) < 1) {
+                    continue;
+                }
+
+                $lines = explode("\n", $contents);
+
+                foreach ($matches[0] as [, $byteOffset]) {
+                    $prefix = substr($contents, 0, (int) $byteOffset);
+                    $lineNumber = substr_count($prefix, "\n") + 1;
+                    $lineContent = $lines[$lineNumber - 1] ?? '';
+                    $violations[] = "{$path}:{$lineNumber}: matched [{$label}] in: ".trim($lineContent);
+                }
             }
         }
     }

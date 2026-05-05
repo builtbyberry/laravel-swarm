@@ -334,6 +334,9 @@ swarm lifecycle events. Example pattern:
 4. Own **retention and PII** on projection tables separately from Swarm prune;
    Swarm prune does not delete app tables.
 
+The snippet below uses an **application-owned** model name for illustration only;
+the package does not publish `SwarmRunProjection` or a migrations stub for it.
+
 ```php
 namespace App\Listeners;
 
@@ -373,6 +376,17 @@ copy sensitive prompts into analytics tables unless required.
 - Full-table scans of `swarm_durable_run_state.route_plan` for reporting
 - Calling `inspect()` per row in a high-volume list (hydrate details only after
   narrowing by typed predicates or history)
+
+### CI static guard (non-exhaustive)
+
+`tests/Unit/DurableOperationalQueryContractStaticTest` scans only
+`src/Persistence/`, `src/Commands/`, `src/Runners/`, and `src/Pulse/` and fails
+the build if `whereJson*`, `JSON_EXTRACT`, or `json_extract(` appears in those
+trees. That catch is **substring-based**, not a SQL parser: it does **not**
+prove absence of every JSON-path predicate (for example `whereRaw` with JSON
+operators or `where('column->path', …)`). Treat those as **code-review**
+discipline for durable queries; extend the test allowlist or patterns only when
+a concrete regression shows up.
 
 For listing finished work, prefer **run history** (`SwarmHistory` /
 `swarm_run_histories`) and combine it with durable tables when you need live

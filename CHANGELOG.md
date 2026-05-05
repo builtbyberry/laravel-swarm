@@ -12,7 +12,10 @@
   fleet queries. `docs/maintenance.md` cross-links the contract for high-volume
   dashboards (read replicas / projections) and reiterates cache-driver limits.
 - Regression test `tests/Unit/DurableOperationalQueryContractStaticTest.php` that
-  fails if `whereJson*` / `JSON_EXTRACT` / `json_extract(` reappears under `src/`.
+  fails if `whereJson*` / `JSON_EXTRACT` / `json_extract(` reappears under
+  `src/Persistence/`, `src/Commands/`, `src/Runners/`, and `src/Pulse/` (scoped
+  operational paths, not all of `src/`). The check is substring-based and
+  intentionally **non-exhaustive**; docs describe CI coverage limits.
 
 ### Changed
 
