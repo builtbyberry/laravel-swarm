@@ -4,6 +4,38 @@
 
 ### Added
 
+- **Audit evidence contract** — `SwarmAuditSink` (contract) and `NoOpSwarmAuditSink`
+  (default no-op binding) provide a first-class, stable evidence emission surface
+  for regulated adopters. Bind `SwarmAuditSink` in your service provider to route
+  normalized evidence records to an append-only table, SIEM export, queue listener,
+  or object-storage archive without making Swarm operational tables immutable.
+- `SwarmAuditDispatcher` routes evidence through the bound sink, enriches every
+  payload with `schema_version`, `category`, and `occurred_at`, and isolates sink
+  exceptions according to `swarm.audit.failure_policy` (`SWARM_AUDIT_FAILURE_POLICY`).
+  Supported policies: `swallow` (default — silent discard) and `log` (record via
+  application logger). Sink failures never propagate into swarm execution.
+- Stable evidence categories emitted across the runtime:
+  - **Run lifecycle:** `run.started`, `run.completed`, `run.failed` (from
+    `SwarmRunner` — sync, queued, and hierarchical parallel join paths).
+  - **Step lifecycle:** `step.started`, `step.completed` (from `SwarmStepRecorder`).
+  - **Durable state transitions:** `durable.checkpointed`,
+    `durable.checkpointed_hierarchical`, `durable.paused`, `durable.pause_requested`,
+    `durable.resumed`, `durable.cancelled`, `durable.cancel_requested`,
+    `durable.completed`, `durable.failed` (from `DurableRunRecorder` and
+    `DurableLifecycleController`).
+  - **Durable wait and signal:** `wait.created`, `signal.received` (from
+    `DurableSignalHandler`; includes `accepted` vs recorded-only semantics).
+  - **Operator commands:** `command.pause`, `command.resume`, `command.cancel`,
+    `command.recover`, `command.prune` — all include `actor: "artisan"`;
+    `command.prune` includes per-table row counts, `dry_run`, and `prevent_prune`.
+  - **Webhook idempotency:** `webhook.start_accepted`, `webhook.start_duplicate`,
+    `webhook.start_conflict`, `webhook.start_in_flight`, `webhook.start_failed`,
+    `webhook.signal_received` (from `SwarmWebhooks`).
+- `swarm.audit.failure_policy` config key and `SWARM_AUDIT_FAILURE_POLICY` env.
+- [Audit Evidence Contract](docs/audit-evidence-contract.md) — full payload schema,
+  category reference, common correlation fields, capture/redaction alignment notes,
+  versioning contract, custom sink examples (database, queue, S3), and production
+  checklist for regulated environments.
 - `LaravelSwarm::ignoreMigrations()` lets applications skip the package's migration autoload, mirroring the first-party Laravel idiom used by Cashier, Sanctum, Passport, Horizon, and Telescope. Default behavior is unchanged. The `swarm-migrations` publish tag remains available regardless, so cache-only deployments can stay table-free until they need database persistence.
 - `swarm.persistence.encrypt_at_rest` (`SWARM_ENCRYPT_AT_REST`), defaulting to
   **true** when `swarm.persistence.driver` is `database`, seals sensitive string

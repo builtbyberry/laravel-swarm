@@ -690,10 +690,16 @@ To customize how swarm state is stored, bind your own implementations against th
   provider call; for durable swarms, size them above one durable step.
 - Schedule `swarm:recover` for durable execution, coordinated queue hierarchical
   parallel (`multi_worker`), and `swarm:prune` for database retention cleanup.
-- Define retention ownership: Swarm tables are operational storage (TTL + prune).
-  Use `php artisan swarm:prune --dry-run` before tightening schedules, set
-  `SWARM_PREVENT_PRUNE` when package pruning must not delete rows, and build
-  immutable or long-lived audit evidence outside Swarm if compliance requires it.
+- **Operational history vs audit evidence:** Swarm tables are operational storage
+  (TTL + prune). They are not an immutable compliance archive. Use `php artisan
+  swarm:prune --dry-run` before tightening schedules and set `SWARM_PREVENT_PRUNE`
+  when package pruning must not delete rows.
+- **Audit evidence for regulated environments:** bind `SwarmAuditSink` in your
+  service provider to route stable, normalized evidence records (run lifecycle,
+  steps, durable transitions, operator commands, wait/signal, webhook idempotency,
+  prune/recover) into an append-only store, SIEM, or object-storage archive.
+  See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full
+  payload schema, category reference, and production checklist.
 - **Capture defaults are conservative** (`swarm.capture.*` default to `false` in
   shipped `config/swarm.php`): full prompts, outputs, automatic step artifacts, and
   rich active-context snapshots are not persisted unless you opt in via config

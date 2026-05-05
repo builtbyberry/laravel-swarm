@@ -7,9 +7,15 @@ persisted stream replay rows are written, but database records remain queryable
 until you prune expired rows.
 
 Swarm tables are **operational workflow storage**. Pruning **deletes** expired
-rows; it does not meet immutable audit-log expectations by itself. Teams under
-regulated retention requirements should own archival strategy (for example
-lifecycle listeners writing to append-only or application-managed audit stores).
+rows; it does not meet immutable audit-log expectations by itself.
+
+For regulated environments, Laravel Swarm provides a first-class audit evidence
+contract. Bind `SwarmAuditSink` in your service provider to receive stable,
+normalized evidence records from run lifecycle, step lifecycle, durable state
+transitions, operator commands, wait/signal flows, webhook idempotency paths,
+and prune/recover operations. See
+[Audit Evidence Contract](audit-evidence-contract.md) for the full reference,
+payload schema, and production checklist.
 
 ## Pruning Expired Records
 
