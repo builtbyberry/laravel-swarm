@@ -14,5 +14,7 @@ class SwarmProgressRecorded
         public readonly ?string $branchId,
         public readonly array $progress,
         public readonly string $executionMode = 'durable',
+        public readonly ?string $swarmClass = null,
+        public readonly ?string $topology = null,
     ) {}
 }

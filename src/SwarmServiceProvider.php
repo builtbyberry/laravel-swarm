@@ -64,6 +64,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Telemetry\NoOpSwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Telemetry\PackageJobTelemetryState;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryEventListener;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -90,6 +91,7 @@ class SwarmServiceProvider extends ServiceProvider
 
         $this->app->singleton(SwarmTelemetrySink::class, NoOpSwarmTelemetrySink::class);
         $this->app->singleton(SwarmTelemetryDispatcher::class);
+        $this->app->singleton(PackageJobTelemetryState::class);
 
         $this->app->singleton(SwarmPersistenceCipher::class);
         $this->app->singleton(SwarmAttributeResolver::class);

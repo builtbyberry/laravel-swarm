@@ -86,7 +86,7 @@ class DurableRunInspector
      */
     public function recordProgress(string $runId, ?string $branchId = null, array $progress = []): void
     {
-        $this->runs->requireRun($runId);
+        $run = $this->runs->requireRun($runId);
         $progress = $this->payloads->payload($progress);
         $this->durableRuns->recordProgress($runId, $branchId, $progress);
 
@@ -94,6 +94,9 @@ class DurableRunInspector
             runId: $runId,
             branchId: $branchId,
             progress: $progress,
+            executionMode: $this->runs->publicLifecycleExecutionMode($run),
+            swarmClass: (string) $run['swarm_class'],
+            topology: (string) $run['topology'],
         ));
     }
 }

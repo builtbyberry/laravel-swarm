@@ -94,8 +94,36 @@ Only these job classes produce `job.*` telemetry:
 - `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch`
 - `BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm`
 
-Payloads include `job_class`, `queue_connection`, `queue_name`, and `run_id`
-(resolved from the job payload or durable run row for advance jobs).
+Payloads include `job_class`, `job_id`, `attempt`, `queue_connection`,
+`queue_name`, and `run_id` (resolved from the job payload or durable run row for
+advance jobs).
+
+Package jobs emit first-class worker-attempt timing from inside their `handle()`
+methods:
+
+| Field | Categories | Meaning |
+| --- | --- | --- |
+| `duration_ms` | `job.completed`, `job.failed` | Required for package handler attempts. Measures only the current worker execution attempt, not queue wait time and not previous retries. |
+| `queue_wait_ms` | `job.started`, `job.completed`, `job.failed` | Nullable. Measures package enqueue timestamp to worker start when the timestamp is available. |
+| `total_elapsed_ms` | `job.completed`, `job.failed` | Nullable. Measures package enqueue timestamp to terminal event for this attempt when the timestamp is available. |
+| `attempt` | all `job.*` | Queue attempt number when the worker exposes it; direct handler calls report `1`. |
+| `job_id` | all `job.*` | Queue UUID or broker job id when available. |
+
+Retries are attempt-scoped: each attempt emits its own `job.started` and terminal
+`job.completed` or `job.failed` record, and `duration_ms` always measures only
+that worker attempt. By contrast, `queue_wait_ms` and `total_elapsed_ms` are
+measured from the package job's stored enqueue or release timestamp. On retries,
+those fields therefore represent time since the current serialized job instance
+was enqueued or released, not a broker-native "time waiting for this exact
+attempt only" metric. Durable advance jobs may represent a single checkpointed
+step or branch, so job timing should not be interpreted as whole-run durable
+duration. Use `run.*` lifecycle telemetry and durable history for whole-run
+timing.
+
+The Laravel queue failure listener remains subscribed as a fallback for package
+job failures that occur before a handler can emit telemetry. In that fallback,
+`duration_ms` is `null`; normal package handler failures emit non-null
+`duration_ms` and suppress the fallback duplicate.
 
 ### Intentionally omitted (audit-only)
 
@@ -129,6 +157,10 @@ final class OtelSwarmTelemetrySink implements SwarmTelemetrySink
 
 Use `run_id` as the primary correlation attribute; add `parent_run_id` and
 `child_run_id` when present for nested durable runs.
+
+For queue jobs, map `job.started` to a worker-attempt span start. Use
+`duration_ms` for worker execution metrics, `queue_wait_ms` for queue saturation
+alerts, and `total_elapsed_ms` for end-to-end package job latency.
 
 ## Related Documentation
 

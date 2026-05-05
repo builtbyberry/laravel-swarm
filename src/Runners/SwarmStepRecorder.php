@@ -31,6 +31,8 @@ class SwarmStepRecorder
             agentClass: $agentClass,
             input: $this->capture->input($input),
             metadata: $state->context->metadata,
+            topology: $state->topology->value,
+            executionMode: $state->executionMode->value,
         ));
         $this->audit->emit('step.started', [
             'run_id' => $state->context->runId,
@@ -142,6 +144,7 @@ class SwarmStepRecorder
             durationMs: $durationMs,
             metadata: $stepMetadata,
             artifacts: $this->capture->artifacts($step->artifacts),
+            executionMode: $state->executionMode->value,
         ));
         $this->audit->emit('step.completed', [
             'run_id' => $state->context->runId,

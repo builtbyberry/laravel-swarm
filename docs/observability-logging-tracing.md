@@ -129,7 +129,33 @@ lines, combine Swarm events with Laravel’s queue events, for example
 id) into your logging context for the duration of the job. When using the
 default `SwarmTelemetrySink` binding, `job.started` / `job.completed` /
 `job.failed` telemetry records already carry `run_id`, `job_class`, queue
-connection, and queue name for these job classes.
+connection, queue name, attempt, job id, and timing fields for these job classes.
+
+In a custom `SwarmTelemetrySink`, queue categories can be mapped directly to
+worker-attempt spans and metrics:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+
+final class AppSwarmTelemetrySink implements SwarmTelemetrySink
+{
+    public function emit(string $category, array $payload): void
+    {
+        if ($category === 'job.started') {
+            // Open or annotate a worker-attempt span keyed by run_id/job_id.
+            // queue_wait_ms is a queue saturation signal.
+            return;
+        }
+
+        if ($category === 'job.completed' || $category === 'job.failed') {
+            // duration_ms is worker execution time for this attempt.
+            // total_elapsed_ms is enqueue-to-terminal latency when available.
+            // exception_class is present for failed attempts.
+            return;
+        }
+    }
+}
+```
 
 If you use **Laravel Horizon**, configure tags or metadata that include
 `swarm_run_id` from your job payload or from the first `SwarmStarted` event you

@@ -21,6 +21,10 @@
   swarm lifecycle events and filtered Laravel queue events into telemetry categories;
   audit-only categories (`command.*`, `webhook.*`, durable checkpoint/completion
   internals, etc.) are not duplicated here by design.
+- Package-owned queue jobs now emit first-class `job.started`, `job.completed`,
+  and `job.failed` telemetry from inside the job handler. Terminal job telemetry
+  includes worker-attempt `duration_ms`; package-created jobs also include
+  nullable `queue_wait_ms` and `total_elapsed_ms` for queue latency analysis.
 - Shared `BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope` helper for
   `schema_version` / `occurred_at` formatting and metadata allowlist normalization;
   `SwarmAuditDispatcher` delegates to it without changing audit behavior.

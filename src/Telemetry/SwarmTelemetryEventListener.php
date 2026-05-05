@@ -30,8 +30,6 @@ use Illuminate\Contracts\Container\Container;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Illuminate\Queue\Events\JobFailed;
-use Illuminate\Queue\Events\JobProcessed;
-use Illuminate\Queue\Events\JobProcessing;
 use Throwable;
 
 /**
@@ -54,6 +52,7 @@ class SwarmTelemetryEventListener
     public function __construct(
         protected Container $container,
         protected DurableRunStore $durableRuns,
+        protected PackageJobTelemetryState $jobTelemetryState,
     ) {}
 
     protected function telemetry(): SwarmTelemetryDispatcher
@@ -78,8 +77,6 @@ class SwarmTelemetryEventListener
         $events->listen(SwarmChildStarted::class, [$this, 'handleSwarmChildStarted']);
         $events->listen(SwarmChildCompleted::class, [$this, 'handleSwarmChildCompleted']);
         $events->listen(SwarmChildFailed::class, [$this, 'handleSwarmChildFailed']);
-        $events->listen(JobProcessing::class, [$this, 'handleJobProcessing']);
-        $events->listen(JobProcessed::class, [$this, 'handleJobProcessed']);
         $events->listen(JobFailed::class, [$this, 'handleJobFailed']);
     }
 
@@ -131,8 +128,8 @@ class SwarmTelemetryEventListener
             'run_id' => $event->runId,
             'parent_run_id' => $event->metadata['parent_run_id'] ?? null,
             'swarm_class' => $event->swarmClass,
-            'topology' => $event->metadata['topology'] ?? null,
-            'execution_mode' => $event->metadata['execution_mode'] ?? null,
+            'topology' => $event->topology ?? ($event->metadata['topology'] ?? null),
+            'execution_mode' => $event->executionMode ?? ($event->metadata['execution_mode'] ?? null),
             'step_index' => $event->index,
             'agent_class' => $event->agentClass,
             'status' => 'started',
@@ -147,7 +144,7 @@ class SwarmTelemetryEventListener
             'parent_run_id' => $event->metadata['parent_run_id'] ?? null,
             'swarm_class' => $event->swarmClass,
             'topology' => $event->topology,
-            'execution_mode' => $event->metadata['execution_mode'] ?? null,
+            'execution_mode' => $event->executionMode ?? ($event->metadata['execution_mode'] ?? null),
             'step_index' => $event->index,
             'agent_class' => $event->agentClass,
             'duration_ms' => $event->durationMs,
@@ -235,6 +232,8 @@ class SwarmTelemetryEventListener
     {
         $this->telemetry()->emit('progress.recorded', [
             'run_id' => $event->runId,
+            'swarm_class' => $event->swarmClass,
+            'topology' => $event->topology,
             'branch_id' => $event->branchId,
             'execution_mode' => $event->executionMode,
             'progress_keys' => array_map('strval', array_keys($event->progress)),
@@ -283,22 +282,12 @@ class SwarmTelemetryEventListener
         ]);
     }
 
-    public function handleJobProcessing(JobProcessing $event): void
-    {
-        $this->emitJobTelemetry('job.started', $event->job, 'started');
-    }
-
-    public function handleJobProcessed(JobProcessed $event): void
-    {
-        $this->emitJobTelemetry('job.completed', $event->job, 'completed');
-    }
-
     public function handleJobFailed(JobFailed $event): void
     {
-        $this->emitJobTelemetry('job.failed', $event->job, 'failed', $event->exception);
+        $this->emitJobFailureFallbackTelemetry($event->job, $event->exception);
     }
 
-    protected function emitJobTelemetry(string $category, QueueJobContract $job, string $status, ?Throwable $exception = null): void
+    protected function emitJobFailureFallbackTelemetry(QueueJobContract $job, Throwable $exception): void
     {
         $command = $this->unserializePackageJob($job);
 
@@ -306,23 +295,53 @@ class SwarmTelemetryEventListener
             return;
         }
 
+        if ($this->jobTelemetryState->consumeFailed($this->packageJobTelemetryKey($command, $job))) {
+            return;
+        }
+
         $connection = $job->getConnectionName();
         $queue = $job->getQueue();
 
-        $payload = [
+        $this->telemetry()->emit('job.failed', [
             'run_id' => $this->runIdFromPackageJob($command),
             'swarm_class' => $this->swarmClassFromPackageJob($command),
             'job_class' => $command::class,
+            'job_id' => $this->queueJobId($job),
+            'attempt' => $job->attempts(),
             'queue_connection' => $connection,
             'queue_name' => $queue,
-            'status' => $status,
-        ];
+            'duration_ms' => null,
+            'queue_wait_ms' => $this->queueWaitMilliseconds($command),
+            'total_elapsed_ms' => $this->queueWaitMilliseconds($command),
+            'exception_class' => $exception::class,
+            'status' => 'failed',
+        ]);
+    }
 
-        if ($exception !== null) {
-            $payload['exception_class'] = $exception::class;
+    protected function packageJobTelemetryKey(object $command, QueueJobContract $job): string
+    {
+        return implode(':', [
+            $command::class,
+            $this->runIdFromPackageJob($command) ?? '',
+            $this->queueJobId($job) ?? '',
+            (string) $job->attempts(),
+        ]);
+    }
+
+    protected function queueJobId(QueueJobContract $job): ?string
+    {
+        $id = $job->uuid() ?: $job->getJobId();
+
+        return is_string($id) && $id !== '' ? $id : null;
+    }
+
+    protected function queueWaitMilliseconds(object $command): ?int
+    {
+        if (! property_exists($command, 'enqueuedAtMs') || ! is_int($command->enqueuedAtMs)) {
+            return null;
         }
 
-        $this->telemetry()->emit($category, $payload);
+        return max(0, ((int) floor(microtime(true) * 1000)) - $command->enqueuedAtMs);
     }
 
     protected function unserializePackageJob(QueueJobContract $job): ?object

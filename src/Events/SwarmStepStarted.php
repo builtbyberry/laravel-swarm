@@ -16,5 +16,7 @@ class SwarmStepStarted
         public readonly string $agentClass,
         public readonly string $input,
         public readonly array $metadata = [],
+        public readonly ?string $topology = null,
+        public readonly ?string $executionMode = null,
     ) {}
 }
