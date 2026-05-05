@@ -24,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -62,8 +63,12 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
+use BuiltByBerry\LaravelSwarm\Telemetry\NoOpSwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
+use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryEventListener;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Pulse\Pulse;
 use Livewire\LivewireManager;
@@ -82,6 +87,9 @@ class SwarmServiceProvider extends ServiceProvider
 
         $this->app->singleton(SwarmAuditSink::class, NoOpSwarmAuditSink::class);
         $this->app->singleton(SwarmAuditDispatcher::class);
+
+        $this->app->singleton(SwarmTelemetrySink::class, NoOpSwarmTelemetrySink::class);
+        $this->app->singleton(SwarmTelemetryDispatcher::class);
 
         $this->app->singleton(SwarmPersistenceCipher::class);
         $this->app->singleton(SwarmAttributeResolver::class);
@@ -174,6 +182,10 @@ class SwarmServiceProvider extends ServiceProvider
     {
         if (LaravelSwarm::$runsMigrations) {
             $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        }
+
+        if ($this->app->make('config')->get('swarm.observability.listen_to_events', true)) {
+            Event::subscribe(SwarmTelemetryEventListener::class);
         }
 
         if (class_exists(Pulse::class)) {

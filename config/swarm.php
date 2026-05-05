@@ -67,6 +67,30 @@ return [
         ))),
     ],
 
+    /*
+     * Observability telemetry routing. Bind SwarmTelemetrySink to export structured
+     * correlation payloads to logs, metrics, or tracing adapters. The default binding
+     * (NoOpSwarmTelemetrySink) discards all records.
+     *
+     * listen_to_events: when false, lifecycle and package queue job telemetry is not
+     * subscribed; stream.event / broadcast.event direct hooks still respect "enabled".
+     *
+     * failure_policy: swallow | log — sink failures never propagate into swarm execution.
+     */
+    'observability' => [
+        'enabled' => filter_var(env('SWARM_OBSERVABILITY_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+        'listen_to_events' => filter_var(env('SWARM_OBSERVABILITY_LISTEN_EVENTS', true), FILTER_VALIDATE_BOOLEAN),
+        'failure_policy' => env('SWARM_OBSERVABILITY_FAILURE_POLICY', 'swallow'),
+        'metadata_allowlist' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('SWARM_OBSERVABILITY_METADATA_ALLOWLIST', '')),
+        ))),
+        'categories' => [
+            'include' => null,
+            'exclude' => null,
+        ],
+    ],
+
     'limits' => [
         'max_input_bytes' => env('SWARM_MAX_INPUT_BYTES'),
         'max_output_bytes' => env('SWARM_MAX_OUTPUT_BYTES'),
