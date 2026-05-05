@@ -48,6 +48,21 @@ return [
         'active_context' => env('SWARM_CAPTURE_ACTIVE_CONTEXT', false),
     ],
 
+    /*
+     * Audit evidence routing. Bind SwarmAuditSink in your service container to route
+     * package-owned audit evidence to an append-only store, SIEM export, or queue listener.
+     * The default binding (NoOpSwarmAuditSink) discards all evidence.
+     *
+     * failure_policy controls what happens when the sink throws an exception:
+     *   swallow — silently discard (default, safest for production).
+     *   log     — record via application logger, then continue.
+     *
+     * Sink failures never propagate into swarm execution regardless of policy.
+     */
+    'audit' => [
+        'failure_policy' => env('SWARM_AUDIT_FAILURE_POLICY', 'swallow'),
+    ],
+
     'limits' => [
         'max_input_bytes' => env('SWARM_MAX_INPUT_BYTES'),
         'max_output_bytes' => env('SWARM_MAX_OUTPUT_BYTES'),

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm;
 
+use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
@@ -21,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -76,6 +79,9 @@ class SwarmServiceProvider extends ServiceProvider
             __DIR__.'/../config/swarm.php',
             'swarm',
         );
+
+        $this->app->singleton(SwarmAuditSink::class, NoOpSwarmAuditSink::class);
+        $this->app->singleton(SwarmAuditDispatcher::class);
 
         $this->app->singleton(SwarmPersistenceCipher::class);
         $this->app->singleton(SwarmAttributeResolver::class);
