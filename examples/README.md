@@ -48,13 +48,15 @@ Read the examples in this order:
    combine coordinator routing with durable branch fan-out and join.
 11. [Durable Waits And Signals](durable-waits-signals/README.md): pause durable
    work at an approval boundary and continue it with a signal.
-12. [Durable Retries, Progress, And Child Swarms](durable-retries-progress-child-swarms/README.md):
+12. [Human-In-The-Loop Support Review](human-in-the-loop-support/README.md):
+   notify a supervisor, review an AI draft, and resume a durable support swarm.
+13. [Durable Retries, Progress, And Child Swarms](durable-retries-progress-child-swarms/README.md):
    add retry policy, progress inspection, and child durable workflows.
-13. [Durable Webhook Ingress](durable-webhook-ingress/README.md): expose
+14. [Durable Webhook Ingress](durable-webhook-ingress/README.md): expose
    authenticated start and signal routes for trusted integrations.
-14. [Operations Dashboard](operations-dashboard/README.md): record lifecycle
+15. [Operations Dashboard](operations-dashboard/README.md): record lifecycle
    events, broadcast app-owned updates, and pair them with Pulse metrics.
-15. [Privacy Capture](privacy-capture/README.md): configure capture flags for
+16. [Privacy Capture](privacy-capture/README.md): configure capture flags for
    sensitive prompts and outputs.
 
 ## Topology Decision Table
@@ -86,6 +88,7 @@ Read the examples in this order:
 | Durable top-level parallel execution | [Parallel Research Swarm](parallel-research-swarm/README.md#durable-parallel-usage) |
 | Durable hierarchical parallel execution | [Durable Hierarchical Approval](durable-hierarchical-approval/README.md) |
 | `#[DurableWait]`, `DurableSwarmManager::signal()`, `swarm:signal` | [Durable Waits And Signals](durable-waits-signals/README.md) |
+| Human-in-the-loop approval | [Human-In-The-Loop Support Review](human-in-the-loop-support/README.md) |
 | `#[DurableLabels]`, `#[DurableDetails]` | [Durable Waits And Signals](durable-waits-signals/README.md) |
 | `#[DurableRetry]` | [Durable Retries, Progress, And Child Swarms](durable-retries-progress-child-swarms/README.md) |
 | `DurableSwarmManager::recordProgress()` | [Durable Retries, Progress, And Child Swarms](durable-retries-progress-child-swarms/README.md) |

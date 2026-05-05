@@ -65,6 +65,9 @@
   testing notes, and related documentation.
 - Added focused examples for stream broadcasting, durable waits/signals, durable
   retries/progress/child swarms, and durable webhook ingress.
+- Added a flagship human-in-the-loop support review example showing durable
+  waits, app-owned broadcast notifications, review endpoints, signal handling,
+  and frontend pseudocode.
 - Added or expanded guides for upgrading, durable runtime architecture,
   workflow operations, durable webhooks, observability logging/tracing,
   observability correlation, audit evidence, operational query contracts,
