@@ -34,6 +34,16 @@ coverage driver (PCOV or Xdebug). Install PCOV for PHP locally when you want to
 match CI or debug coverage failures; otherwise `composer test` remains the
 default fast path without coverage.
 
+**Process concurrency validation** — CI also runs `composer test:process-concurrency`
+on the stable-latest dependency matrix only. That lane exercises parallel and
+hierarchical parallel swarms against Laravel’s real `process` concurrency driver
+(subprocess workers), not the `sync` driver used by the default suite. Run it
+locally when changing `ParallelRunner`, `HierarchicalRunner`, or anything that
+affects closure serialization or container resolution for concurrent workers. It
+requires a CLI environment where `proc_open` is available and subprocess
+spawns succeed; if the driver cannot run, tests **skip** with an explicit reason
+rather than failing intermittently.
+
 If you run PHPStan directly, use the same command as CI:
 
 ```bash
