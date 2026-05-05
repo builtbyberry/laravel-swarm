@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -1413,6 +1414,7 @@ test('durable workers stop cleanly when lease ownership is lost before terminal 
         app('db')->connection(),
         app(SwarmCapture::class),
         app(DurableRunContext::class),
+        app(SwarmAuditDispatcher::class),
     );
 
     app()->bind(DurableRunRecorder::class, function ($app, $params) use ($innerRecorder, $runId) {
