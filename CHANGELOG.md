@@ -71,6 +71,9 @@
   for conservative capture defaults, the `active_context` requirement for
   `queue()` / `dispatchDurable()`, and database encrypter-backed sealing
   (`encrypt_at_rest`, `APP_KEY` rotation).
+- Expanded [UPGRADING.md](UPGRADING.md) into the canonical operator checklist
+  for Composer upgrades, migrations, published config, contract changes, and
+  recommended swarm smoke tests.
 
 ### Changed
 

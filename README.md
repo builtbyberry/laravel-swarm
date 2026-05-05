@@ -5,6 +5,7 @@ Laravel Swarm brings multi-agent orchestration to [Laravel](https://laravel.com)
 - **Packagist:** `builtbyberry/laravel-swarm`
 - **Namespace:** `BuiltByBerry\LaravelSwarm`
 - **Repository:** https://github.com/builtbyberry/laravel-swarm
+- **Upgrading:** [UPGRADING.md](UPGRADING.md)
 - **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Requirements

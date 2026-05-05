@@ -1,10 +1,108 @@
 # Upgrading Laravel Swarm
 
-This document describes **operational upgrade steps** for applications using Laravel Swarm.
+This guide is the action checklist for upgrading applications that use Laravel
+Swarm. Read it when a release asks you to run commands, update published files,
+or change application code.
 
-Laravel Swarm follows [semantic versioning](https://semver.org/) for its own API and behavior. **[CHANGELOG.md](CHANGELOG.md)** lists breaking changes, additions, and fixes **owned by this package**.
+[CHANGELOG.md](CHANGELOG.md) remains the full release history. This file only
+records upgrade work an application operator or maintainer may need to perform.
 
-Swarm does **not** fully isolate you from **PHP**, **Laravel**, or **[Laravel AI](https://github.com/laravel/ai)**. Treat Composer upgrades that touch those dependencies as **integration-test events** for your app. The changelog documents Swarm’s contract; it does not replace verifying behavior against new upstream releases.
+Laravel Swarm follows [semantic versioning](https://semver.org/) for API and
+behavior owned by this package. Swarm does not fully isolate your application
+from **PHP**, **Laravel**, or **[Laravel AI](https://github.com/laravel/ai)**.
+Treat Composer upgrades that touch those dependencies as integration-test events
+for your app.
+
+## Upgrade Checklist
+
+Use the normal Laravel package upgrade flow first:
+
+```bash
+composer update builtbyberry/laravel-swarm
+php artisan config:clear
+php artisan migrate
+```
+
+If your application caches configuration during deploys, rebuild the cache after
+publishing or editing config:
+
+```bash
+php artisan config:cache
+```
+
+Then run the checks that match how your application uses swarms:
+
+- run your application test suite
+- run at least one synchronous `prompt()` path
+- run a queued swarm if you call `queue()` or `broadcastOnQueue()`
+- run a streamed swarm if you call `stream()`, `broadcast()`, or `broadcastNow()`
+- run a durable swarm if you call `dispatchDurable()`
+- verify `swarm:status`, `swarm:history`, `swarm:recover`, and `swarm:prune`
+  in environments where operators use them
+
+## Published Config And Migrations
+
+Laravel Swarm loads its package migrations by default. If you have not published
+or edited the migrations, running `php artisan migrate` is usually enough.
+
+If you published package migrations, compare your copies with the new package
+migrations before deploying. Keep table names, indexes, and foreign keys aligned
+with your `swarm.tables.*` configuration.
+
+If you published `config/swarm.php`, compare it with the current package config
+after each upgrade:
+
+```bash
+php artisan vendor:publish --tag=swarm-config --force
+```
+
+Do not run that command directly against a production app unless you are ready to
+merge your local changes back in. A common workflow is to publish into a clean
+branch, review the diff, then copy the new keys or default changes into your
+application config.
+
+Pay particular attention to config that changes persistence, capture, queues,
+stream replay, durable runtime tables, pruning, and encryption at rest.
+
+## Contract Changes
+
+Most applications should interact with swarms through Laravel-style public
+verbs: `prompt()`, `queue()`, `stream()`, `broadcast()`, `broadcastNow()`,
+`broadcastOnQueue()`, and `dispatchDurable()`.
+
+Upgrade notes matter most if your application extends package internals,
+implements storage contracts, subclasses database stores, publishes migrations,
+or manually resolves runner services. Those extension points can require code
+changes even when the application-facing swarm API stays the same.
+
+## Dependency Upgrades
+
+`laravel/ai` is required in the **^0.6** range today and is **pre-1.0**. Public
+contracts, streaming behavior, and provider integrations can change between
+releases without the stability guarantees of a stable major line.
+
+When upgrading PHP, Laravel, or Laravel AI alongside Swarm:
+
+1. Note the currently resolved versions with `php -v` and `composer show laravel/framework laravel/ai builtbyberry/laravel-swarm`.
+2. Update the dependency or constraint in your application.
+3. Run `composer update`.
+4. Run your automated suite and swarm-heavy smoke paths, especially queued,
+   streamed, and durable execution.
+
+You may pin `laravel/ai` to an exact or narrower range in your application’s
+`composer.json` when you need reproducible builds or a slower upgrade cadence:
+
+```bash
+composer require laravel/ai:0.6.2
+```
+
+That pins your application’s dependency resolution. It does not change the semver
+range Laravel Swarm declares for Packagist.
+
+This package’s `composer.json` uses `"minimum-stability": "dev"` with
+`"prefer-stable": true` so pre-stable dependencies can resolve while Composer
+still prefers tagged releases. Your application may need compatible Composer
+stability settings while Laravel AI remains pre-stable.
 
 ## Unreleased: `run_id` foreign-key constraints
 
@@ -55,23 +153,3 @@ application code should keep using `dispatchDurable()` and operator methods on
 the manager; see
 [docs/durable-runtime-architecture.md](docs/durable-runtime-architecture.md) for
 the full map and testing notes.
-
-## Upgrading Laravel AI
-
-`laravel/ai` is required in the **^0.6** range today and is **pre-1.0**. Public contracts, streaming behavior, and provider integrations can change between releases without the stability guarantees of a stable major line.
-
-**Recommended flow**
-
-1. Note the currently resolved version (for example `composer show laravel/ai`).
-2. Update using `composer update laravel/ai` or by bumping an explicit version constraint in your application’s `composer.json`, then run `composer update`.
-3. Run your automated test suite and manual or staging checks for paths that use swarms—especially **queued**, **streamed**, and **durable** runs and any custom agents or tools.
-
-**Pinning in your application**
-
-You may pin `laravel/ai` to an exact or narrower range in **your** application’s `composer.json` (for example `composer require laravel/ai:0.6.2`) when you need reproducible builds or a slower upgrade cadence. That pins **your** dependency resolution; it does not change the semver range Laravel Swarm declares for Packagist.
-
-**Composer stability**
-
-This package’s `composer.json` uses `"minimum-stability": "dev"` with `"prefer-stable": true` so pre-stable dependencies can resolve while preferring tagged releases when available. Your application may need compatible Composer stability settings when transitive packages are pre-stable; see the [README](README.md#installation) installation notes.
-
-When Laravel AI publishes a stable major and Swarm’s constraints evolve, this section will be updated alongside [CHANGELOG.md](CHANGELOG.md).
