@@ -28,6 +28,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
+use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
@@ -50,6 +51,7 @@ class SequentialStreamRunner
         protected SwarmPayloadLimits $limits,
         protected SwarmAttributeResolver $resolver,
         protected SwarmAuditDispatcher $audit,
+        protected SwarmTelemetryDispatcher $telemetry,
     ) {}
 
     /**
@@ -104,10 +106,15 @@ class SequentialStreamRunner
             storesForReplay: (bool) $this->config->get('swarm.streaming.replay.enabled', false),
             replayFailurePolicy: (string) $this->config->get('swarm.streaming.replay.failure_policy', 'fail'),
             onReplayFailure: function (Throwable $exception) use ($state, $context, $contextTtl, $swarm, &$startedAt): SwarmStreamError {
-                return $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt);
+                $replayStreamSeq = 0;
+                $replayStreamStart = MonotonicTime::now();
+
+                return $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $replayStreamStart, $replayStreamSeq);
             },
             onAbandoned: function (SwarmException $exception) use ($state, $context, $contextTtl, $swarm, &$startedAt): void {
-                $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt);
+                $abandonStreamSeq = 0;
+                $abandonStreamStart = MonotonicTime::now();
+                $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $abandonStreamStart, $abandonStreamSeq);
             },
         );
     }
@@ -137,7 +144,10 @@ class SequentialStreamRunner
             ...$this->audit->metadata($context->metadata),
         ]);
 
-        yield new SwarmStreamStart(
+        $streamTelemetryStart = MonotonicTime::now();
+        $streamSequenceIndex = 0;
+
+        $streamStartEvent = new SwarmStreamStart(
             id: SwarmStreamEvent::newId(),
             runId: $context->runId,
             swarmClass: $swarm::class,
@@ -147,10 +157,17 @@ class SequentialStreamRunner
             timestamp: SwarmStreamEvent::timestamp(),
         );
 
+        yield $streamStartEvent;
+        $this->recordStreamTelemetry($swarm, $state, $streamStartEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
         $startedAt = MonotonicTime::now();
 
         try {
-            yield from $this->sequential->stream($state);
+            foreach ($this->sequential->stream($state) as $streamEvent) {
+                $this->recordStreamTelemetry($swarm, $state, $streamEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                yield $streamEvent;
+            }
 
             $response = $this->normalizeCompletionResponse(new SwarmResponse(
                 output: (string) ($context->data['last_output'] ?? $context->input),
@@ -183,7 +200,7 @@ class SequentialStreamRunner
                 ...$this->audit->metadata($capturedResponse->metadata),
             ]);
 
-            yield new SwarmStreamEnd(
+            $streamEndEvent = new SwarmStreamEnd(
                 id: SwarmStreamEvent::newId(),
                 runId: $context->runId,
                 output: $capturedResponse->output,
@@ -192,16 +209,54 @@ class SequentialStreamRunner
                 timestamp: SwarmStreamEvent::timestamp(),
             );
 
+            $this->recordStreamTelemetry($swarm, $state, $streamEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+            yield $streamEndEvent;
+
             return $response;
         } catch (Throwable $exception) {
-            yield $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt);
+            yield $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $streamTelemetryStart, $streamSequenceIndex);
 
             throw $exception;
         }
     }
 
-    protected function failStream(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, Throwable $exception, ?float $startedAt): SwarmStreamError
-    {
+    protected function recordStreamTelemetry(
+        Swarm $swarm,
+        SwarmExecutionState $state,
+        SwarmStreamEvent $streamEvent,
+        int &$sequenceIndex,
+        float $streamStartHr,
+        bool $isReplay,
+    ): void {
+        $type = $streamEvent->toArray()['type'] ?? 'unknown';
+
+        $this->telemetry->emit('stream.event', [
+            'run_id' => $state->context->runId,
+            'parent_run_id' => $state->context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $swarm::class,
+            'topology' => $state->topology->value,
+            'execution_mode' => $state->executionMode->value,
+            'event_type' => $type,
+            'sequence_index' => $sequenceIndex,
+            'duration_ms' => MonotonicTime::elapsedMilliseconds($streamStartHr),
+            'is_replay' => $isReplay,
+            'status' => 'streaming',
+        ]);
+
+        $sequenceIndex++;
+    }
+
+    protected function failStream(
+        SwarmExecutionState $state,
+        RunContext $context,
+        int $contextTtl,
+        Swarm $swarm,
+        Throwable $exception,
+        ?float $startedAt,
+        float $streamTelemetryStart,
+        int &$streamSequenceIndex,
+    ): SwarmStreamError {
         $durationMs = $startedAt !== null ? MonotonicTime::elapsedMilliseconds($startedAt) : 1;
 
         $this->historyStore->fail($context->runId, $exception, $contextTtl);
@@ -241,6 +296,8 @@ class SequentialStreamRunner
         if ($exception instanceof SwarmStreamProviderException && is_string($exception->invocationId)) {
             $event->withInvocationId($exception->invocationId);
         }
+
+        $this->recordStreamTelemetry($swarm, $state, $event, $streamSequenceIndex, $streamTelemetryStart, false);
 
         return $event;
     }

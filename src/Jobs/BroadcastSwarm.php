@@ -8,7 +8,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Bus\Queueable;
 use Illuminate\Container\Container;
@@ -49,10 +51,50 @@ class BroadcastSwarm implements ShouldQueue
             throw new SwarmException("Unable to resolve broadcast swarm [{$this->swarmClass}] from the container.");
         }
 
+        $telemetry = Container::getInstance()->make(SwarmTelemetryDispatcher::class);
+        $streamStart = MonotonicTime::now();
+        $sequenceIndex = 0;
+        $channelNames = self::normalizeBroadcastChannelNames($this->channels);
+
         $runner->stream($swarm, $context)
-            ->each(function (SwarmStreamEvent $event): void {
+            ->each(function (SwarmStreamEvent $event) use ($telemetry, $context, $swarm, &$sequenceIndex, $streamStart, $channelNames): void {
+                $type = $event->toArray()['type'] ?? 'unknown';
+
+                $telemetry->emit('broadcast.event', [
+                    'run_id' => $context->runId,
+                    'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+                    'swarm_class' => $swarm::class,
+                    'topology' => 'sequential',
+                    'execution_mode' => 'stream',
+                    'event_type' => $type,
+                    'sequence_index' => $sequenceIndex,
+                    'duration_ms' => MonotonicTime::elapsedMilliseconds($streamStart),
+                    'is_replay' => false,
+                    'channel_names' => $channelNames,
+                    'status' => 'broadcast',
+                ]);
+
+                $sequenceIndex++;
                 $event->broadcastNow($this->channels);
             });
+    }
+
+    /**
+     * @param  Channel|array<int, Channel|string>  $channels
+     * @return array<int, string>
+     */
+    protected static function normalizeBroadcastChannelNames(Channel|array $channels): array
+    {
+        if ($channels instanceof Channel) {
+            return [(string) $channels->name];
+        }
+
+        return array_values(array_map(
+            static function (Channel|string $channel): string {
+                return $channel instanceof Channel ? (string) $channel->name : $channel;
+            },
+            $channels,
+        ));
     }
 
     /**
