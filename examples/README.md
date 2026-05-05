@@ -31,22 +31,30 @@ Read the examples in this order:
    of workflow in the background and react with events.
 3. [Streaming Progress](streaming-progress/README.md): expose step/token
    progress from a request (see also [`docs/streaming.md`](../docs/streaming.md)).
-4. [Testing Swarms](testing-swarms/README.md): fake swarms for app tests and
+4. [Streaming Broadcasts](streaming-broadcasts/README.md): broadcast typed stream
+   events through Laravel broadcasting.
+5. [Testing Swarms](testing-swarms/README.md): fake swarms for app tests and
    assert persisted runs when history matters.
-5. [Run Inspector](run-inspector/README.md): build the status endpoint your UI
+6. [Run Inspector](run-inspector/README.md): build the status endpoint your UI
    uses after a queued, streamed, synchronous, or durable run starts.
-6. [Parallel Research Swarm](parallel-research-swarm/README.md): run independent
+7. [Parallel Research Swarm](parallel-research-swarm/README.md): run independent
    container-resolvable agents at the same time, including durable parallel
    branch execution.
-7. [Hierarchical Support Triage](hierarchical-support-triage/README.md): let a
+8. [Hierarchical Support Triage](hierarchical-support-triage/README.md): let a
    coordinator return a validated route plan for specialist workers.
-8. [Durable Compliance Review](durable-compliance-review/README.md): checkpoint
+9. [Durable Compliance Review](durable-compliance-review/README.md): checkpoint
    a workflow one durable step per job.
-9. [Durable Hierarchical Approval](durable-hierarchical-approval/README.md):
+10. [Durable Hierarchical Approval](durable-hierarchical-approval/README.md):
    combine coordinator routing with durable branch fan-out and join.
-10. [Operations Dashboard](operations-dashboard/README.md): record lifecycle
+11. [Durable Waits And Signals](durable-waits-signals/README.md): pause durable
+   work at an approval boundary and continue it with a signal.
+12. [Durable Retries, Progress, And Child Swarms](durable-retries-progress-child-swarms/README.md):
+   add retry policy, progress inspection, and child durable workflows.
+13. [Durable Webhook Ingress](durable-webhook-ingress/README.md): expose
+   authenticated start and signal routes for trusted integrations.
+14. [Operations Dashboard](operations-dashboard/README.md): record lifecycle
    events, broadcast app-owned updates, and pair them with Pulse metrics.
-11. [Privacy Capture](privacy-capture/README.md): configure capture flags for
+15. [Privacy Capture](privacy-capture/README.md): configure capture flags for
    sensitive prompts and outputs.
 
 ## Topology Decision Table
@@ -70,10 +78,19 @@ Read the examples in this order:
 | `prompt()` | [Sequential Content Pipeline](sequential-content-pipeline/README.md) |
 | `queue()` | [Queued Workflow Events](queued-workflow-events/README.md) |
 | `stream()` | [Streaming Progress](streaming-progress/README.md), [`docs/streaming.md`](../docs/streaming.md) |
+| `broadcast()`, `broadcastNow()`, `broadcastOnQueue()` | [Streaming Broadcasts](streaming-broadcasts/README.md) |
 | `dispatchDurable()` | [Durable Compliance Review](durable-compliance-review/README.md) |
+| `#[Timeout]` | [Durable Waits And Signals](durable-waits-signals/README.md) |
+| `#[MaxAgentSteps]` | [Durable Retries, Progress, And Child Swarms](durable-retries-progress-child-swarms/README.md) |
 | Durable sequential execution | [Durable Compliance Review](durable-compliance-review/README.md) |
 | Durable top-level parallel execution | [Parallel Research Swarm](parallel-research-swarm/README.md#durable-parallel-usage) |
 | Durable hierarchical parallel execution | [Durable Hierarchical Approval](durable-hierarchical-approval/README.md) |
+| `#[DurableWait]`, `DurableSwarmManager::signal()`, `swarm:signal` | [Durable Waits And Signals](durable-waits-signals/README.md) |
+| `#[DurableLabels]`, `#[DurableDetails]` | [Durable Waits And Signals](durable-waits-signals/README.md) |
+| `#[DurableRetry]` | [Durable Retries, Progress, And Child Swarms](durable-retries-progress-child-swarms/README.md) |
+| `DurableSwarmManager::recordProgress()` | [Durable Retries, Progress, And Child Swarms](durable-retries-progress-child-swarms/README.md) |
+| `DispatchesChildSwarms` | [Durable Retries, Progress, And Child Swarms](durable-retries-progress-child-swarms/README.md) |
+| `SwarmWebhooks::routes()` | [Durable Webhook Ingress](durable-webhook-ingress/README.md) |
 | Persistence and history | [Run Inspector](run-inspector/README.md) and [Persistence And History](../docs/persistence-and-history.md) |
 | Artifacts and structured context | [Structured Input](../docs/structured-input.md) |
 | Capture and privacy | [Privacy Capture](privacy-capture/README.md) |

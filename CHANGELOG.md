@@ -63,6 +63,8 @@
 - Expanded durable waits/signals, retries/progress, child swarms, and webhooks
   into full user guides with prerequisites, copy-paste examples, edge cases,
   testing notes, and related documentation.
+- Added focused examples for stream broadcasting, durable waits/signals, durable
+  retries/progress/child swarms, and durable webhook ingress.
 - Added or expanded guides for upgrading, durable runtime architecture,
   workflow operations, durable webhooks, observability logging/tracing,
   observability correlation, audit evidence, operational query contracts,
