@@ -43,6 +43,10 @@ jobs:
         if: matrix.dependencies == 'stable-latest'
         run: composer test:coverage
 
+      - name: Execute process concurrency validation
+        if: matrix.dependencies == 'stable-latest'
+        run: composer test:process-concurrency
+
       - name: Execute tests
         if: matrix.dependencies == 'lowest'
         run: composer test
