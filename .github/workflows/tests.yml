@@ -9,8 +9,15 @@ on:
 
 jobs:
   tests:
-    name: PHP 8.5 - Laravel 13
+    name: PHP 8.5 - Laravel 13 (${{ matrix.dependencies }})
     runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        dependencies:
+          - stable-latest
+          - lowest
 
     steps:
       - name: Checkout code
@@ -25,13 +32,24 @@ jobs:
           ini-values: pcov.directory=src
 
       - name: Install dependencies
-        run: composer update --prefer-dist --no-interaction --no-progress
+        if: matrix.dependencies == 'stable-latest'
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      - name: Install lowest dependencies
+        if: matrix.dependencies == 'lowest'
+        run: composer update --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress
 
       - name: Execute tests with coverage
+        if: matrix.dependencies == 'stable-latest'
         run: composer test:coverage
+
+      - name: Execute tests
+        if: matrix.dependencies == 'lowest'
+        run: composer test
 
       - name: Execute static analysis
         run: composer analyse
 
       - name: Execute code style check
+        if: matrix.dependencies == 'stable-latest'
         run: composer lint

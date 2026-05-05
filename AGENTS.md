@@ -1,5 +1,9 @@
 # Laravel Swarm — Agent Context
 
+This file is operational context for AI coding agents. Human contributors should
+start with [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md),
+[CHANGELOG.md](CHANGELOG.md), and the user-facing docs in [docs/](docs/).
+
 ## What This Is
 
 `builtbyberry/laravel-swarm` is a Laravel package that adds reusable multi-agent orchestration on top of the official `laravel/ai` package. Laravel AI handles single-agent LLM interactions and low-level workflow primitives. Laravel Swarm turns repeated multi-agent workflows into first-class application objects with sync, queued, streamed, and durable execution modes.

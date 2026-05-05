@@ -1,5 +1,11 @@
 # Laravel Swarm
 
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
+[![Total Downloads](https://img.shields.io/packagist/dt/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
+[![Tests](https://github.com/builtbyberry/laravel-swarm/actions/workflows/tests.yml/badge.svg)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/tests.yml)
+[![License](https://img.shields.io/packagist/l/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
+[![PHP Version Require](https://img.shields.io/packagist/dependency-v/builtbyberry/laravel-swarm/php.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
+
 Laravel Swarm brings multi-agent orchestration to [Laravel](https://laravel.com) on top of the official [Laravel AI](https://github.com/laravel/ai) package. Define a swarm once, return the Laravel AI agents that participate in it, and run them through sequential, parallel, or hierarchical topologies using explicit Laravel-style verbs.
 
 - **Packagist:** `builtbyberry/laravel-swarm`

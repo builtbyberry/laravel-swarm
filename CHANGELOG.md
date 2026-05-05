@@ -36,6 +36,9 @@
 - Hardened parallel runner test coverage with a serializing concurrency driver
   that validates worker callbacks cross Laravel's concurrency serialization
   boundary without capturing live agent instance state.
+- GitHub Actions now tests both stable-latest and lowest dependency lanes for
+  the declared PHP 8.5 / Laravel 13 support range. The stable-latest lane keeps
+  coverage and Pint checks; the lowest lane runs tests and static analysis.
 - Larastan/PHPStan analysis now runs at **level 7** (`phpstan.neon`). A minimal
   `property.notFound` ignore is scoped to database row `stdClass` access in
   `DatabaseDurableRunStore`, `DatabaseRunHistoryStore`, `DatabaseContextStore`,
@@ -77,6 +80,9 @@
 - Expanded [UPGRADING.md](UPGRADING.md) into the canonical operator checklist
   for Composer upgrades, migrations, published config, contract changes, and
   recommended swarm smoke tests.
+- Added README badges for Packagist version, downloads, tests, license, and PHP
+  requirement, and clarified that `AGENTS.md` / `CLAUDE.md` are AI-agent context
+  while `CONTRIBUTING.md` remains the human contributor entrypoint.
 
 ### Changed
 
