@@ -39,21 +39,15 @@ jobs:
         if: matrix.dependencies == 'lowest'
         run: composer update --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress
 
+      # Same quality gates on stable-latest and lowest (see CONTRIBUTING.md if nightly split is needed).
       - name: Execute tests with coverage
-        if: matrix.dependencies == 'stable-latest'
         run: composer test:coverage
 
       - name: Execute process concurrency validation
-        if: matrix.dependencies == 'stable-latest'
         run: composer test:process-concurrency:ci
-
-      - name: Execute tests
-        if: matrix.dependencies == 'lowest'
-        run: composer test
 
       - name: Execute static analysis
         run: composer analyse
 
       - name: Execute code style check
-        if: matrix.dependencies == 'stable-latest'
         run: composer lint
