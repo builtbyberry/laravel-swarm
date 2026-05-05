@@ -122,13 +122,18 @@ Run `php artisan migrate` after updating the package. Migration
 - `swarm_durable_webhook_idempotency.run_id` → `swarm_durable_runs` (SET NULL)
 - `swarm_durable_child_runs.child_run_id` — **no FK** (independent lifecycle)
 
-Since this is a pre-release package with no existing deployments, no orphan-row
-cleanup is required. For general information about the FK contract and prune
-order, see [docs/maintenance.md § Foreign-key constraints and prune order](docs/maintenance.md#foreign-key-constraints-and-prune-order).
+Before applying this migration in an existing install, take a database backup
+and check each child table for orphaned rows whose parent `run_id` no longer
+exists. Foreign-key creation will fail on those rows. Export, delete, or
+reconcile orphaned operational records before running `php artisan migrate`.
+
+For general information about the FK contract and prune order, see
+[docs/maintenance.md § Foreign-key constraints and prune order](docs/maintenance.md#foreign-key-constraints-and-prune-order).
 
 **Custom table names:** If you have published the package migrations and renamed
-any table, add the equivalent FK constraints to your published copies. Without
-them, orphan rows can accumulate once the parent table is pruned.
+any table, run the same orphan checks against your renamed tables and add the
+equivalent FK constraints to your published copies. Without them, orphan rows
+can accumulate once the parent table is pruned.
 
 ## Unreleased: durable runtime schema split
 

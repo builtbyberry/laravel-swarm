@@ -38,6 +38,9 @@
 
 ### Changed
 
+- Completed database run-history context now seals `context.input` with
+  `swarm.persistence.encrypt_at_rest`, matching the existing start/history
+  encryption contract.
 - Hardened parallel runner test coverage with a serializing concurrency driver
   that validates worker callbacks cross Laravel's concurrency serialization
   boundary without capturing live agent instance state.
@@ -85,6 +88,9 @@
 - Expanded [UPGRADING.md](UPGRADING.md) into the canonical operator checklist
   for Composer upgrades, migrations, published config, contract changes, and
   recommended swarm smoke tests.
+- Clarified `UPGRADING.md` foreign-key migration guidance for existing installs:
+  back up first, inspect child-table orphans, and reconcile them before applying
+  constraints.
 - Added README badges for Packagist version, downloads, tests, license, and PHP
   requirement, and clarified that `AGENTS.md` / `CLAUDE.md` are AI-agent context
   while `CONTRIBUTING.md` remains the human contributor entrypoint.

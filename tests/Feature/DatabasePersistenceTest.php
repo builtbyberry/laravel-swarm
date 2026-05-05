@@ -1307,3 +1307,30 @@ test('database context store seals persisted input when encrypt at rest is enabl
 
     expect($store->find($runId)['input'])->toBe('classified-prompt');
 });
+
+test('database run history seals completed context input when encrypt at rest is enabled', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(DatabaseRunHistoryStore::class);
+
+    $store = app(DatabaseRunHistoryStore::class);
+    $runId = (string) str()->uuid();
+    $context = RunContext::from('classified-history-prompt', $runId);
+
+    $store->start($runId, FakeSequentialSwarm::class, 'sequential', $context, [], 3600);
+    $store->complete(
+        $runId,
+        new SwarmResponse(
+            output: 'final output',
+            steps: [],
+            metadata: ['run_id' => $runId],
+            context: $context,
+        ),
+        3600,
+    );
+
+    $rawContext = DB::table('swarm_run_histories')->where('run_id', $runId)->value('context');
+    expect(json_decode((string) $rawContext, true)['input'])->toStartWith('sw0:');
+
+    expect($store->find($runId)['context']['input'])->toBe('classified-history-prompt');
+});

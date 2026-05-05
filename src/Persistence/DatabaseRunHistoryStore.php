@@ -183,7 +183,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'status' => 'completed',
             'output' => $this->cipher->seal($response->output),
             'usage' => $this->encodeJson($response->usage),
-            'context' => $this->encodeJson($response->context?->toArray()),
+            'context' => $this->encodeJson($response->context !== null ? $this->cipher->sealContextTopLevelInput($response->context->toArray()) : null),
             'artifacts' => $this->encodeJson(array_map(static fn ($artifact): array => $artifact->toArray(), $response->artifacts)),
             'metadata' => $this->encodeJson($response->metadata),
             'finished_at' => Carbon::now('UTC'),
