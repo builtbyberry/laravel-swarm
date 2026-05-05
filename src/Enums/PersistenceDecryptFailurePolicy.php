@@ -21,20 +21,33 @@ enum PersistenceDecryptFailurePolicy: string
      */
     case Throw = 'throw';
 
-    public static function tryFromConfig(?string $value): self
+    /**
+     * @return array{policy: self, invalid: bool}
+     */
+    public static function parse(?string $value): array
     {
-        if ($value === null || $value === '') {
-            return self::NullWithLog;
+        if ($value === null) {
+            return ['policy' => self::NullWithLog, 'invalid' => false];
         }
 
-        $normalized = strtolower(trim($value));
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return ['policy' => self::NullWithLog, 'invalid' => false];
+        }
+
+        $normalized = strtolower($trimmed);
 
         foreach (self::cases() as $case) {
             if ($case->value === $normalized) {
-                return $case;
+                return ['policy' => $case, 'invalid' => false];
             }
         }
 
-        return self::NullWithLog;
+        return ['policy' => self::NullWithLog, 'invalid' => true];
+    }
+
+    public static function tryFromConfig(?string $value): self
+    {
+        return self::parse($value)['policy'];
     }
 }

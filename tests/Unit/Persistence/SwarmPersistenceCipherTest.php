@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Enums\PersistenceDecryptFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use Illuminate\Config\Repository;
 use Illuminate\Contracts\Encryption\DecryptException;
@@ -14,12 +15,14 @@ function makeCipher(
     string $persistenceDriver = 'cache',
     ?LoggerInterface $logger = null,
     string $decryptFailurePolicy = 'null_with_log',
+    bool $warnOnInvalidDecryptFailurePolicy = true,
 ): SwarmPersistenceCipher {
     return new SwarmPersistenceCipher(
         new Repository([
             'swarm.persistence.encrypt_at_rest' => $encryptAtRest,
             'swarm.persistence.driver' => $persistenceDriver,
             'swarm.persistence.decrypt_failure_policy' => $decryptFailurePolicy,
+            'swarm.persistence.warn_on_invalid_decrypt_failure_policy' => $warnOnInvalidDecryptFailurePolicy,
         ]),
         new Encrypter(random_bytes(32), 'aes-256-cbc'),
         $logger ?? new NullLogger,
@@ -57,6 +60,7 @@ test('open logs and returns null when decrypt fails under null_with_log', functi
         'swarm.persistence.encrypt_at_rest' => true,
         'swarm.persistence.driver' => 'database',
         'swarm.persistence.decrypt_failure_policy' => 'null_with_log',
+        'swarm.persistence.warn_on_invalid_decrypt_failure_policy' => true,
     ];
 
     $cipherSeal = new SwarmPersistenceCipher(
@@ -74,6 +78,77 @@ test('open logs and returns null when decrypt fails under null_with_log', functi
     );
 
     expect($cipherOpen->open($sealed))->toBeNull();
+});
+
+test('open logs unrecognized decrypt_failure_policy once when warn toggle is enabled', function () {
+    $logger = $this->createMock(LoggerInterface::class);
+    $logger->expects($this->exactly(2))->method('warning');
+
+    $repo = [
+        'swarm.persistence.encrypt_at_rest' => true,
+        'swarm.persistence.driver' => 'database',
+        'swarm.persistence.decrypt_failure_policy' => 'not-a-valid-policy',
+        'swarm.persistence.warn_on_invalid_decrypt_failure_policy' => true,
+    ];
+
+    $cipherSeal = new SwarmPersistenceCipher(
+        new Repository($repo),
+        new Encrypter(random_bytes(32), 'aes-256-cbc'),
+        new NullLogger,
+    );
+
+    $sealed = $cipherSeal->seal('secret');
+
+    $cipherOpen = new SwarmPersistenceCipher(
+        new Repository($repo),
+        new Encrypter(random_bytes(32), 'aes-256-cbc'),
+        $logger,
+    );
+
+    expect($cipherOpen->open($sealed))->toBeNull();
+});
+
+test('open does not log unrecognized policy when warn toggle is disabled', function () {
+    $logger = $this->createMock(LoggerInterface::class);
+    $logger->expects($this->once())->method('warning');
+
+    $repo = [
+        'swarm.persistence.encrypt_at_rest' => true,
+        'swarm.persistence.driver' => 'database',
+        'swarm.persistence.decrypt_failure_policy' => 'not-a-valid-policy',
+        'swarm.persistence.warn_on_invalid_decrypt_failure_policy' => false,
+    ];
+
+    $cipherSeal = new SwarmPersistenceCipher(
+        new Repository($repo),
+        new Encrypter(random_bytes(32), 'aes-256-cbc'),
+        new NullLogger,
+    );
+
+    $sealed = $cipherSeal->seal('secret');
+
+    $cipherOpen = new SwarmPersistenceCipher(
+        new Repository($repo),
+        new Encrypter(random_bytes(32), 'aes-256-cbc'),
+        $logger,
+    );
+
+    expect($cipherOpen->open($sealed))->toBeNull();
+});
+
+test('parse marks unknown non-empty policy as invalid', function () {
+    $parsed = PersistenceDecryptFailurePolicy::parse('typo');
+
+    expect($parsed['invalid'])->toBeTrue()
+        ->and($parsed['policy'])->toBe(PersistenceDecryptFailurePolicy::NullWithLog);
+});
+
+test('parse treats explicit known policies as valid', function () {
+    foreach (['null_with_log', 'NULL_WITH_LOG', ' legacy ', 'throw'] as $raw) {
+        $parsed = PersistenceDecryptFailurePolicy::parse($raw);
+
+        expect($parsed['invalid'])->toBeFalse();
+    }
 });
 
 test('open returns opaque ciphertext when decrypt fails under legacy policy', function () {

@@ -40,8 +40,17 @@ return [
          * null_with_log — log a warning without ciphertext, return null for that field (default).
          * legacy — return the stored bytes unchanged (previous package behavior; surfaces ciphertext strings).
          * throw — rethrow the decryption exception.
+         * Unrecognized non-empty values are treated as null_with_log; see warn_on_invalid_decrypt_failure_policy.
          */
         'decrypt_failure_policy' => env('SWARM_PERSISTENCE_DECRYPT_FAILURE_POLICY', 'null_with_log'),
+        /*
+         * When true, log once per worker if decrypt_failure_policy is set to an unrecognized value
+         * (effective policy remains null_with_log). Disable to avoid extra log lines in strict environments.
+         */
+        'warn_on_invalid_decrypt_failure_policy' => filter_var(
+            env('SWARM_WARN_ON_INVALID_DECRYPT_FAILURE_POLICY', true),
+            FILTER_VALIDATE_BOOLEAN
+        ),
         /*
          * JSON columns on persisted rows (for example context data/metadata/artifacts) remain
          * structured JSON in the database; encrypt_at_rest seals designated string columns only.

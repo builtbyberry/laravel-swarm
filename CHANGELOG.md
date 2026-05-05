@@ -4,6 +4,10 @@
 
 ### Added
 
+- **`PersistenceDecryptFailurePolicy::parse()`** — distinguishes invalid non-empty
+  **`decrypt_failure_policy`** strings from explicit **`null_with_log`**; optional one-time
+  warning when **`swarm.persistence.warn_on_invalid_decrypt_failure_policy`** is **`true`**
+  (env **`SWARM_WARN_ON_INVALID_DECRYPT_FAILURE_POLICY`**, default **`true`**).
 - **`PersistenceDecryptFailurePolicy`** enum and **`swarm.persistence.decrypt_failure_policy`**
   (`SWARM_PERSISTENCE_DECRYPT_FAILURE_POLICY`), default **`null_with_log`**: when decrypting
   sealed (`sw0:`) persistence values fails, log a warning without ciphertext and return

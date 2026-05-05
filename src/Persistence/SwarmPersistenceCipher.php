@@ -18,6 +18,8 @@ class SwarmPersistenceCipher
 {
     public const PREFIX = 'sw0:';
 
+    protected ?PersistenceDecryptFailurePolicy $resolvedDecryptFailurePolicy = null;
+
     public function __construct(
         protected ConfigRepository $config,
         protected Encrypter $encrypter,
@@ -129,9 +131,29 @@ class SwarmPersistenceCipher
 
     private function decryptFailurePolicy(): PersistenceDecryptFailurePolicy
     {
-        $raw = $this->config->get('swarm.persistence.decrypt_failure_policy');
+        if ($this->resolvedDecryptFailurePolicy !== null) {
+            return $this->resolvedDecryptFailurePolicy;
+        }
 
-        return PersistenceDecryptFailurePolicy::tryFromConfig(is_string($raw) ? $raw : null);
+        $raw = $this->config->get('swarm.persistence.decrypt_failure_policy');
+        $parsed = PersistenceDecryptFailurePolicy::parse(is_string($raw) ? $raw : null);
+
+        if (
+            $parsed['invalid']
+            && filter_var(
+                $this->config->get('swarm.persistence.warn_on_invalid_decrypt_failure_policy', true),
+                FILTER_VALIDATE_BOOLEAN,
+            )
+        ) {
+            $this->logger->warning(
+                'Unrecognized swarm.persistence.decrypt_failure_policy value; using null_with_log as the effective decrypt failure policy.',
+                ['config_key' => 'swarm.persistence.decrypt_failure_policy'],
+            );
+        }
+
+        $this->resolvedDecryptFailurePolicy = $parsed['policy'];
+
+        return $this->resolvedDecryptFailurePolicy;
     }
 
     private function decryptFailedReturnNull(string $prefixedValue): null

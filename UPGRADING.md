@@ -80,6 +80,13 @@ Configure **`swarm.persistence.decrypt_failure_policy`** (env
   `sw0:` ciphertext for sealed payloads).
 - **`throw`** — rethrow the decryption exception.
 
+Non-empty values that are **not** one of the above (case-insensitive), including typos,
+are treated as **`null_with_log`** for effective runtime behavior. When
+**`swarm.persistence.warn_on_invalid_decrypt_failure_policy`** is **`true`** (default,
+env **`SWARM_WARN_ON_INVALID_DECRYPT_FAILURE_POLICY`**), Swarm logs **once per worker**
+when that misconfiguration is first resolved during a decrypt failure path. Set it to
+**`false`** if you cannot emit extra log lines for unknown policy strings.
+
 Encrypt-at-rest applies to **designated string columns** (for example context `input`,
 history step I/O). **JSON columns** (`data`, `metadata`, `artifacts`, and similar)
 remain structured JSON in the database; do not rely on Swarm to encrypt arbitrary
