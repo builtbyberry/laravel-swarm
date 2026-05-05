@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Audit;
 
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -22,7 +23,10 @@ use Throwable;
  */
 class SwarmAuditDispatcher
 {
-    public const SCHEMA_VERSION = '1';
+    /**
+     * @deprecated Use EvidenceEnvelope::SCHEMA_VERSION
+     */
+    public const SCHEMA_VERSION = EvidenceEnvelope::SCHEMA_VERSION;
 
     public function __construct(
         protected SwarmAuditSink $sink,
@@ -39,11 +43,7 @@ class SwarmAuditDispatcher
      */
     public function emit(string $category, array $payload): void
     {
-        $enriched = array_merge($payload, [
-            'schema_version' => self::SCHEMA_VERSION,
-            'category' => $category,
-            'occurred_at' => now()->toIso8601String(),
-        ]);
+        $enriched = EvidenceEnvelope::enrich($category, $payload);
 
         try {
             $this->sink->emit($category, $enriched);
@@ -60,22 +60,7 @@ class SwarmAuditDispatcher
      */
     public function metadata(array $metadata): array
     {
-        $keys = array_map('strval', array_keys($metadata));
-        sort($keys, SORT_STRING);
-
-        $allowlist = $this->metadataAllowlist();
-        $allowed = [];
-
-        foreach ($allowlist as $key) {
-            if (array_key_exists($key, $metadata)) {
-                $allowed[$key] = $metadata[$key];
-            }
-        }
-
-        return [
-            'metadata_keys' => $keys,
-            'metadata' => $allowed,
-        ];
+        return EvidenceEnvelope::metadata($metadata, $this->metadataAllowlist());
     }
 
     protected function handleSinkFailure(string $category, Throwable $exception): void
@@ -98,22 +83,8 @@ class SwarmAuditDispatcher
      */
     protected function metadataAllowlist(): array
     {
-        $configured = $this->config->get('swarm.audit.metadata_allowlist', []);
-
-        if (is_string($configured)) {
-            $configured = explode(',', $configured);
-        }
-
-        if (! is_array($configured)) {
-            return [];
-        }
-
-        return array_values(array_filter(
-            array_map(
-                fn (mixed $key): string => trim((string) $key),
-                $configured,
-            ),
-            fn (string $key): bool => $key !== '',
-        ));
+        return EvidenceEnvelope::normalizeAllowlist(
+            $this->config->get('swarm.audit.metadata_allowlist', []),
+        );
     }
 }
