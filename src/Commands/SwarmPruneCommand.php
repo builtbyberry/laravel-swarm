@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
@@ -19,10 +20,18 @@ class SwarmPruneCommand extends Command
 
     protected const CHUNK_SIZE = 1000;
 
-    public function handle(Connection $connection, ConfigRepository $config): int
+    public function handle(Connection $connection, ConfigRepository $config, SwarmAuditDispatcher $audit): int
     {
-        if ($config->get('swarm.retention.prevent_prune', false) === true && ! $this->option('dry-run')) {
+        $preventPrune = $config->get('swarm.retention.prevent_prune', false) === true;
+
+        if ($preventPrune && ! $this->option('dry-run')) {
             $this->components->warn('Swarm pruning is disabled because swarm.retention.prevent_prune is true (SWARM_PREVENT_PRUNE). Use --dry-run to inspect impact without deleting.');
+            $audit->emit('command.prune', [
+                'dry_run' => false,
+                'prevent_prune' => true,
+                'status' => 'skipped',
+                'counts' => [],
+            ]);
 
             return self::SUCCESS;
         }
@@ -73,6 +82,13 @@ class SwarmPruneCommand extends Command
                 ? $this->countPrunableRows($connection, $config, $name, $table, $tables['history'])
                 : $this->pruneTable($connection, $config, $name, $table, $tables['history']);
         }
+
+        $audit->emit('command.prune', [
+            'dry_run' => $dryRun,
+            'prevent_prune' => false,
+            'status' => $dryRun ? 'dry_run' : 'pruned',
+            'counts' => $counts,
+        ]);
 
         $verb = $dryRun ? 'Would prune' : 'Pruned';
 
