@@ -135,6 +135,21 @@ use Illuminate\Support\Facades\Schedule;
 Schedule::command('swarm:prune')->daily();
 ```
 
+Use `swarm:health` in deployment checks to verify the configured context,
+artifact, history, and stream replay stores before application traffic reaches
+swarm execution:
+
+```bash
+php artisan swarm:health
+```
+
+For deployments using `dispatchDurable()` or coordinated multi-worker
+hierarchical queueing, include the durable runtime tables:
+
+```bash
+php artisan swarm:health --durable
+```
+
 If you are using durable execution, also schedule the recovery command
 frequently:
 

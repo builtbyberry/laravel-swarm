@@ -39,6 +39,11 @@ class CacheArtifactRepository implements ArtifactRepository
         return $artifacts ?? [];
     }
 
+    public function assertReady(): void
+    {
+        $this->assertCacheStoreReady($this->cacheFactory, $this->config, 'artifacts', 'artifacts');
+    }
+
     protected function key(string $runId): string
     {
         return (string) $this->config->get('swarm.artifacts.prefix', 'swarm:artifacts:').$runId;

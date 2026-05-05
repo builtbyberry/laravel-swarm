@@ -53,6 +53,11 @@ class CacheStreamEventStore implements StreamEventStore
         }
     }
 
+    public function assertReady(): void
+    {
+        $this->assertCacheStoreReady($this->cacheFactory, $this->config, 'streaming.replay', 'stream replay');
+    }
+
     protected function key(string $runId): string
     {
         return (string) $this->config->get('swarm.streaming.replay.prefix', 'swarm:stream:').$runId;

@@ -30,6 +30,11 @@
   category without performing deletes.
 - `swarm.retention.prevent_prune` (`SWARM_PREVENT_PRUNE`) to disable destructive
   pruning while still allowing `--dry-run`.
+- `swarm:health` verifies the configured context, artifact, history, and stream
+  replay stores before production traffic reaches a swarm run. Pass `--durable`
+  to also validate durable runtime database tables.
+- Cache-backed context, artifact, history, and stream replay stores now expose
+  lightweight readiness probes that write, read, and remove temporary cache keys.
 
 ### Changed
 

@@ -156,6 +156,11 @@ class CacheRunHistoryStore implements RunHistoryStore
         return $records;
     }
 
+    public function assertReady(): void
+    {
+        $this->assertCacheStoreReady($this->cacheFactory, $this->config, 'history', 'history');
+    }
+
     protected function key(string $runId): string
     {
         return (string) $this->config->get('swarm.history.prefix', 'swarm:history:').$runId;

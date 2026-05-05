@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
@@ -45,6 +46,20 @@ class DatabaseStreamEventStore implements StreamEventStore
     {
         foreach ($this->table()->where('run_id', $runId)->orderBy('id')->cursor() as $record) {
             yield SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+        }
+    }
+
+    public function assertReady(): void
+    {
+        $table = (string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events');
+        $schema = $this->connection->getSchemaBuilder();
+
+        if (! $schema->hasTable($table)) {
+            throw new SwarmException("Database-backed stream replay requires the [{$table}] table.");
+        }
+
+        if (! $schema->hasColumns($table, ['id', 'run_id', 'event_type', 'payload', 'created_at', 'updated_at', 'expires_at'])) {
+            throw new SwarmException("Database-backed stream replay requires runtime columns on [{$table}] for persisted stream events.");
         }
     }
 

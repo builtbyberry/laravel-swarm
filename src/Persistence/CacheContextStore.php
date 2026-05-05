@@ -36,6 +36,11 @@ class CacheContextStore implements ContextStore
         return $context;
     }
 
+    public function assertReady(): void
+    {
+        $this->assertCacheStoreReady($this->cacheFactory, $this->config, 'context', 'context');
+    }
+
     protected function key(string $runId): string
     {
         return (string) $this->config->get('swarm.context.prefix', 'swarm:context:').$runId;

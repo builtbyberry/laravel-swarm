@@ -140,6 +140,21 @@ This mirrors the opt-out idiom used by Cashier, Sanctum, Passport, Horizon, and 
 
 The `swarm-migrations` publish tag remains available regardless of this setting. If you later switch to database persistence, remove the `ignoreMigrations()` call (or publish the migrations explicitly with `vendor:publish --tag=swarm-migrations`) and run `php artisan migrate`.
 
+You can verify the configured persistence stack before deploying or enabling a
+new environment:
+
+```bash
+php artisan swarm:health
+```
+
+The health command checks the configured context, artifact, history, and stream
+replay stores. If you use `dispatchDurable()` or coordinated multi-worker
+hierarchical queueing, include durable runtime tables in the check:
+
+```bash
+php artisan swarm:health --durable
+```
+
 Publish the package configuration if you want to customize defaults:
 
 ```bash
