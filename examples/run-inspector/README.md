@@ -14,6 +14,14 @@ This example teaches:
   history;
 - the inspector is application code, not a package-owned dashboard API.
 
+## Prerequisites
+
+- Use database persistence when run inspection must outlive cache TTLs.
+- Store a small pending record when a controller returns a `run_id` before the
+  worker writes history.
+- Enable durable persistence when the inspector should include durable waits,
+  branches, labels, details, progress, or child runs.
+
 ## Pending Run Store
 
 When a controller queues work and immediately returns `202`, the queue worker

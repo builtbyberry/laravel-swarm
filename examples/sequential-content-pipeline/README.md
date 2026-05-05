@@ -12,6 +12,13 @@ This example teaches:
 - how sequential handoff works;
 - how to pass plain structured input.
 
+## Prerequisites
+
+- Laravel AI is configured in your application.
+- `builtbyberry/laravel-swarm` is installed.
+- The example agent classes can use your Laravel AI default provider and model.
+- No queue worker or database persistence is required for the synchronous run.
+
 ## Files To Create
 
 ### `app/Ai/Swarms/ContentPipeline.php`

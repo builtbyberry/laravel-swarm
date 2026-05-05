@@ -19,6 +19,7 @@ This example covers:
 **Requires:**
 
 - `SWARM_PERSISTENCE_DRIVER=database`
+- `SWARM_CAPTURE_ACTIVE_CONTEXT=true`
 - migrated swarm tables
 - a running queue worker for the durable queue
 - `swarm:recover` scheduled in Laravel's scheduler
@@ -245,4 +246,3 @@ Active route plans and branch outputs can contain worker prompts and
 intermediate review notes. Treat durable runtime storage as sensitive
 operational data, and use capture settings plus short retention windows for
 regulated workflows.
-

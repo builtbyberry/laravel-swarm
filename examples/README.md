@@ -7,6 +7,20 @@ Examples assume your app has Laravel AI configured. When an example does not
 show `#[Provider]` and `#[Model]`, the agent uses your Laravel AI defaults. The
 first sequential example shows the explicit provider/model attribute pattern.
 
+## Before You Copy An Example
+
+Every example assumes:
+
+- a Laravel 13 application with Laravel AI configured;
+- this package installed and migrated, unless the example explicitly uses only
+  cache persistence;
+- generated or manually created agent classes under `app/Ai/Agents`;
+- plain task payloads made from strings, numbers, booleans, null, and arrays.
+
+Examples that use `queue()`, `broadcastOnQueue()`, or `dispatchDurable()` also
+need a running queue worker. Examples that use durable execution need database
+persistence and `SWARM_CAPTURE_ACTIVE_CONTEXT=true`.
+
 ## Start Here
 
 Read the examples in this order:

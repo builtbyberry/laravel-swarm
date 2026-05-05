@@ -14,6 +14,14 @@ This example teaches:
 - use lifecycle events or persisted history when the app needs inspection after
   the request ends.
 
+## Prerequisites
+
+- Laravel AI is configured in your application.
+- The swarm is sequential.
+- The HTTP request can remain open for the full workflow duration.
+- Enable `SWARM_STREAM_REPLAY_ENABLED=true` or call `storeForReplay()` only when
+  exact playback is required later.
+
 ## Stream From A Route
 
 ```php
@@ -67,3 +75,11 @@ Route::get('/article-stream/{runId}/replay', function (string $runId) {
 - A stream is a request/response experience. If the browser also needs a stable
   run detail page, use lifecycle events, persisted replay, and a run inspector
   endpoint keyed by the persisted `run_id`.
+
+## What Happened
+
+The route returned a lazy `StreamableSwarmResponse`. Laravel consumed the
+response as the swarm ran, sending typed stream events to the client. When
+`storeForReplay()` is used, the emitted timeline is also written to the replay
+store so `SwarmHistory::replay($runId)` can return the same event sequence
+later.

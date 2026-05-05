@@ -13,6 +13,13 @@ This example teaches:
 - Laravel Swarm validates the route plan before workers run;
 - worker classes after the coordinator must be unique.
 
+## Prerequisites
+
+- Laravel AI is configured with structured output support for the coordinator.
+- Worker agents are concrete, unique classes after the coordinator.
+- The route plan must be a valid DAG using worker, parallel, and finish nodes.
+- No queue worker is required for the synchronous example.
+
 ## Swarm
 
 ```php
@@ -150,3 +157,11 @@ to the editor.
 ```
 
 See `docs/hierarchical-routing.md` for the full route-plan contract.
+
+## What Happened
+
+The coordinator received the original task and returned a structured route plan.
+Laravel Swarm validated the plan before running workers. The parallel node let
+`BillingResponder` and `PolicyResearcher` receive the original task
+independently, then `ReplyEditor` received their named outputs before the
+finish node selected the final result.

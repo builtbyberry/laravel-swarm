@@ -54,6 +54,15 @@
 
 ### Documentation
 
+- Reworked the README and examples around a Laravel-style learning path:
+  install, create a swarm, run it, choose an execution mode, then add
+  production operations.
+- Added a documentation index and public surface coverage matrix mapping swarm
+  methods, responses, attributes, testing helpers, durable manager operations,
+  Artisan commands, and extension points to their canonical guides.
+- Expanded durable waits/signals, retries/progress, child swarms, and webhooks
+  into full user guides with prerequisites, copy-paste examples, edge cases,
+  testing notes, and related documentation.
 - Added or expanded guides for upgrading, durable runtime architecture,
   workflow operations, durable webhooks, observability logging/tracing,
   observability correlation, audit evidence, operational query contracts,

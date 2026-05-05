@@ -13,6 +13,14 @@ This example teaches:
   broadcaster;
 - use Pulse for aggregate metrics and your own dashboard for run-level UX.
 
+## Prerequisites
+
+- Laravel events are enabled for your application.
+- Run the package migrations if you want database-backed history or durable
+  controls alongside the dashboard.
+- Configure broadcasting only if the UI needs live updates.
+- Install and configure Laravel Pulse only if you want aggregate metrics cards.
+
 ## Register Listeners
 
 ### `app/Providers/AppServiceProvider.php`

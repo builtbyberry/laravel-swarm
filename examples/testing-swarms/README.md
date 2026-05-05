@@ -10,6 +10,13 @@ This example teaches:
 - use event assertions for real lifecycle behavior;
 - array task assertions use subset matching.
 
+## Prerequisites
+
+- Pest or PHPUnit is configured for your Laravel application.
+- Laravel AI does not need to call a real provider when you use `fake()`.
+- Database-backed durable behavior requires migrations and package-style feature
+  tests; fakes only record durable dispatch intent.
+
 ## Fake A Swarm
 
 ```php

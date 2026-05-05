@@ -14,6 +14,15 @@ This example teaches:
   real-time updates;
 - callbacks are compatibility-only, not the recommended queued pattern.
 
+## Prerequisites
+
+- Laravel AI is configured in your application.
+- A queue connection and worker are running.
+- `SWARM_CAPTURE_ACTIVE_CONTEXT=true` is set so the worker can rebuild the run
+  context.
+- Use database persistence when the browser needs durable status beyond cache
+  TTLs.
+
 ## Queue A Swarm
 
 ```php
@@ -103,3 +112,11 @@ only because queued closures can capture unexpected application state.
 Events are not a replacement for persisted status. Use events for notifications
 and live updates, and keep a run inspector endpoint as the fallback source of
 truth for browser refreshes, reconnects, and missed broadcasts.
+
+## What Happened
+
+The controller dispatched one Laravel queue job and returned `202` with the
+`run_id`. The worker re-resolved the swarm from the container, rebuilt the
+plain-data task payload into a run context, executed the agents, and emitted
+`SwarmCompleted` or `SwarmFailed`. The pending record covers the short period
+before persisted history exists.

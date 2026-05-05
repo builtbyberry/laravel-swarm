@@ -11,6 +11,14 @@ This example teaches:
 - simple concrete agents are container-resolvable without manual binding;
 - agents with interface dependencies need normal Laravel container bindings.
 
+## Prerequisites
+
+- Laravel AI is configured in your application.
+- Parallel agents are stateless and container-resolvable by class.
+- Laravel concurrency can run in the current environment.
+- Durable parallel usage also requires database persistence,
+  `SWARM_CAPTURE_ACTIVE_CONTEXT=true`, a queue worker, and scheduled recovery.
+
 ## Swarm
 
 ```php
@@ -133,3 +141,10 @@ $response->runId;
 
 Durable parallel execution requires database-backed persistence, a queue
 worker, and scheduled `swarm:recover`.
+
+## What Happened
+
+In the synchronous parallel run, every agent received the original task and
+Laravel concurrency executed them independently. In the durable parallel run,
+Laravel Swarm created branch jobs with independent leases, recorded each branch
+terminal state, and joined the branch outputs before completing the run.

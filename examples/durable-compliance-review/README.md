@@ -19,6 +19,7 @@ This example covers:
 **Requires:**
 
 - `SWARM_PERSISTENCE_DRIVER=database`
+- `SWARM_CAPTURE_ACTIVE_CONTEXT=true`
 - migrated swarm tables
 - a running queue worker
 - `swarm:recover` scheduled in Laravel's scheduler
@@ -38,6 +39,7 @@ workflow from the beginning.
 
 ```bash
 SWARM_PERSISTENCE_DRIVER=database
+SWARM_CAPTURE_ACTIVE_CONTEXT=true
 SWARM_DURABLE_STEP_TIMEOUT=300
 ```
 

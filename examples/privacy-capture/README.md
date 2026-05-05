@@ -12,6 +12,14 @@ This example teaches:
 - disabled capture uses `[redacted]` instead of changing payload shape;
 - metadata is not redacted and should not contain secrets.
 
+## Prerequisites
+
+- Decide whether your application needs operational inspection, audit evidence,
+  or both.
+- Use database persistence when retained history must survive cache eviction.
+- Set `SWARM_CAPTURE_ACTIVE_CONTEXT=true` for queued or durable swarms even when
+  input and output capture stay disabled.
+
 ## Configuration
 
 ```bash
