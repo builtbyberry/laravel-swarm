@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
@@ -18,6 +19,7 @@ class SwarmStepRecorder
     public function __construct(
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
+        protected SwarmAuditDispatcher $audit,
     ) {}
 
     public function started(SwarmExecutionState $state, int $index, string $agentClass, string $input): void
@@ -30,6 +32,16 @@ class SwarmStepRecorder
             input: $this->capture->input($input),
             metadata: $state->context->metadata,
         ));
+        $this->audit->emit('step.started', [
+            'run_id' => $state->context->runId,
+            'parent_run_id' => $state->context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $state->swarm::class,
+            'topology' => $state->topology->value,
+            'execution_mode' => $state->executionMode->value,
+            'step_index' => $index,
+            'agent_class' => $agentClass,
+            'status' => 'started',
+        ]);
     }
 
     /**
@@ -131,6 +143,18 @@ class SwarmStepRecorder
             metadata: $stepMetadata,
             artifacts: $this->capture->artifacts($step->artifacts),
         ));
+        $this->audit->emit('step.completed', [
+            'run_id' => $state->context->runId,
+            'parent_run_id' => $state->context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $state->swarm::class,
+            'topology' => $state->topology->value,
+            'execution_mode' => $state->executionMode->value,
+            'step_index' => $index,
+            'agent_class' => $agentClass,
+            'duration_ms' => $durationMs,
+            'status' => 'completed',
+            'metadata' => $stepMetadata,
+        ]);
 
         return $step;
     }

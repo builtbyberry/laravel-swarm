@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
@@ -73,6 +74,7 @@ class SwarmRunner
         protected SwarmPayloadLimits $limits,
         protected SwarmAttributeResolver $resolver,
         protected QueuedHierarchicalCoordinator $queuedHierarchicalCoordinator,
+        protected SwarmAuditDispatcher $audit,
     ) {}
 
     /**
@@ -189,6 +191,15 @@ class SwarmRunner
             metadata: $context->metadata,
             executionMode: $executionMode->value,
         ));
+        $this->audit->emit('run.started', [
+            'run_id' => $context->runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $swarm::class,
+            'topology' => $topology->value,
+            'execution_mode' => $executionMode->value,
+            'status' => 'started',
+            'metadata' => $context->metadata,
+        ]);
 
         try {
             $response = match ($topology) {
@@ -219,6 +230,17 @@ class SwarmRunner
                 executionMode: $executionMode->value,
                 exceptionClass: $exception::class,
             ));
+            $this->audit->emit('run.failed', [
+                'run_id' => $context->runId,
+                'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+                'swarm_class' => $swarm::class,
+                'topology' => $topology->value,
+                'execution_mode' => $executionMode->value,
+                'status' => 'failed',
+                'exception_class' => $exception::class,
+                'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                'metadata' => $context->metadata,
+            ]);
 
             throw $exception;
         }
@@ -596,6 +618,17 @@ class SwarmRunner
                 executionMode: ExecutionMode::Queue->value,
                 exceptionClass: $exception::class,
             ));
+            $this->audit->emit('run.failed', [
+                'run_id' => $context->runId,
+                'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+                'swarm_class' => $swarm::class,
+                'topology' => $topology->value,
+                'execution_mode' => ExecutionMode::Queue->value,
+                'status' => 'failed',
+                'exception_class' => $exception::class,
+                'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                'metadata' => $context->metadata,
+            ]);
 
             throw $exception;
         }
@@ -655,6 +688,16 @@ class SwarmRunner
             artifacts: $capturedResponse->artifacts,
             executionMode: $executionMode->value,
         ));
+        $this->audit->emit('run.completed', [
+            'run_id' => $context->runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $swarm::class,
+            'topology' => $topology->value,
+            'execution_mode' => $executionMode->value,
+            'status' => 'completed',
+            'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+            'metadata' => $capturedResponse->metadata,
+        ]);
 
         return $response;
     }

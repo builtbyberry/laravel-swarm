@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -29,6 +30,7 @@ class DurableRunRecorder
         protected Connection $connection,
         protected SwarmCapture $capture,
         protected DurableRunContext $runs,
+        protected SwarmAuditDispatcher $audit,
     ) {}
 
     public function fail(string $runId, string $token, Throwable $exception, RunContext $context, int $stepLeaseSeconds): void
@@ -44,6 +46,17 @@ class DurableRunRecorder
             $historyToken = is_array($historyRow) ? ($historyRow['execution_token'] ?? null) : null;
             $this->historyStore->fail($runId, $exception, $this->ttlSeconds(), $historyToken, $stepLeaseSeconds);
         });
+        $this->audit->emit('durable.failed', [
+            'run_id' => $runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $context->metadata['swarm_class'] ?? null,
+            'topology' => $context->metadata['topology'] ?? null,
+            'execution_mode' => 'durable',
+            'status' => 'failed',
+            'exception_class' => $exception::class,
+            'timed_out' => str_contains(strtolower($exception->getMessage()), 'timeout'),
+            'duration_ms' => $this->runs->durationMillisecondsFor($runId),
+        ]);
     }
 
     public function cancel(string $runId, string $token, RunContext $context, ?SwarmStep $step = null): void
@@ -54,6 +67,14 @@ class DurableRunRecorder
             $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             $this->historyStore->syncDurableState($runId, 'cancelled', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), true);
         });
+        $this->audit->emit('durable.cancelled', [
+            'run_id' => $runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $context->metadata['swarm_class'] ?? null,
+            'topology' => $context->metadata['topology'] ?? null,
+            'execution_mode' => 'durable',
+            'status' => 'cancelled',
+        ]);
     }
 
     public function pauseAtBoundary(string $runId, string $token, RunContext $context): void
@@ -62,6 +83,14 @@ class DurableRunRecorder
             $this->durableRuns->markPaused($runId, $token);
             $this->historyStore->syncDurableState($runId, 'paused', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false);
         });
+        $this->audit->emit('durable.paused', [
+            'run_id' => $runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $context->metadata['swarm_class'] ?? null,
+            'topology' => $context->metadata['topology'] ?? null,
+            'execution_mode' => 'durable',
+            'status' => 'paused',
+        ]);
     }
 
     public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null): void
@@ -72,6 +101,15 @@ class DurableRunRecorder
             $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             $this->historyStore->complete($runId, $capturedResponse, $this->ttlSeconds(), $token, $stepLeaseSeconds);
         });
+        $this->audit->emit('durable.completed', [
+            'run_id' => $runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $context->metadata['swarm_class'] ?? null,
+            'topology' => $context->metadata['topology'] ?? null,
+            'execution_mode' => 'durable',
+            'status' => 'completed',
+            'duration_ms' => $this->runs->durationMillisecondsFor($runId),
+        ]);
     }
 
     public function checkpointHierarchical(
@@ -98,6 +136,15 @@ class DurableRunRecorder
                 totalSteps: $result->totalSteps,
             );
         });
+        $this->audit->emit('durable.checkpointed_hierarchical', [
+            'run_id' => $runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $context->metadata['swarm_class'] ?? null,
+            'topology' => $context->metadata['topology'] ?? null,
+            'execution_mode' => 'durable',
+            'status' => 'checkpointed',
+            'next_step_index' => $nextStepIndex,
+        ]);
     }
 
     public function checkpointSequential(string $runId, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds): void
@@ -106,6 +153,15 @@ class DurableRunRecorder
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->durableRuns->releaseForNextStep($runId, $token, $nextStepIndex);
         });
+        $this->audit->emit('durable.checkpointed', [
+            'run_id' => $runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $context->metadata['swarm_class'] ?? null,
+            'topology' => $context->metadata['topology'] ?? null,
+            'execution_mode' => 'durable',
+            'status' => 'checkpointed',
+            'next_step_index' => $nextStepIndex,
+        ]);
     }
 
     protected function persistStepArtifacts(string $runId, ?SwarmStep $step): void
