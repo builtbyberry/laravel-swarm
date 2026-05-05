@@ -7,9 +7,11 @@
 - **Testing** — Added an opt-in Pest lane, `composer test:process-concurrency`,
   that runs parallel and hierarchical parallel smoke tests against Laravel’s
   `process` concurrency driver (real subprocess workers), with deterministic
-  skips when `proc_open` or the driver is unavailable. GitHub Actions runs this
-  lane for the `stable-latest` dependency matrix only; the default `composer test`
-  path remains on the `sync` driver with existing serialization-mock coverage.
+  skips when `proc_open` or the driver is unavailable. GitHub Actions runs
+  `composer test:process-concurrency:ci` (same tests with `--fail-on-skipped`)
+  for the `stable-latest` dependency matrix only so skipped tests cannot pass
+  CI silently. The default `composer test` path remains on the `sync` driver
+  with existing serialization-mock coverage.
 
 ### Added
 

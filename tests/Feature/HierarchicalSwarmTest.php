@@ -23,22 +23,15 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalLimitedSwarm
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMissingStructuredCoordinatorSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMultiRouteSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalSingleRouteSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Contracts\Concurrency\Driver;
 use Illuminate\Support\Defer\DeferredCallback;
 use Illuminate\Support\Facades\Event;
 
-function hierarchicalPlan(string $startAt, array $nodes): array
-{
-    return [
-        'start_at' => $startAt,
-        'nodes' => $nodes,
-    ];
-}
-
 beforeEach(function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -66,7 +59,7 @@ test('hierarchical swarm executes a valid single-worker plan', function () {
 
 test('hierarchical swarm executes a valid sequential worker chain', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -105,7 +98,7 @@ PROMPT);
 
 test('hierarchical swarm executes a valid parallel group followed by a join', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -160,7 +153,7 @@ test('hierarchical swarm fails when parallel branch results are missing', functi
     });
 
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -189,7 +182,7 @@ test('hierarchical swarm fails when parallel branch results are missing', functi
 
 test('hierarchical swarm can finish without worker execution', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('finish_node', [
+        HierarchicalTestPlan::make('finish_node', [
             'finish_node' => [
                 'type' => 'finish',
                 'output' => 'done-without-workers',
@@ -207,7 +200,7 @@ test('hierarchical swarm can finish without worker execution', function () {
 
 test('hierarchical swarm rejects plans that route the coordinator to itself', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('coordinator_node', [
+        HierarchicalTestPlan::make('coordinator_node', [
             'coordinator_node' => [
                 'type' => 'worker',
                 'agent' => FakeHierarchicalCoordinator::class,
@@ -222,7 +215,7 @@ test('hierarchical swarm rejects plans that route the coordinator to itself', fu
 
 test('hierarchical swarm names unknown worker classes explicitly', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('unknown_node', [
+        HierarchicalTestPlan::make('unknown_node', [
             'unknown_node' => [
                 'type' => 'worker',
                 'agent' => 'App\\Ai\\Agents\\Foo',
@@ -237,7 +230,7 @@ test('hierarchical swarm names unknown worker classes explicitly', function () {
 
 test('hierarchical swarm rejects unknown node references', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -253,7 +246,7 @@ test('hierarchical swarm rejects unknown node references', function () {
 
 test('hierarchical swarm rejects cyclic plans', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -275,7 +268,7 @@ test('hierarchical swarm rejects cyclic plans', function () {
 
 test('hierarchical swarm rejects unreachable nodes', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -295,7 +288,7 @@ test('hierarchical swarm rejects unreachable nodes', function () {
 
 test('hierarchical swarm rejects invalid finish node shapes', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('finish_node', [
+        HierarchicalTestPlan::make('finish_node', [
             'finish_node' => [
                 'type' => 'finish',
                 'output' => 'done',
@@ -321,7 +314,7 @@ test('hierarchical swarm requires a structured-output coordinator', function () 
 
 test('hierarchical swarm enforces max agent step limits across coordinator and workers', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -345,7 +338,7 @@ test('hierarchical swarm enforces max agent step limits across coordinator and w
 
 test('hierarchical swarm rejects over-budget parallel groups before worker execution', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -377,7 +370,7 @@ test('hierarchical swarm rejects over-budget parallel groups before worker execu
 
 test('hierarchical swarm requires parallel nodes to define next during validation', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -404,7 +397,7 @@ test('hierarchical swarm requires parallel nodes to define next during validatio
 
 test('parallel nodes missing next fail validation before budget checks', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -431,7 +424,7 @@ test('parallel nodes missing next fail validation before budget checks', functio
 
 test('unreachable nodes fail validation before budget checks', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -464,7 +457,7 @@ test('hierarchical swarm rejects duplicate worker classes', function () {
 
 test('hierarchical swarm persists node ids and branch metadata to history', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -506,7 +499,7 @@ test('hierarchical swarm dispatches lifecycle events for coordinator and workers
     Event::fake();
 
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -537,7 +530,7 @@ test('hierarchical swarm dispatches lifecycle events for coordinator and workers
 
 test('queued hierarchical execution honors the validated plan contract', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -568,7 +561,7 @@ test('queued hierarchical execution honors the validated plan contract', functio
 
 test('queued hierarchical parallel groups run sequentially when coordination is in_process (default)', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -607,7 +600,7 @@ test('queued hierarchical parallel groups run sequentially when coordination is 
 
 test('parallel branch sibling output dependencies fail validation in run mode', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -640,7 +633,7 @@ test('parallel branch sibling output dependencies fail validation in run mode', 
 
 test('parallel branch sibling output dependencies fail validation in queue mode', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -676,7 +669,7 @@ test('parallel branch sibling output dependencies fail validation in queue mode'
 
 test('worker nodes cannot reference downstream future outputs', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -701,7 +694,7 @@ test('worker nodes cannot reference downstream future outputs', function () {
 
 test('finish nodes cannot reference future outputs', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('finish_node', [
+        HierarchicalTestPlan::make('finish_node', [
             'finish_node' => [
                 'type' => 'finish',
                 'output_from' => 'writer_node',
@@ -722,7 +715,7 @@ test('finish nodes cannot reference future outputs', function () {
 
 test('workers after parallel groups can reference all branch outputs in run mode', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -767,7 +760,7 @@ PROMPT);
 
 test('workers after parallel groups can reference all branch outputs in queue mode', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -814,7 +807,7 @@ PROMPT);
 
 test('hierarchical worker nodes resolve named upstream outputs', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,
@@ -849,7 +842,7 @@ PROMPT);
 
 test('hierarchical finish nodes can resolve their output from a prior node', function () {
     FakeHierarchicalCoordinator::fake([
-        hierarchicalPlan('writer_node', [
+        HierarchicalTestPlan::make('writer_node', [
             'writer_node' => [
                 'type' => 'worker',
                 'agent' => FakeWriter::class,

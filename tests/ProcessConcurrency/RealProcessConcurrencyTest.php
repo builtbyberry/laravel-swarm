@@ -10,17 +10,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryHierarchicalParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableParallelSwarm;
-
-/**
- * @return array{start_at: string, nodes: array<string, mixed>}
- */
-function processConcurrencyHierarchicalPlan(string $startAt, array $nodes): array
-{
-    return [
-        'start_at' => $startAt,
-        'nodes' => $nodes,
-    ];
-}
+use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 
 pest()->group('process-concurrency');
 
@@ -33,7 +23,7 @@ test('parallel swarm crosses the real process concurrency driver without agent i
 
 test('hierarchical swarm executes parallel group and join under the real process concurrency driver', function () {
     FakeHierarchicalCoordinator::fake([
-        processConcurrencyHierarchicalPlan('parallel_node', [
+        HierarchicalTestPlan::make('parallel_node', [
             'parallel_node' => [
                 'type' => 'parallel',
                 'branches' => ['writer_node', 'editor_node'],
@@ -63,8 +53,17 @@ test('hierarchical swarm executes parallel group and join under the real process
     expect($response->metadata['parallel_groups'])->toBe([
         ['node_id' => 'parallel_node', 'branches' => ['writer_node', 'editor_node']],
     ]);
-    expect($response->steps[1]->metadata['parent_parallel_node_id'])->toBe('parallel_node');
-    expect($response->steps[2]->metadata['parent_parallel_node_id'])->toBe('parallel_node');
+
+    $parallelSteps = array_values(array_filter(
+        $response->steps,
+        fn ($step) => ($step->metadata['parent_parallel_node_id'] ?? null) === 'parallel_node'
+    ));
+
+    expect($parallelSteps)->toHaveCount(2);
+
+    foreach ($parallelSteps as $step) {
+        expect($step->metadata['parent_parallel_node_id'])->toBe('parallel_node');
+    }
 });
 
 test('parallel swarm agents must be container resolvable before process concurrency dispatch', function () {

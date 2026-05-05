@@ -185,6 +185,12 @@ composer analyse
 composer format
 ```
 
+For parallel or hierarchical **concurrency** changes, also run
+`composer test:process-concurrency` (optional locally; skips cleanly when the
+real `process` driver cannot run). Continuous integration uses
+`composer test:process-concurrency:ci`, which fails the build if any test in
+that lane is skipped.
+
 The package `TestCase` sets `swarm.capture.*` to **true** and `swarm.persistence.encrypt_at_rest` to **false** so the suite exercises full persisted payloads without coupling every test to the conservative production defaults.
 
 If running phpstan directly, use:

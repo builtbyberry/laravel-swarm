@@ -45,7 +45,7 @@ jobs:
 
       - name: Execute process concurrency validation
         if: matrix.dependencies == 'stable-latest'
-        run: composer test:process-concurrency
+        run: composer test:process-concurrency:ci
 
       - name: Execute tests
         if: matrix.dependencies == 'lowest'

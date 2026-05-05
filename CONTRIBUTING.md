@@ -34,15 +34,23 @@ coverage driver (PCOV or Xdebug). Install PCOV for PHP locally when you want to
 match CI or debug coverage failures; otherwise `composer test` remains the
 default fast path without coverage.
 
-**Process concurrency validation** — CI also runs `composer test:process-concurrency`
-on the stable-latest dependency matrix only. That lane exercises parallel and
-hierarchical parallel swarms against Laravel’s real `process` concurrency driver
-(subprocess workers), not the `sync` driver used by the default suite. Run it
-locally when changing `ParallelRunner`, `HierarchicalRunner`, or anything that
-affects closure serialization or container resolution for concurrent workers. It
-requires a CLI environment where `proc_open` is available and subprocess
-spawns succeed; if the driver cannot run, tests **skip** with an explicit reason
-rather than failing intermittently.
+**Process concurrency validation** — CI runs `composer test:process-concurrency:ci`
+on the stable-latest dependency matrix only. That script is like
+`composer test:process-concurrency` but adds Pest’s `--fail-on-skipped`, so the
+workflow **fails** if any test in that folder is skipped (a broken driver cannot
+look green while providing no coverage). For day-to-day local work, use
+`composer test:process-concurrency`, which still **skips** with an explicit
+reason when `proc_open` or subprocess bootstrap is unavailable instead of
+flaking. Use `composer test:process-concurrency:ci` locally to match GitHub
+Actions.
+
+The lane exercises parallel and hierarchical parallel swarms against Laravel’s
+real `process` concurrency driver (subprocess workers), not the `sync` driver
+used by the default suite. Run it when changing `ParallelRunner`,
+`HierarchicalRunner`, or anything that affects closure serialization or
+container resolution for concurrent workers. If the CI job fails with skips,
+check `proc_open`, PHP build flags, and Testbench/Artisan subprocess bootstrap
+(see [Laravel concurrency](https://laravel.com/docs/concurrency)).
 
 If you run PHPStan directly, use the same command as CI:
 
