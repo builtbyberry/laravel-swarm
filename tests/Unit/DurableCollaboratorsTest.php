@@ -144,6 +144,39 @@ test('factory shares signal handler instance between manager and boundary coordi
     expect($signalsProp->getValue($boundary))->toBe($signalHandlerInManager);
 });
 
+test('factory shares run context through extracted step advancement collaborators', function () {
+    configureDurableCollaboratorRuntime();
+
+    $manager = app(DurableSwarmManager::class);
+
+    $hierarchicalProp = new ReflectionProperty($manager, 'hierarchicalCoordinator');
+    $hierarchical = $hierarchicalProp->getValue($manager);
+
+    $advancerProp = new ReflectionProperty($manager, 'advancer');
+    $advancer = $advancerProp->getValue($manager);
+
+    $runContextProp = new ReflectionProperty($advancer, 'runs');
+    $runContext = $runContextProp->getValue($advancer);
+
+    $terminalProp = new ReflectionProperty($advancer, 'terminal');
+    $terminal = $terminalProp->getValue($advancer);
+
+    $parallelProp = new ReflectionProperty($advancer, 'parallel');
+    $parallel = $parallelProp->getValue($advancer);
+
+    $executionBuilderProp = new ReflectionProperty($advancer, 'executionBuilder');
+    $executionBuilder = $executionBuilderProp->getValue($advancer);
+
+    $checkpointsProp = new ReflectionProperty($advancer, 'checkpoints');
+    $checkpoints = $checkpointsProp->getValue($advancer);
+
+    expect((new ReflectionProperty($terminal, 'runs'))->getValue($terminal))->toBe($runContext)
+        ->and((new ReflectionProperty($parallel, 'runs'))->getValue($parallel))->toBe($runContext)
+        ->and((new ReflectionProperty($executionBuilder, 'runs'))->getValue($executionBuilder))->toBe($runContext)
+        ->and((new ReflectionProperty($parallel, 'terminal'))->getValue($parallel))->toBe($terminal)
+        ->and((new ReflectionProperty($checkpoints, 'hierarchical'))->getValue($checkpoints))->toBe($hierarchical);
+});
+
 test('queued hierarchical durable coordinator creates coordination run and dispatches branches', function () {
     configureDurableCollaboratorRuntime();
 

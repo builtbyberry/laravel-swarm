@@ -24,6 +24,9 @@ flowchart TB
   F[DurableManagerCollaboratorFactory]
   subgraph collab["Runners/Durable collaborators"]
     SA[DurableStepAdvancer]
+    TB[Step execution builders/checkpointers]
+    TH[Terminal handler]
+    TP[Top-level parallel advancer]
     BA[DurableBranchAdvancer]
     JD[DurableJobDispatcher]
     SH[DurableSignalHandler]
@@ -35,6 +38,9 @@ flowchart TB
   M --> F
   F --> collab
   SA --> JD
+  SA --> TB
+  SA --> TH
+  SA --> TP
   BA --> JD
 ```
 
@@ -95,8 +101,13 @@ These classes live in `BuiltByBerry\LaravelSwarm\Runners\Durable\` unless noted.
 | `DurableRecoveryCoordinator` | `recover()` scan and redispatch semantics. |
 | `DurableBoundaryCoordinator` | Declarative waits and child-swarm boundary entry after checkpoints. |
 | `DurableChildSwarmCoordinator` | Child durable dispatch and parent wait reconciliation. |
-| `DurableBranchCoordinator` / `DurableBranchAdvancer` | Parallel branch lifecycle and join advancement. |
-| `DurableStepAdvancer` | Core sequential and hierarchical step advancement after lease acquisition. |
+| `DurableBranchCoordinator` / `DurableBranchAdvancer` | Durable branch lifecycle, worker execution, and branch terminal checkpointing. |
+| `DurableStepAdvancer` | Lease-owned coordinator for `advance()`; delegates execution setup, topology-specific advancement, checkpoints, and terminal transitions. |
+| `DurableStepExecutionBuilder` | Resolves the swarm, marks the run running, dispatches `SwarmStarted`, and builds the shared `SwarmExecutionState`. |
+| `DurableSequentialStepAdvancer` | Executes one sequential durable step through `SequentialRunner`. |
+| `DurableTopLevelParallelAdvancer` | Top-level parallel branch fan-out, branch-wait checkpointing, joins, partial-success policy, and terminal delegation. |
+| `DurableStepCheckpointCoordinator` | Successful post-step checkpointing, testing checkpoint hooks, durable boundary entry, and next step/branch dispatch. |
+| `DurableRunTerminalHandler` | Durable timeout, cancel, pause, failure, branch-failure, completion, lifecycle event, and child-run terminal reconciliation paths. |
 | `DurableHierarchicalCoordinator` | Waiting parent / join dispatch at hierarchical boundaries. |
 | `QueuedHierarchicalDurableCoordinator` | Bridge for `multi_worker` queued hierarchical parallel coordination. |
 | `DurableRunRecorder` | `src/Runners/DurableRunRecorder.php` — checkpoint persistence helper used by the advancers. |

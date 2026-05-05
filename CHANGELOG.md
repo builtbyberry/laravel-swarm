@@ -104,6 +104,10 @@
 
 ### Changed
 
+- Durable step advancement internals are split into focused collaborators for
+  execution setup, sequential advancement, top-level parallel advancement,
+  checkpoint dispatch, and terminal handling. `DurableSwarmManager`, durable
+  jobs, events, responses, persistence shapes, and public APIs are unchanged.
 - Completed database run-history context now seals `context.input` with
   `swarm.persistence.encrypt_at_rest`, matching the existing start/history
   encryption contract.

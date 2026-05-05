@@ -176,24 +176,56 @@ class DurableManagerCollaboratorFactory
             'hierarchical' => $hierarchicalRunner,
             'jobs' => $jobs,
         ]);
-        $advancer = $this->application->makeWith(DurableStepAdvancer::class, [
+        $terminal = $this->application->makeWith(DurableRunTerminalHandler::class, [
+            'durableRuns' => $durableRuns,
+            'events' => $events,
+            'recorder' => $recorder,
+            'capture' => $capture,
+            'limits' => $limits,
+            'runs' => $runContext,
+            'payloads' => $payloads,
+            'branches' => $branches,
+            'children' => $children,
+        ]);
+        $parallel = $this->application->makeWith(DurableTopLevelParallelAdvancer::class, [
+            'durableRuns' => $durableRuns,
+            'historyStore' => $historyStore,
+            'connection' => $connection,
+            'capture' => $capture,
+            'runs' => $runContext,
+            'branches' => $branches,
+            'terminal' => $terminal,
+        ]);
+        $executionBuilder = $this->application->makeWith(DurableStepExecutionBuilder::class, [
             'durableRuns' => $durableRuns,
             'historyStore' => $historyStore,
             'contextStore' => $contextStore,
             'artifactRepository' => $artifactRepository,
             'events' => $events,
-            'sequential' => $sequential,
-            'recorder' => $recorder,
             'connection' => $connection,
             'capture' => $capture,
-            'limits' => $limits,
             'application' => $application,
             'runs' => $runContext,
             'payloads' => $payloads,
-            'branches' => $branches,
-            'children' => $children,
+        ]);
+        $sequentialAdvancer = $this->application->makeWith(DurableSequentialStepAdvancer::class, [
+            'sequential' => $sequential,
+        ]);
+        $checkpointCoordinator = $this->application->makeWith(DurableStepCheckpointCoordinator::class, [
+            'durableRuns' => $durableRuns,
+            'recorder' => $recorder,
+            'hierarchical' => $hierarchical,
+        ]);
+        $advancer = $this->application->makeWith(DurableStepAdvancer::class, [
+            'durableRuns' => $durableRuns,
+            'runs' => $runContext,
             'retryHandler' => $retryHandler,
             'hierarchical' => $hierarchical,
+            'terminal' => $terminal,
+            'parallel' => $parallel,
+            'executionBuilder' => $executionBuilder,
+            'sequential' => $sequentialAdvancer,
+            'checkpoints' => $checkpointCoordinator,
         ]);
         $branchAdvancer = $this->application->makeWith(DurableBranchAdvancer::class, [
             'durableRuns' => $durableRuns,
