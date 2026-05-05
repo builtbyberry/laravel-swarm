@@ -39,6 +39,8 @@ trait Runnable
      */
     public static function make(mixed ...$arguments): mixed
     {
+        // Keep static construction aligned with Laravel AI's Promptable ergonomics:
+        // container resolution powers framework bindings and Swarm::fake() interception.
         if (Container::getInstance()->bound(static::class)) {
             $resolved = Container::getInstance()->make(static::class);
             if ($resolved instanceof SwarmFakeInstance) {

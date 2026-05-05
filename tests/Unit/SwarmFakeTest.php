@@ -7,6 +7,7 @@ use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ContainerResolvedQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyRunnableSwarm;
 use Illuminate\Broadcasting\AnonymousEvent;
 use Illuminate\Broadcasting\Channel;
@@ -28,6 +29,26 @@ test('fake intercepts run and queue calls', function () {
     EmptyRunnableSwarm::assertDispatchedDurably('gamma');
 });
 
+test('make without arguments resolves the swarm through the container', function () {
+    $resolved = new EmptyRunnableSwarm;
+
+    app()->instance(EmptyRunnableSwarm::class, $resolved);
+
+    expect(EmptyRunnableSwarm::make())->toBe($resolved);
+});
+
+test('make with named arguments resolves the swarm through container make with', function () {
+    $swarm = ContainerResolvedQueuedSwarm::make(output: 'named-output');
+
+    expect((string) $swarm->run('task'))->toBe('named-output');
+});
+
+test('make with positional arguments creates a direct runtime instance', function () {
+    $swarm = ContainerResolvedQueuedSwarm::make('positional-output');
+
+    expect((string) $swarm->run('task'))->toBe('positional-output');
+});
+
 test('fake intercepts prompt and run calls in the same sync bucket', function () {
     EmptyRunnableSwarm::fake(['prompt-output', 'run-output']);
 
@@ -46,6 +67,18 @@ test('fake make returns the fake even when positional arguments are passed', fun
     $fake = EmptyRunnableSwarm::fake();
 
     expect(EmptyRunnableSwarm::make('runtime-state'))->toBe($fake);
+});
+
+test('fake assertion helpers resolve the fake through the container', function () {
+    $fake = new SwarmFake(EmptyRunnableSwarm::class);
+
+    app()->instance(EmptyRunnableSwarm::class, $fake);
+
+    $fake->run('container-task');
+    $fake->queue('container-queue-task');
+
+    EmptyRunnableSwarm::assertRan('container-task');
+    EmptyRunnableSwarm::assertQueued('container-queue-task');
 });
 
 test('fake intercepts positional make run calls', function () {
