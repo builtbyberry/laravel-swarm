@@ -33,6 +33,17 @@ it('forbids json-path sql predicates in durable query surfaces', function (): vo
         'json_extract(' => '/\bjson_extract\s*\(/i',
     ];
 
+    /**
+     * Laravel JSON column path helpers (`where('meta->key', …)`). Scoped to
+     * Persistence only—Commands/Runners rarely contain query builders here.
+     *
+     * @var array<string, string>
+     */
+    $persistenceOnlyPatterns = [
+        'where_quoted_json_column_path' => '/where\s*\(\s*[\'"][^\'"]*->[^\'"]*[\'"]/',
+        'orderBy_quoted_json_column_path' => '/orderBy(?:Asc|Desc)?\s*\(\s*[\'"][^\'"]*->[^\'"]*[\'"]/',
+    ];
+
     $violations = [];
 
     foreach ($scopedRelativeRoots as $relative) {
@@ -40,6 +51,12 @@ it('forbids json-path sql predicates in durable query surfaces', function (): vo
 
         if (! is_dir($srcRoot)) {
             continue;
+        }
+
+        $activePatterns = $patterns;
+
+        if ($relative === 'src/Persistence') {
+            $activePatterns = [...$patterns, ...$persistenceOnlyPatterns];
         }
 
         $iterator = new RecursiveIteratorIterator(
@@ -65,7 +82,7 @@ it('forbids json-path sql predicates in durable query surfaces', function (): vo
                 continue;
             }
 
-            foreach ($patterns as $label => $regex) {
+            foreach ($activePatterns as $label => $regex) {
                 if (preg_match_all($regex, $contents, $matches, PREG_OFFSET_CAPTURE) < 1) {
                     continue;
                 }

@@ -382,11 +382,15 @@ copy sensitive prompts into analytics tables unless required.
 `tests/Unit/DurableOperationalQueryContractStaticTest` scans only
 `src/Persistence/`, `src/Commands/`, `src/Runners/`, and `src/Pulse/` and fails
 the build if `whereJson*`, `JSON_EXTRACT`, or `json_extract(` appears in those
-trees. That catch is **substring-based**, not a SQL parser: it does **not**
-prove absence of every JSON-path predicate (for example `whereRaw` with JSON
-operators or `where('column->path', …)`). Treat those as **code-review**
-discipline for durable queries; extend the test allowlist or patterns only when
-a concrete regression shows up.
+trees. Under **`src/Persistence/`** it also flags common **Laravel JSON column
+path** call shapes: quoted strings such as `where('col->key', …)` and
+`orderBy(…'col->key'…)` / `orderByAsc` / `orderByDesc`, so JSON-path predicates
+are harder to reintroduce in the store layer.
+
+The check remains **regex-based**, not a SQL parser: it does **not** catch every
+risk (`whereRaw` with hand-written JSON SQL, dynamic column names, or matches
+inside comments). Those stay **code-review** discipline; extend the test
+allowlist or patterns when a concrete regression appears.
 
 For listing finished work, prefer **run history** (`SwarmHistory` /
 `swarm_run_histories`) and combine it with durable tables when you need live

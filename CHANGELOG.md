@@ -19,6 +19,11 @@
 
 ### Changed
 
+- **Durable query contract static test** — In addition to scoped
+  `whereJson*` / `JSON_EXTRACT` / `json_extract(` checks, `src/Persistence/`
+  is scanned for quoted Laravel JSON column path strings in `where(` /
+  `orderBy(` / `orderByAsc` / `orderByDesc` calls. Docs describe remaining
+  non-exhaustive gaps (`whereRaw`, comments, dynamic columns).
 - **Testing** — Added an opt-in Pest lane, `composer test:process-concurrency`,
   that runs parallel and hierarchical parallel smoke tests against Laravel’s
   `process` concurrency driver (real subprocess workers), with deterministic
