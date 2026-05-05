@@ -2,6 +2,14 @@
 
 declare(strict_types=1);
 
+/**
+ * Static guard for operational SQL against durable-related tables (scoped dirs above).
+ *
+ * Exclusions not matched here include dynamic column names, whereRaw() and similar
+ * APIs, SQL embedded in comments, heredocs, or runtime-built strings,
+ * and JSON-path predicates introduced outside the scanned roots. See
+ * docs/durable-execution.md (operational query contract) for fleet-query guidance.
+ */
 it('forbids json-path sql predicates in durable query surfaces', function (): void {
     $packageRoot = dirname(__DIR__, 2);
 

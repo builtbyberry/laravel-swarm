@@ -4,6 +4,11 @@
 
 ### Added
 
+- **`PersistenceDecryptFailurePolicy`** enum and **`swarm.persistence.decrypt_failure_policy`**
+  (`SWARM_PERSISTENCE_DECRYPT_FAILURE_POLICY`), default **`null_with_log`**: when decrypting
+  sealed (`sw0:`) persistence values fails, log a warning without ciphertext and return
+  **`null`** for that field. **`legacy`** restores returning the stored bytes unchanged;
+  **`throw`** rethrows the decryption exception.
 - **Durable operational query contract** — `docs/durable-execution.md` now defines
   the supported predicate surface (typed columns and satellite tables),
   package-maintained commands and Pulse behavior, cache-driver exclusion,
@@ -19,6 +24,14 @@
 
 ### Changed
 
+- **`SwarmPersistenceCipher`** — injects **`Psr\Log\LoggerInterface`**; decrypt failures use
+  **`swarm.persistence.decrypt_failure_policy`** instead of always returning opaque ciphertext
+  strings on failure (minor behavior change; see **UPGRADING.md**).
+- **GitHub Actions** — the **lowest** dependency matrix runs **`composer test:coverage`**,
+  **`composer test:process-concurrency:ci`**, and **`composer lint`**, matching **stable-latest**
+  (see **CONTRIBUTING.md**).
+- **Documentation** — **README.md** (Composer stability), **UPGRADING.md** (decrypt policy,
+  JSON vs sealed strings, minimum-stability), **`config/swarm.php`** (JSON column note).
 - **Durable query contract static test** — In addition to scoped
   `whereJson*` / `JSON_EXTRACT` / `json_extract(` checks, `src/Persistence/`
   is scanned for quoted Laravel JSON column path strings in `where(` /
@@ -29,9 +42,9 @@
   `process` concurrency driver (real subprocess workers), with deterministic
   skips when `proc_open` or the driver is unavailable. GitHub Actions runs
   `composer test:process-concurrency:ci` (same tests with `--fail-on-skipped`)
-  for the `stable-latest` dependency matrix only so skipped tests cannot pass
-  CI silently. The default `composer test` path remains on the `sync` driver
-  with existing serialization-mock coverage.
+  on both dependency matrix rows so skipped tests cannot pass CI silently. The
+  default `composer test` path remains on the `sync` driver with existing
+  serialization-mock coverage.
 
 ### Added
 

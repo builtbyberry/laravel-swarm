@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
+use BuiltByBerry\LaravelSwarm\Enums\PersistenceDecryptFailurePolicy;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Encryption\Encrypter;
+use Psr\Log\LoggerInterface;
 
 /**
  * Application-level encryption for sensitive string columns written by database
@@ -19,6 +21,7 @@ class SwarmPersistenceCipher
     public function __construct(
         protected ConfigRepository $config,
         protected Encrypter $encrypter,
+        protected LoggerInterface $logger,
     ) {}
 
     public function enabled(): bool
@@ -51,8 +54,12 @@ class SwarmPersistenceCipher
 
         try {
             return $this->encrypter->decryptString(substr($value, strlen(self::PREFIX)));
-        } catch (DecryptException) {
-            return $value;
+        } catch (DecryptException $e) {
+            return match ($this->decryptFailurePolicy()) {
+                PersistenceDecryptFailurePolicy::Legacy => $value,
+                PersistenceDecryptFailurePolicy::Throw => throw $e,
+                PersistenceDecryptFailurePolicy::NullWithLog => $this->decryptFailedReturnNull($value),
+            };
         }
     }
 
@@ -118,5 +125,22 @@ class SwarmPersistenceCipher
         }
 
         return $step;
+    }
+
+    private function decryptFailurePolicy(): PersistenceDecryptFailurePolicy
+    {
+        $raw = $this->config->get('swarm.persistence.decrypt_failure_policy');
+
+        return PersistenceDecryptFailurePolicy::tryFromConfig(is_string($raw) ? $raw : null);
+    }
+
+    private function decryptFailedReturnNull(string $prefixedValue): null
+    {
+        $this->logger->warning('Swarm persistence could not decrypt a sealed column value. The field will be returned as null. Verify APP_KEY matches the key used to encrypt stored rows.', [
+            'sealed_length' => strlen($prefixedValue),
+            'has_swarm_prefix' => str_starts_with($prefixedValue, self::PREFIX),
+        ]);
+
+        return null;
     }
 }

@@ -35,6 +35,18 @@ return [
             env('SWARM_ENCRYPT_AT_REST', $swarmPersistenceDriver === 'database'),
             FILTER_VALIDATE_BOOLEAN
         ),
+        /*
+         * When decrypting sw0:-prefixed columns fails (wrong or rotated APP_KEY, corrupt rows):
+         * null_with_log — log a warning without ciphertext, return null for that field (default).
+         * legacy — return the stored bytes unchanged (previous package behavior; surfaces ciphertext strings).
+         * throw — rethrow the decryption exception.
+         */
+        'decrypt_failure_policy' => env('SWARM_PERSISTENCE_DECRYPT_FAILURE_POLICY', 'null_with_log'),
+        /*
+         * JSON columns on persisted rows (for example context data/metadata/artifacts) remain
+         * structured JSON in the database; encrypt_at_rest seals designated string columns only.
+         * Do not store secrets inside JSON payloads unless your application encrypts them.
+         */
     ],
 
     /*

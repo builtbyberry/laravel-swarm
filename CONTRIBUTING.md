@@ -29,20 +29,21 @@ composer lint
 composer analyse
 ```
 
-Continuous integration runs `composer test:coverage`, which requires a code
-coverage driver (PCOV or Xdebug). Install PCOV for PHP locally when you want to
-match CI or debug coverage failures; otherwise `composer test` remains the
-default fast path without coverage.
+Continuous integration runs the same checks on **stable-latest** and **lowest**
+Composer resolutions: `composer test:coverage`, `composer test:process-concurrency:ci`,
+`composer analyse`, and `composer lint`. Install PCOV for PHP locally when you want to
+match CI or debug coverage failures; otherwise `composer test` remains the default
+fast path without coverage. If workflow runtime becomes prohibitive, maintainers may
+split **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
+until then, pull requests validate both matrices equally.
 
 **Process concurrency validation** — CI runs `composer test:process-concurrency:ci`
-on the stable-latest dependency matrix only. That script is like
-`composer test:process-concurrency` but adds Pest’s `--fail-on-skipped`, so the
-workflow **fails** if any test in that folder is skipped (a broken driver cannot
-look green while providing no coverage). For day-to-day local work, use
-`composer test:process-concurrency`, which still **skips** with an explicit
-reason when `proc_open` or subprocess bootstrap is unavailable instead of
-flaking. Use `composer test:process-concurrency:ci` locally to match GitHub
-Actions.
+on every matrix row. That script is like `composer test:process-concurrency` but adds
+Pest’s `--fail-on-skipped`, so the workflow **fails** if any test in that folder is
+skipped (a broken driver cannot look green while providing no coverage). For day-to-day
+local work, use `composer test:process-concurrency`, which still **skips** with an
+explicit reason when `proc_open` or subprocess bootstrap is unavailable instead of
+flaking. Use `composer test:process-concurrency:ci` locally to match GitHub Actions.
 
 The lane exercises parallel and hierarchical parallel swarms against Laravel’s
 real `process` concurrency driver (subprocess workers), not the `sync` driver

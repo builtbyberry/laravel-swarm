@@ -64,6 +64,33 @@ application config.
 Pay particular attention to config that changes persistence, capture, queues,
 stream replay, durable runtime tables, pruning, and encryption at rest.
 
+## Persistence decrypt failures (minor)
+
+When `swarm.persistence.encrypt_at_rest` is enabled with the database driver,
+designated string columns are sealed with Laravel’s encrypter (`APP_KEY`). If the
+application key no longer matches the key used when rows were written (for example
+after rotation without re-encryption), decryption fails.
+
+Configure **`swarm.persistence.decrypt_failure_policy`** (env
+**`SWARM_PERSISTENCE_DECRYPT_FAILURE_POLICY`**):
+
+- **`null_with_log`** (default) — affected sealed **string** fields are returned as
+  **null**; a **warning** is logged without ciphertext in the log context.
+- **`legacy`** — previous package behavior: return the stored value unchanged (opaque
+  `sw0:` ciphertext for sealed payloads).
+- **`throw`** — rethrow the decryption exception.
+
+Encrypt-at-rest applies to **designated string columns** (for example context `input`,
+history step I/O). **JSON columns** (`data`, `metadata`, `artifacts`, and similar)
+remain structured JSON in the database; do not rely on Swarm to encrypt arbitrary
+nested secrets inside JSON unless your application handles that separately.
+
+## Composer minimum-stability
+
+The package uses `"minimum-stability": "dev"` with `"prefer-stable": true` in
+[`composer.json`](composer.json). Applications should keep **`prefer-stable` enabled**
+so Composer prefers stable releases for transitive dependencies where possible.
+
 ## Contract Changes
 
 Most applications should interact with swarms through Laravel-style public

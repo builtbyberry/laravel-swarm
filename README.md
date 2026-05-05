@@ -20,6 +20,12 @@ Laravel Swarm brings multi-agent orchestration to [Laravel](https://laravel.com)
 - Laravel **13+**
 - `laravel/ai` **^0.6**
 
+### Composer stability
+
+This package declares `"minimum-stability": "dev"` with `"prefer-stable": true`.
+Keep **`prefer-stable` enabled** in consuming applications unless you intentionally
+want Composer to resolve unstable transitive releases.
+
 ### Upgrading PHP, Laravel, or Laravel AI
 
 Laravel Swarm orchestrates the same Laravel AI agents and streams as your app. **Composer upgrades to Laravel or `laravel/ai` can change APIs, stream events, or provider behavior** that Swarm does not wrap away. After bumping those dependencies, run your full test suite and any workflows that use swarms (especially queued, streamed, or durable runs). The [changelog](CHANGELOG.md) documents **this package’s** breaking changes; it is not a substitute for integration testing against new framework or Laravel AI releases. For Laravel AI–focused upgrade and pinning steps, see [UPGRADING.md](UPGRADING.md).
