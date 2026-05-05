@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **Durable operational query contract** — `docs/durable-execution.md` now defines
+  the supported predicate surface (typed columns and satellite tables),
+  package-maintained commands and Pulse behavior, cache-driver exclusion,
+  application-owned projection pattern (`SwarmStepCompleted` /
+  `SwarmCompleted`), recovery index references, and anti-patterns for JSON-path
+  fleet queries. `docs/maintenance.md` cross-links the contract for high-volume
+  dashboards (read replicas / projections) and reiterates cache-driver limits.
+- Regression test `tests/Unit/DurableOperationalQueryContractStaticTest.php` that
+  fails if `whereJson*` / `JSON_EXTRACT` / `json_extract(` reappears under `src/`.
+
 ### Changed
 
 - **Testing** — Added an opt-in Pest lane, `composer test:process-concurrency`,

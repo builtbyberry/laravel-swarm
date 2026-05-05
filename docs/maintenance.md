@@ -192,9 +192,19 @@ Avoid driving dashboards from SQL filters or sorts on arbitrary JSON paths in
 checkpoint side tables or the main durable row; that pattern scales poorly and
 fights indexing.
 
-See [Operational queries at scale](durable-execution.md#operational-queries-at-scale)
-in `docs/durable-execution.md` for the fields the package treats as safe
-operational predicates.
+**Cache-backed persistence does not participate in the durable operational query
+contract** — there are no durable tables to index or join. Monitored production
+deployments that rely on `swarm:recover`, `swarm:inspect`, or dashboard queries
+over durable rows must use the `database` driver.
+
+See [Operational query contract](durable-execution.md#operational-query-contract)
+in `docs/durable-execution.md` for package-maintained surfaces, supported
+predicates, Pulse behavior, projection patterns, and anti-patterns.
+
+For read-heavy reporting without impacting writers, point dashboards at a
+**read replica** or an **application-owned projection** fed by lifecycle events
+(see the durable execution doc); the package does not ship built-in table
+partitioning.
 
 ## Durable storage growth and archival
 
@@ -214,6 +224,12 @@ append-only application store.
 If a single logical table outgrows comfortable maintenance windows after pruning
 and archival, plan an application-specific partitioning or archival tier before
 expecting database-native partitioning alone to solve throughput.
+
+When you add **application-owned** covering indexes on swarm tables in very large
+databases, prefer your engine’s **online / concurrent** index build options (for
+example PostgreSQL `CREATE INDEX CONCURRENTLY` or MySQL/InnoDB online DDL) and run
+them in a controlled window; package migrations use standard Laravel index
+creation and may take stronger locks on huge tables than a hand-tuned rollout.
 
 ## Release Checklist
 

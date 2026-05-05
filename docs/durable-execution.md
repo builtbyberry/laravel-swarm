@@ -202,43 +202,181 @@ hierarchical durable run completes, fails, or is cancelled. Terminal history,
 context, and durable failure metadata follow the normal capture and redaction
 settings.
 
-## Operational queries at scale
+## Operational query contract
 
-Operator dashboards and high-volume list views should filter and sort using
-**typed columns** on `swarm_durable_runs` and **satellite tables** (labels,
-waits, signals, progress, child runs, branches, `swarm_durable_run_state`,
-`swarm_durable_node_states`), not SQL predicates on JSON paths across large
-result sets.
+This section is the **supported durable operational query surface** for
+high-volume operators and integrators. It describes which fields are safe
+predicates, which tables participate, how first-party commands and Pulse behave,
+and what stays intentionally out of contract.
 
-Laravel Swarm’s recovery, retry, and join helpers query only typed fields. For
-your own dashboards, treat these as the supported operational dimensions:
+### Database persistence only
 
-- **Identity and classification:** `run_id`, `swarm_class`, `topology`,
-  `execution_mode`, `coordination_profile`
-- **Lifecycle:** `status`, `finished_at`, `created_at`, `updated_at`
-- **Steps and hierarchy:** `next_step_index`, `current_step_index`, `total_steps`,
-  `current_node_id`, `route_start_node_id`, `parent_run_id`
-- **Leases and retries:** `leased_until`, `lease_acquired_at`, `execution_token`,
-  `attempts`, `next_retry_at`, `retry_attempt`, `recovery_count`, `last_recovered_at`
-- **Timeouts and waits:** `timeout_at`, `step_timeout_seconds`, `timed_out_at`,
-  `wait_reason`, `waiting_since`, `wait_timeout_at`, `last_progress_at`
-- **Queue routing:** `queue_connection`, `queue_name`
-- **Pause and cancel:** `pause_requested_at`, `paused_at`, `resumed_at`,
-  `cancel_requested_at`, `cancelled_at`
-- **Labels:** query `swarm_durable_labels` by `key` and the typed value columns
-  (`value_string`, `value_integer`, `value_float`, `value_boolean`, `value_type`)
+**Cache-backed persistence (`swarm.persistence.driver = cache`) is out of this
+contract.** Durable execution itself requires database-backed stores; there is
+no durable runtime table in cache mode. Any monitoring, recovery automation, or
+dashboard that assumes queryable durable rows **must** use the `database`
+driver. See [Maintenance](maintenance.md) for persistence driver notes.
 
-Checkpoint JSON for hierarchical routing and per-node progress lives in
-`swarm_durable_run_state` (`route_plan`, `failure`, `retry_policy`) and
-`swarm_durable_node_states` (`state` per `node_id`), not on the hot
-`swarm_durable_runs` row. The main durable row still carries `route_cursor` and
-`completed_node_ids` for scheduler joins. Load JSON payloads **after** narrowing
-by `run_id` or the typed filters above—for example when hydrating a detail
-view—not as the primary `WHERE` clause across a large table.
+### Package-maintained operational surfaces
+
+These entry points are part of the contract: they resolve durable state through
+`DurableRunStore` / `DatabaseDurableRunStore` and do **not** use broad JSON-path
+`WHERE` clauses on checkpoint payloads.
+
+| Surface | Query / data path | Primary tables / columns |
+| --- | --- | --- |
+| `swarm:recover` | `DurableRecoveryCoordinator` → `recoverable`, `recoverableBranches`, `dueRetries`, `dueRetryBranches`, `recoverableWaitingJoins`, `recoverableTimedOutWaits`, `parentsWaitingOnTerminalChildren`, `undispatchedChildRuns` | Typed columns on `swarm_durable_runs`, `swarm_durable_branches`, joins to `swarm_durable_waits` |
+| `swarm:inspect`, `swarm:progress` | `DurableSwarmManager::inspect` → `find`, `labels`, `details`, `waits`, `signals`, `progress`, `childRuns`, `branchesFor` | Main row + satellite tables keyed by `run_id` |
+| `swarm:pause` / `resume` / `cancel` | lifecycle controllers → `DurableRunStore` mutations | Typed status / lease / pause columns |
+| `swarm:health --durable` | store readiness probe | Connection to configured durable tables |
+| `swarm:prune` | category pruning over configured `swarm.tables.*` roles | All durable family tables (bounded batches) |
+| Pulse `SwarmRuns` / `SwarmStepDurations` | **Event-driven** aggregates on `SwarmCompleted`, `SwarmFailed`, `SwarmStepCompleted` | Laravel Pulse tables only — **no** direct durable SQL |
+
+`swarm:status` and `swarm:history` read **run history** (`RunHistoryStore` /
+`swarm_run_histories`), not durable tables. Treat history as the listing API for
+terminal and step-captured runs; join to durable rows only when you need live
+runtime fields for a known `run_id`.
+
+### Supported predicates (typed and indexed)
+
+Filter and sort list views using **typed columns** on `swarm_durable_runs` and
+**satellite tables** (labels, waits, signals, progress, child runs, branches,
+`swarm_durable_run_state` keys you join on, `swarm_durable_node_states` by
+`node_id`). **Do not** use SQL predicates on JSON paths across large result sets.
+
+**Approved filter shapes:** equality on `run_id`, `swarm_class`, `status`,
+`topology`, `coordination_profile`, `execution_mode`; range or ordering on
+`created_at`, `updated_at`, `finished_at`, `leased_until`, `next_retry_at`,
+`wait_timeout_at`, `timeout_at`; `IN` / `whereIn` on small bounded status sets;
+label lookups via `swarm_durable_labels` (`key` + typed `value_*` columns). Load
+checkpoint JSON **after** narrowing to a small row set (detail hydration), not
+as the primary `WHERE` across the fleet.
+
+**Identity and classification:** `run_id`, `swarm_class`, `topology`,
+`execution_mode`, `coordination_profile`
+
+**Lifecycle:** `status`, `finished_at`, `created_at`, `updated_at`
+
+**Steps and hierarchy:** `next_step_index`, `current_step_index`, `total_steps`,
+`current_node_id`, `route_start_node_id`, `parent_run_id`
+
+**Leases and retries:** `leased_until`, `lease_acquired_at`, `execution_token`,
+`attempts`, `next_retry_at`, `retry_attempt`, `recovery_count`, `last_recovered_at`
+
+**Timeouts and waits:** `timeout_at`, `step_timeout_seconds`, `timed_out_at`,
+`wait_reason`, `waiting_since`, `wait_timeout_at`, `last_progress_at`
+
+**Queue routing:** `queue_connection`, `queue_name`
+
+**Pause and cancel:** `pause_requested_at`, `paused_at`, `resumed_at`,
+`cancel_requested_at`, `cancelled_at`
+
+**Labels:** `swarm_durable_labels` keyed by `run_id`, filter on `key` and typed
+value columns (`value_string`, `value_integer`, `value_float`, `value_boolean`,
+`value_type`). Prefer `DurableRunStore::runIdsForLabels()` for package-aligned
+label resolution.
+
+**Satellite operational rows:** `swarm_durable_waits`, `swarm_durable_signals`,
+`swarm_durable_progress`, `swarm_durable_child_runs`, `swarm_durable_branches`,
+`swarm_durable_details` (KV details), webhook idempotency — each has typed
+status / name / timestamp columns suitable for predicates; keep JSON `metadata`
+/ `outcome` / `progress` blobs for post-filter hydration unless you add an
+**application-owned projection** (below).
+
+### Non-queryable checkpoint JSON
+
+The following remain **checkpoint / inspection payload**, not fleet-wide
+predicates:
+
+- `swarm_durable_run_state`: `route_plan`, `failure`, `retry_policy`
+- `swarm_durable_node_states.state` per `node_id`
+- `swarm_durable_runs.route_cursor`, `completed_node_ids` (JSON on the main row
+  for routing joins — still avoid `WHERE` JSON-path scans; narrow by typed
+  columns first)
+
+Laravel Swarm’s recovery, retry, and join helpers query only typed fields.
+
+### Indexes the package relies on
+
+Recovery and waiting-join scans use composite indexes on `swarm_durable_runs` and
+`swarm_durable_branches` (see migration
+`2026_04_24_000011_add_recovery_indexes_to_swarm_durable_tables.php`:
+`swarm_durable_runs_recovery_idx`, `swarm_durable_runs_waiting_join_idx`,
+`swarm_durable_branches_recovery_idx`). When adding custom reporting queries,
+ensure predicates remain compatible with these indexes or add **your own**
+covering indexes in application migrations.
+
+### Pulse and the contract
+
+Shipped Pulse recorders aggregate **lifecycle events**, not durable SQL. They
+remain aligned with the contract because keys are derived from typed event
+properties (`swarmClass`, `topology`, `status`, `durationMs`). If you extend
+Pulse cards, keep the same rule: derive aggregates from events or from **typed**
+durable columns — never from JSON-path filters across durable tables.
+
+### Application-owned projections
+
+When you need tenant dashboards, analytics, or ad hoc filters that checkpoint
+JSON cannot support at scale, **project** into an application-owned table using
+swarm lifecycle events. Example pattern:
+
+1. Create an `app_swarm_run_projections` (or similarly named) migration in your
+   application with columns you control (`run_id` unique, `swarm_class`,
+   `tenant_id`, `current_status`, `last_step_at`, denormalized counters, etc.)
+   and the indexes your dashboards require.
+2. Listen to `BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted` and
+   `BuiltByBerry\LaravelSwarm\Events\SwarmCompleted` (and optionally
+   `SwarmFailed`) in your application: upsert projection rows by `run_id`.
+   Use `ShouldQueue` listeners if writes must not block swarm completion.
+3. Treat projection writes as **at-least-once**: use `updateOrInsert` on
+   `run_id` + step index (or a monotonic `step_sequence` you own) so replays are
+   idempotent.
+4. Own **retention and PII** on projection tables separately from Swarm prune;
+   Swarm prune does not delete app tables.
+
+```php
+namespace App\Listeners;
+
+use App\Models\SwarmRunProjection;
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
+use Illuminate\Contracts\Queue\ShouldQueue;
+
+class ProjectSwarmRunToAnalyticsTable implements ShouldQueue
+{
+    public function handle(SwarmStepCompleted|SwarmCompleted $event): void
+    {
+        SwarmRunProjection::query()->updateOrInsert(
+            ['run_id' => $event->runId],
+            [
+                'swarm_class' => $event->swarmClass,
+                'topology' => $event->topology,
+                'execution_mode' => $event->executionMode,
+                'last_event_at' => now(),
+                'last_step_index' => $event instanceof SwarmStepCompleted ? $event->index : null,
+                'terminal_output' => $event instanceof SwarmCompleted ? $event->output : null,
+            ],
+        );
+    }
+}
+```
+
+Register the listener in your application `EventServiceProvider` (or Laravel
+11+ `AppServiceProvider` using `Event::listen`). **Redaction:** projection code
+runs in your app — respect `swarm.capture.*` and your own data policies; do not
+copy sensitive prompts into analytics tables unless required.
+
+### Anti-patterns
+
+- `whereJsonContains` / `JSON_EXTRACT` / `json_extract` predicates across
+  `swarm_durable_*` for fleet list views
+- Full-table scans of `swarm_durable_run_state.route_plan` for reporting
+- Calling `inspect()` per row in a high-volume list (hydrate details only after
+  narrowing by typed predicates or history)
 
 For listing finished work, prefer **run history** (`SwarmHistory` /
 `swarm_run_histories`) and combine it with durable tables when you need live
-runtime fields.
+runtime fields for specific `run_id` values.
 
 ## Pause, Resume, Cancel, And Recover
 
@@ -367,7 +505,8 @@ Schedule::command('swarm:prune')->daily();
 ## Production Setup Checklist
 
 Before using durable swarms in production, make the operational contract
-explicit. Durable sequential execution is the recommended default for an
+explicit (see [Operational query contract](#operational-query-contract) above).
+Durable sequential execution is the recommended default for an
 enterprise pilot because each step has the simplest retry, recovery, and
 inspection boundary.
 
