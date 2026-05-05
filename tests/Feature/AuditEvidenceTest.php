@@ -10,12 +10,14 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStreamingFailureSwarm;
 use Illuminate\Support\Facades\Artisan;
 
 // ---------------------------------------------------------------------------
@@ -45,6 +47,49 @@ function configureDurableRuntimeForAudit(): void
     app()->forgetInstance(SwarmRunner::class);
     app()->forgetInstance(DurableSwarmManager::class);
     app()->forgetInstance(SwarmAuditDispatcher::class);
+}
+
+function bindFailingDurableManagerForAudit(string $method): void
+{
+    app()->instance(DurableSwarmManager::class, new class($method) extends DurableSwarmManager
+    {
+        public function __construct(protected string $method) {}
+
+        public function pause(string $runId): bool
+        {
+            $this->throwIfTarget('pause');
+
+            return true;
+        }
+
+        public function resume(string $runId): bool
+        {
+            $this->throwIfTarget('resume');
+
+            return true;
+        }
+
+        public function cancel(string $runId): bool
+        {
+            $this->throwIfTarget('cancel');
+
+            return true;
+        }
+
+        public function recover(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
+        {
+            $this->throwIfTarget('recover');
+
+            return [];
+        }
+
+        protected function throwIfTarget(string $method): void
+        {
+            if ($this->method === $method) {
+                throw new RuntimeException("{$method} failed");
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +158,48 @@ test('run.failed evidence is emitted when swarm throws', function (): void {
     expect($failed['duration_ms'])->toBeInt()->toBeGreaterThanOrEqual(0);
 });
 
+test('stream emits run.started step evidence and run.completed evidence', function (): void {
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+    FakeEditor::fake(['editor-out']);
+
+    $sink = bindRecordingSink();
+
+    iterator_to_array(FakeSequentialSwarm::make()->stream('stream-task'));
+
+    expect($sink->hasCategory('run.started'))->toBeTrue();
+    expect($sink->hasCategory('step.started'))->toBeTrue();
+    expect($sink->hasCategory('step.completed'))->toBeTrue();
+    expect($sink->hasCategory('run.completed'))->toBeTrue();
+
+    $started = $sink->recordsForCategory('run.started')[0];
+    $completed = $sink->recordsForCategory('run.completed')[0];
+
+    expect($started['execution_mode'])->toBe('stream');
+    expect($completed['execution_mode'])->toBe('stream');
+    expect($completed['duration_ms'])->toBeInt()->toBeGreaterThanOrEqual(0);
+});
+
+test('failed stream emits run.failed evidence', function (): void {
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+
+    $sink = bindRecordingSink();
+
+    expect(fn () => iterator_to_array(FakeStreamingFailureSwarm::make()->stream('stream-task')))
+        ->toThrow(RuntimeException::class);
+
+    expect($sink->hasCategory('run.started'))->toBeTrue();
+    expect($sink->hasCategory('step.started'))->toBeTrue();
+    expect($sink->hasCategory('run.failed'))->toBeTrue();
+    expect($sink->hasCategory('run.completed'))->toBeFalse();
+
+    $failed = $sink->recordsForCategory('run.failed')[0];
+    expect($failed['execution_mode'])->toBe('stream');
+    expect($failed['status'])->toBe('failed');
+    expect($failed['exception_class'])->toBe(RuntimeException::class);
+});
+
 test('step evidence carries run_id and swarm_class', function (): void {
     FakeResearcher::fake(['step-out']);
 
@@ -147,6 +234,60 @@ test('evidence payloads do not include raw prompt text when capture is disabled'
         $encoded = json_encode($record) ?: '';
         expect($encoded)->not->toContain('SENSITIVE_PROMPT_TEXT');
     }
+});
+
+test('evidence payloads do not include metadata values by default and include metadata keys', function (): void {
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+    FakeEditor::fake(['editor-out']);
+
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+    config()->set('swarm.audit.metadata_allowlist', []);
+
+    $context = RunContext::from([
+        'input' => 'task',
+        'metadata' => [
+            'tenant_id' => 'acme',
+            'secret_note' => 'SENSITIVE_METADATA_VALUE',
+        ],
+    ]);
+
+    $sink = bindRecordingSink();
+    FakeSequentialSwarm::make()->run($context);
+
+    $started = $sink->recordsForCategory('run.started')[0];
+    expect($started['metadata_keys'])->toContain('tenant_id', 'secret_note');
+    expect($started['metadata'])->toBe([]);
+
+    foreach ($sink->allRecords() as $record) {
+        $encoded = json_encode($record) ?: '';
+        expect($encoded)->not->toContain('SENSITIVE_METADATA_VALUE');
+        expect($encoded)->not->toContain('acme');
+    }
+});
+
+test('audit metadata allowlist emits only configured top-level metadata values', function (): void {
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+    FakeEditor::fake(['editor-out']);
+
+    config()->set('swarm.audit.metadata_allowlist', ['tenant_id']);
+
+    $context = RunContext::from([
+        'input' => 'task',
+        'metadata' => [
+            'tenant_id' => 'acme',
+            'secret_note' => 'SENSITIVE_METADATA_VALUE',
+        ],
+    ]);
+
+    $sink = bindRecordingSink();
+    FakeSequentialSwarm::make()->run($context);
+
+    $started = $sink->recordsForCategory('run.started')[0];
+    expect($started['metadata'])->toBe(['tenant_id' => 'acme']);
+    expect(json_encode($sink->allRecords()) ?: '')->not->toContain('SENSITIVE_METADATA_VALUE');
 });
 
 // ---------------------------------------------------------------------------
@@ -223,6 +364,25 @@ test('swarm:recover with targeted run-id emits evidence with target_run_id', fun
     $record = $sink->recordsForCategory('command.recover')[0];
     expect($record['target_run_id'])->toBe('run-abc-123');
 });
+
+test('operator commands emit failed evidence when manager operations throw', function (string $command, array $arguments, string $category, string $method): void {
+    $sink = bindRecordingSink();
+    bindFailingDurableManagerForAudit($method);
+
+    expect(fn () => Artisan::call($command, $arguments))
+        ->toThrow(RuntimeException::class);
+
+    expect($sink->hasCategory($category))->toBeTrue();
+    $record = $sink->recordsForCategory($category)[0];
+    expect($record['actor'])->toBe('artisan');
+    expect($record['status'])->toBe('failed');
+    expect($record['exception_class'])->toBe(RuntimeException::class);
+})->with([
+    ['swarm:pause', ['runId' => 'run-pause'], 'command.pause', 'pause'],
+    ['swarm:resume', ['runId' => 'run-resume'], 'command.resume', 'resume'],
+    ['swarm:cancel', ['runId' => 'run-cancel'], 'command.cancel', 'cancel'],
+    ['swarm:recover', ['--run-id' => 'run-recover'], 'command.recover', 'recover'],
+]);
 
 // ---------------------------------------------------------------------------
 // Durable wait / signal evidence

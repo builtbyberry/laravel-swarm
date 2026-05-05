@@ -69,7 +69,7 @@ category that carries them are listed below.
 | `parent_run_id`  | Set when the run was spawned as a child run. |
 | `swarm_class`    | FQCN of the swarm.                    |
 | `topology`       | `sequential`, `parallel`, or `hierarchical`. |
-| `execution_mode` | `run`, `queue`, or `durable`.         |
+| `execution_mode` | `run`, `queue`, `stream`, or `durable`. |
 | `status`         | Current outcome of the event.         |
 
 ## Evidence Categories
@@ -78,7 +78,7 @@ category that carries them are listed below.
 
 | Category        | Description                                                  |
 |-----------------|--------------------------------------------------------------|
-| `run.started`   | A swarm run was started (synchronous, queued, or durable).   |
+| `run.started`   | A swarm run was started (synchronous, queued, streamed, or durable). |
 | `run.completed` | A swarm run completed successfully.                          |
 | `run.failed`    | A swarm run failed with an exception.                        |
 
@@ -93,7 +93,8 @@ category that carries them are listed below.
 | `step.completed`  | An individual agent step completed.                 |
 
 Both include `step_index` and `agent_class`.
-`step.completed` includes `duration_ms` and `metadata`.
+`step.completed` includes `duration_ms`, `metadata_keys`, and allowlisted
+`metadata`.
 
 ### Durable State Transitions
 
@@ -131,6 +132,9 @@ advance execution.
 | `command.prune`   | `swarm:prune` completed. Includes `dry_run`, `prevent_prune`, `status`, and `counts` (row counts per table). |
 
 All command categories include `actor: "artisan"`.
+Failed pause, resume, cancel, and recover attempts emit the same command
+category with `status: "failed"` and `exception_class`, then rethrow so console
+behavior remains unchanged.
 
 ### Webhook Idempotency
 
@@ -149,9 +153,20 @@ All webhook categories include `swarm_class`, `has_idempotency_key`, and
 ## Redaction and Capture Alignment
 
 Evidence payloads respect the same capture policy as the rest of the runtime.
-Raw prompt text and agent outputs are **not** included in any evidence payload
-— only non-content correlation fields, metadata, duration, status, and class
-names are emitted. Evidence payloads do not bypass `swarm.capture.*` defaults.
+Raw prompt text and agent outputs are **not** included in any evidence payload.
+Arbitrary run and step metadata values are default-deny: audit evidence includes
+`metadata_keys` for top-level diagnostics and includes `metadata` values only for
+top-level keys configured in `swarm.audit.metadata_allowlist`
+(`SWARM_AUDIT_METADATA_ALLOWLIST`, comma-separated). Nested allowlisting is not
+supported; if you allowlist a top-level key, its value is emitted as-is.
+
+For example:
+
+```php
+'audit' => [
+    'metadata_allowlist' => ['tenant_id', 'workflow_type'],
+],
+```
 
 ## Versioning
 
@@ -208,8 +223,11 @@ class S3AuditSink implements SwarmAuditSink
 {
     public function emit(string $category, array $payload): void
     {
+        $runId = $payload['run_id'] ?? 'no-run-id';
+        $name = hash('sha256', $category.'|'.$payload['occurred_at'].'|'.json_encode($payload));
+
         Storage::disk('s3-audit')->put(
-            "swarm/evidence/{$payload['occurred_at']}/{$category}/{$payload['run_id']}.json",
+            "swarm/evidence/{$category}/{$runId}/{$payload['occurred_at']}-{$name}.json",
             json_encode($payload),
         );
     }
@@ -225,6 +243,8 @@ class S3AuditSink implements SwarmAuditSink
   acceptable in your compliance model.
 - [ ] Confirm that your sink does not expose raw prompt/output content; evidence
   payloads never include them, but verify your sink does not add them.
+- [ ] Configure `swarm.audit.metadata_allowlist` only for top-level metadata keys
+  approved for evidence export.
 - [ ] Implement a periodic test that emits a sentinel evidence record and
   verifies it arrives in your audit target.
 - [ ] Establish a legal-hold workflow that protects archived evidence records

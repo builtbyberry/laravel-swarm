@@ -198,7 +198,7 @@ class SwarmRunner
             'topology' => $topology->value,
             'execution_mode' => $executionMode->value,
             'status' => 'started',
-            'metadata' => $context->metadata,
+            ...$this->audit->metadata($context->metadata),
         ]);
 
         try {
@@ -239,7 +239,7 @@ class SwarmRunner
                 'status' => 'failed',
                 'exception_class' => $exception::class,
                 'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
-                'metadata' => $context->metadata,
+                ...$this->audit->metadata($context->metadata),
             ]);
 
             throw $exception;
@@ -627,7 +627,7 @@ class SwarmRunner
                 'status' => 'failed',
                 'exception_class' => $exception::class,
                 'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
-                'metadata' => $context->metadata,
+                ...$this->audit->metadata($context->metadata),
             ]);
 
             throw $exception;
@@ -696,7 +696,7 @@ class SwarmRunner
             'execution_mode' => $executionMode->value,
             'status' => 'completed',
             'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
-            'metadata' => $capturedResponse->metadata,
+            ...$this->audit->metadata($capturedResponse->metadata),
         ]);
 
         return $response;

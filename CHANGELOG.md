@@ -14,9 +14,14 @@
   exceptions according to `swarm.audit.failure_policy` (`SWARM_AUDIT_FAILURE_POLICY`).
   Supported policies: `swallow` (default — silent discard) and `log` (record via
   application logger). Sink failures never propagate into swarm execution.
+- `swarm.audit.metadata_allowlist` (`SWARM_AUDIT_METADATA_ALLOWLIST`) controls
+  which top-level run or step metadata values may be emitted in audit evidence.
+  Evidence includes `metadata_keys` by default, while arbitrary metadata values
+  are omitted unless allowlisted.
 - Stable evidence categories emitted across the runtime:
   - **Run lifecycle:** `run.started`, `run.completed`, `run.failed` (from
-    `SwarmRunner` — sync, queued, and hierarchical parallel join paths).
+    `SwarmRunner` and `SequentialStreamRunner` — sync, queued, streamed, and
+    hierarchical parallel join paths).
   - **Step lifecycle:** `step.started`, `step.completed` (from `SwarmStepRecorder`).
   - **Durable state transitions:** `durable.checkpointed`,
     `durable.checkpointed_hierarchical`, `durable.paused`, `durable.pause_requested`,
@@ -27,11 +32,14 @@
     `DurableSignalHandler`; includes `accepted` vs recorded-only semantics).
   - **Operator commands:** `command.pause`, `command.resume`, `command.cancel`,
     `command.recover`, `command.prune` — all include `actor: "artisan"`;
+    pause/resume/cancel/recover emit failed attempts with `exception_class`;
     `command.prune` includes per-table row counts, `dry_run`, and `prevent_prune`.
   - **Webhook idempotency:** `webhook.start_accepted`, `webhook.start_duplicate`,
     `webhook.start_conflict`, `webhook.start_in_flight`, `webhook.start_failed`,
     `webhook.signal_received` (from `SwarmWebhooks`).
 - `swarm.audit.failure_policy` config key and `SWARM_AUDIT_FAILURE_POLICY` env.
+- `swarm.audit.metadata_allowlist` config key and
+  `SWARM_AUDIT_METADATA_ALLOWLIST` env.
 - [Audit Evidence Contract](docs/audit-evidence-contract.md) — full payload schema,
   category reference, common correlation fields, capture/redaction alignment notes,
   versioning contract, custom sink examples (database, queue, S3), and production

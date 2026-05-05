@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
 use Symfony\Component\Console\Attribute\AsCommand;
+use Throwable;
 
 #[AsCommand(name: 'swarm:cancel')]
 class SwarmCancelCommand extends Command
@@ -22,7 +23,19 @@ class SwarmCancelCommand extends Command
     public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit): int
     {
         $runId = $this->argumentString('runId');
-        $manager->cancel($runId);
+
+        try {
+            $manager->cancel($runId);
+        } catch (Throwable $exception) {
+            $audit->emit('command.cancel', [
+                'run_id' => $runId,
+                'actor' => 'artisan',
+                'status' => 'failed',
+                'exception_class' => $exception::class,
+            ]);
+
+            throw $exception;
+        }
 
         $audit->emit('command.cancel', [
             'run_id' => $runId,

@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
 use Symfony\Component\Console\Attribute\AsCommand;
+use Throwable;
 
 #[AsCommand(name: 'swarm:recover')]
 class SwarmRecoverCommand extends Command
@@ -26,11 +27,23 @@ class SwarmRecoverCommand extends Command
         $targetRunId = is_string($runIdOption) && $runIdOption !== '' ? $runIdOption : null;
         $targetSwarmClass = is_string($swarmOption) && $swarmOption !== '' ? $swarmOption : null;
 
-        $runIds = $manager->recover(
-            runId: $targetRunId,
-            swarmClass: $targetSwarmClass,
-            limit: $this->optionInt('limit', 50),
-        );
+        try {
+            $runIds = $manager->recover(
+                runId: $targetRunId,
+                swarmClass: $targetSwarmClass,
+                limit: $this->optionInt('limit', 50),
+            );
+        } catch (Throwable $exception) {
+            $audit->emit('command.recover', [
+                'target_run_id' => $targetRunId,
+                'target_swarm_class' => $targetSwarmClass,
+                'actor' => 'artisan',
+                'status' => 'failed',
+                'exception_class' => $exception::class,
+            ]);
+
+            throw $exception;
+        }
 
         $audit->emit('command.recover', [
             'target_run_id' => $targetRunId,

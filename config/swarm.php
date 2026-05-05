@@ -61,6 +61,10 @@ return [
      */
     'audit' => [
         'failure_policy' => env('SWARM_AUDIT_FAILURE_POLICY', 'swallow'),
+        'metadata_allowlist' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('SWARM_AUDIT_METADATA_ALLOWLIST', '')),
+        ))),
     ],
 
     'limits' => [

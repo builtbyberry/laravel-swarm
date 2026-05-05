@@ -153,7 +153,7 @@ class SwarmStepRecorder
             'agent_class' => $agentClass,
             'duration_ms' => $durationMs,
             'status' => 'completed',
-            'metadata' => $stepMetadata,
+            ...$this->audit->metadata($stepMetadata),
         ]);
 
         return $step;

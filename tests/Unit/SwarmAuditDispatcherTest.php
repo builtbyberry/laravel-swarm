@@ -107,3 +107,31 @@ test('dispatcher forwards multiple sequential emissions without cross-contaminat
         expect($record['schema_version'])->toBe(SwarmAuditDispatcher::SCHEMA_VERSION);
     }
 });
+
+test('dispatcher metadata helper includes keys and omits values by default', function (): void {
+    config(['swarm.audit.metadata_allowlist' => []]);
+
+    $metadata = app(SwarmAuditDispatcher::class)->metadata([
+        'secret_note' => 'do-not-export',
+        'tenant_id' => 'acme',
+    ]);
+
+    expect($metadata['metadata_keys'])->toBe(['secret_note', 'tenant_id']);
+    expect($metadata['metadata'])->toBe([]);
+});
+
+test('dispatcher metadata helper emits allowlisted top-level values', function (): void {
+    config(['swarm.audit.metadata_allowlist' => 'tenant_id, workflow']);
+
+    $metadata = app(SwarmAuditDispatcher::class)->metadata([
+        'secret_note' => 'do-not-export',
+        'tenant_id' => 'acme',
+        'workflow' => 'approval',
+    ]);
+
+    expect($metadata['metadata_keys'])->toBe(['secret_note', 'tenant_id', 'workflow']);
+    expect($metadata['metadata'])->toBe([
+        'tenant_id' => 'acme',
+        'workflow' => 'approval',
+    ]);
+});

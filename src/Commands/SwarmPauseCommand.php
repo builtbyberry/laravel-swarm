@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
 use Symfony\Component\Console\Attribute\AsCommand;
+use Throwable;
 
 #[AsCommand(name: 'swarm:pause')]
 class SwarmPauseCommand extends Command
@@ -22,7 +23,19 @@ class SwarmPauseCommand extends Command
     public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit): int
     {
         $runId = $this->argumentString('runId');
-        $manager->pause($runId);
+
+        try {
+            $manager->pause($runId);
+        } catch (Throwable $exception) {
+            $audit->emit('command.pause', [
+                'run_id' => $runId,
+                'actor' => 'artisan',
+                'status' => 'failed',
+                'exception_class' => $exception::class,
+            ]);
+
+            throw $exception;
+        }
 
         $audit->emit('command.pause', [
             'run_id' => $runId,

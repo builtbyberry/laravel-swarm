@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
@@ -48,6 +49,7 @@ class SequentialStreamRunner
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
         protected SwarmAttributeResolver $resolver,
+        protected SwarmAuditDispatcher $audit,
     ) {}
 
     /**
@@ -125,6 +127,15 @@ class SequentialStreamRunner
             metadata: $context->metadata,
             executionMode: ExecutionMode::Stream->value,
         ));
+        $this->audit->emit('run.started', [
+            'run_id' => $context->runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $swarm::class,
+            'topology' => $state->topology->value,
+            'execution_mode' => ExecutionMode::Stream->value,
+            'status' => 'started',
+            ...$this->audit->metadata($context->metadata),
+        ]);
 
         yield new SwarmStreamStart(
             id: SwarmStreamEvent::newId(),
@@ -161,6 +172,16 @@ class SequentialStreamRunner
                 artifacts: $capturedResponse->artifacts,
                 executionMode: ExecutionMode::Stream->value,
             ));
+            $this->audit->emit('run.completed', [
+                'run_id' => $context->runId,
+                'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+                'swarm_class' => $swarm::class,
+                'topology' => $state->topology->value,
+                'execution_mode' => ExecutionMode::Stream->value,
+                'status' => 'completed',
+                'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                ...$this->audit->metadata($capturedResponse->metadata),
+            ]);
 
             yield new SwarmStreamEnd(
                 id: SwarmStreamEvent::newId(),
@@ -181,6 +202,8 @@ class SequentialStreamRunner
 
     protected function failStream(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, Throwable $exception, ?float $startedAt): SwarmStreamError
     {
+        $durationMs = $startedAt !== null ? MonotonicTime::elapsedMilliseconds($startedAt) : 1;
+
         $this->historyStore->fail($context->runId, $exception, $contextTtl);
         $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
         $this->events->dispatch(new SwarmFailed(
@@ -188,11 +211,22 @@ class SequentialStreamRunner
             swarmClass: $swarm::class,
             topology: $state->topology->value,
             exception: $this->capture->failureException($exception),
-            durationMs: $startedAt !== null ? MonotonicTime::elapsedMilliseconds($startedAt) : 1,
+            durationMs: $durationMs,
             metadata: $this->failureMetadata($context, $exception),
             executionMode: ExecutionMode::Stream->value,
             exceptionClass: $this->failureExceptionClass($exception),
         ));
+        $this->audit->emit('run.failed', [
+            'run_id' => $context->runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $swarm::class,
+            'topology' => $state->topology->value,
+            'execution_mode' => ExecutionMode::Stream->value,
+            'status' => 'failed',
+            'exception_class' => $this->failureExceptionClass($exception),
+            'duration_ms' => $durationMs,
+            ...$this->audit->metadata($this->failureMetadata($context, $exception)),
+        ]);
 
         $event = new SwarmStreamError(
             id: $exception instanceof SwarmStreamProviderException ? $exception->eventId : SwarmStreamEvent::newId(),

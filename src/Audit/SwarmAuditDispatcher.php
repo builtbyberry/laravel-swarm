@@ -52,6 +52,32 @@ class SwarmAuditDispatcher
         }
     }
 
+    /**
+     * Return default-safe metadata evidence for audit payloads.
+     *
+     * @param  array<string, mixed>  $metadata
+     * @return array{metadata_keys: array<int, string>, metadata: array<string, mixed>}
+     */
+    public function metadata(array $metadata): array
+    {
+        $keys = array_map('strval', array_keys($metadata));
+        sort($keys, SORT_STRING);
+
+        $allowlist = $this->metadataAllowlist();
+        $allowed = [];
+
+        foreach ($allowlist as $key) {
+            if (array_key_exists($key, $metadata)) {
+                $allowed[$key] = $metadata[$key];
+            }
+        }
+
+        return [
+            'metadata_keys' => $keys,
+            'metadata' => $allowed,
+        ];
+    }
+
     protected function handleSinkFailure(string $category, Throwable $exception): void
     {
         $policy = (string) $this->config->get('swarm.audit.failure_policy', 'swallow');
@@ -65,5 +91,29 @@ class SwarmAuditDispatcher
         }
 
         // Never rethrow — sink failures must not affect swarm execution.
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function metadataAllowlist(): array
+    {
+        $configured = $this->config->get('swarm.audit.metadata_allowlist', []);
+
+        if (is_string($configured)) {
+            $configured = explode(',', $configured);
+        }
+
+        if (! is_array($configured)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            array_map(
+                fn (mixed $key): string => trim((string) $key),
+                $configured,
+            ),
+            fn (string $key): bool => $key !== '',
+        ));
     }
 }

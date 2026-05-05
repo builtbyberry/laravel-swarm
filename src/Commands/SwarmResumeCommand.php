@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
 use Symfony\Component\Console\Attribute\AsCommand;
+use Throwable;
 
 #[AsCommand(name: 'swarm:resume')]
 class SwarmResumeCommand extends Command
@@ -22,7 +23,19 @@ class SwarmResumeCommand extends Command
     public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit): int
     {
         $runId = $this->argumentString('runId');
-        $manager->resume($runId);
+
+        try {
+            $manager->resume($runId);
+        } catch (Throwable $exception) {
+            $audit->emit('command.resume', [
+                'run_id' => $runId,
+                'actor' => 'artisan',
+                'status' => 'failed',
+                'exception_class' => $exception::class,
+            ]);
+
+            throw $exception;
+        }
 
         $audit->emit('command.resume', [
             'run_id' => $runId,

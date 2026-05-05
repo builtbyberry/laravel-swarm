@@ -698,6 +698,8 @@ To customize how swarm state is stored, bind your own implementations against th
   service provider to route stable, normalized evidence records (run lifecycle,
   steps, durable transitions, operator commands, wait/signal, webhook idempotency,
   prune/recover) into an append-only store, SIEM, or object-storage archive.
+  Use `swarm.audit.metadata_allowlist` only for top-level metadata keys approved
+  for evidence export; arbitrary metadata values are omitted by default.
   See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full
   payload schema, category reference, and production checklist.
 - **Capture defaults are conservative** (`swarm.capture.*` default to `false` in
