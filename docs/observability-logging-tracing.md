@@ -110,13 +110,26 @@ Swarm execution does not depend on listener success; failed listeners are still
 reported by Laravel’s event dispatcher and should be monitored like any other
 application listener.
 
+## Telemetry Sink (Structured Correlation)
+
+For a **single binding** that receives normalized correlation payloads (including
+`schema_version`, `category`, and `occurred_at`), bind `SwarmTelemetrySink`. The
+package subscribes a listener that mirrors lifecycle events and package queue
+job boundaries, and emits per-event stream/broadcast telemetry from the runtime.
+See [Observability Correlation Contract](observability-correlation-contract.md)
+for categories, redaction rules, and configuration (`swarm.observability.*`).
+
 ## Queue And Job Context
 
-Queued swarms run inside normal Laravel queue jobs (`RunQueuedSwarm`,
-`AdvanceDurableSwarmStep`, and related jobs). To attach **queue** metadata to
-the same log lines, combine Swarm events with Laravel’s queue events, for
-example `Illuminate\Queue\Events\JobProcessing`, and merge `job->uuid()` (or
-your broker’s id) into your logging context for the duration of the job.
+Queued swarms run inside normal Laravel queue jobs owned by this package:
+`InvokeSwarm`, `BroadcastSwarm`, `AdvanceDurableSwarm`, `AdvanceDurableBranch`,
+and `ResumeQueuedHierarchicalSwarm`. To attach **queue** metadata to the same log
+lines, combine Swarm events with Laravel’s queue events, for example
+`Illuminate\Queue\Events\JobProcessing`, and merge `job->uuid()` (or your broker’s
+id) into your logging context for the duration of the job. When using the
+default `SwarmTelemetrySink` binding, `job.started` / `job.completed` /
+`job.failed` telemetry records already carry `run_id`, `job_class`, queue
+connection, and queue name for these job classes.
 
 If you use **Laravel Horizon**, configure tags or metadata that include
 `swarm_run_id` from your job payload or from the first `SwarmStarted` event you

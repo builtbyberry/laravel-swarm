@@ -4,6 +4,28 @@
 
 ### Added
 
+- **Observability correlation contract** — `SwarmTelemetrySink` (contract) and
+  `NoOpSwarmTelemetrySink` (default no-op binding) provide a dependency-free
+  structured telemetry surface for `run_id` correlation across lifecycle events,
+  package queue jobs (`InvokeSwarm`, `BroadcastSwarm`, `AdvanceDurableSwarm`,
+  `AdvanceDurableBranch`, `ResumeQueuedHierarchicalSwarm`), and per-event
+  `stream.event` / `broadcast.event` boundaries from the streaming runtime.
+- `SwarmTelemetryDispatcher` enriches payloads with `schema_version`, `category`,
+  and `occurred_at`, isolates sink failures per `swarm.observability.failure_policy`
+  (`SWARM_OBSERVABILITY_FAILURE_POLICY`), and supports `swarm.observability.metadata_allowlist`
+  (`SWARM_OBSERVABILITY_METADATA_ALLOWLIST`). Master switches: `swarm.observability.enabled`
+  (`SWARM_OBSERVABILITY_ENABLED`) and `swarm.observability.listen_to_events`
+  (`SWARM_OBSERVABILITY_LISTEN_EVENTS`) to disable the lifecycle/queue listener
+  subscription without unbinding the sink.
+- `SwarmTelemetryEventListener` (subscribed when `listen_to_events` is true) maps
+  swarm lifecycle events and filtered Laravel queue events into telemetry categories;
+  audit-only categories (`command.*`, `webhook.*`, durable checkpoint/completion
+  internals, etc.) are not duplicated here by design.
+- Shared `BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope` helper for
+  `schema_version` / `occurred_at` formatting and metadata allowlist normalization;
+  `SwarmAuditDispatcher` delegates to it without changing audit behavior.
+- [Observability Correlation Contract](docs/observability-correlation-contract.md)
+  — category reference, redaction notes, and OpenTelemetry adapter sketch.
 - **Audit evidence contract** — `SwarmAuditSink` (contract) and `NoOpSwarmAuditSink`
   (default no-op binding) provide a first-class, stable evidence emission surface
   for regulated adopters. Bind `SwarmAuditSink` in your service provider to route

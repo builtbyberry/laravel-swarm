@@ -702,6 +702,13 @@ To customize how swarm state is stored, bind your own implementations against th
   for evidence export; arbitrary metadata values are omitted by default.
   See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full
   payload schema, category reference, and production checklist.
+- **Observability telemetry:** bind `SwarmTelemetrySink` to export normalized
+  correlation payloads (lifecycle mirrors, package queue job boundaries, stream
+  and broadcast event cadence) to logs, metrics, or tracing adapters. Configure
+  `swarm.observability.*` (`SWARM_OBSERVABILITY_*`) for failure policy, metadata
+  allowlist, and optional listener disable (`listen_to_events`). This surface is
+  separate from audit evidence — see
+  [Observability Correlation Contract](docs/observability-correlation-contract.md).
 - **Capture defaults are conservative** (`swarm.capture.*` default to `false` in
   shipped `config/swarm.php`): full prompts, outputs, automatic step artifacts, and
   rich active-context snapshots are not persisted unless you opt in via config
