@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
@@ -18,9 +19,16 @@ class SwarmResumeCommand extends Command
 
     protected $description = 'Resume a paused durable swarm run';
 
-    public function handle(DurableSwarmManager $manager): int
+    public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit): int
     {
-        $manager->resume($this->argumentString('runId'));
+        $runId = $this->argumentString('runId');
+        $manager->resume($runId);
+
+        $audit->emit('command.resume', [
+            'run_id' => $runId,
+            'actor' => 'artisan',
+            'status' => 'dispatched',
+        ]);
 
         $this->components->info('Durable swarm resumed.');
 

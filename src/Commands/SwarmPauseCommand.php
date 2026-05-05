@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
@@ -18,9 +19,16 @@ class SwarmPauseCommand extends Command
 
     protected $description = 'Pause a durable swarm run at the next safe boundary';
 
-    public function handle(DurableSwarmManager $manager): int
+    public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit): int
     {
-        $manager->pause($this->argumentString('runId'));
+        $runId = $this->argumentString('runId');
+        $manager->pause($runId);
+
+        $audit->emit('command.pause', [
+            'run_id' => $runId,
+            'actor' => 'artisan',
+            'status' => 'requested',
+        ]);
 
         $this->components->info('Durable swarm pause request recorded.');
 

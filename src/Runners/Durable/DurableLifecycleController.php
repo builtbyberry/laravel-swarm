@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
@@ -27,6 +28,7 @@ class DurableLifecycleController
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
         protected DurableChildSwarmCoordinator $children,
+        protected SwarmAuditDispatcher $audit,
     ) {}
 
     public function pause(string $runId): bool
@@ -63,6 +65,15 @@ class DurableLifecycleController
                 executionMode: $this->runs->publicLifecycleExecutionMode($updated),
             ));
         }
+        $immediatelyPaused = is_array($updated) && $updated['status'] === 'paused';
+        $this->audit->emit('durable.pause_requested', [
+            'run_id' => $runId,
+            'swarm_class' => $run['swarm_class'],
+            'topology' => $run['topology'],
+            'execution_mode' => $this->runs->publicLifecycleExecutionMode($run),
+            'status' => $immediatelyPaused ? 'paused' : 'pause_scheduled',
+            'immediately_paused' => $immediatelyPaused,
+        ]);
 
         return true;
     }
@@ -104,6 +115,13 @@ class DurableLifecycleController
             metadata: $this->payloads->eventMetadata($context),
             executionMode: $this->runs->publicLifecycleExecutionMode($updated),
         ));
+        $this->audit->emit('durable.resumed', [
+            'run_id' => $runId,
+            'swarm_class' => $run['swarm_class'],
+            'topology' => $run['topology'],
+            'execution_mode' => $this->runs->publicLifecycleExecutionMode($updated),
+            'status' => 'resumed',
+        ]);
 
         if (is_array($updated) && $updated['status'] === 'waiting') {
             return ['waiting' => $updated, 'dispatchStep' => null];
@@ -150,7 +168,9 @@ class DurableLifecycleController
             throw new SwarmException("Durable run [{$runId}] could not be cancelled.");
         }
 
-        if (is_array($updated) && $updated['status'] === 'cancelled' && $context !== null) {
+        $immediatelyCancelled = is_array($updated) && $updated['status'] === 'cancelled';
+
+        if ($immediatelyCancelled && $context !== null) {
             $this->children->cancelActiveChildren($runId, $cancelChild);
 
             $this->events->dispatch(new SwarmCancelled(
@@ -161,6 +181,14 @@ class DurableLifecycleController
                 executionMode: $this->runs->publicLifecycleExecutionMode($updated),
             ));
         }
+        $this->audit->emit('durable.cancel_requested', [
+            'run_id' => $runId,
+            'swarm_class' => $run['swarm_class'],
+            'topology' => $run['topology'],
+            'execution_mode' => $this->runs->publicLifecycleExecutionMode($run),
+            'status' => $immediatelyCancelled ? 'cancelled' : 'cancel_scheduled',
+            'immediately_cancelled' => $immediatelyCancelled,
+        ]);
 
         return true;
     }

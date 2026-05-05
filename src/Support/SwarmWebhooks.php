@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
@@ -41,6 +42,15 @@ class SwarmWebhooks
                 $request->headers->get('Idempotency-Key'),
             );
 
+            app(SwarmAuditDispatcher::class)->emit('webhook.signal_received', [
+                'run_id' => $runId,
+                'signal_name' => $signal,
+                'accepted' => $result->accepted,
+                'duplicate' => $result->duplicate,
+                'has_idempotency_key' => $request->headers->has('Idempotency-Key'),
+                'status' => $result->status,
+            ]);
+
             return response()->json([
                 'run_id' => $result->runId,
                 'signal' => $result->name,
@@ -62,21 +72,40 @@ class SwarmWebhooks
                 $idempotencyKey = $request->headers->get('Idempotency-Key');
                 $scope = self::startIdempotencyScope($swarmClass);
                 $requestHash = self::requestHash($request);
+                $audit = app(SwarmAuditDispatcher::class);
 
                 if ($idempotencyKey !== null) {
                     $reservation = app(DurableRunStore::class)->reserveWebhookIdempotency($scope, $idempotencyKey, $requestHash);
 
                     if ($reservation['duplicate']) {
                         $payload = is_array($reservation['record']['response_payload'] ?? null) ? $reservation['record']['response_payload'] : ['run_id' => $reservation['record']['run_id'] ?? null];
+                        $audit->emit('webhook.start_duplicate', [
+                            'swarm_class' => $swarmClass,
+                            'run_id' => $reservation['record']['run_id'] ?? null,
+                            'has_idempotency_key' => true,
+                            'status' => 'duplicate',
+                        ]);
 
                         return response()->json(array_merge($payload, ['duplicate' => true]), 200);
                     }
 
                     if ($reservation['conflict']) {
+                        $audit->emit('webhook.start_conflict', [
+                            'swarm_class' => $swarmClass,
+                            'has_idempotency_key' => true,
+                            'status' => 'conflict',
+                        ]);
+
                         return response()->json(['message' => 'Idempotency key was already used with a different request payload.'], 409);
                     }
 
                     if ($reservation['in_flight']) {
+                        $audit->emit('webhook.start_in_flight', [
+                            'swarm_class' => $swarmClass,
+                            'has_idempotency_key' => true,
+                            'status' => 'in_flight',
+                        ]);
+
                         return response()->json(['message' => 'Idempotency key is already processing.'], 409);
                     }
                 }
@@ -93,6 +122,12 @@ class SwarmWebhooks
                     if ($idempotencyKey !== null) {
                         app(DurableRunStore::class)->failWebhookIdempotency($scope, $idempotencyKey);
                     }
+                    $audit->emit('webhook.start_failed', [
+                        'swarm_class' => $swarmClass,
+                        'has_idempotency_key' => $idempotencyKey !== null,
+                        'status' => 'failed',
+                        'exception_class' => $exception::class,
+                    ]);
 
                     throw $exception;
                 }
@@ -102,6 +137,13 @@ class SwarmWebhooks
                 if ($idempotencyKey !== null) {
                     app(DurableRunStore::class)->completeWebhookIdempotency($scope, $idempotencyKey, $response->runId, $payload);
                 }
+
+                $audit->emit('webhook.start_accepted', [
+                    'swarm_class' => $swarmClass,
+                    'run_id' => $response->runId,
+                    'has_idempotency_key' => $idempotencyKey !== null,
+                    'status' => 'accepted',
+                ]);
 
                 return response()->json($payload, 202);
             })->name("swarm.webhooks.start.{$slug}");

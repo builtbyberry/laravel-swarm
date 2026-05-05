@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
@@ -18,9 +19,16 @@ class SwarmCancelCommand extends Command
 
     protected $description = 'Cancel a durable swarm run';
 
-    public function handle(DurableSwarmManager $manager): int
+    public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit): int
     {
-        $manager->cancel($this->argumentString('runId'));
+        $runId = $this->argumentString('runId');
+        $manager->cancel($runId);
+
+        $audit->emit('command.cancel', [
+            'run_id' => $runId,
+            'actor' => 'artisan',
+            'status' => 'requested',
+        ]);
 
         $this->components->info('Durable swarm cancelled or cancellation requested.');
 

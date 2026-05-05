@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
@@ -23,6 +24,7 @@ class DurableSignalHandler
         protected SwarmCapture $capture,
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
+        protected SwarmAuditDispatcher $audit,
     ) {}
 
     /**
@@ -77,6 +79,16 @@ class DurableSignalHandler
             accepted: $accepted,
             executionMode: $this->runs->publicLifecycleExecutionMode($run),
         ));
+        $this->audit->emit('signal.received', [
+            'run_id' => $runId,
+            'swarm_class' => $run['swarm_class'],
+            'topology' => $run['topology'],
+            'execution_mode' => $this->runs->publicLifecycleExecutionMode($run),
+            'signal_name' => $name,
+            'accepted' => $accepted,
+            'duplicate' => (bool) ($signal['duplicate'] ?? false),
+            'status' => $accepted ? 'accepted' : (string) ($signal['status'] ?? 'recorded'),
+        ]);
 
         $result = new DurableSignalResult(
             runId: $runId,
@@ -111,5 +123,15 @@ class DurableSignalHandler
             metadata: $this->payloads->eventMetadata($context),
             executionMode: $this->runs->publicLifecycleExecutionMode($run),
         ));
+        $this->audit->emit('wait.created', [
+            'run_id' => $runId,
+            'swarm_class' => $run['swarm_class'],
+            'topology' => $run['topology'],
+            'execution_mode' => $this->runs->publicLifecycleExecutionMode($run),
+            'wait_name' => $name,
+            'reason' => $reason,
+            'timeout_seconds' => $timeoutSeconds,
+            'status' => 'waiting',
+        ]);
     }
 }
