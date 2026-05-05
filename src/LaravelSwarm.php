@@ -28,8 +28,8 @@ final class LaravelSwarm
      */
     public static function ignoreMigrations(): static
     {
-        static::$runsMigrations = false;
+        self::$runsMigrations = false;
 
-        return new static;
+        return new self;
     }
 }

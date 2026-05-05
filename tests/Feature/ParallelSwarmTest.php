@@ -13,11 +13,13 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableParallelSwarm;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Contracts\Concurrency\Driver;
 use Illuminate\Support\Defer\DeferredCallback;
 use Illuminate\Support\Facades\Event;
+use Laravel\SerializableClosure\SerializableClosure;
 
 beforeEach(function () {
     FakeResearcher::fake(['parallel-a']);
@@ -52,6 +54,43 @@ test('parallel swarm rejects empty agent lists', function () {
 test('parallel swarm agents must be container resolvable for concurrency workers', function () {
     expect(fn () => UnresolvableParallelSwarm::make()->run('shared-task'))
         ->toThrow(SwarmException::class, UnresolvableParallelSwarm::class.': parallel agent ['.UnresolvableParallelAgent::class.'] must be container-resolvable because Laravel Concurrency serializes worker callbacks.');
+});
+
+test('parallel swarm crosses the concurrency serialization boundary without agent instance state', function () {
+    app()->instance(ConcurrencyManager::class, new class(app()) extends ConcurrencyManager
+    {
+        public function driver($name = null): Driver
+        {
+            return new class implements Driver
+            {
+                public function run(Closure|array $tasks): array
+                {
+                    $results = [];
+
+                    foreach ($tasks as $key => $task) {
+                        $serializedTask = serialize(new SerializableClosure($task));
+
+                        /** @var SerializableClosure $roundTrippedTask */
+                        $roundTrippedTask = unserialize($serializedTask);
+
+                        $results[$key] = $roundTrippedTask();
+                    }
+
+                    return $results;
+                }
+
+                public function defer(Closure|array $tasks): DeferredCallback
+                {
+                    throw new RuntimeException('Not supported.');
+                }
+            };
+        }
+    });
+
+    $response = SerializationBoundaryParallelSwarm::make()->run('shared-task');
+
+    expect($response->steps)->toHaveCount(2)
+        ->and((string) $response)->toContain('serialization-boundary:shared-task');
 });
 
 test('parallel swarm fails when concurrency returns a sparse result set', function () {

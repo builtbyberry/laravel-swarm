@@ -33,6 +33,9 @@
 
 ### Changed
 
+- Hardened parallel runner test coverage with a serializing concurrency driver
+  that validates worker callbacks cross Laravel's concurrency serialization
+  boundary without capturing live agent instance state.
 - Larastan/PHPStan analysis now runs at **level 7** (`phpstan.neon`). A minimal
   `property.notFound` ignore is scoped to database row `stdClass` access in
   `DatabaseDurableRunStore`, `DatabaseRunHistoryStore`, `DatabaseContextStore`,
