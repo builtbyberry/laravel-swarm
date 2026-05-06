@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Telemetry\CanonicalTelemetryRecord;
+use BuiltByBerry\LaravelSwarm\Telemetry\CompositeSwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope;
 use BuiltByBerry\LaravelSwarm\Telemetry\NoOpSwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
@@ -41,6 +43,40 @@ test('dispatcher enriches payloads with schema_version category and occurred_at'
     expect($record)->toHaveKey('occurred_at');
     expect($record['run_id'])->toBe('test-run');
     expect($record['status'])->toBe('started');
+});
+
+test('canonical telemetry records expose category and payload', function (): void {
+    $record = CanonicalTelemetryRecord::make('run.started', [
+        'run_id' => 'test-run',
+        'status' => 'started',
+    ]);
+
+    expect($record->category)->toBe('run.started')
+        ->and($record->toArray())->toBe([
+            'run_id' => 'test-run',
+            'status' => 'started',
+        ]);
+});
+
+test('composite telemetry sink fans out without changing application sink records', function (): void {
+    $applicationSink = new RecordingSwarmTelemetrySink;
+    $cloudSink = new RecordingSwarmTelemetrySink;
+
+    app()->instance(SwarmTelemetrySink::class, new CompositeSwarmTelemetrySink([
+        $applicationSink,
+        $cloudSink,
+    ]));
+    app()->forgetInstance(SwarmTelemetryDispatcher::class);
+
+    app(SwarmTelemetryDispatcher::class)->emit('step.completed', [
+        'run_id' => 'test-run',
+        'step_index' => 1,
+        'status' => 'completed',
+    ]);
+
+    expect($applicationSink->allRecords())->toHaveCount(1)
+        ->and($cloudSink->allRecords())->toHaveCount(1)
+        ->and($applicationSink->allRecords())->toBe($cloudSink->allRecords());
 });
 
 test('dispatcher swallows sink exceptions by default', function (): void {
