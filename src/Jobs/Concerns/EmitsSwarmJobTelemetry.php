@@ -85,7 +85,10 @@ trait EmitsSwarmJobTelemetry
 
         if ($durationMs !== null) {
             $payload['duration_ms'] = $durationMs;
-            $payload['total_elapsed_ms'] = $this->telemetryElapsedSinceEnqueue(self::telemetryEpochMilliseconds());
+            $payload['total_elapsed_ms'] = max(
+                $durationMs,
+                $this->telemetryElapsedSinceEnqueue(self::telemetryEpochMilliseconds()) ?? 0,
+            );
         }
 
         if ($exception !== null) {
