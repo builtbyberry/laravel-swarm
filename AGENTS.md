@@ -29,6 +29,14 @@ Every implementation decision must follow existing Laravel and Laravel AI conven
 - Config lives in `config/swarm.php`, not `config/ai.php`.
 - Generated swarm classes live in `app/Ai/Swarms/`, extending the `app/Ai/` namespace Laravel AI establishes.
 
+## Product Completeness Standard
+
+- Build the full product behavior, not an MVP approximation.
+- Do not choose the path of least resistance if it leaves operational, security, developer experience, documentation, or testing gaps.
+- Solve the underlying problem completely, including failure modes, operator workflows, rollout and maintenance implications, and reviewer expectations.
+- If a shortcut would trade away correctness, resilience, or product completeness, do not take it silently. Surface the tradeoff explicitly and treat it as a decision, not an implementation detail.
+- Default to closing gaps during implementation rather than leaving follow-up work unless the deferral is explicitly approved.
+
 ## Tech Stack
 
 - PHP ^8.5
