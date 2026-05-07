@@ -181,9 +181,9 @@ Set the global persistence driver in `config/swarm.php`:
 'persistence' => [
     'driver' => 'database', // or 'cache'
     /*
-     * When the driver is `database`, this defaults to true: sensitive string
-     * columns are sealed with Laravel's encrypter (APP_KEY). See "Encryption
-     * at rest" under Privacy And Data Capture.
+     * When the global driver or a per-store override is `database`, this
+     * defaults to true: sensitive string columns are sealed with Laravel's
+     * encrypter (APP_KEY). See "Encryption at rest" under Privacy And Data Capture.
      */
     'encrypt_at_rest' => true, // or false / env('SWARM_ENCRYPT_AT_REST')
 ],
@@ -255,14 +255,15 @@ run the prune command described in [Maintenance](maintenance.md).
 
 ### Encryption at rest (database persistence)
 
-When `swarm.persistence.driver` is `database`, `swarm.persistence.encrypt_at_rest`
-defaults to **true**. Laravel Swarm then seals selected sensitive **string**
-columns (for example persisted context `input`, run history final `output` and
-per-step agent I/O, durable branch input and output, hierarchical node outputs,
-and child durable run outputs plus top-level `input` inside stored
-`context_payload` JSON) using Laravel’s encrypter and your application
-`APP_KEY`—the same family of primitive as encrypted Eloquent casts. Stored
-values are prefixed (`sw0:`) so older plaintext rows remain readable.
+When `swarm.persistence.driver` or any per-store driver override is `database`,
+`swarm.persistence.encrypt_at_rest` defaults to **true**. Laravel Swarm then
+seals selected sensitive **string** columns written by database-backed stores
+(for example persisted context `input`, run history final `output` and per-step
+agent I/O, durable branch input and output, hierarchical node outputs, and child
+durable run outputs plus top-level `input` inside stored `context_payload` JSON)
+using Laravel’s encrypter and your application `APP_KEY`—the same family of
+primitive as encrypted Eloquent casts. Stored values are prefixed (`sw0:`) so
+older plaintext rows remain readable.
 
 Set `SWARM_ENCRYPT_AT_REST=false` only when you intentionally rely on
 database- or infrastructure-level encryption instead of application-layer

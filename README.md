@@ -36,11 +36,7 @@ Require the package with Composer:
 composer require builtbyberry/laravel-swarm
 ```
 
-Tagged releases are available on [Packagist](https://packagist.org/packages/builtbyberry/laravel-swarm). Pin a tagged release for production applications. If you need to test the development branch before the next tag, require it explicitly:
-
-```bash
-composer require builtbyberry/laravel-swarm:dev-main
-```
+Tagged releases are available on [Packagist](https://packagist.org/packages/builtbyberry/laravel-swarm). Pin a tagged release for production applications.
 
 Laravel Swarm loads its package migrations automatically. If your application
 only uses cache persistence and should not create swarm tables, opt out before
@@ -406,7 +402,7 @@ Common settings include:
 - `swarm.observability.*`
 - `swarm.audit.*`
 
-Capture defaults are conservative. Prompts, outputs, automatic step artifacts, and rich active-context snapshots are not persisted unless you opt in. When `swarm.persistence.driver` is `database`, `swarm.persistence.encrypt_at_rest` defaults to true and seals designated sensitive string columns with Laravel's encrypter.
+Capture defaults are conservative. Prompts, outputs, automatic step artifacts, and rich active-context snapshots are not persisted unless you opt in. When the global persistence driver or a per-store override uses `database`, `swarm.persistence.encrypt_at_rest` defaults to true and seals designated sensitive string columns with Laravel's encrypter.
 
 Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](docs/maintenance.md), [Observability: Logging And Tracing](docs/observability-logging-tracing.md), and [Audit Evidence Contract](docs/audit-evidence-contract.md) before enabling production capture, audit, or retention policies.
 
