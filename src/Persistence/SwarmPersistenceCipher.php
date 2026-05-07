@@ -28,11 +28,7 @@ class SwarmPersistenceCipher
 
     public function enabled(): bool
     {
-        if (! (bool) $this->config->get('swarm.persistence.encrypt_at_rest', false)) {
-            return false;
-        }
-
-        return (string) $this->config->get('swarm.persistence.driver', 'cache') === 'database';
+        return (bool) $this->config->get('swarm.persistence.encrypt_at_rest', false);
     }
 
     public function seal(?string $value): ?string

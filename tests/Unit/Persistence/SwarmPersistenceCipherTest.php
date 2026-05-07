@@ -36,8 +36,8 @@ test('seal is a no-op when encrypt at rest is disabled', function () {
         ->and($cipher->seal('plain'))->toBe('plain');
 });
 
-test('seal and open round trip when database persistence and encryption are enabled', function () {
-    $cipher = makeCipher(true, 'database');
+test('seal and open round trip when encryption is enabled', function () {
+    $cipher = makeCipher(true);
 
     expect($cipher->enabled())->toBeTrue();
 

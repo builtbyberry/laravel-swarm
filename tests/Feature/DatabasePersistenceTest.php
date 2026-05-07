@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -1306,6 +1307,26 @@ test('database context store seals persisted input when encrypt at rest is enabl
     expect($raw)->toStartWith('sw0:');
 
     expect($store->find($runId)['input'])->toBe('classified-prompt');
+});
+
+test('per store database override seals context input when global driver is cache', function () {
+    config()->set('swarm.persistence.driver', 'cache');
+    config()->set('swarm.context.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(ContextStore::class);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    $store = app(ContextStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+
+    $store->put(RunContext::from('override-classified-prompt', $runId), 3600);
+
+    $raw = DB::table('swarm_contexts')->where('run_id', $runId)->value('input');
+    expect($raw)->toStartWith('sw0:');
+
+    expect($store->find($runId)['input'])->toBe('override-classified-prompt');
 });
 
 test('database run history seals completed context input when encrypt at rest is enabled', function () {

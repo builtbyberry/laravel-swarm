@@ -5,6 +5,17 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 
 $swarmPersistenceDriver = env('SWARM_PERSISTENCE_DRIVER', 'cache');
+$swarmContextDriver = env('SWARM_CONTEXT_DRIVER');
+$swarmArtifactsDriver = env('SWARM_ARTIFACTS_DRIVER');
+$swarmHistoryDriver = env('SWARM_HISTORY_DRIVER');
+$swarmStreamReplayDriver = env('SWARM_STREAM_REPLAY_DRIVER');
+$swarmDatabasePersistenceEnabled = in_array('database', [
+    $swarmPersistenceDriver,
+    $swarmContextDriver,
+    $swarmArtifactsDriver,
+    $swarmHistoryDriver,
+    $swarmStreamReplayDriver,
+], true);
 
 return [
     'topology' => env('SWARM_TOPOLOGY', Topology::Sequential->value),
@@ -27,12 +38,12 @@ return [
     'persistence' => [
         'driver' => $swarmPersistenceDriver,
         /*
-         * When the persistence driver is database, sensitive string columns (prompts,
-         * agent outputs, branch I/O, etc.) are sealed with Laravel's encrypter (APP_KEY).
+         * When any database persistence driver is active, sensitive string columns
+         * (prompts, agent outputs, branch I/O, etc.) are sealed with Laravel's encrypter (APP_KEY).
          * Override with SWARM_ENCRYPT_AT_REST=false only when you rely solely on database-level encryption.
          */
         'encrypt_at_rest' => filter_var(
-            env('SWARM_ENCRYPT_AT_REST', $swarmPersistenceDriver === 'database'),
+            env('SWARM_ENCRYPT_AT_REST', $swarmDatabasePersistenceEnabled),
             FILTER_VALIDATE_BOOLEAN
         ),
         /*
@@ -119,20 +130,20 @@ return [
     ],
 
     'context' => [
-        'driver' => env('SWARM_CONTEXT_DRIVER'),
+        'driver' => $swarmContextDriver,
         'ttl' => (int) env('SWARM_CONTEXT_TTL', 3600),
         'store' => env('SWARM_CONTEXT_STORE'),
         'prefix' => env('SWARM_CONTEXT_PREFIX', 'swarm:context:'),
     ],
 
     'artifacts' => [
-        'driver' => env('SWARM_ARTIFACTS_DRIVER'),
+        'driver' => $swarmArtifactsDriver,
         'store' => env('SWARM_ARTIFACTS_STORE'),
         'prefix' => env('SWARM_ARTIFACTS_PREFIX', 'swarm:artifacts:'),
     ],
 
     'history' => [
-        'driver' => env('SWARM_HISTORY_DRIVER'),
+        'driver' => $swarmHistoryDriver,
         'store' => env('SWARM_HISTORY_STORE'),
         'prefix' => env('SWARM_HISTORY_PREFIX', 'swarm:history:'),
         'index_prefix' => env('SWARM_HISTORY_INDEX_PREFIX', 'swarm:index:'),
@@ -142,7 +153,7 @@ return [
     'streaming' => [
         'replay' => [
             'enabled' => env('SWARM_STREAM_REPLAY_ENABLED', false),
-            'driver' => env('SWARM_STREAM_REPLAY_DRIVER'),
+            'driver' => $swarmStreamReplayDriver,
             'failure_policy' => env('SWARM_STREAM_REPLAY_FAILURE_POLICY', 'fail'),
             'store' => env('SWARM_STREAM_REPLAY_STORE'),
             'prefix' => env('SWARM_STREAM_REPLAY_PREFIX', 'swarm:stream:'),
