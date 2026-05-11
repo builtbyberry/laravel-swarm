@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
+use Throwable;
 
 class DatabaseDurableOutbox implements DurableOutbox
 {
@@ -45,9 +46,11 @@ class DatabaseDurableOutbox implements DurableOutbox
 
         $typeValues = array_map(static fn (OutboxDispatchType $t): string => $t->value, $types);
 
-        $dispatched = 0;
-
-        $this->connection->transaction(function () use ($now, $staleThreshold, $typeValues, $limit, &$dispatched): void {
+        // Phase 1: claim rows atomically inside a short transaction.
+        // Dispatch happens outside (queue systems are not DB transaction participants —
+        // dispatching inside a transaction risks duplicate jobs if the commit fails after
+        // a successful queue push).
+        $entries = $this->connection->transaction(function () use ($now, $staleThreshold, $typeValues, $limit) {
             $query = $this->table()
                 ->where(function ($q) use ($now, $staleThreshold): void {
                     $q->whereNull('reserved_at')
@@ -55,59 +58,105 @@ class DatabaseDurableOutbox implements DurableOutbox
                 })
                 ->where('available_at', '<=', $now)
                 ->orderBy('id')
-                ->limit($limit)
-                ->lockForUpdate();
+                ->limit($limit);
 
             if ($typeValues !== []) {
                 $query->whereIn('dispatch_type', $typeValues);
             }
 
+            // Use FOR UPDATE SKIP LOCKED so concurrent relay workers each claim
+            // a distinct batch rather than blocking on each other's locks.
+            // SQLite does not support row-level locking; the guard keeps tests working.
+            $query->lockForUpdate();
+            if ($this->connection->getDriverName() !== 'sqlite') {
+                $query->skipLocked();
+            }
+
             $entries = $query->get();
 
             if ($entries->isEmpty()) {
-                return;
+                return $entries;
             }
 
-            $ids = $entries->pluck('id')->all();
+            $this->table()->whereIn('id', $entries->pluck('id')->all())->update(['reserved_at' => $now]);
 
-            $this->table()->whereIn('id', $ids)->update(['reserved_at' => $now]);
+            return $entries;
+        });
 
-            foreach ($entries as $entry) {
+        if ($entries->isEmpty()) {
+            return 0;
+        }
+
+        // Phase 2: dispatch and delete each entry individually, outside any transaction.
+        // Per-entry try/catch ensures a single malformed or unroutable row cannot
+        // prevent the remaining batch from being dispatched (poison-pill isolation).
+        // Failed entries retain their reserved_at and become re-claimable after the
+        // reservation timeout expires.
+        $dispatched = 0;
+
+        foreach ($entries as $entry) {
+            try {
                 $this->dispatchEntry($entry);
                 $this->table()->where('id', $entry->id)->delete();
                 $dispatched++;
+            } catch (Throwable $e) {
+                report($e);
             }
-        });
+        }
 
         return $dispatched;
     }
 
     protected function dispatchEntry(object $entry): void
     {
-        $type = OutboxDispatchType::from($entry->dispatch_type);
+        $type = OutboxDispatchType::tryFrom($entry->dispatch_type);
+
+        if ($type === null) {
+            report(new \UnexpectedValueException("Unknown outbox dispatch_type [{$entry->dispatch_type}] for entry [{$entry->id}]; skipping."));
+
+            return;
+        }
+
         $payload = is_string($entry->payload) ? json_decode($entry->payload, true) : (array) $entry->payload;
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            report(new \UnexpectedValueException("Invalid JSON payload for outbox entry [{$entry->id}] (type: {$entry->dispatch_type}); skipping."));
+
+            return;
+        }
+
+        // Validate the stored queue connection against the application's known connections
+        // so a tampered or stale DB row cannot reroute jobs to an unexpected driver.
+        $knownConnections = array_keys((array) $this->config->get('queue.connections', []));
+        $connection = in_array($entry->queue_connection, $knownConnections, true)
+            ? $entry->queue_connection
+            : null;
+        $queue = $entry->queue_name ?: null;
 
         match ($type) {
             OutboxDispatchType::Step => $this->jobs->dispatchStep(
                 $entry->run_id,
                 (int) $payload['step_index'],
-                $entry->queue_connection ?: null,
-                $entry->queue_name ?: null,
+                $connection,
+                $queue,
             ),
             OutboxDispatchType::Branch => $this->jobs->dispatchBranch(
                 $entry->run_id,
                 (string) $payload['branch_id'],
-                $entry->queue_connection ?: null,
-                $entry->queue_name ?: null,
+                $connection,
+                $queue,
             ),
             OutboxDispatchType::QueuedResume => $this->jobs->dispatchQueuedResumeById(
                 $entry->run_id,
-                $entry->queue_connection ?: null,
-                $entry->queue_name ?: null,
+                $connection,
+                $queue,
             ),
         };
     }
 
+    /**
+     * @param  array<string, mixed>  $payload
+     */
     protected function insert(OutboxDispatchType $type, string $runId, array $payload, ?string $connection, ?string $queue): void
     {
         $now = Carbon::now('UTC');

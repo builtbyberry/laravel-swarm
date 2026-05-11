@@ -231,11 +231,28 @@ return [
         ],
         'relay' => [
             /*
+             * The transactional outbox relay drains swarm_durable_outbox rows and
+             * dispatches the corresponding queue jobs. It must be scheduled to run
+             * regularly (e.g. every minute) for durable execution to advance:
+             *
+             *   Schedule::command('swarm:relay')->everyMinute();
+             *
+             * Without the relay, durable runs will stall permanently after the
+             * first step completes.
+             */
+
+            /*
              * How long a relay worker's claim on an outbox entry is considered valid.
              * Entries whose reserved_at is older than this many seconds are treated as
              * abandoned and become eligible for re-claim by the next relay run.
              */
             'reservation_timeout_seconds' => (int) env('SWARM_DURABLE_RELAY_RESERVATION_TIMEOUT_SECONDS', 60),
+
+            /*
+             * Maximum number of outbox entries drained per relay invocation.
+             * The --limit option on swarm:relay overrides this, capped at 10,000.
+             */
+            'limit' => (int) env('SWARM_DURABLE_RELAY_LIMIT', 100),
         ],
         'webhooks' => [
             'enabled' => env('SWARM_WEBHOOKS_ENABLED', false),
