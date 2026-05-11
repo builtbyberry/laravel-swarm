@@ -31,11 +31,18 @@ class DurableJobDispatcher
      */
     public function dispatchQueuedHierarchicalResume(array $run): void
     {
-        $connection = $this->config->get('swarm.queue.hierarchical_parallel.resume.connection')
-            ?? ($run['queue_connection'] ?? null);
-        $queue = $this->config->get('swarm.queue.hierarchical_parallel.resume.name')
-            ?? ($run['queue_name'] ?? null);
-        $dispatch = QueuedHierarchicalCoordinator::dispatchResume($run['run_id'], $connection, $queue);
+        $this->dispatchQueuedResumeById(
+            (string) $run['run_id'],
+            $run['queue_connection'] ?? null,
+            $run['queue_name'] ?? null,
+        );
+    }
+
+    public function dispatchQueuedResumeById(string $runId, ?string $connection = null, ?string $queue = null): void
+    {
+        $connection = $this->config->get('swarm.queue.hierarchical_parallel.resume.connection') ?? $connection;
+        $queue = $this->config->get('swarm.queue.hierarchical_parallel.resume.name') ?? $queue;
+        $dispatch = QueuedHierarchicalCoordinator::dispatchResume($runId, $connection, $queue);
         unset($dispatch);
     }
 

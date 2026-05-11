@@ -229,6 +229,14 @@ return [
         'recovery' => [
             'grace_seconds' => (int) env('SWARM_DURABLE_RECOVERY_GRACE_SECONDS', 300),
         ],
+        'relay' => [
+            /*
+             * How long a relay worker's claim on an outbox entry is considered valid.
+             * Entries whose reserved_at is older than this many seconds are treated as
+             * abandoned and become eligible for re-claim by the next relay run.
+             */
+            'reservation_timeout_seconds' => (int) env('SWARM_DURABLE_RELAY_RESERVATION_TIMEOUT_SECONDS', 60),
+        ],
         'webhooks' => [
             'enabled' => env('SWARM_WEBHOOKS_ENABLED', false),
             'prefix' => env('SWARM_WEBHOOKS_PREFIX', 'swarm/webhooks'),
@@ -265,5 +273,6 @@ return [
         'durable_progress' => env('SWARM_DURABLE_PROGRESS_TABLE', 'swarm_durable_progress'),
         'durable_child_runs' => env('SWARM_DURABLE_CHILD_RUNS_TABLE', 'swarm_durable_child_runs'),
         'durable_webhook_idempotency' => env('SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE', 'swarm_durable_webhook_idempotency'),
+        'durable_outbox' => env('SWARM_DURABLE_OUTBOX_TABLE', 'swarm_durable_outbox'),
     ],
 ];

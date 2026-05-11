@@ -15,11 +15,13 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmPauseCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmProgressCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPruneCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmRecoverCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmRelayCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmSignalCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
@@ -31,6 +33,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
@@ -163,6 +166,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->bind(DurableRunRecorder::class);
         $this->app->singleton(DurableSwarmManager::class);
         $this->app->singleton(DurableRunStore::class, DatabaseDurableRunStore::class);
+        $this->app->singleton(DurableOutbox::class, DatabaseDurableOutbox::class);
 
         $this->app->singleton(ContextStore::class, fn (Application $app): ContextStore => $this->resolvePersistenceStore(
             $app,
@@ -235,6 +239,7 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmResumeCommand::class,
                 SwarmCancelCommand::class,
                 SwarmRecoverCommand::class,
+                SwarmRelayCommand::class,
                 SwarmSignalCommand::class,
                 SwarmInspectCommand::class,
                 SwarmProgressCommand::class,
