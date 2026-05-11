@@ -97,7 +97,9 @@ class DurableRetryHandler
         $nextRetryAt = Carbon::now('UTC')->addSeconds($policy->delayForAttempt($attempt));
 
         try {
-            $this->durableRuns->scheduleBranchRetry($run['run_id'], (string) $branch['branch_id'], $token, $policy->toArray(), $attempt, $nextRetryAt);
+            $this->connection->transaction(function () use ($run, $branch, $token, $policy, $attempt, $nextRetryAt): void {
+                $this->durableRuns->scheduleBranchRetry($run['run_id'], (string) $branch['branch_id'], $token, $policy->toArray(), $attempt, $nextRetryAt);
+            });
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
             return ['scheduled' => true, 'dispatchBranch' => null];
         }
