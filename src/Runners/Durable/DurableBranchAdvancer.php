@@ -160,11 +160,6 @@ class DurableBranchAdvancer
         } catch (Throwable $exception) {
             $retry = $this->retryHandler->scheduleBranchRetryIfAllowed($run, $branch, $swarm, $context, $token, $exception);
             if ($retry['scheduled']) {
-                if ($retry['dispatchBranch'] !== null) {
-                    $rb = $retry['dispatchBranch'];
-                    $this->outbox->enqueueBranch($rb['runId'], $rb['branchId'], $rb['connection'], $rb['queue']);
-                }
-
                 return;
             }
 

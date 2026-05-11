@@ -54,7 +54,7 @@ class DurableHierarchicalCoordinator
     /**
      * @param  array<string, mixed>  $run
      */
-    public function checkpointBranchWait(array $run, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds, DurableHierarchicalStepResult $result): void
+    public function checkpointBranchWait(array $run, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds, DurableHierarchicalStepResult $result, ?callable $withTransaction = null): void
     {
         $swarm = $this->application->make($run['swarm_class']);
 
@@ -64,7 +64,7 @@ class DurableHierarchicalCoordinator
 
         $branches = array_map(fn (array $branch): array => $this->branches->withBranchRouting($swarm, $context, $branch, $run), $result->branches);
 
-        $this->connection->transaction(function () use ($run, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $branches): void {
+        $this->connection->transaction(function () use ($run, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $branches, $withTransaction): void {
             $this->historyStore->syncDurableState($run['run_id'], 'running', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->durableRuns->waitForBranches($run['run_id'], new BranchWaitPayload(
                 executionToken: $token,
@@ -77,6 +77,9 @@ class DurableHierarchicalCoordinator
                 totalSteps: $result->totalSteps,
                 branches: $branches,
             ));
+            if ($withTransaction !== null) {
+                ($withTransaction)();
+            }
         });
     }
 
@@ -124,13 +127,12 @@ class DurableHierarchicalCoordinator
                 continue;
             }
 
-            $dispatch = $this->jobs->dispatchBranch(
+            $this->outbox->enqueueBranch(
                 $run['run_id'],
                 (string) $branch['branch_id'],
                 $branch['queue_connection'] ?? $run['queue_connection'],
                 $branch['queue_name'] ?? $run['queue_name'],
             );
-            unset($dispatch);
         }
     }
 

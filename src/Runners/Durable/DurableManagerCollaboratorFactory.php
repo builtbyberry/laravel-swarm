@@ -85,6 +85,7 @@ class DurableManagerCollaboratorFactory
             'connection' => $connection,
             'capture' => $capture,
             'runs' => $runContext,
+            'outbox' => $outbox,
         ]);
         $inspector = $this->application->makeWith(DurableRunInspector::class, [
             'durableRuns' => $durableRuns,
@@ -237,7 +238,6 @@ class DurableManagerCollaboratorFactory
             'executionBuilder' => $executionBuilder,
             'sequential' => $sequentialAdvancer,
             'checkpoints' => $checkpointCoordinator,
-            'outbox' => $outbox,
         ]);
         $branchAdvancer = $this->application->makeWith(DurableBranchAdvancer::class, [
             'durableRuns' => $durableRuns,

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
@@ -26,7 +25,6 @@ class DurableStepAdvancer
         protected DurableStepExecutionBuilder $executionBuilder,
         protected DurableSequentialStepAdvancer $sequential,
         protected DurableStepCheckpointCoordinator $checkpoints,
-        protected DurableOutbox $outbox,
     ) {}
 
     public function afterStepCheckpointForTesting(?callable $hook): void
@@ -99,11 +97,6 @@ class DurableStepAdvancer
         } catch (Throwable $exception) {
             $retry = $this->retryHandler->scheduleRunRetryIfAllowed($run, $swarm, $context, $token, $stepLeaseSeconds, $expectedStepIndex, $exception);
             if ($retry['scheduled']) {
-                if ($retry['dispatchStep'] !== null) {
-                    $rs = $retry['dispatchStep'];
-                    $this->outbox->enqueueStep($rs['runId'], $rs['stepIndex'], $rs['connection'], $rs['queue']);
-                }
-
                 return;
             }
 

@@ -120,8 +120,9 @@ class DurableRunRecorder
         int $stepLeaseSeconds,
         DurableHierarchicalStepResult $result,
         ?SwarmStep $step = null,
+        ?callable $withTransaction = null,
     ): void {
-        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $step): void {
+        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $step, $withTransaction): void {
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->persistStepArtifacts($runId, $step);
             $this->durableRuns->checkpointHierarchicalStep(
@@ -135,6 +136,9 @@ class DurableRunRecorder
                 nodeOutput: $result->nodeOutput,
                 totalSteps: $result->totalSteps,
             );
+            if ($withTransaction !== null) {
+                ($withTransaction)();
+            }
         });
         $this->audit->emit('durable.checkpointed_hierarchical', [
             'run_id' => $runId,
@@ -147,11 +151,14 @@ class DurableRunRecorder
         ]);
     }
 
-    public function checkpointSequential(string $runId, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds): void
+    public function checkpointSequential(string $runId, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds, ?callable $withTransaction = null): void
     {
-        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds): void {
+        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $withTransaction): void {
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->durableRuns->releaseForNextStep($runId, $token, $nextStepIndex);
+            if ($withTransaction !== null) {
+                ($withTransaction)();
+            }
         });
         $this->audit->emit('durable.checkpointed', [
             'run_id' => $runId,

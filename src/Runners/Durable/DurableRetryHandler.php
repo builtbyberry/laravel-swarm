@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Attributes\DurableRetry;
 use BuiltByBerry\LaravelSwarm\Contracts\ConfiguresDurableRetries;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
@@ -28,93 +29,89 @@ class DurableRetryHandler
         protected Connection $connection,
         protected SwarmCapture $capture,
         protected DurableRunContext $runs,
+        protected DurableOutbox $outbox,
     ) {}
 
     /**
      * @param  array<string, mixed>  $run
-     * @return array{scheduled: bool, dispatchStep: array{runId: string, stepIndex: int, connection: ?string, queue: ?string}|null}
+     * @return array{scheduled: bool}
      */
     public function scheduleRunRetryIfAllowed(array $run, Swarm $swarm, RunContext $context, string $token, int $stepLeaseSeconds, int $stepIndex, Throwable $exception): array
     {
         $policy = $this->resolveRetryPolicy($swarm, $this->agentClassForStep($swarm, $run, $stepIndex));
 
         if ($policy === null || $this->isNonRetryable($policy, $exception)) {
-            return ['scheduled' => false, 'dispatchStep' => null];
+            return ['scheduled' => false];
         }
 
         $attempt = ((int) ($run['retry_attempt'] ?? 0)) + 1;
 
         if ($attempt > $policy->maxAttempts) {
-            return ['scheduled' => false, 'dispatchStep' => null];
+            return ['scheduled' => false];
         }
 
         $nextRetryAt = Carbon::now('UTC')->addSeconds($policy->delayForAttempt($attempt));
+        $isZeroDelay = $policy->delayForAttempt($attempt) === 0;
 
         try {
-            $this->connection->transaction(function () use ($run, $token, $policy, $attempt, $nextRetryAt, $context, $stepLeaseSeconds): void {
+            $this->connection->transaction(function () use ($run, $token, $policy, $attempt, $nextRetryAt, $context, $stepLeaseSeconds, $isZeroDelay): void {
                 $this->durableRuns->scheduleRetry($run['run_id'], $token, $policy->toArray(), $attempt, $nextRetryAt);
                 $this->historyStore->syncDurableState($run['run_id'], 'pending', $this->capture->context($context), array_merge($context->metadata, [
                     'durable_retry_attempt' => $attempt,
                     'durable_next_retry_at' => $nextRetryAt->toJSON(),
                 ]), $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
+                // Zero-delay retries are enqueued inside the transaction so the
+                // outbox row and the retry state change are always atomic.
+                if ($isZeroDelay) {
+                    $this->outbox->enqueueStep($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
+                }
             });
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
-            return ['scheduled' => true, 'dispatchStep' => null];
+            return ['scheduled' => true];
         }
 
-        $dispatchStep = null;
-        if ($policy->delayForAttempt($attempt) === 0) {
-            $dispatchStep = [
-                'runId' => $run['run_id'],
-                'stepIndex' => (int) $run['next_step_index'],
-                'connection' => $run['queue_connection'],
-                'queue' => $run['queue_name'],
-            ];
-        }
-
-        return ['scheduled' => true, 'dispatchStep' => $dispatchStep];
+        return ['scheduled' => true];
     }
 
     /**
      * @param  array<string, mixed>  $run
      * @param  array<string, mixed>  $branch
-     * @return array{scheduled: bool, dispatchBranch: array{runId: string, branchId: string, connection: ?string, queue: ?string}|null}
+     * @return array{scheduled: bool}
      */
     public function scheduleBranchRetryIfAllowed(array $run, array $branch, Swarm $swarm, RunContext $context, string $token, Throwable $exception): array
     {
         $policy = $this->resolveRetryPolicy($swarm, (string) $branch['agent_class']);
 
         if ($policy === null || $this->isNonRetryable($policy, $exception)) {
-            return ['scheduled' => false, 'dispatchBranch' => null];
+            return ['scheduled' => false];
         }
 
         $attempt = ((int) ($branch['retry_attempt'] ?? 0)) + 1;
 
         if ($attempt > $policy->maxAttempts) {
-            return ['scheduled' => false, 'dispatchBranch' => null];
+            return ['scheduled' => false];
         }
 
         $nextRetryAt = Carbon::now('UTC')->addSeconds($policy->delayForAttempt($attempt));
+        $isZeroDelay = $policy->delayForAttempt($attempt) === 0;
 
         try {
-            $this->connection->transaction(function () use ($run, $branch, $token, $policy, $attempt, $nextRetryAt): void {
+            $this->connection->transaction(function () use ($run, $branch, $token, $policy, $attempt, $nextRetryAt, $isZeroDelay): void {
                 $this->durableRuns->scheduleBranchRetry($run['run_id'], (string) $branch['branch_id'], $token, $policy->toArray(), $attempt, $nextRetryAt);
+                if ($isZeroDelay) {
+                    $this->outbox->enqueueBranch(
+                        $run['run_id'],
+                        (string) $branch['branch_id'],
+                        $branch['queue_connection'] ?? $run['queue_connection'],
+                        $branch['queue_name'] ?? $run['queue_name'],
+                    );
+                }
             });
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
-            return ['scheduled' => true, 'dispatchBranch' => null];
+            return ['scheduled' => true];
         }
 
-        $dispatchBranch = null;
-        if ($policy->delayForAttempt($attempt) === 0) {
-            $dispatchBranch = [
-                'runId' => $run['run_id'],
-                'branchId' => (string) $branch['branch_id'],
-                'connection' => $branch['queue_connection'] ?? $run['queue_connection'],
-                'queue' => $branch['queue_name'] ?? $run['queue_name'],
-            ];
-        }
-
-        return ['scheduled' => true, 'dispatchBranch' => $dispatchBranch];
+        return ['scheduled' => true];
     }
 
     public function resolveRetryPolicy(Swarm $swarm, ?string $agentClass = null): ?DurableRetryPolicy
