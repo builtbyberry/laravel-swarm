@@ -30,11 +30,8 @@ class DurableRecoveryCoordinator
     /**
      * @return array<int, string>
      */
-    public function recover(?string $runId = null, ?string $swarmClass = null, int $limit = 50, ?callable $dispatchStep = null, ?callable $dispatchBranch = null): array
+    public function recover(?string $runId = null, ?string $swarmClass = null, int $limit = 50, callable $dispatchStep, callable $dispatchBranch): array
     {
-        $dispatchStep ??= fn (string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null) => $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue);
-        $dispatchBranch ??= fn (string $runId, string $branchId, ?string $connection = null, ?string $queue = null) => $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue);
-
         $runs = $this->durableRuns->recoverable(
             runId: $runId,
             swarmClass: $swarmClass,

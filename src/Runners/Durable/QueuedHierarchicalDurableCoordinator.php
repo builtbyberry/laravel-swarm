@@ -87,7 +87,7 @@ class QueuedHierarchicalDurableCoordinator
         }
 
         $runRow = $this->runs->requireRun($runId);
-        $token = $this->durableRuns->acquireLease($runId, (int) $runRow['next_step_index'], $this->validateStepTimeoutSeconds((int) $runRow['step_timeout_seconds']));
+        $token = $this->durableRuns->acquireLease($runId, (int) $runRow['next_step_index'], $this->runs->validateStepTimeoutSeconds((int) $runRow['step_timeout_seconds']));
 
         if ($token === null) {
             throw new SwarmException("Unable to acquire coordination lease for queued hierarchical run [{$runId}].");
@@ -170,12 +170,4 @@ class QueuedHierarchicalDurableCoordinator
         }
     }
 
-    protected function validateStepTimeoutSeconds(int $seconds): int
-    {
-        if ($seconds <= 0) {
-            throw new SwarmException('Durable swarm step timeout must be a positive integer.');
-        }
-
-        return $seconds;
-    }
 }

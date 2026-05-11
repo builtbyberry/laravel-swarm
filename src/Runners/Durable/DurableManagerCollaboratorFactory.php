@@ -183,7 +183,6 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'branches' => $branches,
             'hierarchical' => $hierarchicalRunner,
-            'jobs' => $jobs,
             'outbox' => $outbox,
         ]);
         $terminal = $this->application->makeWith(DurableRunTerminalHandler::class, [

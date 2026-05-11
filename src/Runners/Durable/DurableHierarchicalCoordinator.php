@@ -33,7 +33,6 @@ class DurableHierarchicalCoordinator
         protected DurableRunContext $runs,
         protected DurableBranchCoordinator $branches,
         protected HierarchicalRunner $hierarchical,
-        protected DurableJobDispatcher $jobs,
         protected DurableOutbox $outbox,
     ) {}
 

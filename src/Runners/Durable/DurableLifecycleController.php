@@ -111,8 +111,8 @@ class DurableLifecycleController
                 $this->outbox->enqueueStep(
                     $runId,
                     (int) ($updated['next_step_index'] ?? $run['next_step_index']),
-                    $run['queue_connection'],
-                    $run['queue_name'],
+                    $updated['queue_connection'],
+                    $updated['queue_name'],
                 );
             }
 
