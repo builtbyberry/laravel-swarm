@@ -129,6 +129,25 @@ return [
         'overflow' => env('SWARM_LIMIT_OVERFLOW', 'fail'),
     ],
 
+    /*
+     * Guardrails validate input, each agent step, and final output. They are not orchestration or middleware.
+     *
+     * child_inheritance:
+     *   own_and_global — global config entries plus the swarm's DefinesGuardrails::guardrails().
+     *   own_global_and_parent — also merge parent swarm guardrails when parent_run_id resolves via history.
+     *
+     * parallel_failure_policy (sync ParallelRunner only; durable queued parallel branches fall back to existing):
+     *   existing — validate each branch immediately before that branch's step is recorded.
+     *   batch_validate_before_record — validate every parallel output before any step completion row is written.
+     */
+    'guardrails' => [
+        'input' => [],
+        'step' => [],
+        'output' => [],
+        'child_inheritance' => env('SWARM_GUARDRAILS_CHILD_INHERITANCE', 'own_and_global'),
+        'parallel_failure_policy' => env('SWARM_GUARDRAILS_PARALLEL_FAILURE_POLICY', 'existing'),
+    ],
+
     'context' => [
         'driver' => $swarmContextDriver,
         'ttl' => (int) env('SWARM_CONTEXT_TTL', 3600),

@@ -83,6 +83,11 @@ class LeaseStealingQueuedRunHistoryStore implements ClaimsQueuedRunExecution, Ru
         $this->inner->fail($runId, $exception, $ttlSeconds, $executionToken, $leaseSeconds);
     }
 
+    public function recordPreflightFailure(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, Throwable $exception, int $ttlSeconds): void
+    {
+        $this->inner->recordPreflightFailure($runId, $swarmClass, $topology, $context, $metadata, $exception, $ttlSeconds);
+    }
+
     public function find(string $runId): ?array
     {
         return $this->inner->find($runId);

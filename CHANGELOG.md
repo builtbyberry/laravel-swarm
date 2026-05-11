@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Guardrails v1:** `SwarmInputGuardrail`, `SwarmStepGuardrail`, `SwarmOutputGuardrail`, optional
+  `DefinesGuardrails::guardrails()`, centralized `SwarmGuardrailRunner`, `GuardrailViolation`
+  (`policyCode`, `reason`, `metadata`, `scope`, `::block()`),
+  `config/swarm.php` `guardrails.*` (including child inheritance and parallel sync policy), wiring through
+  `SwarmRunner`, durable starters, sequential/parallel/hierarchical/stream/durable paths, and
+  `MissingQueueLeaseSchemaException` for missing queued-lease columns (distinct from runtime
+  `LostSwarmLeaseException`). Documentation: `docs/guardrails.md`. Feature and unit tests under
+  `tests/Feature/Guardrails*.php`, `tests/Unit/Runners/SwarmGuardrailRunnerTest.php`,
+  `tests/Unit/Exceptions/GuardrailViolationTest.php`.
+
+### Changed
+
+- `GuardrailViolation` uses a `policyCode` property instead of `code`, avoiding collision with PHP’s
+  inherited `Exception::$code`.
+
+### Fixed
+
+- Output-phase guardrail violations are handled inside `SwarmRunner::runWithExecutionMode()`’s primary
+  `try` so failures call `historyStore->fail`, emit `SwarmFailed`, and merge safe guardrail metadata—same
+  as other orchestration failures (previously `finalizeSuccessfulSwarmExecution()` sat outside that
+  `try`, so `GuardrailViolation` could escape without lifecycle handling). The queued hierarchical
+  resume-after-join success path wraps finalization the same way.
+- `queue()` and `broadcastOnQueue()` now persist a preflight failure row and dispatch `SwarmFailed`
+  when an input guardrail blocks at dispatch time (previously the violation was thrown without any
+  history or event being written).
+- `dispatchDurable()` now persists a preflight failure row and dispatches `SwarmFailed` when an input
+  guardrail blocks before the durable transaction runs (previously the violation escaped without any
+  history row).
+- Stream input guardrails now fire eagerly at `stream()` call time, before `StreamableSwarmResponse`
+  is constructed. Previously they ran lazily inside the generator and only fired when the caller began
+  iterating, leaving a window where a blocked stream was returned without any history or event written.
+- `own_global_and_parent` child-inheritance mode now logs a `warning` (via injected `LoggerInterface`)
+  when the parent swarm class cannot be found or resolved from the container, instead of silently
+  dropping parent guardrails.
+
 ## v0.2.0 - 2026-05-05
 
 ### Added

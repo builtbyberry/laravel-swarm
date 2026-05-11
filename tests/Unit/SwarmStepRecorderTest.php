@@ -37,6 +37,8 @@ function makeStepRecorderState(?callable $verifyOwnership = null): array
 
         public function fail(string $runId, Throwable $exception, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void {}
 
+        public function recordPreflightFailure(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, Throwable $exception, int $ttlSeconds): void {}
+
         public function find(string $runId): ?array
         {
             return null;

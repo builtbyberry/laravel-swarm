@@ -16,7 +16,9 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
+use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -45,6 +47,7 @@ class DurableBranchAdvancer
         protected DurableBranchCoordinator $branches,
         protected DurableHierarchicalCoordinator $hierarchical,
         protected DurableRetryHandler $retryHandler,
+        protected SwarmGuardrailRunner $guardrails,
     ) {}
 
     /**
@@ -128,6 +131,18 @@ class DurableBranchAdvancer
             $output = (string) $response;
             $usage = $response->usage->toArray();
             $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
+            $this->guardrails->validateStep(
+                $swarm,
+                GuardrailStepContext::fromState(
+                    $state,
+                    (int) $branch['step_index'],
+                    $branch['agent_class'],
+                    $branch['input'],
+                    $output,
+                    is_array($branch['metadata'] ?? null) ? $branch['metadata'] : [],
+                ),
+                $state->context,
+            );
             $step = $this->stepsRecorder->completed(
                 state: $state,
                 index: (int) $branch['step_index'],

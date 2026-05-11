@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -219,6 +220,36 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     /**
      * @param  array<string, mixed>  $metadata
      */
+    public function recordPreflightFailure(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, Throwable $exception, int $ttlSeconds): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->table()->updateOrInsert(['run_id' => $runId], [
+            'swarm_class' => $swarmClass,
+            'topology' => $topology,
+            'status' => 'failed',
+            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($context->toArray())),
+            'metadata' => $this->encodeJson($metadata),
+            'steps' => $this->encodeJson([]),
+            'output' => null,
+            'usage' => $this->encodeJson([]),
+            'error' => $this->encodeJson([
+                'message' => $this->capture->failureMessage($exception),
+                'class' => $exception::class,
+            ]),
+            'artifacts' => $this->encodeJson([]),
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
+            'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+            'finished_at' => $timestamp,
+            'execution_token' => null,
+            'leased_until' => null,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
     public function syncDurableState(string $runId, string $status, RunContext $context, array $metadata, int $ttlSeconds, bool $finished, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
         $values = [
@@ -424,7 +455,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         $table = (string) $this->config->get('swarm.tables.history', 'swarm_run_histories');
 
         if (! $this->connection->getSchemaBuilder()->hasColumns($table, ['execution_token', 'leased_until'])) {
-            throw new LostSwarmLeaseException('Database-backed queued swarms require [execution_token] and [leased_until] columns on the history table.');
+            throw new MissingQueueLeaseSchemaException('Database-backed queued swarms require [execution_token] and [leased_until] columns on the history table.');
         }
     }
 

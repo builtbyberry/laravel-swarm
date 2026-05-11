@@ -1,3 +1,5 @@
+![](https://banners.beyondco.de/Laravel%20Swarm.png?theme=light&packageManager=composer+require&packageName=builtbyberry%2Flaravel-swarm&pattern=aztec&style=style_1&description=Lightweight+orchestration+package+for+coordinating+AI+agents%2C+workflows%2C+and+distributed+task+execution+within+Laravel+applications+built+on+Laravel+AI&md=1&showWatermark=1&fontSize=100px&images=cog) 
+
 # Laravel Swarm
 
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
@@ -161,6 +163,8 @@ return response()->json($response);
 | `broadcast()` / `broadcastNow()` | `StreamableSwarmResponse` | A sequential workflow should stream and broadcast typed events immediately. |
 | `broadcastOnQueue()` | `QueuedSwarmResponse` | A worker should stream and broadcast typed events. |
 | `dispatchDurable()` | `DurableSwarmResponse` | The workflow needs checkpointing, recovery, operator controls, or branch jobs. |
+
+**Guardrails** (input, per-step, final output policy checks) run across these modes at fixed orchestration boundaries; see [docs/guardrails.md](docs/guardrails.md).
 
 `queue()` and `dispatchDurable()` return dispatch handles with a `runId`. Listen for lifecycle events or inspect persisted history for eventual results.
 

@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
+use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
@@ -52,6 +53,7 @@ class SequentialStreamRunner
         protected SwarmAttributeResolver $resolver,
         protected SwarmAuditDispatcher $audit,
         protected SwarmTelemetryDispatcher $telemetry,
+        protected SwarmGuardrailRunner $guardrails,
     ) {}
 
     /**
@@ -94,6 +96,47 @@ class SequentialStreamRunner
             queueHierarchicalParallelCoordination: null,
         );
 
+        // Validate input eagerly before returning the response — consistent with prompt() and queue().
+        // Input guardrails must not be lazy for stream; callers should not need to iterate to learn of a block.
+        try {
+            $this->guardrails->validateInput($swarm, $context);
+        } catch (Throwable $exception) {
+            if ($exception instanceof GuardrailViolation) {
+                $context->mergeMetadata($exception->safeContextMetadata());
+            }
+            $this->historyStore->recordPreflightFailure(
+                $context->runId,
+                $swarm::class,
+                $topology->value,
+                $context,
+                $context->metadata,
+                $exception,
+                $contextTtl,
+            );
+            $this->events->dispatch(new SwarmFailed(
+                runId: $context->runId,
+                swarmClass: $swarm::class,
+                topology: $topology->value,
+                exception: $this->capture->failureException($exception),
+                durationMs: 0,
+                metadata: $context->metadata,
+                executionMode: ExecutionMode::Stream->value,
+                exceptionClass: $exception::class,
+            ));
+            $this->audit->emit('run.failed', [
+                'run_id' => $context->runId,
+                'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+                'swarm_class' => $swarm::class,
+                'topology' => $topology->value,
+                'execution_mode' => ExecutionMode::Stream->value,
+                'status' => 'failed',
+                'exception_class' => $exception::class,
+                'duration_ms' => 0,
+                ...$this->audit->metadata($context->metadata),
+            ]);
+            throw $exception;
+        }
+
         $startedAt = null;
 
         return new StreamableSwarmResponse(
@@ -124,6 +167,8 @@ class SequentialStreamRunner
      */
     protected function execute(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, ?float &$startedAt): \Generator
     {
+        $historyRowStarted = false;
+
         $this->historyStore->start($context->runId, $swarm::class, $state->topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
         $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
         $this->events->dispatch(new SwarmStarted(
@@ -162,6 +207,8 @@ class SequentialStreamRunner
 
         $startedAt = MonotonicTime::now();
 
+        $historyRowStarted = true;
+
         try {
             foreach ($this->sequential->stream($state) as $streamEvent) {
                 $this->recordStreamTelemetry($swarm, $state, $streamEvent, $streamSequenceIndex, $streamTelemetryStart, false);
@@ -175,6 +222,8 @@ class SequentialStreamRunner
                 artifacts: $context->artifacts,
                 usage: is_array($context->metadata['usage'] ?? null) ? $context->metadata['usage'] : [],
             ), $context, $state->topology->value);
+
+            $this->guardrails->validateOutput($swarm, $context, $response->output);
 
             $capturedResponse = $this->limits->response($this->capture->response($response));
             $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
@@ -215,7 +264,7 @@ class SequentialStreamRunner
 
             return $response;
         } catch (Throwable $exception) {
-            yield $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $streamTelemetryStart, $streamSequenceIndex);
+            yield $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $streamTelemetryStart, $streamSequenceIndex, $historyRowStarted);
 
             throw $exception;
         }
@@ -256,10 +305,27 @@ class SequentialStreamRunner
         ?float $startedAt,
         float $streamTelemetryStart,
         int &$streamSequenceIndex,
+        bool $historyRowStarted = true,
     ): SwarmStreamError {
         $durationMs = $startedAt !== null ? MonotonicTime::elapsedMilliseconds($startedAt) : 1;
 
-        $this->historyStore->fail($context->runId, $exception, $contextTtl);
+        if ($exception instanceof GuardrailViolation) {
+            $context->mergeMetadata($exception->safeContextMetadata());
+        }
+
+        if ($historyRowStarted) {
+            $this->historyStore->fail($context->runId, $exception, $contextTtl);
+        } else {
+            $this->historyStore->recordPreflightFailure(
+                $context->runId,
+                $swarm::class,
+                $state->topology->value,
+                $context,
+                $context->metadata,
+                $exception,
+                $contextTtl,
+            );
+        }
         $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
         $this->events->dispatch(new SwarmFailed(
             runId: $context->runId,

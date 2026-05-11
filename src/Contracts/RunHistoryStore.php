@@ -24,6 +24,13 @@ interface RunHistoryStore
     public function fail(string $runId, Throwable $exception, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void;
 
     /**
+     * Persist a failed run when execution never reached {@see start()} (for example input guardrail violations).
+     *
+     * @param  array<string, mixed>  $metadata
+     */
+    public function recordPreflightFailure(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, Throwable $exception, int $ttlSeconds): void;
+
+    /**
      * @return array<string, mixed>|null
      */
     public function find(string $runId): ?array;

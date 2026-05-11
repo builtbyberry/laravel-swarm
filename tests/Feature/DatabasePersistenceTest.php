@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
@@ -1263,7 +1263,7 @@ test('queued database swarms fail clearly when the history table is missing leas
     config()->set('swarm.tables.history', 'legacy_swarm_histories');
 
     expect(fn () => app(SwarmRunner::class)->runQueued(FakeSequentialSwarm::make(), 'legacy-queue-task'))
-        ->toThrow(LostSwarmLeaseException::class, 'Database-backed queued swarms require [execution_token] and [leased_until] columns on the history table.');
+        ->toThrow(MissingQueueLeaseSchemaException::class, 'Database-backed queued swarms require [execution_token] and [leased_until] columns on the history table.');
 });
 
 test('database-backed assert persisted finds structured and callable matches beyond the latest 100 runs', function () {

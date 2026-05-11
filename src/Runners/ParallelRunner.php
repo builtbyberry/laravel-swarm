@@ -5,14 +5,17 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
+use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Laravel\Ai\Contracts\Agent;
 
@@ -24,6 +27,8 @@ class ParallelRunner
         protected ConcurrencyManager $concurrency,
         protected SwarmStepRecorder $stepsRecorder,
         protected SwarmCapture $capture,
+        protected SwarmGuardrailRunner $guardrails,
+        protected ConfigRepository $config,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -67,6 +72,26 @@ class ParallelRunner
             throw new SwarmTimeoutException('The swarm exceeded its configured timeout after parallel execution.');
         }
 
+        $policy = GuardrailParallelFailurePolicy::tryFrom((string) $this->config->get(
+            'swarm.guardrails.parallel_failure_policy',
+            GuardrailParallelFailurePolicy::Existing->value,
+        )) ?? GuardrailParallelFailurePolicy::Existing;
+
+        if ($policy === GuardrailParallelFailurePolicy::BatchValidateBeforeRecord) {
+            foreach ($agents as $index => $agent) {
+                if (! array_key_exists($index, $results)) {
+                    throw new SwarmException($state->swarm::class.": parallel execution did not return a result for agent index [{$index}].");
+                }
+
+                $row = $results[$index];
+                $this->guardrails->validateStep(
+                    $state->swarm,
+                    GuardrailStepContext::fromState($state, $index, $row['class'], $input, $row['output'], []),
+                    $state->context,
+                );
+            }
+        }
+
         $steps = [];
         $mergedUsage = [];
         $outputs = [];
@@ -77,6 +102,15 @@ class ParallelRunner
             }
 
             $row = $results[$index];
+
+            if ($policy === GuardrailParallelFailurePolicy::Existing) {
+                $this->guardrails->validateStep(
+                    $state->swarm,
+                    GuardrailStepContext::fromState($state, $index, $row['class'], $input, $row['output'], []),
+                    $state->context,
+                );
+            }
+
             $step = $this->stepsRecorder->completed(
                 state: $state,
                 index: $index,

@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
+use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -18,11 +19,13 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\AlignsQueuedHierarchicalParallelCursor;
+use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Laravel\Ai\Contracts\Agent;
 
@@ -37,6 +40,8 @@ class HierarchicalRunner
         protected SwarmStepRecorder $stepsRecorder,
         protected SwarmCapture $capture,
         protected DurableRunStore $durableRuns,
+        protected SwarmGuardrailRunner $guardrails,
+        protected ConfigRepository $config,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -796,6 +801,44 @@ class HierarchicalRunner
                     /** @var array<string, array{output: string, usage: array<string, int>, duration_ms: int}> $results */
                     $results = $this->concurrency->driver()->run($callbacks);
 
+                    $policy = GuardrailParallelFailurePolicy::tryFrom((string) $this->config->get(
+                        'swarm.guardrails.parallel_failure_policy',
+                        GuardrailParallelFailurePolicy::Existing->value,
+                    )) ?? GuardrailParallelFailurePolicy::Existing;
+
+                    if ($policy === GuardrailParallelFailurePolicy::BatchValidateBeforeRecord) {
+                        foreach ($node->branches as $branchNodeId) {
+                            /** @var HierarchicalWorkerNode $branch */
+                            $branch = $branchDefinitions[$branchNodeId]['node'];
+                            $input = $branchDefinitions[$branchNodeId]['input'];
+                            $index = $branchDefinitions[$branchNodeId]['index'];
+
+                            if (! array_key_exists($branchNodeId, $results)) {
+                                throw new SwarmException($state->swarm::class.": hierarchical parallel execution did not return a result for branch node [{$branchNodeId}].");
+                            }
+
+                            $row = $results[$branchNodeId];
+
+                            $this->guardrails->validateStep(
+                                $state->swarm,
+                                GuardrailStepContext::fromState(
+                                    $state,
+                                    $index,
+                                    $branch->agentClass,
+                                    $input,
+                                    $row['output'],
+                                    array_merge($branch->metadata, [
+                                        'index' => $index,
+                                        'usage' => $row['usage'],
+                                        'node_id' => $branch->id,
+                                        'parent_parallel_node_id' => $node->id,
+                                    ]),
+                                ),
+                                $state->context,
+                            );
+                        }
+                    }
+
                     foreach ($node->branches as $branchNodeId) {
                         /** @var HierarchicalWorkerNode $branch */
                         $branch = $branchDefinitions[$branchNodeId]['node'];
@@ -808,6 +851,21 @@ class HierarchicalRunner
 
                         $row = $results[$branchNodeId];
 
+                        $mergedMeta = array_merge($branch->metadata, [
+                            'index' => $index,
+                            'usage' => $row['usage'],
+                            'node_id' => $branch->id,
+                            'parent_parallel_node_id' => $node->id,
+                        ]);
+
+                        if ($policy === GuardrailParallelFailurePolicy::Existing) {
+                            $this->guardrails->validateStep(
+                                $state->swarm,
+                                GuardrailStepContext::fromState($state, $index, $branch->agentClass, $input, $row['output'], $mergedMeta),
+                                $state->context,
+                            );
+                        }
+
                         $step = $this->stepsRecorder->completed(
                             state: $state,
                             index: $index,
@@ -816,12 +874,7 @@ class HierarchicalRunner
                             output: $row['output'],
                             usage: $row['usage'],
                             durationMs: $row['duration_ms'],
-                            metadata: array_merge($branch->metadata, [
-                                'index' => $index,
-                                'usage' => $row['usage'],
-                                'node_id' => $branch->id,
-                                'parent_parallel_node_id' => $node->id,
-                            ]),
+                            metadata: $mergedMeta,
                             updateContext: false,
                             storeContext: false,
                             includeUsageInMetadata: false,
@@ -1241,6 +1294,12 @@ class HierarchicalRunner
         $response = $agent->prompt($input);
         $output = (string) $response;
         $usage = $this->usageFromResponse($response);
+
+        $this->guardrails->validateStep(
+            $state->swarm,
+            GuardrailStepContext::fromState($state, $index, $agent::class, $input, $output, $metadata),
+            $state->context,
+        );
 
         return $this->stepsRecorder->completed(
             state: $state,

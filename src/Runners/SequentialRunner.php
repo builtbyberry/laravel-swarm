@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -42,6 +43,7 @@ class SequentialRunner
         protected SwarmStepRecorder $steps,
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
+        protected SwarmGuardrailRunner $guardrails,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -206,6 +208,11 @@ class SequentialRunner
                 }
 
                 $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
+                $this->guardrails->validateStep(
+                    $state->swarm,
+                    GuardrailStepContext::fromState($state, $index, $agent::class, $input, $output, []),
+                    $state->context,
+                );
                 $step = $this->steps->completed(
                     state: $state,
                     index: $index,
@@ -219,6 +226,12 @@ class SequentialRunner
                 $response = $agent->prompt($input);
                 $output = (string) $response;
                 $stepUsage = $this->usageFromResponse($response);
+
+                $this->guardrails->validateStep(
+                    $state->swarm,
+                    GuardrailStepContext::fromState($state, $index, $agent::class, $input, $output, []),
+                    $state->context,
+                );
 
                 $step = $this->steps->completed(
                     state: $state,
@@ -277,6 +290,12 @@ class SequentialRunner
         $mergedUsage = $this->mergeUsage(
             is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [],
             $usage,
+        );
+
+        $this->guardrails->validateStep(
+            $state->swarm,
+            GuardrailStepContext::fromState($state, $index, $agent::class, $input, $output, []),
+            $state->context,
         );
 
         return $this->steps->completed(

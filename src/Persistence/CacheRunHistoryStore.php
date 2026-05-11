@@ -92,6 +92,37 @@ class CacheRunHistoryStore implements RunHistoryStore
     }
 
     /**
+     * @param  array<string, mixed>  $metadata
+     */
+    public function recordPreflightFailure(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, Throwable $exception, int $ttlSeconds): void
+    {
+        $timestamp = Carbon::now('UTC')->toIso8601String();
+
+        $this->store()->put($this->key($runId), [
+            'run_id' => $runId,
+            'swarm_class' => $swarmClass,
+            'topology' => $topology,
+            'status' => 'failed',
+            'context' => $context->toArray(),
+            'metadata' => $metadata,
+            'steps' => [],
+            'output' => null,
+            'usage' => [],
+            'error' => [
+                'message' => $this->capture->failureMessage($exception),
+                'class' => $exception::class,
+            ],
+            'artifacts' => [],
+            'started_at' => $timestamp,
+            'finished_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ], $ttlSeconds);
+
+        $this->appendToIndex($this->swarmIndexKey($swarmClass), $runId, $ttlSeconds);
+        $this->appendToIndex($this->latestIndexKey(), $runId, $ttlSeconds);
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public function find(string $runId): ?array

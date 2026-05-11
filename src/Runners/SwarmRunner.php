@@ -18,7 +18,9 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
+use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
@@ -75,6 +77,7 @@ class SwarmRunner
         protected SwarmAttributeResolver $resolver,
         protected QueuedHierarchicalCoordinator $queuedHierarchicalCoordinator,
         protected SwarmAuditDispatcher $audit,
+        protected SwarmGuardrailRunner $guardrails,
     ) {}
 
     /**
@@ -146,62 +149,69 @@ class SwarmRunner
             queueHierarchicalParallelCoordination: $queueHierarchicalCoord,
         );
 
-        if ($executionMode === ExecutionMode::Queue && $this->historyStore instanceof ClaimsQueuedRunExecution) {
-            $acquisition = $this->historyStore->acquireQueuedRun(
-                $context->runId,
-                $swarm::class,
-                $topology->value,
-                $this->capture->context($context),
-                $context->metadata,
-                $contextTtl,
-                $queueLeaseSeconds ?? $timeoutSeconds,
-            );
-
-            if (! $acquisition->acquired()) {
-                return null;
-            }
-
-            $state = new SwarmExecutionState(
-                swarm: $swarm,
-                topology: $topology,
-                executionMode: $executionMode,
-                deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
-                maxAgentExecutions: $maxAgentExecutions,
-                ttlSeconds: $contextTtl,
-                leaseSeconds: $queueLeaseSeconds,
-                executionToken: $acquisition->executionToken,
-                verifyOwnership: null,
-                context: $context,
-                contextStore: $this->contextStore,
-                artifactRepository: $this->artifactRepository,
-                historyStore: $this->historyStore,
-                events: $this->events,
-                queueHierarchicalParallelCoordination: $queueHierarchicalCoord,
-            );
-        } else {
-            $this->historyStore->start($context->runId, $swarm::class, $topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
-        }
-
-        $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
-        $this->events->dispatch(new SwarmStarted(
-            runId: $context->runId,
-            swarmClass: $swarm::class,
-            topology: $topology->value,
-            input: $this->capture->input($context->input),
-            metadata: $context->metadata,
-            executionMode: $executionMode->value,
-        ));
-        $this->audit->emit('run.started', [
-            'run_id' => $context->runId,
-            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-            'swarm_class' => $swarm::class,
-            'topology' => $topology->value,
-            'execution_mode' => $executionMode->value,
-            'status' => 'started',
-            ...$this->audit->metadata($context->metadata),
-        ]);
+        $historyStarted = false;
 
         try {
+            $this->guardrails->validateInput($swarm, $context);
+
+            if ($executionMode === ExecutionMode::Queue && $this->historyStore instanceof ClaimsQueuedRunExecution) {
+                $acquisition = $this->historyStore->acquireQueuedRun(
+                    $context->runId,
+                    $swarm::class,
+                    $topology->value,
+                    $this->capture->context($context),
+                    $context->metadata,
+                    $contextTtl,
+                    $queueLeaseSeconds ?? $timeoutSeconds,
+                );
+
+                if (! $acquisition->acquired()) {
+                    return null;
+                }
+
+                $historyStarted = true;
+
+                $state = new SwarmExecutionState(
+                    swarm: $swarm,
+                    topology: $topology,
+                    executionMode: $executionMode,
+                    deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
+                    maxAgentExecutions: $maxAgentExecutions,
+                    ttlSeconds: $contextTtl,
+                    leaseSeconds: $queueLeaseSeconds,
+                    executionToken: $acquisition->executionToken,
+                    verifyOwnership: null,
+                    context: $context,
+                    contextStore: $this->contextStore,
+                    artifactRepository: $this->artifactRepository,
+                    historyStore: $this->historyStore,
+                    events: $this->events,
+                    queueHierarchicalParallelCoordination: $queueHierarchicalCoord,
+                );
+            } else {
+                $this->historyStore->start($context->runId, $swarm::class, $topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
+                $historyStarted = true;
+            }
+
+            $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
+            $this->events->dispatch(new SwarmStarted(
+                runId: $context->runId,
+                swarmClass: $swarm::class,
+                topology: $topology->value,
+                input: $this->capture->input($context->input),
+                metadata: $context->metadata,
+                executionMode: $executionMode->value,
+            ));
+            $this->audit->emit('run.started', [
+                'run_id' => $context->runId,
+                'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+                'swarm_class' => $swarm::class,
+                'topology' => $topology->value,
+                'execution_mode' => $executionMode->value,
+                'status' => 'started',
+                ...$this->audit->metadata($context->metadata),
+            ]);
+
             $response = match ($topology) {
                 Topology::Sequential => $this->sequential->run($state),
                 Topology::Parallel => $this->parallel->run($state),
@@ -209,11 +219,35 @@ class SwarmRunner
                     ? $this->queuedHierarchicalCoordinator->runInvokeSegment($state)
                     : $this->hierarchical->run($state),
             };
+
+            if ($response === null) {
+                return null;
+            }
+
+            return $this->finalizeSuccessfulSwarmExecution($state, $swarm, $topology, $executionMode, $response, $startedAt, $contextTtl);
+        } catch (MissingQueueLeaseSchemaException $e) {
+            throw $e;
         } catch (LostSwarmLeaseException) {
             return null;
         } catch (Throwable $exception) {
+            if ($exception instanceof GuardrailViolation) {
+                $context->mergeMetadata($exception->safeContextMetadata());
+            }
+
             try {
-                $this->historyStore->fail($context->runId, $exception, $contextTtl, $state->executionToken, $state->leaseSeconds);
+                if ($historyStarted) {
+                    $this->historyStore->fail($context->runId, $exception, $contextTtl, $state->executionToken, $state->leaseSeconds);
+                } else {
+                    $this->historyStore->recordPreflightFailure(
+                        $context->runId,
+                        $swarm::class,
+                        $topology->value,
+                        $context,
+                        $context->metadata,
+                        $exception,
+                        $contextTtl,
+                    );
+                }
             } catch (LostSwarmLeaseException) {
                 return null;
             }
@@ -244,12 +278,6 @@ class SwarmRunner
 
             throw $exception;
         }
-
-        if ($response === null) {
-            return null;
-        }
-
-        return $this->finalizeSuccessfulSwarmExecution($state, $swarm, $topology, $executionMode, $response, $startedAt, $contextTtl);
     }
 
     /**
@@ -284,6 +312,13 @@ class SwarmRunner
         $context = RunContext::fromTask($task);
         $this->checkInputPayload($task, $context, ExecutionMode::Queue);
         $this->ensureActiveContextCompatible(ExecutionMode::Queue);
+        try {
+            $this->guardrails->validateInput($swarm, $context);
+        } catch (GuardrailViolation $e) {
+            $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Queue, $e);
+            throw $e;
+        }
+
         $pendingDispatch = new PendingDispatch(new InvokeSwarm($swarm::class, $context->toQueuePayload()));
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
@@ -311,6 +346,13 @@ class SwarmRunner
         $context = RunContext::fromTask($task);
         $this->checkInputPayload($task, $context, ExecutionMode::Queue);
         $this->ensureActiveContextCompatible(ExecutionMode::Queue);
+        try {
+            $this->guardrails->validateInput($swarm, $context);
+        } catch (GuardrailViolation $e) {
+            $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Queue, $e);
+            throw $e;
+        }
+
         $pendingDispatch = new PendingDispatch(new BroadcastSwarm($swarm::class, $context->toQueuePayload(), $channels));
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
@@ -351,9 +393,62 @@ class SwarmRunner
         $context = RunContext::fromTask($task);
         $this->checkInputPayload($task, $context, ExecutionMode::Durable);
         $this->ensureActiveContextCompatible(ExecutionMode::Durable);
+
+        try {
+            $this->guardrails->validateInput($swarm, $context);
+        } catch (GuardrailViolation $e) {
+            $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Durable, $e);
+            throw $e;
+        }
+
         $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $this->resolver->resolveDurableParallelFailurePolicy($swarm));
 
         return new DurableSwarmResponse(new PendingDispatch($start->job), $this->durable, $start->runId);
+    }
+
+    /**
+     * Persist a preflight failure row, dispatch SwarmFailed, and emit audit for dispatch-time guardrail blocks
+     * (queue, broadcastOnQueue, dispatchDurable). These paths never reach runWithExecutionMode, so the
+     * normal failure handler in that method cannot run.
+     */
+    protected function recordDispatchPreflightFailure(Swarm $swarm, RunContext $context, ExecutionMode $executionMode, GuardrailViolation $violation): void
+    {
+        $topology = $this->resolver->resolveTopology($swarm);
+        $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
+        $context->mergeMetadata($violation->safeContextMetadata());
+
+        $this->historyStore->recordPreflightFailure(
+            $context->runId,
+            $swarm::class,
+            $topology->value,
+            $context,
+            $context->metadata,
+            $violation,
+            $contextTtl,
+        );
+
+        $this->events->dispatch(new SwarmFailed(
+            runId: $context->runId,
+            swarmClass: $swarm::class,
+            topology: $topology->value,
+            exception: $this->capture->failureException($violation),
+            durationMs: 0,
+            metadata: $context->metadata,
+            executionMode: $executionMode->value,
+            exceptionClass: $violation::class,
+        ));
+
+        $this->audit->emit('run.failed', [
+            'run_id' => $context->runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $swarm::class,
+            'topology' => $topology->value,
+            'execution_mode' => $executionMode->value,
+            'status' => 'failed',
+            'exception_class' => $violation::class,
+            'duration_ms' => 0,
+            ...$this->audit->metadata($context->metadata),
+        ]);
     }
 
     protected function normalizeCompletionResponse(SwarmResponse $response, RunContext $context, string $topology): SwarmResponse
@@ -650,7 +745,46 @@ class SwarmRunner
             }
         }
 
-        return $this->finalizeSuccessfulSwarmExecution($state, $swarm, $topology, ExecutionMode::Queue, $outcome, $startedAt, $contextTtl);
+        try {
+            return $this->finalizeSuccessfulSwarmExecution($state, $swarm, $topology, ExecutionMode::Queue, $outcome, $startedAt, $contextTtl);
+        } catch (Throwable $exception) {
+            if ($exception instanceof GuardrailViolation) {
+                $context->mergeMetadata($exception->safeContextMetadata());
+            }
+
+            try {
+                $this->historyStore->fail($context->runId, $exception, $contextTtl, $state->executionToken, $state->leaseSeconds);
+            } catch (LostSwarmLeaseException) {
+                return null;
+            }
+
+            $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
+            $this->maybeFailCoordinationRunFromException($runId, $exception);
+
+            $this->events->dispatch(new SwarmFailed(
+                runId: $context->runId,
+                swarmClass: $swarm::class,
+                topology: $topology->value,
+                exception: $this->capture->failureException($exception),
+                durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
+                metadata: $context->metadata,
+                executionMode: ExecutionMode::Queue->value,
+                exceptionClass: $exception::class,
+            ));
+            $this->audit->emit('run.failed', [
+                'run_id' => $context->runId,
+                'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+                'swarm_class' => $swarm::class,
+                'topology' => $topology->value,
+                'execution_mode' => ExecutionMode::Queue->value,
+                'status' => 'failed',
+                'exception_class' => $exception::class,
+                'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                ...$this->audit->metadata($context->metadata),
+            ]);
+
+            throw $exception;
+        }
     }
 
     /**
@@ -668,6 +802,7 @@ class SwarmRunner
         int $contextTtl,
     ): ?SwarmResponse {
         $context = $state->context;
+        $this->guardrails->validateOutput($state->swarm, $context, $response->output);
         $response = $this->normalizeCompletionResponse($response, $context, $topology->value);
         $capturedResponse = $this->limits->response($this->capture->response($response));
 

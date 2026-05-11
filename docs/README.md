@@ -21,6 +21,7 @@ Return to this page when you need the deeper guide for a specific feature.
 - [Queueing a swarm](../README.md#queueing-a-swarm): background execution and queue-safe payloads.
 - [Streaming](streaming.md): sequential stream events, SSE, broadcast helpers, replay, and failure behavior.
 - [Durable Execution](durable-execution.md): checkpointed execution, recovery, branch jobs, and operator controls.
+- [Guardrails](guardrails.md): input, step, and output policy validation across execution modes (not middleware).
 
 ## Topologies
 
