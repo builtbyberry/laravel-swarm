@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Database\Connection;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
@@ -22,7 +23,7 @@ class SwarmHealthCommand extends Command
 
     protected $description = 'Verify Laravel Swarm persistence readiness';
 
-    public function handle(Application $app, ConfigRepository $config): int
+    public function handle(Application $app, ConfigRepository $config, Connection $connection): int
     {
         $checks = [
             ['component' => 'Context', 'abstract' => ContextStore::class, 'config_key' => 'context'],
@@ -39,6 +40,10 @@ class SwarmHealthCommand extends Command
             fn (array $check): array => $this->runCheck($app, $config, $check),
             $checks,
         );
+
+        if ($this->option('durable') === true) {
+            $results[] = $this->runOutboxStalenessCheck($config, $connection);
+        }
 
         if ($this->option('json') === true) {
             $this->line((string) json_encode([
@@ -61,6 +66,60 @@ class SwarmHealthCommand extends Command
         return collect($results)->contains(fn (array $result): bool => $result['status'] === 'failed')
             ? self::FAILURE
             : self::SUCCESS;
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runOutboxStalenessCheck(ConfigRepository $config, Connection $connection): array
+    {
+        $outboxTable = (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox');
+        $reservationTimeoutSeconds = (int) $config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
+        $stalenessThresholdSeconds = $reservationTimeoutSeconds * 2;
+        $staleThreshold = now()->subSeconds($stalenessThresholdSeconds);
+
+        try {
+            if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
+                return [
+                    'component' => 'Outbox relay',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'failed',
+                    'details' => "Outbox table [{$outboxTable}] does not exist. Run migrations.",
+                ];
+            }
+
+            $staleCount = $connection->table($outboxTable)
+                ->whereNull('reserved_at')
+                ->where('created_at', '<', $staleThreshold)
+                ->count();
+
+            if ($staleCount > 0) {
+                return [
+                    'component' => 'Outbox relay',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'warning',
+                    'details' => "{$staleCount} unclaimed outbox row(s) older than {$stalenessThresholdSeconds}s — is swarm:relay scheduled?",
+                ];
+            }
+
+            return [
+                'component' => 'Outbox relay',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'ok',
+                'details' => 'no stale rows',
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Outbox relay',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ];
+        }
     }
 
     /**

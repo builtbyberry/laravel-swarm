@@ -56,6 +56,7 @@ class SwarmPruneCommand extends Command
             'durable_progress' => (string) $config->get('swarm.tables.durable_progress', 'swarm_durable_progress'),
             'durable_child_runs' => (string) $config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs'),
             'durable_webhook_idempotency' => (string) $config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'),
+            'durable_outbox' => (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox'),
         ];
 
         $counts = [];
@@ -133,6 +134,11 @@ class SwarmPruneCommand extends Command
             $verb,
             $counts['durable_webhook_idempotency'],
         ));
+        $this->components->info(sprintf(
+            '%s %d durable outbox record(s).',
+            $verb,
+            $counts['durable_outbox'],
+        ));
 
         return self::SUCCESS;
     }
@@ -161,6 +167,15 @@ class SwarmPruneCommand extends Command
             });
         } elseif ($role === 'durable_child_runs') {
             $query->whereIn('parent_run_id', function ($subquery) use ($historyTable): void {
+                $subquery->from($historyTable)
+                    ->select('run_id')
+                    ->where('expires_at', '<', now())
+                    ->whereIn('status', ['completed', 'failed', 'cancelled']);
+            });
+        } elseif ($role === 'durable_outbox') {
+            // Outbox rows are cascade-deleted with their parent run, so this catches
+            // any orphans that were not cleaned up (e.g., reserved rows whose run is now terminal).
+            $query->whereIn('run_id', function ($subquery) use ($historyTable): void {
                 $subquery->from($historyTable)
                     ->select('run_id')
                     ->where('expires_at', '<', now())
