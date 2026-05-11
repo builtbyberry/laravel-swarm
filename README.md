@@ -288,13 +288,14 @@ $response->cancel();
 $response->signal('approval_received', ['approved' => true], idempotencyKey: 'approval-123');
 ```
 
-Schedule recovery for durable execution and coordinated multi-worker hierarchical queueing:
+Schedule the relay, recovery, and pruning for durable execution:
 
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:recover')->everyMinute();
-Schedule::command('swarm:prune')->daily();
+Schedule::command('swarm:relay')->everyMinute();   // required: drains the outbox after each checkpoint
+Schedule::command('swarm:recover')->everyMinute(); // safety net: redispatches stranded runs
+Schedule::command('swarm:prune')->daily();         // retention: removes expired persistence rows
 ```
 
 Start with [Durable Execution](docs/durable-execution.md), then use the topic guides for [waits and signals](docs/durable-waits-and-signals.md), [retries and progress](docs/durable-retries-and-progress.md), [child swarms](docs/durable-child-swarms.md), and [webhooks](docs/durable-webhooks.md).
@@ -416,6 +417,7 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 - Use database persistence for durable execution, long-lived history, active-run pruning protection, or operational dashboards.
 - Set `SWARM_CAPTURE_ACTIVE_CONTEXT=true` for queued and durable swarms.
 - Size queue worker timeouts and queue `retry_after` above the longest expected provider call.
+- Schedule `swarm:relay` every minute for durable execution — without it, durable runs stall after the first checkpoint.
 - Schedule `swarm:recover` for durable execution and coordinated multi-worker hierarchical queueing.
 - Schedule `swarm:prune` for database retention cleanup, or set `SWARM_PREVENT_PRUNE=true` when retention is managed outside the package.
 - Treat operational swarm tables as TTL-based runtime storage, not immutable compliance archives.

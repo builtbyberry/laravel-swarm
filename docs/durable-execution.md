@@ -503,8 +503,18 @@ longest expected provider call for one durable step. If the queue visibility
 window is shorter than the provider call, another worker may see the job as
 available before the current worker finishes.
 
-Finally, schedule recovery so checkpointed durable runs are supervised if a
-worker exits after saving state but before dispatching the next step:
+Schedule the relay so checkpointed steps are dispatched to the queue after each
+checkpoint commits:
+
+```php
+use Illuminate\Support\Facades\Schedule;
+
+// Required: drains the durable outbox so each checkpoint dispatches its next job.
+Schedule::command('swarm:relay')->everyMinute();
+```
+
+Schedule recovery so runs that were checkpointed but whose queue job was never
+dispatched are rediscovered and retried:
 
 ```php
 use Illuminate\Support\Facades\Schedule;
@@ -531,6 +541,7 @@ inspection boundary.
 - use database-backed persistence and run the package migrations
 - put durable swarms on a dedicated queue when the workflow is important or
   provider calls are slow
+- schedule `swarm:relay` every minute (required — dispatches jobs after checkpoint)
 - schedule `swarm:recover` every few minutes
 - schedule `swarm:prune` daily, or more often if retention windows are short
 - keep the queue worker timeout above the longest expected durable step
@@ -553,6 +564,12 @@ parallel route nodes, but they carry higher planning, prompt, and
 intermediate-output storage risk than a fixed sequential chain. Treat
 hierarchical durable workflows as an explicit operational choice rather than
 the default enterprise rollout path.
+
+Durable dispatch depends on the relay. If `swarm:relay` is not scheduled, durable
+runs stall permanently after the first checkpoint — the outbox row is written but
+never drained. Run `php artisan swarm:relay` once to unblock a stalled run, then
+add it to the scheduler for ongoing operation. `swarm:health --durable` warns when
+unclaimed outbox rows are stale, making it easy to detect a missing relay entry.
 
 Durable recovery depends on the scheduler. If `swarm:recover` is not scheduled,
 a run can stay `running` after a worker crashes or exits between checkpointing a

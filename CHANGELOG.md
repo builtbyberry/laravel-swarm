@@ -4,6 +4,41 @@
 
 ### Added
 
+- **Transactional outbox for durable dispatch:** `DurableOutbox` contract and `DatabaseDurableOutbox`
+  implementation write outbox rows atomically inside checkpoint, branch-wait, and retry transactions.
+  `swarm:relay` (new Artisan command) drains and dispatches them; it must be scheduled
+  (`Schedule::command('swarm:relay')->everyMinute()`). Two-phase drain (claim with `SKIP LOCKED`,
+  dispatch, delete per-entry) prevents duplicate jobs under concurrent relay workers. Per-entry error
+  isolation means a single bad row cannot poison the batch. Fixes the parallel-topology join-boundary
+  stall (GitHub issue #2).
+- `swarm:relay` Artisan command: drains the durable outbox and dispatches queued jobs. Options:
+  `--type=step|branch` (filter by dispatch type), `--limit=N` (default 100, max 10 000),
+  `--drain-until-empty` (loop until the outbox is clear). Run `swarm:relay --help` for details.
+- `swarm:health --durable` now includes an **Outbox relay** check: warns when unclaimed outbox rows
+  are older than 2× `swarm.durable.relay.reservation_timeout_seconds`, helping detect a stalled relay.
+- `swarm:prune` now prunes orphaned `swarm_durable_outbox` rows (rows whose parent run has expired
+  and been pruned but whose outbox entry was not cascade-deleted, e.g. reserved rows that expired).
+- Migration `2026_05_11_000002_optimize_swarm_durable_outbox_indexes.php`: replaces the composite
+  `swarm_outbox_drain_idx` with two targeted indexes—`(available_at, id)` for unfiltered drains and
+  `(dispatch_type, available_at, id)` for type-filtered drains—plus a PostgreSQL partial index on
+  `(available_at, id) WHERE reserved_at IS NULL`.
+
+### Changed
+
+- `DurableRunRecorder::checkpointSequential` and `checkpointHierarchical` accept an optional
+  `?callable $withTransaction` that is invoked inside the DB transaction before commit, enabling
+  atomic checkpoint + outbox writes. This is an `@internal` API used by collaborators only.
+- `DurableHierarchicalCoordinator::checkpointBranchWait` similarly accepts `?callable $withTransaction`
+  for atomic branch-wait + outbox enqueue.
+- `DurableRetryHandler` now enqueues zero-delay retries inside the retry transaction rather than after
+  it, closing the crash window between retry state commit and dispatch.
+- `DurableLifecycleController::resume` now uses the freshly loaded post-resume run row for queue
+  routing instead of the stale pre-resume snapshot.
+- `DurableRecoveryCoordinator::recover` `$dispatchStep` and `$dispatchBranch` parameters are now
+  required (no default closures). This is an `@internal` change.
+- `QueuedHierarchicalDurableCoordinator` delegates `validateStepTimeoutSeconds` to `DurableRunContext`
+  instead of maintaining a duplicate copy.
+
 - **Guardrails v1:** `SwarmInputGuardrail`, `SwarmStepGuardrail`, `SwarmOutputGuardrail`, optional
   `DefinesGuardrails::guardrails()`, centralized `SwarmGuardrailRunner`, `GuardrailViolation`
   (`policyCode`, `reason`, `metadata`, `scope`, `::block()`),

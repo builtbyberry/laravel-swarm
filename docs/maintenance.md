@@ -156,14 +156,22 @@ hierarchical queueing, include the durable runtime tables:
 php artisan swarm:health --durable
 ```
 
-If you are using durable execution, also schedule the recovery command
-frequently:
+If you are using durable execution, also schedule the relay and recovery commands:
 
 ```php
 use Illuminate\Support\Facades\Schedule;
 
+// Required: drain the durable outbox so steps/branches are dispatched after each checkpoint.
+Schedule::command('swarm:relay')->everyMinute();
+
+// Safety net: redispatch runs that were checkpointed but never received a queue job.
 Schedule::command('swarm:recover')->everyFiveMinutes();
 ```
+
+`swarm:relay` must run at least as frequently as you want checkpointed steps to
+advance. The default limit is 100 rows per run; pass `--limit` to tune, or
+`--drain-until-empty` to clear a backlog in a single invocation. Without the
+relay scheduled, durable runs stall at the first step.
 
 The same `swarm:recover` loop redispatches **coordinated queue hierarchical parallel** joins (`coordination_profile = queue_hierarchical_parallel` on `swarm_durable_runs`): stale `waiting` parents with terminal branch rows release to `pending` and enqueue `ResumeQueuedHierarchicalSwarm`, and branch rows are recovered the same way as durable parallel branches.
 
@@ -240,8 +248,9 @@ Before cutting a release tag, work through the checklist in [CONTRIBUTING.md § 
 For production database persistence:
 
 - schedule `swarm:prune`
+- schedule `swarm:relay` (required for durable execution — drains the outbox after each checkpoint)
 - schedule `swarm:recover` when using durable execution
-- treat pruning and recovery as required operating discipline for
+- treat pruning, relay, and recovery as required operating discipline for
   database-backed durable workflows, not optional cleanup
 - use a dedicated queue for durable workflows that should not compete with
   ordinary application jobs

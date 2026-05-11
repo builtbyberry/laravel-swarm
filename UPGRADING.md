@@ -138,6 +138,35 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Unreleased: transactional outbox and `swarm:relay` scheduler entry
+
+Run `php artisan migrate` after updating the package. Two migrations are added:
+
+- `2026_05_11_000001_create_swarm_durable_outbox_table` — creates `swarm_durable_outbox`
+- `2026_05_11_000002_optimize_swarm_durable_outbox_indexes` — replaces the initial composite
+  index with two targeted drain indexes (plus a PostgreSQL partial index)
+
+**Action required for all durable swarm users:** add `swarm:relay` to your scheduler. Without
+it, durable swarms will stall after every step because the outbox is never drained.
+
+```php
+// app/Console/Kernel.php (or routes/console.php in Laravel 11+)
+Schedule::command('swarm:relay')->everyMinute();
+```
+
+If you also schedule `swarm:recover`, the relay should run at the same or higher frequency.
+The relay is a fast, bounded operation (default limit 100 rows per run) and is safe to run
+every minute on any database.
+
+To verify the relay is working after deploying, run:
+
+```bash
+php artisan swarm:health --durable
+```
+
+The **Outbox relay** check warns when unclaimed rows are older than 2× the reservation timeout.
+If you see that warning in a healthy environment, it means `swarm:relay` is not scheduled.
+
 ## Unreleased: `run_id` foreign-key constraints
 
 Run `php artisan migrate` after updating the package. Migration

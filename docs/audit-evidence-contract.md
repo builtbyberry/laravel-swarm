@@ -129,6 +129,7 @@ advance execution.
 | `command.resume`  | `swarm:resume` was invoked for a run.                          |
 | `command.cancel`  | `swarm:cancel` was invoked for a run.                          |
 | `command.recover` | `swarm:recover` was invoked. Includes `recovered_count` and `recovered_run_ids`. |
+| `command.relay`   | `swarm:relay` completed. Includes `dispatched` (count dispatched), `types` (filter applied), `limit`, `status` (`dispatched`, `none`, or `failed`), and `exception_class` on failure. |
 | `command.prune`   | `swarm:prune` completed. Includes `dry_run`, `prevent_prune`, `status`, and `counts` (row counts per table). |
 
 All command categories include `actor: "artisan"`.

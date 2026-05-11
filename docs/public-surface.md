@@ -85,6 +85,7 @@ adding a new public API.
 | `swarm:pause` | Pause a durable run at the next safe boundary. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover) |
 | `swarm:resume` | Resume a paused durable run. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover) |
 | `swarm:cancel` | Cancel a durable run. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover) |
+| `swarm:relay` | Drain the durable outbox and dispatch queued step/branch jobs. Must be scheduled (`everyMinute()`). Options: `--type=step\|branch`, `--limit=N`, `--drain-until-empty`. | [Maintenance](maintenance.md#scheduling) |
 | `swarm:recover` | Redispatch recoverable durable work. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover), [Maintenance](maintenance.md#scheduling) |
 | `swarm:prune` | Remove expired database persistence rows. | [Maintenance](maintenance.md#pruning-expired-records) |
 
