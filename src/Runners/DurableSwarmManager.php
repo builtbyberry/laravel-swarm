@@ -37,7 +37,6 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
-use Illuminate\Foundation\Bus\PendingDispatch;
 
 // DurableSignalHandler, DurableRetryHandler, DurableRunInspector, and DurableRunRecorder are
 // intentionally NOT constructor-injected. They are built by DurableManagerCollaboratorFactory
@@ -176,14 +175,7 @@ class DurableSwarmManager
 
     public function signal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
     {
-        $outcome = $this->signalHandler->signal($runId, $name, $payload, $idempotencyKey);
-
-        if ($outcome['dispatchStep'] !== null) {
-            $step = $outcome['dispatchStep'];
-            $this->jobs->dispatchStep($step['runId'], $step['stepIndex'], $step['connection'], $step['queue']);
-        }
-
-        return $outcome['result'];
+        return $this->signalHandler->signal($runId, $name, $payload, $idempotencyKey);
     }
 
     /**
@@ -207,13 +199,7 @@ class DurableSwarmManager
      */
     public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null): DurableChildRun
     {
-        return $this->children->dispatchChildSwarm(
-            $parentRunId,
-            $childSwarmClass,
-            $task,
-            $dedupeKey,
-            fn (string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch => $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue),
-        );
+        return $this->children->dispatchChildSwarm($parentRunId, $childSwarmClass, $task, $dedupeKey);
     }
 
     public function pause(string $runId): bool
@@ -227,13 +213,6 @@ class DurableSwarmManager
 
         if ($result['waiting'] !== null) {
             $this->dispatchWaitingBoundary($result['waiting'], true);
-
-            return true;
-        }
-
-        if ($result['dispatchStep'] !== null) {
-            $step = $result['dispatchStep'];
-            $this->jobs->dispatchStep($step['runId'], $step['stepIndex'], $step['connection'], $step['queue']);
         }
 
         return true;
@@ -253,8 +232,8 @@ class DurableSwarmManager
             $runId,
             $swarmClass,
             $limit,
-            fn (string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch => $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue),
-            fn (string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch => $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue),
+            fn (string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null) => $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue),
+            fn (string $runId, string $branchId, ?string $connection = null, ?string $queue = null) => $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue),
         );
     }
 
@@ -292,40 +271,13 @@ class DurableSwarmManager
         $this->advancer->advance(
             $runId,
             $expectedStepIndex,
-            $this->dispatchStepCallback(),
-            $this->dispatchBranchCallback(),
-            fn (array $run, Swarm $swarm, RunContext $context, int $nextStepIndex): bool => $this->enterDeclaredDurableBoundary($run, $swarm, $context, $nextStepIndex),
+            fn (array $run, Swarm $swarm, RunContext $context, int $nextStepIndex): bool => $this->enterDeclaredDurableBoundary($run, $swarm, $context),
         );
-    }
-
-    protected function dispatchStepCallback(): callable
-    {
-        return fn (string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch => $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue);
-    }
-
-    protected function dispatchBranchCallback(): callable
-    {
-        return fn (string $runId, string $branchId, ?string $connection = null, ?string $queue = null): PendingDispatch => $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue);
     }
 
     public function advanceBranch(string $runId, string $branchId): void
     {
-        $this->branchAdvancer->advanceBranch(
-            $runId,
-            $branchId,
-            $this->dispatchBranchCallback(),
-            $this->dispatchStepCallback(),
-            /** @param array<string, mixed> $run */
-            function (array $run): void {
-                $this->dispatchQueuedHierarchicalResume($run);
-            },
-            /**
-             * @param  array<string, mixed>  $run
-             */
-            function (array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId, callable $dispatchStep): void {
-                $this->advancer->failCurrentRunFromBranchFailures($run, $token, $context, $stepLeaseSeconds, $parentNodeId, $dispatchStep);
-            },
-        );
+        $this->branchAdvancer->advanceBranch($runId, $branchId);
     }
 
     /**
@@ -333,31 +285,14 @@ class DurableSwarmManager
      */
     protected function dispatchWaitingBoundary(array $run, bool $dispatchRecoverableBranches = false): void
     {
-        $this->hierarchicalCoordinator->dispatchWaitingBoundary(
-            $run,
-            $dispatchRecoverableBranches,
-            $this->dispatchStepCallback(),
-            $this->dispatchBranchCallback(),
-            /** @param array<string, mixed> $run */
-            function (array $run): void {
-                $this->dispatchQueuedHierarchicalResume($run);
-            },
-        );
+        $this->hierarchicalCoordinator->dispatchWaitingBoundary($run, $dispatchRecoverableBranches);
     }
 
     /**
      * @param  array<string, mixed>  $run
      */
-    protected function dispatchQueuedHierarchicalResume(array $run): void
+    protected function enterDeclaredDurableBoundary(array $run, Swarm $swarm, RunContext $context): bool
     {
-        $this->jobs->dispatchQueuedHierarchicalResume($run);
-    }
-
-    /**
-     * @param  array<string, mixed>  $run
-     */
-    protected function enterDeclaredDurableBoundary(array $run, Swarm $swarm, RunContext $context, int $nextStepIndex): bool
-    {
-        return $this->boundary->enterDeclaredBoundary($run, $swarm, $context, $this->dispatchStepCallback());
+        return $this->boundary->enterDeclaredBoundary($run, $swarm, $context);
     }
 }

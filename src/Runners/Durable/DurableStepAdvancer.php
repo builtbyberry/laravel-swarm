@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
@@ -25,6 +26,7 @@ class DurableStepAdvancer
         protected DurableStepExecutionBuilder $executionBuilder,
         protected DurableSequentialStepAdvancer $sequential,
         protected DurableStepCheckpointCoordinator $checkpoints,
+        protected DurableOutbox $outbox,
     ) {}
 
     public function afterStepCheckpointForTesting(?callable $hook): void
@@ -37,13 +39,8 @@ class DurableStepAdvancer
         $this->checkpoints->beforeStepCheckpointForTesting($hook);
     }
 
-    public function advance(
-        string $runId,
-        int $expectedStepIndex,
-        callable $dispatchStep,
-        callable $dispatchBranch,
-        callable $enterDurableBoundary,
-    ): void {
+    public function advance(string $runId, int $expectedStepIndex, callable $enterDurableBoundary): void
+    {
         $run = $this->runs->requireRun($runId);
         $stepLeaseSeconds = $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']);
         $token = $this->durableRuns->acquireLease($runId, $expectedStepIndex, $stepLeaseSeconds);
@@ -58,7 +55,7 @@ class DurableStepAdvancer
 
         if ($this->runs->hasTimedOut($run)) {
             try {
-                $this->terminal->failTimedOutRun($run, $token, $context, $stepLeaseSeconds, $dispatchStep);
+                $this->terminal->failTimedOutRun($run, $token, $context, $stepLeaseSeconds);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -68,7 +65,7 @@ class DurableStepAdvancer
 
         if (($run['cancel_requested_at'] ?? null) !== null) {
             try {
-                $this->terminal->cancelRun($run, $token, $context, $dispatchStep);
+                $this->terminal->cancelRun($run, $token, $context);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -81,13 +78,13 @@ class DurableStepAdvancer
 
         try {
             if ($run['topology'] === Topology::Parallel->value) {
-                $this->parallel->advance($state, $run, $token, $stepLeaseSeconds, $expectedStepIndex, $dispatchBranch, $dispatchStep);
+                $this->parallel->advance($state, $run, $token, $stepLeaseSeconds, $expectedStepIndex);
 
                 return;
             }
 
             if ($run['topology'] === Topology::Hierarchical->value) {
-                $hierarchicalResult = $this->advanceHierarchical($state, $run, $token, $context, $stepLeaseSeconds, $expectedStepIndex, $dispatchStep);
+                $hierarchicalResult = $this->advanceHierarchical($state, $run, $token, $context, $stepLeaseSeconds, $expectedStepIndex);
 
                 if ($hierarchicalResult === null) {
                     return;
@@ -103,15 +100,15 @@ class DurableStepAdvancer
             $retry = $this->retryHandler->scheduleRunRetryIfAllowed($run, $swarm, $context, $token, $stepLeaseSeconds, $expectedStepIndex, $exception);
             if ($retry['scheduled']) {
                 if ($retry['dispatchStep'] !== null) {
-                    $dispatch = $dispatchStep($retry['dispatchStep']['runId'], $retry['dispatchStep']['stepIndex'], $retry['dispatchStep']['connection'], $retry['dispatchStep']['queue']);
-                    unset($dispatch);
+                    $rs = $retry['dispatchStep'];
+                    $this->outbox->enqueueStep($rs['runId'], $rs['stepIndex'], $rs['connection'], $rs['queue']);
                 }
 
                 return;
             }
 
             try {
-                $this->terminal->failRun($run, $token, $exception, $context, $stepLeaseSeconds, $dispatchStep);
+                $this->terminal->failRun($run, $token, $exception, $context, $stepLeaseSeconds);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -123,7 +120,7 @@ class DurableStepAdvancer
 
         if (($run['cancel_requested_at'] ?? null) !== null) {
             try {
-                $this->terminal->cancelRun($run, $token, $context, $dispatchStep, $step);
+                $this->terminal->cancelRun($run, $token, $context, $step);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -150,7 +147,7 @@ class DurableStepAdvancer
 
         if ($isComplete) {
             try {
-                $this->terminal->completeRun($run, $token, $context, $stepLeaseSeconds, $step ?? null, $dispatchStep);
+                $this->terminal->completeRun($run, $token, $context, $stepLeaseSeconds, $step ?? null);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -168,8 +165,6 @@ class DurableStepAdvancer
                 $nextStepIndex,
                 $hierarchicalResult,
                 $step ?? null,
-                $dispatchStep,
-                $dispatchBranch,
                 $enterDurableBoundary,
             );
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
@@ -180,9 +175,9 @@ class DurableStepAdvancer
     /**
      * @param  array<string, mixed>  $run
      */
-    public function failCurrentRunFromBranchFailures(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId, callable $dispatchStep): void
+    public function failCurrentRunFromBranchFailures(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId): void
     {
-        $this->terminal->failCurrentRunFromBranchFailures($run, $token, $context, $stepLeaseSeconds, $parentNodeId, $dispatchStep);
+        $this->terminal->failCurrentRunFromBranchFailures($run, $token, $context, $stepLeaseSeconds, $parentNodeId);
     }
 
     /**
@@ -195,7 +190,6 @@ class DurableStepAdvancer
         RunContext $context,
         int $stepLeaseSeconds,
         int $expectedStepIndex,
-        callable $dispatchStep,
     ): ?DurableHierarchicalStepResult {
         return $this->hierarchical->runStep(
             $state,
@@ -204,8 +198,8 @@ class DurableStepAdvancer
             $context,
             $stepLeaseSeconds,
             $expectedStepIndex,
-            function (array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId) use ($dispatchStep): void {
-                $this->failCurrentRunFromBranchFailures($run, $token, $context, $stepLeaseSeconds, $parentNodeId, $dispatchStep);
+            function (array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId): void {
+                $this->failCurrentRunFromBranchFailures($run, $token, $context, $stepLeaseSeconds, $parentNodeId);
             },
         );
     }

@@ -14,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBoundaryCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
@@ -110,13 +111,11 @@ test('durable boundary coordinator enters declared wait once and skips open wait
         $run,
         new DurableBoundaryWaitSwarm,
         $context,
-        fn (): PendingDispatch => durableCollaboratorNoopDispatch(),
     );
     $enteredAgain = $coordinator->enterDeclaredBoundary(
         app(DurableRunStore::class)->find($context->runId),
         new DurableBoundaryWaitSwarm,
         $context,
-        fn (): PendingDispatch => durableCollaboratorNoopDispatch(),
     );
 
     $waits = app(DurableRunInspector::class)->inspect($context->runId)->waits;
@@ -194,6 +193,33 @@ test('queued hierarchical durable coordinator creates coordination run and dispa
     };
 
     app()->instance(DurableJobDispatcher::class, $dispatcher);
+
+    $outbox = new class($dispatcher) implements DurableOutbox
+    {
+        public function __construct(private readonly DurableJobDispatcher $jobs) {}
+
+        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void
+        {
+            $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue);
+        }
+
+        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void
+        {
+            $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue);
+        }
+
+        public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void
+        {
+            $this->jobs->dispatchQueuedResumeById($runId, $connection, $queue);
+        }
+
+        public function drain(array $types = [], int $limit = 100): int
+        {
+            return 0;
+        }
+    };
+
+    app()->instance(DurableOutbox::class, $outbox);
     app()->forgetInstance(QueuedHierarchicalDurableCoordinator::class);
 
     $context = RunContext::fromTask('queued-hierarchical-task');

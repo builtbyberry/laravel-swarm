@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
@@ -33,6 +34,7 @@ class DurableHierarchicalCoordinator
         protected DurableBranchCoordinator $branches,
         protected HierarchicalRunner $hierarchical,
         protected DurableJobDispatcher $jobs,
+        protected DurableOutbox $outbox,
     ) {}
 
     /**
@@ -81,7 +83,7 @@ class DurableHierarchicalCoordinator
     /**
      * @param  array<string, mixed>  $run
      */
-    public function dispatchWaitingBoundary(array $run, bool $dispatchRecoverableBranches, callable $dispatchStep, callable $dispatchBranch, ?callable $dispatchQueuedResume = null): void
+    public function dispatchWaitingBoundary(array $run, bool $dispatchRecoverableBranches): void
     {
         if ($run['status'] !== 'waiting') {
             return;
@@ -96,18 +98,19 @@ class DurableHierarchicalCoordinator
         $branches = $this->durableRuns->branchesFor($run['run_id'], $parentNodeId);
 
         if ($this->branches->branchesAreTerminal($branches)) {
-            if ($this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
-                if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
-                    if ($dispatchQueuedResume !== null) {
-                        $dispatchQueuedResume($run);
-                    } else {
-                        $this->jobs->dispatchQueuedHierarchicalResume($run);
-                    }
-                } else {
-                    $dispatch = $dispatchStep($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
-                    unset($dispatch);
+            $this->connection->transaction(function () use ($run): void {
+                if (! $this->durableRuns->releaseWaitingRunForJoin($run['run_id'], (int) $run['next_step_index'])) {
+                    return;
                 }
-            }
+
+                $updated = $this->runs->requireRun($run['run_id']);
+
+                if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
+                    $this->outbox->enqueueQueuedResume($run['run_id'], $updated['queue_connection'], $updated['queue_name']);
+                } else {
+                    $this->outbox->enqueueStep($run['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                }
+            });
 
             return;
         }
@@ -121,7 +124,12 @@ class DurableHierarchicalCoordinator
                 continue;
             }
 
-            $dispatch = $dispatchBranch($run['run_id'], (string) $branch['branch_id'], $branch['queue_connection'] ?? $run['queue_connection'], $branch['queue_name'] ?? $run['queue_name']);
+            $dispatch = $this->jobs->dispatchBranch(
+                $run['run_id'],
+                (string) $branch['branch_id'],
+                $branch['queue_connection'] ?? $run['queue_connection'],
+                $branch['queue_name'] ?? $run['queue_name'],
+            );
             unset($dispatch);
         }
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -21,6 +22,7 @@ class DurableStepCheckpointCoordinator
         protected DurableRunStore $durableRuns,
         protected DurableRunRecorder $recorder,
         protected DurableHierarchicalCoordinator $hierarchical,
+        protected DurableOutbox $outbox,
     ) {}
 
     public function afterStepCheckpointForTesting(?callable $hook): void
@@ -45,8 +47,6 @@ class DurableStepCheckpointCoordinator
         int $nextStepIndex,
         ?DurableHierarchicalStepResult $hierarchicalResult,
         ?SwarmStep $step,
-        callable $dispatchStep,
-        callable $dispatchBranch,
         callable $enterDurableBoundary,
     ): void {
         $runId = (string) $run['run_id'];
@@ -81,14 +81,12 @@ class DurableStepCheckpointCoordinator
             $branches = $this->durableRuns->branchesFor($runId, $hierarchicalResult->waitingParentNodeId);
 
             foreach ($branches as $branch) {
-                $dispatch = $dispatchBranch($runId, (string) $branch['branch_id'], $branch['queue_connection'] ?? $run['queue_connection'], $branch['queue_name'] ?? $run['queue_name']);
-                unset($dispatch);
+                $this->outbox->enqueueBranch($runId, (string) $branch['branch_id'], $branch['queue_connection'] ?? $run['queue_connection'], $branch['queue_name'] ?? $run['queue_name']);
             }
 
             return;
         }
 
-        $dispatch = $dispatchStep($runId, $nextStepIndex, $run['queue_connection'], $run['queue_name']);
-        unset($dispatch);
+        $this->outbox->enqueueStep($runId, $nextStepIndex, $run['queue_connection'], $run['queue_name']);
     }
 }

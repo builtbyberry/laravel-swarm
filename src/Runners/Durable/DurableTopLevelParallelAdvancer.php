@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
@@ -22,26 +23,27 @@ class DurableTopLevelParallelAdvancer
         protected DurableRunContext $runs,
         protected DurableBranchCoordinator $branches,
         protected DurableRunTerminalHandler $terminal,
+        protected DurableOutbox $outbox,
     ) {}
 
     /**
      * @param  array<string, mixed>  $run
      */
-    public function advance(SwarmExecutionState $state, array $run, string $token, int $stepLeaseSeconds, int $expectedStepIndex, callable $dispatchBranch, callable $dispatchStep): void
+    public function advance(SwarmExecutionState $state, array $run, string $token, int $stepLeaseSeconds, int $expectedStepIndex): void
     {
         if ($expectedStepIndex === 0) {
-            $this->startBranches($state, $run, $token, $stepLeaseSeconds, $dispatchBranch);
+            $this->startBranches($state, $run, $token, $stepLeaseSeconds);
 
             return;
         }
 
-        $this->joinBranches($state, $run, $token, $stepLeaseSeconds, $dispatchStep);
+        $this->joinBranches($state, $run, $token, $stepLeaseSeconds);
     }
 
     /**
      * @param  array<string, mixed>  $run
      */
-    protected function startBranches(SwarmExecutionState $state, array $run, string $token, int $stepLeaseSeconds, callable $dispatchBranch): void
+    protected function startBranches(SwarmExecutionState $state, array $run, string $token, int $stepLeaseSeconds): void
     {
         $branches = [];
         $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
@@ -60,7 +62,7 @@ class DurableTopLevelParallelAdvancer
             $branches[] = $this->branches->withBranchRouting($state->swarm, $state->context, $branch, $run);
         }
 
-        $this->connection->transaction(function () use ($token, $state, $stepLeaseSeconds, $branches): void {
+        $this->connection->transaction(function () use ($token, $state, $stepLeaseSeconds, $branches, $run): void {
             $this->historyStore->syncDurableState($state->context->runId, 'running', $this->capture->context($state->context), $state->context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->durableRuns->waitForBranches($state->context->runId, new BranchWaitPayload(
                 executionToken: $token,
@@ -70,18 +72,22 @@ class DurableTopLevelParallelAdvancer
                 ttlSeconds: $this->runs->ttlSeconds(),
                 branches: $branches,
             ));
-        });
 
-        foreach ($branches as $branch) {
-            $dispatch = $dispatchBranch($state->context->runId, (string) $branch['branch_id'], $branch['queue_connection'] ?? $run['queue_connection'], $branch['queue_name'] ?? $run['queue_name']);
-            unset($dispatch);
-        }
+            foreach ($branches as $branch) {
+                $this->outbox->enqueueBranch(
+                    $state->context->runId,
+                    (string) $branch['branch_id'],
+                    $branch['queue_connection'] ?? $run['queue_connection'],
+                    $branch['queue_name'] ?? $run['queue_name'],
+                );
+            }
+        });
     }
 
     /**
      * @param  array<string, mixed>  $run
      */
-    protected function joinBranches(SwarmExecutionState $state, array $run, string $token, int $stepLeaseSeconds, callable $dispatchStep): void
+    protected function joinBranches(SwarmExecutionState $state, array $run, string $token, int $stepLeaseSeconds): void
     {
         $branches = $this->durableRuns->branchesFor($state->context->runId, 'parallel');
 
@@ -102,7 +108,7 @@ class DurableTopLevelParallelAdvancer
         $policy = $this->branches->parallelFailurePolicy($state->context);
 
         if ($failed !== [] && ($policy !== DurableParallelFailurePolicy::PartialSuccess || $completed === [])) {
-            $this->terminal->failCurrentRunFromBranchFailures($run, $token, $state->context, $stepLeaseSeconds, 'parallel', $dispatchStep);
+            $this->terminal->failCurrentRunFromBranchFailures($run, $token, $state->context, $stepLeaseSeconds, 'parallel');
 
             return;
         }
@@ -124,6 +130,6 @@ class DurableTopLevelParallelAdvancer
                 'executed_agent_classes' => array_values(array_map(static fn (array $branch): string => (string) $branch['agent_class'], $completed)),
             ]);
 
-        $this->terminal->completeRun(array_merge($run, ['run_id' => $state->context->runId]), $token, $state->context, $stepLeaseSeconds, null, $dispatchStep);
+        $this->terminal->completeRun(array_merge($run, ['run_id' => $state->context->runId]), $token, $state->context, $stepLeaseSeconds, null);
     }
 }

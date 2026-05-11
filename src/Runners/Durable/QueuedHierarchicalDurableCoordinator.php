@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
@@ -16,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Database\Connection;
 use JsonException;
 
 class QueuedHierarchicalDurableCoordinator
@@ -29,6 +31,8 @@ class QueuedHierarchicalDurableCoordinator
         protected DurableRunContext $runs,
         protected DurableBranchCoordinator $branches,
         protected DurableJobDispatcher $jobs,
+        protected DurableOutbox $outbox,
+        protected Connection $connection,
     ) {}
 
     public function enter(SwarmExecutionState $state, QueueHierarchicalParallelBoundary $boundary): void
@@ -115,42 +119,43 @@ class QueuedHierarchicalDurableCoordinator
                 'queue_hierarchical_waiting_parallel' => true,
             ]);
 
-        $this->durableRuns->waitForBranches($runId, new BranchWaitPayload(
-            executionToken: $token,
-            nextStepIndex: $boundary->nextStepIndexAfterJoin,
-            parentNodeId: $boundary->parentParallelNodeId,
-            context: $this->capture->activeContext($context),
-            ttlSeconds: $this->runs->ttlSeconds(),
-            routeCursor: $boundary->routeCursor,
-            routePlan: $boundary->routePlan,
-            totalSteps: $boundary->totalSteps,
-            branches: $branches,
-        ));
+        $this->connection->transaction(function () use ($runId, $token, $context, $boundary, $branches, $runRow, $state): void {
+            $this->durableRuns->waitForBranches($runId, new BranchWaitPayload(
+                executionToken: $token,
+                nextStepIndex: $boundary->nextStepIndexAfterJoin,
+                parentNodeId: $boundary->parentParallelNodeId,
+                context: $this->capture->activeContext($context),
+                ttlSeconds: $this->runs->ttlSeconds(),
+                routeCursor: $boundary->routeCursor,
+                routePlan: $boundary->routePlan,
+                totalSteps: $boundary->totalSteps,
+                branches: $branches,
+            ));
 
-        $this->historyStore->syncDurableState(
-            $runId,
-            'waiting',
-            $this->capture->context($context),
-            $context->metadata,
-            $this->runs->ttlSeconds(),
-            false,
-            $state->executionToken,
-            $state->leaseSeconds,
-        );
-
-        $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
-
-        $run = $this->runs->requireRun($runId);
-
-        foreach ($this->durableRuns->branchesFor($runId, $boundary->parentParallelNodeId) as $branch) {
-            $dispatch = $this->jobs->dispatchBranch(
+            $this->historyStore->syncDurableState(
                 $runId,
-                (string) $branch['branch_id'],
-                $branch['queue_connection'] ?? $run['queue_connection'],
-                $branch['queue_name'] ?? $run['queue_name'],
+                'waiting',
+                $this->capture->context($context),
+                $context->metadata,
+                $this->runs->ttlSeconds(),
+                false,
+                $state->executionToken,
+                $state->leaseSeconds,
             );
-            unset($dispatch);
-        }
+
+            $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
+
+            $run = $this->runs->requireRun($runId);
+
+            foreach ($this->durableRuns->branchesFor($runId, $boundary->parentParallelNodeId) as $branch) {
+                $this->outbox->enqueueBranch(
+                    $runId,
+                    (string) $branch['branch_id'],
+                    $branch['queue_connection'] ?? $run['queue_connection'],
+                    $branch['queue_name'] ?? $run['queue_name'],
+                );
+            }
+        });
     }
 
     /**

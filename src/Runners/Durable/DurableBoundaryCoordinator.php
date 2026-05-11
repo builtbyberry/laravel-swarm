@@ -11,7 +11,6 @@ use BuiltByBerry\LaravelSwarm\Contracts\RoutesDurableWaits;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
-use Illuminate\Foundation\Bus\PendingDispatch;
 use ReflectionClass;
 
 /**
@@ -28,7 +27,7 @@ class DurableBoundaryCoordinator
     /**
      * @param  array<string, mixed>  $run
      */
-    public function enterDeclaredBoundary(array $run, Swarm $swarm, RunContext $context, callable $dispatchStep): bool
+    public function enterDeclaredBoundary(array $run, Swarm $swarm, RunContext $context): bool
     {
         foreach ($this->declaredWaits($swarm, $context) as $wait) {
             $name = $wait['name'];
@@ -53,7 +52,7 @@ class DurableBoundaryCoordinator
                 continue;
             }
 
-            $this->dispatchChildSwarm($run['run_id'], $definition['swarm'], $definition['task'], (string) $index, $dispatchStep);
+            $this->dispatchChildSwarm($run['run_id'], $definition['swarm'], $definition['task'], (string) $index);
 
             return true;
         }
@@ -95,14 +94,8 @@ class DurableBoundaryCoordinator
     /**
      * @param  SwarmTaskInput  $task
      */
-    protected function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey, callable $dispatchStep): DurableChildRun
+    protected function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey): DurableChildRun
     {
-        return $this->children->dispatchChildSwarm(
-            $parentRunId,
-            $childSwarmClass,
-            $task,
-            $dedupeKey,
-            fn (string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch => $dispatchStep($runId, $stepIndex, $connection, $queue),
-        );
+        return $this->children->dispatchChildSwarm($parentRunId, $childSwarmClass, $task, $dedupeKey);
     }
 }

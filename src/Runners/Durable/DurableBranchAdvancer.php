@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
@@ -26,7 +27,6 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
-use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Carbon;
 use Laravel\Ai\Contracts\Agent;
 use Throwable;
@@ -48,22 +48,12 @@ class DurableBranchAdvancer
         protected DurableHierarchicalCoordinator $hierarchical,
         protected DurableRetryHandler $retryHandler,
         protected SwarmGuardrailRunner $guardrails,
+        protected DurableOutbox $outbox,
+        protected DurableRunTerminalHandler $terminal,
     ) {}
 
-    /**
-     * @param  callable(string, string, ?string, ?string): PendingDispatch  $dispatchBranch
-     * @param  callable(string, int, ?string, ?string): PendingDispatch  $dispatchStep
-     * @param  callable(array<string, mixed>): void  $dispatchQueuedResume
-     * @param  callable(array<string, mixed>, string, RunContext, int, ?string, callable): void  $failCurrentRun
-     */
-    public function advanceBranch(
-        string $runId,
-        string $branchId,
-        callable $dispatchBranch,
-        callable $dispatchStep,
-        callable $dispatchQueuedResume,
-        callable $failCurrentRun,
-    ): void {
+    public function advanceBranch(string $runId, string $branchId): void
+    {
         $run = $this->runs->requireRun($runId);
         $branch = $this->durableRuns->findBranch($runId, $branchId);
 
@@ -171,7 +161,8 @@ class DurableBranchAdvancer
             $retry = $this->retryHandler->scheduleBranchRetryIfAllowed($run, $branch, $swarm, $context, $token, $exception);
             if ($retry['scheduled']) {
                 if ($retry['dispatchBranch'] !== null) {
-                    $dispatchBranch($retry['dispatchBranch']['runId'], $retry['dispatchBranch']['branchId'], $retry['dispatchBranch']['connection'], $retry['dispatchBranch']['queue']);
+                    $rb = $retry['dispatchBranch'];
+                    $this->outbox->enqueueBranch($rb['runId'], $rb['branchId'], $rb['connection'], $rb['queue']);
                 }
 
                 return;
@@ -191,21 +182,15 @@ class DurableBranchAdvancer
                     $run,
                     $context,
                     $stepLeaseSeconds,
-                    function (array $run, string $token, $context, int $stepLeaseSeconds, ?string $parentNodeId) use ($failCurrentRun, $dispatchStep): void {
-                        $failCurrentRun($run, $token, $context, $stepLeaseSeconds, $parentNodeId, $dispatchStep);
+                    function (array $freshRun, string $freshToken, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId): void {
+                        $this->terminal->failCurrentRunFromBranchFailures($freshRun, $freshToken, $context, $stepLeaseSeconds, $parentNodeId);
                     },
                 );
             }
         }
 
         $run = $this->runs->requireRun($runId);
-        $this->hierarchical->dispatchWaitingBoundary(
-            $run,
-            false,
-            $dispatchStep,
-            $dispatchBranch,
-            $dispatchQueuedResume,
-        );
+        $this->hierarchical->dispatchWaitingBoundary($run, false);
     }
 
     protected function persistBranchStepArtifacts(string $runId, ?SwarmStep $step): void

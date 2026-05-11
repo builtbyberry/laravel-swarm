@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
@@ -56,6 +57,8 @@ class DurableManagerCollaboratorFactory
         SwarmPayloadLimits $limits,
         Application $application,
     ): DurableManagerCollaborators {
+        $outbox = $this->application->make(DurableOutbox::class);
+
         $runContext = $this->application->makeWith(DurableRunContext::class, [
             'config' => $config,
             'durableRuns' => $durableRuns,
@@ -73,6 +76,8 @@ class DurableManagerCollaboratorFactory
             'capture' => $capture,
             'runs' => $runContext,
             'payloads' => $payloads,
+            'outbox' => $outbox,
+            'connection' => $connection,
         ]);
         $retryHandler = $this->application->makeWith(DurableRetryHandler::class, [
             'durableRuns' => $durableRuns,
@@ -124,7 +129,7 @@ class DurableManagerCollaboratorFactory
             'application' => $application,
             'runs' => $runContext,
             'payloads' => $payloads,
-            'jobs' => $jobs,
+            'outbox' => $outbox,
         ]);
         $queuedHierarchical = $this->application->makeWith(QueuedHierarchicalDurableCoordinator::class, [
             'config' => $config,
@@ -135,6 +140,8 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'branches' => $branches,
             'jobs' => $jobs,
+            'outbox' => $outbox,
+            'connection' => $connection,
         ]);
         $boundary = $this->application->makeWith(DurableBoundaryCoordinator::class, [
             'durableRuns' => $durableRuns,
@@ -152,6 +159,7 @@ class DurableManagerCollaboratorFactory
             'payloads' => $payloads,
             'jobs' => $jobs,
             'children' => $children,
+            'outbox' => $outbox,
         ]);
         $recovery = $this->application->makeWith(DurableRecoveryCoordinator::class, [
             'config' => $config,
@@ -175,6 +183,7 @@ class DurableManagerCollaboratorFactory
             'branches' => $branches,
             'hierarchical' => $hierarchicalRunner,
             'jobs' => $jobs,
+            'outbox' => $outbox,
         ]);
         $terminal = $this->application->makeWith(DurableRunTerminalHandler::class, [
             'durableRuns' => $durableRuns,
@@ -195,6 +204,7 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'branches' => $branches,
             'terminal' => $terminal,
+            'outbox' => $outbox,
         ]);
         $executionBuilder = $this->application->makeWith(DurableStepExecutionBuilder::class, [
             'durableRuns' => $durableRuns,
@@ -215,6 +225,7 @@ class DurableManagerCollaboratorFactory
             'durableRuns' => $durableRuns,
             'recorder' => $recorder,
             'hierarchical' => $hierarchical,
+            'outbox' => $outbox,
         ]);
         $advancer = $this->application->makeWith(DurableStepAdvancer::class, [
             'durableRuns' => $durableRuns,
@@ -226,6 +237,7 @@ class DurableManagerCollaboratorFactory
             'executionBuilder' => $executionBuilder,
             'sequential' => $sequentialAdvancer,
             'checkpoints' => $checkpointCoordinator,
+            'outbox' => $outbox,
         ]);
         $branchAdvancer = $this->application->makeWith(DurableBranchAdvancer::class, [
             'durableRuns' => $durableRuns,
@@ -241,6 +253,8 @@ class DurableManagerCollaboratorFactory
             'branches' => $branches,
             'hierarchical' => $hierarchical,
             'retryHandler' => $retryHandler,
+            'outbox' => $outbox,
+            'terminal' => $terminal,
         ]);
 
         return new DurableManagerCollaborators(

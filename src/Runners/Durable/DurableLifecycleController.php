@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
@@ -29,6 +30,7 @@ class DurableLifecycleController
         protected DurablePayloadCapture $payloads,
         protected DurableChildSwarmCoordinator $children,
         protected SwarmAuditDispatcher $audit,
+        protected DurableOutbox $outbox,
     ) {}
 
     public function pause(string $runId): bool
@@ -79,7 +81,7 @@ class DurableLifecycleController
     }
 
     /**
-     * @return array{waiting: array<string, mixed>|null, dispatchStep: array{runId: string, stepIndex: int, connection: ?string, queue: ?string}|null}
+     * @return array{waiting: array<string, mixed>|null}
      */
     public function resume(string $runId): array
     {
@@ -92,7 +94,7 @@ class DurableLifecycleController
         $context = null;
         $updated = null;
 
-        $resumed = $this->connection->transaction(function () use ($runId, &$context, &$updated): bool {
+        $resumed = $this->connection->transaction(function () use ($runId, $run, &$context, &$updated): bool {
             if (! $this->durableRuns->resume($runId)) {
                 return false;
             }
@@ -100,6 +102,19 @@ class DurableLifecycleController
             $updated = $this->runs->requireRun($runId);
             $context = $this->runs->loadContext($runId);
             $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
+
+            if (! is_array($updated) || $updated['status'] === 'waiting') {
+                return true;
+            }
+
+            if (! $this->runs->isQueueHierarchicalParallel($updated)) {
+                $this->outbox->enqueueStep(
+                    $runId,
+                    (int) ($updated['next_step_index'] ?? $run['next_step_index']),
+                    $run['queue_connection'],
+                    $run['queue_name'],
+                );
+            }
 
             return true;
         });
@@ -123,18 +138,7 @@ class DurableLifecycleController
             'status' => 'resumed',
         ]);
 
-        if (is_array($updated) && $updated['status'] === 'waiting') {
-            return ['waiting' => $updated, 'dispatchStep' => null];
-        }
-
-        $dispatchStep = $this->runs->isQueueHierarchicalParallel($updated) ? null : [
-            'runId' => $runId,
-            'stepIndex' => (int) ($updated['next_step_index'] ?? $run['next_step_index']),
-            'connection' => $run['queue_connection'],
-            'queue' => $run['queue_name'],
-        ];
-
-        return ['waiting' => null, 'dispatchStep' => $dispatchStep];
+        return ['waiting' => is_array($updated) && $updated['status'] === 'waiting' ? $updated : null];
     }
 
     public function cancel(string $runId, callable $cancelChild): bool

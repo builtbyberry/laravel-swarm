@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
@@ -13,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Database\Connection;
 
 class DurableSignalHandler
 {
@@ -25,28 +27,23 @@ class DurableSignalHandler
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
         protected SwarmAuditDispatcher $audit,
+        protected DurableOutbox $outbox,
+        protected Connection $connection,
     ) {}
 
-    /**
-     * Process an inbound signal against a durable run.
-     *
-     * Returns the result and, when a waiting run was released, the updated run
-     * row so the caller can dispatch the next step job.
-     *
-     * @return array{result: DurableSignalResult, dispatchStep: array{runId: string, stepIndex: int, connection: ?string, queue: ?string}|null}
-     */
-    public function signal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): array
+    public function signal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
     {
         $run = $this->runs->requireRun($runId);
         $capturedPayload = $this->payloads->payload($payload);
         $signal = $this->durableRuns->recordSignal($runId, $name, $capturedPayload, $idempotencyKey);
         $accepted = false;
-        $dispatchStep = null;
 
         if (($signal['duplicate'] ?? false) !== true && $run['status'] === 'waiting') {
-            $accepted = $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id']);
+            $accepted = $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload): bool {
+                if (! $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id'])) {
+                    return false;
+                }
 
-            if ($accepted) {
                 $context = $this->runs->loadContext($runId);
                 $signals = is_array($context->metadata['durable_signals'] ?? null) ? $context->metadata['durable_signals'] : [];
                 $outcomes = is_array($context->metadata['durable_wait_outcomes'] ?? null) ? $context->metadata['durable_wait_outcomes'] : [];
@@ -61,14 +58,11 @@ class DurableSignalHandler
 
                 $updated = $this->runs->requireRun($runId);
                 if ($updated['status'] === 'pending') {
-                    $dispatchStep = [
-                        'runId' => $runId,
-                        'stepIndex' => (int) $updated['next_step_index'],
-                        'connection' => $updated['queue_connection'],
-                        'queue' => $updated['queue_name'],
-                    ];
+                    $this->outbox->enqueueStep($runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
                 }
-            }
+
+                return true;
+            });
         }
 
         $this->events->dispatch(new SwarmSignalled(
@@ -90,7 +84,7 @@ class DurableSignalHandler
             'status' => $accepted ? 'accepted' : (string) ($signal['status'] ?? 'recorded'),
         ]);
 
-        $result = new DurableSignalResult(
+        return new DurableSignalResult(
             runId: $runId,
             name: $name,
             status: $accepted ? 'accepted' : (string) ($signal['status'] ?? 'recorded'),
@@ -98,8 +92,6 @@ class DurableSignalHandler
             duplicate: (bool) ($signal['duplicate'] ?? false),
             signal: $signal,
         );
-
-        return ['result' => $result, 'dispatchStep' => $dispatchStep];
     }
 
     /**

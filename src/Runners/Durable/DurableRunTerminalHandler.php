@@ -37,7 +37,7 @@ class DurableRunTerminalHandler
     /**
      * @param  array<string, mixed>  $run
      */
-    public function failTimedOutRun(array $run, string $token, RunContext $context, int $stepLeaseSeconds, callable $dispatchStep): void
+    public function failTimedOutRun(array $run, string $token, RunContext $context, int $stepLeaseSeconds): void
     {
         $runId = (string) $run['run_id'];
         $exception = new SwarmException("Durable swarm run [{$runId}] exceeded its configured timeout.");
@@ -47,19 +47,19 @@ class DurableRunTerminalHandler
             'message' => $this->capture->failureMessage($exception),
             'class' => $exception::class,
             'timed_out' => true,
-        ], $dispatchStep);
+        ]);
         $this->dispatchFailed($run, $context, $exception, ExecutionMode::Durable->value);
     }
 
     /**
      * @param  array<string, mixed>  $run
      */
-    public function cancelRun(array $run, string $token, RunContext $context, callable $dispatchStep, ?SwarmStep $step = null): void
+    public function cancelRun(array $run, string $token, RunContext $context, ?SwarmStep $step = null): void
     {
         $runId = (string) $run['run_id'];
 
         $this->recorder->cancel($runId, $token, $context, $step);
-        $this->children->markChildTerminalIfNeeded($runId, 'cancelled', null, null, $dispatchStep);
+        $this->children->markChildTerminalIfNeeded($runId, 'cancelled', null, null);
         $this->events->dispatch(new SwarmCancelled(
             runId: $runId,
             swarmClass: $run['swarm_class'],
@@ -89,7 +89,7 @@ class DurableRunTerminalHandler
     /**
      * @param  array<string, mixed>  $run
      */
-    public function failRun(array $run, string $token, Throwable $exception, RunContext $context, int $stepLeaseSeconds, callable $dispatchStep): void
+    public function failRun(array $run, string $token, Throwable $exception, RunContext $context, int $stepLeaseSeconds): void
     {
         $runId = (string) $run['run_id'];
 
@@ -97,14 +97,14 @@ class DurableRunTerminalHandler
         $this->children->markChildTerminalIfNeeded($runId, 'failed', null, [
             'message' => $this->capture->failureMessage($exception),
             'class' => $exception::class,
-        ], $dispatchStep);
+        ]);
         $this->dispatchFailed($run, $context, $exception, ExecutionMode::Durable->value);
     }
 
     /**
      * @param  array<string, mixed>  $run
      */
-    public function completeRun(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?SwarmStep $step, callable $dispatchStep): void
+    public function completeRun(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?SwarmStep $step): void
     {
         $runId = (string) $run['run_id'];
         $response = new SwarmResponse(
@@ -121,7 +121,7 @@ class DurableRunTerminalHandler
 
         $capturedResponse = $this->limits->response($this->capture->response($response));
         $this->recorder->complete($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step);
-        $this->children->markChildTerminalIfNeeded($runId, 'completed', $capturedResponse->output, null, $dispatchStep);
+        $this->children->markChildTerminalIfNeeded($runId, 'completed', $capturedResponse->output, null);
 
         $this->events->dispatch(new SwarmCompleted(
             runId: $runId,
@@ -138,7 +138,7 @@ class DurableRunTerminalHandler
     /**
      * @param  array<string, mixed>  $run
      */
-    public function failCurrentRunFromBranchFailures(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId, callable $dispatchStep): void
+    public function failCurrentRunFromBranchFailures(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId): void
     {
         $runId = (string) $run['run_id'];
         $branches = $this->durableRuns->branchesFor($runId, $parentNodeId);
@@ -153,7 +153,7 @@ class DurableRunTerminalHandler
         $this->children->markChildTerminalIfNeeded($runId, 'failed', null, [
             'message' => $this->capture->failureMessage($exception),
             'class' => $exception::class,
-        ], $dispatchStep);
+        ]);
         $this->dispatchFailed($run, $context, $exception, $this->runs->publicLifecycleExecutionMode($run));
     }
 

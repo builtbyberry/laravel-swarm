@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
@@ -127,9 +128,41 @@ function recordingDurableJobDispatcher(?RuntimeException $stepException = null):
     };
 }
 
+function synchronousDurableOutbox(DurableJobDispatcher $jobs): DurableOutbox
+{
+    return new class($jobs) implements DurableOutbox
+    {
+        public function __construct(private readonly DurableJobDispatcher $jobs) {}
+
+        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void
+        {
+            $dispatch = $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue);
+            unset($dispatch);
+        }
+
+        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void
+        {
+            $dispatch = $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue);
+            unset($dispatch);
+        }
+
+        public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void
+        {
+            $this->jobs->dispatchQueuedResumeById($runId, $connection, $queue);
+        }
+
+        public function drain(array $types = [], int $limit = 100): int
+        {
+            return 0;
+        }
+    };
+}
+
 function durableManagerWithJobDispatcher(DurableJobDispatcher $dispatcher): DurableSwarmManager
 {
+    $outbox = synchronousDurableOutbox($dispatcher);
     app()->bind(DurableJobDispatcher::class, fn (): DurableJobDispatcher => $dispatcher);
+    app()->bind(DurableOutbox::class, fn (): DurableOutbox => $outbox);
     app()->forgetInstance(DurableSwarmManager::class);
 
     return app(DurableSwarmManager::class);

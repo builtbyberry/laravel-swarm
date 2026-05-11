@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Events\SwarmChildCompleted;
@@ -39,7 +40,7 @@ class DurableChildSwarmCoordinator
         protected Application $application,
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
-        protected DurableJobDispatcher $jobs,
+        protected DurableOutbox $outbox,
     ) {}
 
     public function afterChildIntentForTesting(?callable $hook): void
@@ -50,7 +51,7 @@ class DurableChildSwarmCoordinator
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null, ?callable $dispatchStep = null): DurableChildRun
+    public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null): DurableChildRun
     {
         $parent = $this->runs->requireRun($parentRunId);
         $swarm = $this->application->make($childSwarmClass);
@@ -76,7 +77,7 @@ class DurableChildSwarmCoordinator
             'wait_name' => $waitName,
             'context_payload' => $context->toArray(),
             'status' => 'pending',
-        ], $dispatchStep);
+        ]);
 
         $child = $this->durableRuns->childRunForChild($context->runId);
 
@@ -121,7 +122,7 @@ class DurableChildSwarmCoordinator
     /**
      * @param  array<string, mixed>  $child
      */
-    public function dispatchChildIntent(array $child, ?callable $dispatchStep = null): void
+    public function dispatchChildIntent(array $child): void
     {
         $childRunId = (string) $child['child_run_id'];
         $childSwarmClass = (string) $child['child_swarm_class'];
@@ -143,7 +144,7 @@ class DurableChildSwarmCoordinator
                 $parent = $this->durableRuns->find((string) $child['parent_run_id']);
 
                 if ($parent !== null) {
-                    $this->reconcileTerminalChildrenForParent($parent, $dispatchStep);
+                    $this->reconcileTerminalChildrenForParent($parent);
                 }
 
                 return;
@@ -162,7 +163,7 @@ class DurableChildSwarmCoordinator
     /**
      * @param  array<string, mixed>|null  $failure
      */
-    public function markChildTerminalIfNeeded(string $childRunId, string $status, ?string $output, ?array $failure, ?callable $dispatchStep = null): void
+    public function markChildTerminalIfNeeded(string $childRunId, string $status, ?string $output, ?array $failure): void
     {
         $child = $this->durableRuns->childRunForChild($childRunId);
 
@@ -174,17 +175,15 @@ class DurableChildSwarmCoordinator
         $parent = $this->durableRuns->find((string) $child['parent_run_id']);
 
         if ($parent !== null) {
-            $this->reconcileTerminalChildrenForParent($parent, $dispatchStep);
+            $this->reconcileTerminalChildrenForParent($parent);
         }
     }
 
     /**
      * @param  array<string, mixed>  $parent
      */
-    public function reconcileTerminalChildrenForParent(array $parent, ?callable $dispatchStep = null): void
+    public function reconcileTerminalChildrenForParent(array $parent): void
     {
-        $dispatchStep ??= fn (string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null) => $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue);
-
         foreach ($this->durableRuns->childRuns($parent['run_id']) as $child) {
             if (! in_array($child['status'], ['completed', 'failed', 'cancelled'], true)) {
                 continue;
@@ -215,7 +214,14 @@ class DurableChildSwarmCoordinator
                 $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
                 $this->historyStore->syncDurableState($parent['run_id'], 'pending', $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
 
-                return $this->durableRuns->markChildTerminalEventDispatched((string) $child['child_run_id']);
+                if (! $this->durableRuns->markChildTerminalEventDispatched((string) $child['child_run_id'])) {
+                    return false;
+                }
+
+                $updated = $this->runs->requireRun($parent['run_id']);
+                $this->outbox->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+
+                return true;
             });
 
             if (! $released) {
@@ -227,10 +233,6 @@ class DurableChildSwarmCoordinator
             } else {
                 $this->events->dispatch(new SwarmChildFailed($parent['run_id'], (string) $child['child_run_id'], (string) $child['child_swarm_class'], is_array($child['failure'] ?? null) ? $child['failure'] : null));
             }
-
-            $updated = $this->runs->requireRun($parent['run_id']);
-            $dispatch = $dispatchStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
-            unset($dispatch);
         }
     }
 

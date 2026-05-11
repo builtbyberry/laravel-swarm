@@ -147,7 +147,7 @@ class DurableRecoveryCoordinator
         );
 
         foreach ($childParents as $run) {
-            $this->children->reconcileTerminalChildrenForParent($run, $dispatchStep);
+            $this->children->reconcileTerminalChildrenForParent($run);
         }
 
         $undispatchedChildren = $this->durableRuns->undispatchedChildRuns(
@@ -157,7 +157,7 @@ class DurableRecoveryCoordinator
         );
 
         foreach ($undispatchedChildren as $child) {
-            $this->children->dispatchChildIntent($child, $dispatchStep);
+            $this->children->dispatchChildIntent($child);
         }
 
         return array_values(array_unique(array_merge(
