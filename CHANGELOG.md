@@ -7,24 +7,50 @@
 - **Transactional outbox for durable dispatch:** `DurableOutbox` contract and `DatabaseDurableOutbox`
   implementation write outbox rows atomically inside checkpoint, branch-wait, and retry transactions.
   `swarm:relay` (new Artisan command) drains and dispatches them; it must be scheduled
-  (`Schedule::command('swarm:relay')->everyMinute()`). Two-phase drain (claim with `SKIP LOCKED`,
-  dispatch, delete per-entry) prevents duplicate jobs under concurrent relay workers. Per-entry error
+  (`Schedule::command(‘swarm:relay’)->everyMinute()`). Two-phase drain (claim with `SKIP LOCKED`,
+  dispatch, batched delete) prevents duplicate jobs under concurrent relay workers. Per-entry error
   isolation means a single bad row cannot poison the batch. Fixes the parallel-topology join-boundary
   stall (GitHub issue #2).
 - `swarm:relay` Artisan command: drains the durable outbox and dispatches queued jobs. Options:
   `--type=step|branch` (filter by dispatch type), `--limit=N` (default 100, max 10 000),
   `--drain-until-empty` (loop until the outbox is clear). Run `swarm:relay --help` for details.
-- `swarm:health --durable` now includes an **Outbox relay** check: warns when unclaimed outbox rows
-  are older than 2× `swarm.durable.relay.reservation_timeout_seconds`, helping detect a stalled relay.
+- `swarm:health --durable` now includes an **Outbox relay** check: warns when unclaimed or
+  stale-reserved outbox rows are older than 2× `swarm.durable.relay.reservation_timeout_seconds`,
+  helping detect a stalled relay or a relay worker that crashed mid-dispatch.
 - `swarm:prune` now prunes orphaned `swarm_durable_outbox` rows (rows whose parent run has expired
   and been pruned but whose outbox entry was not cascade-deleted, e.g. reserved rows that expired).
 - Migration `2026_05_11_000002_optimize_swarm_durable_outbox_indexes.php`: replaces the composite
   `swarm_outbox_drain_idx` with two targeted indexes—`(available_at, id)` for unfiltered drains and
   `(dispatch_type, available_at, id)` for type-filtered drains—plus a PostgreSQL partial index on
   `(available_at, id) WHERE reserved_at IS NULL`.
+- **Guardrails v1:** `SwarmInputGuardrail`, `SwarmStepGuardrail`, `SwarmOutputGuardrail`, optional
+  `DefinesGuardrails::guardrails()`, centralized `SwarmGuardrailRunner`, `GuardrailViolation`
+  (`policyCode`, `reason`, `metadata`, `scope`, `::block()`),
+  `config/swarm.php` `guardrails.*` (including child inheritance and parallel sync policy), wiring through
+  `SwarmRunner`, durable starters, sequential/parallel/hierarchical/stream/durable paths, and
+  `MissingQueueLeaseSchemaException` for missing queued-lease columns (distinct from runtime
+  `LostSwarmLeaseException`). Documentation: `docs/guardrails.md`. Feature and unit tests under
+  `tests/Feature/Guardrails*.php`, `tests/Unit/Runners/SwarmGuardrailRunnerTest.php`,
+  `tests/Unit/Exceptions/GuardrailViolationTest.php`.
 
 ### Changed
 
+- **Breaking:** `DurableOutbox::drain()` now returns `DrainResult` (`Responses\DrainResult`) instead
+  of `int`. `DrainResult` exposes `dispatched` (entries queued successfully), `skipped` (permanently
+  invalid entries deleted without dispatch), and `total()`. Custom `DurableOutbox` implementations
+  must update their return type and return a `new DrainResult(dispatched: $n, skipped: $m)` instance;
+  applications that only inject the contract need no changes.
+- `DrainResult` lives in the `Responses\` namespace, not `Contracts\`.
+- `DatabaseDurableOutbox::drain()` now uses a two-catch dispatch loop: `UnexpectedValueException`
+  signals a permanently invalid row (unknown `dispatch_type`, non-array or malformed JSON payload) —
+  the entry is reported via `report()`, deleted immediately, and counted in `skipped`. Any other
+  `Throwable` is treated as transient — the entry retains `reserved_at` and is re-claimable after the
+  reservation timeout.
+- `DatabaseDurableOutbox::drain()` collects dispatched IDs and issues a single batched `WHERE IN`
+  DELETE at the end of each loop iteration instead of one DELETE per dispatched entry.
+- `command.relay` audit event field renamed from `dispatched` to `dispatched_count`; the failure-path
+  event now also includes `dispatched_count` and `skipped_count` reflecting entries processed before
+  the error.
 - `DurableRunRecorder::checkpointSequential` and `checkpointHierarchical` accept an optional
   `?callable $withTransaction` that is invoked inside the DB transaction before commit, enabling
   atomic checkpoint + outbox writes. This is an `@internal` API used by collaborators only.
@@ -38,24 +64,17 @@
   required (no default closures). This is an `@internal` change.
 - `QueuedHierarchicalDurableCoordinator` delegates `validateStepTimeoutSeconds` to `DurableRunContext`
   instead of maintaining a duplicate copy.
-
-- **Guardrails v1:** `SwarmInputGuardrail`, `SwarmStepGuardrail`, `SwarmOutputGuardrail`, optional
-  `DefinesGuardrails::guardrails()`, centralized `SwarmGuardrailRunner`, `GuardrailViolation`
-  (`policyCode`, `reason`, `metadata`, `scope`, `::block()`),
-  `config/swarm.php` `guardrails.*` (including child inheritance and parallel sync policy), wiring through
-  `SwarmRunner`, durable starters, sequential/parallel/hierarchical/stream/durable paths, and
-  `MissingQueueLeaseSchemaException` for missing queued-lease columns (distinct from runtime
-  `LostSwarmLeaseException`). Documentation: `docs/guardrails.md`. Feature and unit tests under
-  `tests/Feature/Guardrails*.php`, `tests/Unit/Runners/SwarmGuardrailRunnerTest.php`,
-  `tests/Unit/Exceptions/GuardrailViolationTest.php`.
-
-### Changed
-
 - `GuardrailViolation` uses a `policyCode` property instead of `code`, avoiding collision with PHP’s
   inherited `Exception::$code`.
 
 ### Fixed
 
+- `swarm:health --durable` outbox relay check now detects stale-reserved rows — entries claimed by a
+  relay worker that crashed mid-dispatch — in addition to unclaimed rows. Previously a crashed relay
+  appeared healthy for up to the full reservation timeout window.
+- `DurableRetryHandler::scheduleBranchRetryIfAllowed` now wraps its state change in a transaction,
+  consistent with the run retry path. Fixes a narrow window where a branch retry state change could
+  be written without the corresponding outbox enqueue completing atomically.
 - Output-phase guardrail violations are handled inside `SwarmRunner::runWithExecutionMode()`’s primary
   `try` so failures call `historyStore->fail`, emit `SwarmFailed`, and merge safe guardrail metadata—same
   as other orchestration failures (previously `finalizeSuccessfulSwarmExecution()` sat outside that
