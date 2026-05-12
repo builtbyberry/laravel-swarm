@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DrainResult;
+use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;

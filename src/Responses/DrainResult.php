@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace BuiltByBerry\LaravelSwarm\Contracts;
+namespace BuiltByBerry\LaravelSwarm\Responses;
 
 /**
  * Result of a single DurableOutbox::drain() invocation.

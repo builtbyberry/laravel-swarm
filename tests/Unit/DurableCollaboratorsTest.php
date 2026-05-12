@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
+use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBoundaryCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
@@ -213,9 +214,9 @@ test('queued hierarchical durable coordinator creates coordination run and dispa
             $this->jobs->dispatchQueuedResumeById($runId, $connection, $queue);
         }
 
-        public function drain(array $types = [], int $limit = 100): int
+        public function drain(array $types = [], int $limit = 100): DrainResult
         {
-            return 0;
+            return new DrainResult(0, 0);
         }
     };
 

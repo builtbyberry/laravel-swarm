@@ -37,6 +37,19 @@ Every implementation decision must follow existing Laravel and Laravel AI conven
 - If a shortcut would trade away correctness, resilience, or product completeness, do not take it silently. Surface the tradeoff explicitly and treat it as a decision, not an implementation detail.
 - Default to closing gaps during implementation rather than leaving follow-up work unless the deferral is explicitly approved.
 
+## Definition of Done
+
+A feature or fix is complete only when all of the following are true. Reviewers should treat missing items as blockers, not follow-up work.
+
+- **Artisan command** — if the feature introduces an operational concern (relay, prune, recover, status), it ships with a corresponding `swarm:*` command with a `--help` description.
+- **Config key** — every new tuneable has a key in `config/swarm.php` with an inline comment explaining intent and a safe production default.
+- **Prune / retention hook** — any new persistent data has a `swarm:prune` integration or an explicit documented reason it is exempt.
+- **Test coverage** — new behavior has deterministic Pest tests; concurrency-sensitive paths have a `test:process-concurrency` lane entry.
+- **CHANGELOG.md** — every PR includes a changelog entry. Breaking changes also require an `UPGRADING.md` section.
+- **Docs parity** — public surface changes update the relevant file in `docs/` or `README.md` in the same PR, not a follow-up.
+
+If a gap is deferred, it must be recorded as a named follow-up with an owner, not silently dropped.
+
 ## Tech Stack
 
 - PHP ^8.5
@@ -127,6 +140,7 @@ Pulse is aggregate observability. For live per-run operations feeds, listen to L
 
 ## Key Architecture Decisions
 
+- **Transaction boundaries** — any code that coordinates two systems (DB + queue, DB + cache, two tables, outbox + checkpoint) must either execute inside a single transaction or explicitly document in the code why eventual consistency is acceptable. Flag this at design time. Do not discover it in review.
 - Do not use facades inside orchestration internals; inject services and contracts through the container.
 - `ParallelRunner` and hierarchical parallel execution use `ConcurrencyManager` from the container, not the facade directly.
 - `SwarmRunner` resolves attributes via reflection and falls back to `config('swarm.*')`.
@@ -139,7 +153,7 @@ Pulse is aggregate observability. For live per-run operations feeds, listen to L
 
 ## Review Method
 
-Use multi-expert review for meaningful changes, especially streaming contracts, persistence/replay, migrations, security surfaces, and public API drift.
+Use multi-expert review for meaningful changes, especially streaming contracts, persistence/replay, migrations, security surfaces, and public API drift. Invoke the `anthropic-skills:multi-expert-change-review` skill rather than doing lens reviews inline — it runs all eight lenses in parallel and produces the required output format.
 
 Default review lenses:
 

@@ -32,6 +32,10 @@ class SwarmRelayCommand extends Command
         Without the relay, durable runs will stall permanently after writing to
         the outbox. Use --drain-until-empty to clear backlogs in a single invocation.
 
+        When --drain-until-empty encounters permanently invalid entries, each loop
+        iteration reports and deletes the bad rows and continues until the table is
+        empty. This is correct behaviour — use --limit to control throughput.
+
         Examples:
           php artisan swarm:relay
           php artisan swarm:relay --type=step --type=branch

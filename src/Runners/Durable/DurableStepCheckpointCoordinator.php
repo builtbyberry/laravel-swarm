@@ -74,6 +74,12 @@ class DurableStepCheckpointCoordinator
         // case the extra step-job is harmless: acquireLease() rejects 'waiting' runs, so
         // the dispatched job is a safe no-op.
         //
+        // Crash edge case: if enterDurableBoundary throws after the checkpoint transaction
+        // commits, the run stays 'pending' with an outbox step pointing at it. The relay
+        // dispatches that job; acquireLease() accepts it and the run advances normally.
+        // The boundary state is not persisted until persistChildIntent() commits its own
+        // independent transaction, so this path is a safe retry with no data loss.
+        //
         // NOTE: branchesFor() is called INSIDE the closure (i.e., inside the checkpoint
         // transaction). For the initial branch-wait case, waitForBranches() creates the
         // branch rows in the same transaction — so the closure must read after that write.

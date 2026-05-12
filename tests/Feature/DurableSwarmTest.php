@@ -26,7 +26,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
-use BuiltByBerry\LaravelSwarm\Contracts\DrainResult;
+use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;

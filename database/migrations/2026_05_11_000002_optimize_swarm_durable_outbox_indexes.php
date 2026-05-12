@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -24,8 +25,9 @@ return new class extends Migration
     public function up(): void
     {
         $driver = DB::connection()->getDriverName();
+        $outboxTable = config('swarm.tables.durable_outbox', 'swarm_durable_outbox');
 
-        Schema::table('swarm_durable_outbox', function (\Illuminate\Database\Schema\Blueprint $table) use ($driver): void {
+        Schema::table($outboxTable, function (Blueprint $table): void {
             $table->dropIndex('swarm_outbox_drain_idx');
             $table->index(['available_at', 'id'], 'swarm_outbox_unfiltered_idx');
             $table->index(['dispatch_type', 'available_at', 'id'], 'swarm_outbox_typed_idx');
@@ -33,9 +35,9 @@ return new class extends Migration
 
         if ($driver === 'pgsql') {
             DB::statement(
-                'CREATE INDEX IF NOT EXISTS swarm_outbox_pending_idx
-                 ON swarm_durable_outbox (available_at, id)
-                 WHERE reserved_at IS NULL'
+                "CREATE INDEX IF NOT EXISTS swarm_outbox_pending_idx
+                 ON {$outboxTable} (available_at, id)
+                 WHERE reserved_at IS NULL"
             );
         }
     }
@@ -43,12 +45,13 @@ return new class extends Migration
     public function down(): void
     {
         $driver = DB::connection()->getDriverName();
+        $outboxTable = config('swarm.tables.durable_outbox', 'swarm_durable_outbox');
 
         if ($driver === 'pgsql') {
             DB::statement('DROP INDEX IF EXISTS swarm_outbox_pending_idx');
         }
 
-        Schema::table('swarm_durable_outbox', function (\Illuminate\Database\Schema\Blueprint $table): void {
+        Schema::table($outboxTable, function (Blueprint $table): void {
             $table->dropIndex('swarm_outbox_unfiltered_idx');
             $table->dropIndex('swarm_outbox_typed_idx');
             $table->index(['dispatch_type', 'available_at', 'reserved_at'], 'swarm_outbox_drain_idx');

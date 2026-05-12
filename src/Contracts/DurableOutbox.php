@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
 use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
+use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 
 interface DurableOutbox
 {

@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
-use BuiltByBerry\LaravelSwarm\Contracts\DrainResult;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
+use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -77,10 +77,11 @@ class DatabaseDurableOutbox implements DurableOutbox
 
             // Use FOR UPDATE SKIP LOCKED so concurrent relay workers each claim
             // a distinct batch rather than blocking on each other's locks.
-            // SQLite does not support row-level locking; the guard keeps tests working.
-            $query->lockForUpdate();
+            // SQLite uses file-level locking via its transaction; FOR UPDATE SKIP LOCKED
+            // is not supported and would produce a no-op at best. Both clauses are skipped
+            // on SQLite so tests run cleanly without any locking divergence.
             if ($this->connection->getDriverName() !== 'sqlite') {
-                $query->skipLocked();
+                $query->lockForUpdate()->skipLocked();
             }
 
             $entries = $query->get();
@@ -153,12 +154,19 @@ class DatabaseDurableOutbox implements DurableOutbox
             );
         }
 
-        $payload = is_string($entry->payload) ? json_decode($entry->payload, true) : (array) $entry->payload;
+        try {
+            $payload = is_string($entry->payload)
+                ? json_decode($entry->payload, true, 512, JSON_THROW_ON_ERROR)
+                : (array) $entry->payload;
+        } catch (\JsonException) {
+            throw new UnexpectedValueException(
+                "Invalid JSON payload for outbox entry [{$entry->id}] (type: {$entry->dispatch_type})."
+            );
+        }
 
-        if (json_last_error() !== JSON_ERROR_NONE || ! is_array($payload)) {
-            // json_last_error() catches decode errors; the is_array() guard catches valid-but-
-            // non-object JSON (e.g. the literal string "null") that would pass the error check
-            // but cannot be used as an associative payload array.
+        if (! is_array($payload)) {
+            // is_array() catches valid-but-non-object JSON (e.g. the literal "null") that
+            // json_decode succeeds on but cannot be used as an associative payload array.
             throw new UnexpectedValueException(
                 "Invalid JSON payload for outbox entry [{$entry->id}] (type: {$entry->dispatch_type})."
             );

@@ -75,6 +75,9 @@ class SwarmHealthCommand extends Command
     {
         $outboxTable = (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox');
         $reservationTimeoutSeconds = (int) $config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
+        // 2× the reservation timeout: gives the relay at least one full reclaim cycle
+        // before alerting. A single missed relay run reclaims stale reservations on the
+        // next run; two missed cycles indicates the relay is not running at all.
         $stalenessThresholdSeconds = $reservationTimeoutSeconds * 2;
         $staleThreshold = now()->subSeconds($stalenessThresholdSeconds);
 
