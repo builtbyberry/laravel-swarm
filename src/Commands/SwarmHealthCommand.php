@@ -93,7 +93,10 @@ class SwarmHealthCommand extends Command
             }
 
             $staleCount = $connection->table($outboxTable)
-                ->whereNull('reserved_at')
+                ->where(function ($q) use ($staleThreshold): void {
+                    $q->whereNull('reserved_at')
+                      ->orWhere('reserved_at', '<', $staleThreshold);
+                })
                 ->where('created_at', '<', $staleThreshold)
                 ->count();
 

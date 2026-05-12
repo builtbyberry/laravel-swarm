@@ -16,6 +16,7 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class SwarmHealthRecordingCacheStore extends ArrayStore
 {
@@ -127,4 +128,80 @@ test('swarm health identifies failing cache component', function (): void {
         ->toContain('Context')
         ->toContain('swarm-health-failing')
         ->toContain('failed to write readiness probe');
+});
+
+// ---------------------------------------------------------------------------
+// swarm:health --durable outbox staleness checks
+// ---------------------------------------------------------------------------
+
+describe('outbox staleness check', function (): void {
+    beforeEach(function (): void {
+        config()->set('swarm.persistence.driver', 'database');
+        // Disable FK checks for the duration of these tests so we can insert
+        // outbox rows with arbitrary run_ids without needing a parent run row.
+        DB::statement('PRAGMA foreign_keys = OFF');
+    });
+
+    afterEach(function (): void {
+        DB::statement('PRAGMA foreign_keys = ON');
+    });
+
+    test('missing outbox table returns failed status and exits 1', function (): void {
+        config()->set('swarm.tables.durable_outbox', 'nonexistent_outbox_xyz');
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(1);
+        expect(Artisan::output())->toContain('does not exist');
+    });
+
+    test('stale unclaimed rows produce a warning status', function (): void {
+        // Insert a row with reserved_at = null and created_at well past the
+        // default 2 × 60 s = 120 s staleness threshold.
+        DB::table('swarm_durable_outbox')->insert([
+            'run_id'           => (string) \Illuminate\Support\Str::uuid(),
+            'dispatch_type'    => 'step',
+            'payload'          => '{}',
+            'queue_connection' => null,
+            'queue_name'       => null,
+            'available_at'     => now()->subMinutes(3),
+            'reserved_at'      => null,
+            'created_at'       => now()->subMinutes(3),
+        ]);
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())->toContain('warning');
+    });
+
+    test('stale reserved rows produce a warning status (F2 regression guard)', function (): void {
+        // Insert a row whose reserved_at is itself stale (relay worker died
+        // between claim and dispatch). This branch is covered by the
+        // orWhere('reserved_at', '<', $staleThreshold) condition introduced in
+        // the F2 fix; the test would fail if that clause were reverted.
+        DB::table('swarm_durable_outbox')->insert([
+            'run_id'           => (string) \Illuminate\Support\Str::uuid(),
+            'dispatch_type'    => 'step',
+            'payload'          => '{}',
+            'queue_connection' => null,
+            'queue_name'       => null,
+            'available_at'     => now()->subMinutes(3),
+            'reserved_at'      => now()->subMinutes(3),
+            'created_at'       => now()->subMinutes(3),
+        ]);
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())->toContain('warning');
+    });
+
+    test('clean outbox returns ok status', function (): void {
+        // No rows — outbox is empty, health check should be clean.
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())->not->toContain('failed');
+    });
 });

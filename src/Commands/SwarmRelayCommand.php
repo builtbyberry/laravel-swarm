@@ -69,6 +69,8 @@ class SwarmRelayCommand extends Command
                 'limit' => $limit,
                 'drain_until_empty' => $drainUntilEmpty,
                 'actor' => 'artisan',
+                'dispatched_count' => $totalDispatched,
+                'skipped_count' => $totalSkipped,
                 'status' => 'failed',
                 'exception_class' => $exception::class,
             ]);
@@ -81,7 +83,7 @@ class SwarmRelayCommand extends Command
             'limit' => $limit,
             'drain_until_empty' => $drainUntilEmpty,
             'actor' => 'artisan',
-            'dispatched' => $totalDispatched,
+            'dispatched_count' => $totalDispatched,
             'skipped_count' => $totalSkipped,
             'status' => $totalDispatched > 0 ? 'dispatched' : ($totalSkipped > 0 ? 'skipped' : 'none_found'),
         ]);

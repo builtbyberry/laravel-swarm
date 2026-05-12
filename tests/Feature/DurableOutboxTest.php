@@ -181,6 +181,18 @@ test('drain respects the limit parameter', function (): void {
         ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(1);
 });
 
+test('drain returns empty result immediately when limit is zero or negative', function (int $limit): void {
+    $outbox = app(DurableOutbox::class);
+    $response = FakeSequentialSwarm::make()->dispatchDurable('task');
+    $outbox->enqueueStep($response->runId, 1, null, null);
+
+    $result = $outbox->drain([], $limit);
+
+    expect($result->dispatched)->toBe(0)
+        ->and($result->skipped)->toBe(0)
+        ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(1);
+})->with([0, -1, -100]);
+
 // ---------------------------------------------------------------------------
 // swarm:relay Artisan command
 // ---------------------------------------------------------------------------

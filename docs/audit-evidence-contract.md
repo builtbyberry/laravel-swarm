@@ -129,7 +129,7 @@ advance execution.
 | `command.resume`  | `swarm:resume` was invoked for a run.                          |
 | `command.cancel`  | `swarm:cancel` was invoked for a run.                          |
 | `command.recover` | `swarm:recover` was invoked. Includes `recovered_count` and `recovered_run_ids`. |
-| `command.relay`   | `swarm:relay` completed. Includes `dispatched` (count dispatched), `skipped_count` (permanently invalid entries deleted), `types` (filter applied), `limit`, `drain_until_empty`, `status` (`dispatched`, `skipped`, `none_found`, or `failed`), and `exception_class` on failure. |
+| `command.relay`   | `swarm:relay` completed or failed. Includes `dispatched_count` and `skipped_count` on both success and failure events (reflecting work completed before any error), `types` (filter applied), `limit`, `drain_until_empty`, `status` (`dispatched`, `skipped`, `none_found`, or `failed`), and `exception_class` on failure. |
 | `command.prune`   | `swarm:prune` completed. Includes `dry_run`, `prevent_prune`, `status`, and `counts` (row counts per table). |
 
 All command categories include `actor: "artisan"`.

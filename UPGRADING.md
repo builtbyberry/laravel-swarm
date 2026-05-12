@@ -167,6 +167,19 @@ php artisan swarm:health --durable
 The **Outbox relay** check warns when unclaimed rows are older than 2× the reservation timeout.
 If you see that warning in a healthy environment, it means `swarm:relay` is not scheduled.
 
+**`DurableOutbox::drain()` return type changed**
+
+`DurableOutbox::drain()` now returns `DrainResult` (namespace
+`BuiltByBerry\LaravelSwarm\Responses\DrainResult`) instead of `int`. The bundled
+`DatabaseDurableOutbox` implementation is updated automatically.
+
+If your application provides a **custom `DurableOutbox` implementation**, update its
+`drain()` method signature and return a `new DrainResult(dispatched: $n, skipped: $m)`
+instance. The `dispatched` count is entries successfully dispatched to a queue driver;
+`skipped` is permanently invalid entries deleted without dispatch.
+
+Applications that only *inject* `DurableOutbox` need no changes.
+
 ## Unreleased: `run_id` foreign-key constraints
 
 Run `php artisan migrate` after updating the package. Migration
