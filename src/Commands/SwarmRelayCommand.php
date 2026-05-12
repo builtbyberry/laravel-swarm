@@ -49,13 +49,16 @@ class SwarmRelayCommand extends Command
         $limit = $this->resolveLimit($config);
         $drainUntilEmpty = (bool) $this->option('drain-until-empty');
 
-        $total = 0;
+        $totalDispatched = 0;
+        $totalSkipped = 0;
+        $result = null;
 
         try {
             do {
-                $count = $outbox->drain($types, $limit);
-                $total += $count;
-            } while ($drainUntilEmpty && $count > 0);
+                $result = $outbox->drain($types, $limit);
+                $totalDispatched += $result->dispatched;
+                $totalSkipped += $result->skipped;
+            } while ($drainUntilEmpty && $result->total() > 0);
         } catch (Throwable $exception) {
             $audit->emit('command.relay', [
                 'types' => array_map(static fn (OutboxDispatchType $t): string => $t->value, $types),
@@ -74,17 +77,24 @@ class SwarmRelayCommand extends Command
             'limit' => $limit,
             'drain_until_empty' => $drainUntilEmpty,
             'actor' => 'artisan',
-            'dispatched_count' => $total,
-            'status' => $total > 0 ? 'dispatched' : 'none_found',
+            'dispatched' => $totalDispatched,
+            'skipped_count' => $totalSkipped,
+            'status' => $totalDispatched > 0 ? 'dispatched' : ($totalSkipped > 0 ? 'skipped' : 'none_found'),
         ]);
 
-        if ($total === 0) {
+        if ($totalDispatched === 0 && $totalSkipped === 0) {
             $this->components->info('No pending outbox entries were found.');
 
             return self::SUCCESS;
         }
 
-        $this->components->info("Dispatched {$total} outbox entr".($total === 1 ? 'y' : 'ies').'.');
+        if ($totalDispatched > 0) {
+            $this->components->info("Dispatched {$totalDispatched} outbox entr".($totalDispatched === 1 ? 'y' : 'ies').'.');
+        }
+
+        if ($totalSkipped > 0) {
+            $this->components->warn("Skipped {$totalSkipped} invalid outbox entr".($totalSkipped === 1 ? 'y' : 'ies').'. Check your error tracker for details.');
+        }
 
         return self::SUCCESS;
     }

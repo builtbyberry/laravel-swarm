@@ -65,7 +65,7 @@ class DurableStepCheckpointCoordinator
             && $hierarchicalResult->waitingParentNodeId !== null;
 
         // Build the closure that runs INSIDE the recorder's transaction, atomically
-        // with the checkpoint DB writes. This guarantees the outbox row is committed
+        // with the checkpoint DB writes. This guarantees every outbox row is committed
         // in the same transaction so a crash between checkpoint and enqueue cannot
         // leave the run stranded.
         //
@@ -73,6 +73,12 @@ class DurableStepCheckpointCoordinator
         // below, outside the transaction) will subsequently enter a boundary. In that
         // case the extra step-job is harmless: acquireLease() rejects 'waiting' runs, so
         // the dispatched job is a safe no-op.
+        //
+        // NOTE: branchesFor() is called INSIDE the closure (i.e., inside the checkpoint
+        // transaction). For the initial branch-wait case, waitForBranches() creates the
+        // branch rows in the same transaction — so the closure must read after that write.
+        // The step advancer's exclusive lease ensures no concurrent process can modify
+        // the branch list between the write and this read.
         $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult): void {
             if ($hierarchicalResult !== null && $hierarchicalResult->branches !== []) {
                 $branches = $this->durableRuns->branchesFor($runId, $hierarchicalResult->waitingParentNodeId);

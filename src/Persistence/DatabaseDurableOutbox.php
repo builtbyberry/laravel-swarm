@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
+use BuiltByBerry\LaravelSwarm\Contracts\DrainResult;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
@@ -11,6 +12,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 use Throwable;
+use UnexpectedValueException;
 
 class DatabaseDurableOutbox implements DurableOutbox
 {
@@ -38,13 +40,18 @@ class DatabaseDurableOutbox implements DurableOutbox
     /**
      * @param  array<OutboxDispatchType>  $types
      */
-    public function drain(array $types = [], int $limit = 100): int
+    public function drain(array $types = [], int $limit = 100): DrainResult
     {
         $reservationTimeoutSeconds = (int) $this->config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
         $now = Carbon::now('UTC');
         $staleThreshold = $now->copy()->subSeconds($reservationTimeoutSeconds);
 
         $typeValues = array_map(static fn (OutboxDispatchType $t): string => $t->value, $types);
+
+        // Validate the stored queue connection against the application's known connections
+        // so a tampered or stale DB row cannot reroute jobs to an unexpected driver.
+        // Resolved once per drain() call rather than per-entry to avoid repeated config reads.
+        $knownConnections = array_keys((array) $this->config->get('queue.connections', []));
 
         // Phase 1: claim rows atomically inside a short transaction.
         // Dispatch happens outside (queue systems are not DB transaction participants —
@@ -84,53 +91,81 @@ class DatabaseDurableOutbox implements DurableOutbox
         });
 
         if ($entries->isEmpty()) {
-            return 0;
+            return new DrainResult(0, 0);
         }
 
-        // Phase 2: dispatch and delete each entry individually, outside any transaction.
-        // Per-entry try/catch ensures a single malformed or unroutable row cannot
-        // prevent the remaining batch from being dispatched (poison-pill isolation).
-        // Failed entries retain their reserved_at and become re-claimable after the
-        // reservation timeout expires.
+        // Phase 2: dispatch each entry individually, outside any transaction.
+        //
+        // Three outcomes per entry:
+        //   a) Success       — dispatched to queue, ID collected for batched delete, $dispatched++
+        //   b) Invalid entry — permanently corrupt (unknown type, malformed JSON); deleted
+        //                      immediately, reported to the error handler, $skipped++
+        //   c) Transient err — queue driver unavailable etc.; entry retains reserved_at and
+        //                      becomes re-claimable after the reservation timeout expires
+        //
+        // Collecting successful IDs and deleting in a single WHERE IN at the end is more
+        // efficient than N individual DELETEs, particularly when limit is large.
         $dispatched = 0;
+        $skipped = 0;
+        $dispatchedIds = [];
 
         foreach ($entries as $entry) {
             try {
-                $this->dispatchEntry($entry);
-                $this->table()->where('id', $entry->id)->delete();
+                $this->dispatchEntry($entry, $knownConnections);
+                $dispatchedIds[] = $entry->id;
                 $dispatched++;
+            } catch (UnexpectedValueException $e) {
+                // Permanently invalid entry — cannot succeed on retry. Delete it to
+                // prevent it from clogging the outbox indefinitely, and route it through
+                // the application error handler so it appears in Sentry / logs.
+                report($e);
+                $this->table()->where('id', $entry->id)->delete();
+                $skipped++;
             } catch (Throwable $e) {
+                // Transient failure: preserve reserved_at so the entry is re-claimable.
                 report($e);
             }
         }
 
-        return $dispatched;
+        if ($dispatchedIds !== []) {
+            $this->table()->whereIn('id', $dispatchedIds)->delete();
+        }
+
+        return new DrainResult($dispatched, $skipped);
     }
 
-    protected function dispatchEntry(object $entry): void
+    /**
+     * @param  list<string>  $knownConnections
+     *
+     * @throws UnexpectedValueException  For permanently invalid entries (unknown type, bad payload).
+     */
+    protected function dispatchEntry(object $entry, array $knownConnections): void
     {
         $type = OutboxDispatchType::tryFrom($entry->dispatch_type);
 
         if ($type === null) {
-            report(new \UnexpectedValueException("Unknown outbox dispatch_type [{$entry->dispatch_type}] for entry [{$entry->id}]; skipping."));
-
-            return;
+            throw new UnexpectedValueException(
+                "Unknown outbox dispatch_type [{$entry->dispatch_type}] for entry [{$entry->id}]."
+            );
         }
 
         $payload = is_string($entry->payload) ? json_decode($entry->payload, true) : (array) $entry->payload;
 
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            report(new \UnexpectedValueException("Invalid JSON payload for outbox entry [{$entry->id}] (type: {$entry->dispatch_type}); skipping."));
-
-            return;
+        if (json_last_error() !== JSON_ERROR_NONE || ! is_array($payload)) {
+            // json_last_error() catches decode errors; the is_array() guard catches valid-but-
+            // non-object JSON (e.g. the literal string "null") that would pass the error check
+            // but cannot be used as an associative payload array.
+            throw new UnexpectedValueException(
+                "Invalid JSON payload for outbox entry [{$entry->id}] (type: {$entry->dispatch_type})."
+            );
         }
 
-        // Validate the stored queue connection against the application's known connections
-        // so a tampered or stale DB row cannot reroute jobs to an unexpected driver.
-        $knownConnections = array_keys((array) $this->config->get('queue.connections', []));
         $connection = in_array($entry->queue_connection, $knownConnections, true)
             ? $entry->queue_connection
             : null;
+
+        // An empty queue_name string is treated as null (use the driver's default queue).
+        // Writers that have no queue preference store null or '' — the ?: operator normalises both.
         $queue = $entry->queue_name ?: null;
 
         match ($type) {

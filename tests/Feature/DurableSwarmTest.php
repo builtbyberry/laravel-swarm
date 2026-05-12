@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Contracts\DrainResult;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
@@ -151,9 +152,9 @@ function synchronousDurableOutbox(DurableJobDispatcher $jobs): DurableOutbox
             $this->jobs->dispatchQueuedResumeById($runId, $connection, $queue);
         }
 
-        public function drain(array $types = [], int $limit = 100): int
+        public function drain(array $types = [], int $limit = 100): DrainResult
         {
-            return 0;
+            return new DrainResult(0, 0);
         }
     };
 }

@@ -29,8 +29,12 @@ interface DurableOutbox
     /**
      * Claim and dispatch pending outbox entries, then delete them.
      *
+     * Returns a DrainResult describing how many entries were dispatched to a queue
+     * driver and how many were permanently invalid and deleted without dispatch.
+     * Transient dispatch failures are counted in neither — those entries retain their
+     * reserved_at and are re-claimable after the configured reservation timeout.
+     *
      * @param  array<OutboxDispatchType>  $types  Restrict to these types; empty means all.
-     * @return int  Number of entries successfully dispatched.
      */
-    public function drain(array $types = [], int $limit = 100): int;
+    public function drain(array $types = [], int $limit = 100): DrainResult;
 }

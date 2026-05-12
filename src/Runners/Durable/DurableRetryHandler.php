@@ -67,6 +67,10 @@ class DurableRetryHandler
                 }
             });
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
+            // The execution lease expired before or during the retry transaction.
+            // Another process (e.g. swarm:recover) must have taken ownership.
+            // Returning 'scheduled: true' prevents the caller from failing the run —
+            // recovery will redispatch it when it next polls.
             return ['scheduled' => true];
         }
 
@@ -108,6 +112,7 @@ class DurableRetryHandler
                 }
             });
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
+            // Same semantics as the run retry catch above — lease lost, recovery takes over.
             return ['scheduled' => true];
         }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DrainResult;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
@@ -46,9 +47,11 @@ test('drain dispatches pending step entries and deletes them', function (): void
 
     $outbox->enqueueStep($response->runId, 1, null, null);
 
-    $count = $outbox->drain([OutboxDispatchType::Step], 100);
+    $result = $outbox->drain([OutboxDispatchType::Step], 100);
 
-    expect($count)->toBe(1)
+    expect($result)->toBeInstanceOf(DrainResult::class)
+        ->and($result->dispatched)->toBe(1)
+        ->and($result->skipped)->toBe(0)
         ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(0);
 });
 
@@ -63,17 +66,19 @@ test('drain reclaims stale reservations after reservation timeout', function ():
         ->where('run_id', $response->runId)
         ->update(['reserved_at' => now()->subMinutes(5)]);
 
-    $count = $outbox->drain([OutboxDispatchType::Step], 100);
+    $result = $outbox->drain([OutboxDispatchType::Step], 100);
 
-    expect($count)->toBe(1)
+    expect($result->dispatched)->toBe(1)
+        ->and($result->skipped)->toBe(0)
         ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(0);
 });
 
-test('drain skips entries with invalid dispatch_type and continues with valid ones', function (): void {
+test('drain skips entries with invalid dispatch_type when type-filtered', function (): void {
+    // When a type filter is active the bad row is excluded from the SQL query entirely
+    // (not claimed, not dispatched, not deleted). This verifies the filter itself.
     $outbox = app(DurableOutbox::class);
     $response = FakeSequentialSwarm::make()->dispatchDurable('task');
 
-    // Insert a valid entry and a bad one
     $outbox->enqueueStep($response->runId, 1, null, null);
     DB::table('swarm_durable_outbox')->insert([
         'run_id' => $response->runId,
@@ -86,11 +91,64 @@ test('drain skips entries with invalid dispatch_type and continues with valid on
         'created_at' => now(),
     ]);
 
-    $count = $outbox->drain([OutboxDispatchType::Step], 100);
+    $result = $outbox->drain([OutboxDispatchType::Step], 100);
 
-    // Bad entry is skipped (error reported), good entry is dispatched and deleted
-    expect($count)->toBe(1)
+    // Valid step entry dispatched, bad entry excluded by filter (1 row remains)
+    expect($result->dispatched)->toBe(1)
+        ->and($result->skipped)->toBe(0)
         ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(1);
+});
+
+test('drain reports and deletes permanently invalid entries when draining without a type filter', function (): void {
+    // Without a type filter the bad row IS claimed. dispatchEntry() throws
+    // UnexpectedValueException, which the drain loop catches as a skipped entry:
+    // reported to the error handler, deleted from the outbox, and counted in $skipped.
+    $outbox = app(DurableOutbox::class);
+    $response = FakeSequentialSwarm::make()->dispatchDurable('task');
+
+    $outbox->enqueueStep($response->runId, 1, null, null);
+    DB::table('swarm_durable_outbox')->insert([
+        'run_id' => $response->runId,
+        'dispatch_type' => 'not_a_real_type',
+        'payload' => '{"step_index":2}',
+        'queue_connection' => null,
+        'queue_name' => null,
+        'available_at' => now(),
+        'reserved_at' => null,
+        'created_at' => now(),
+    ]);
+
+    $result = $outbox->drain([], 100);
+
+    // Valid entry dispatched, invalid entry skipped-and-deleted — outbox is now clean
+    expect($result->dispatched)->toBe(1)
+        ->and($result->skipped)->toBe(1)
+        ->and($result->total())->toBe(2)
+        ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(0);
+});
+
+test('drain treats a null-json payload as invalid and skips the entry', function (): void {
+    // json_decode('null', true) returns null (valid JSON), but the payload must be
+    // an associative array — the is_array() guard catches this case.
+    $outbox = app(DurableOutbox::class);
+    $response = FakeSequentialSwarm::make()->dispatchDurable('task');
+
+    DB::table('swarm_durable_outbox')->insert([
+        'run_id' => $response->runId,
+        'dispatch_type' => OutboxDispatchType::Step->value,
+        'payload' => 'null',  // valid JSON, but not an array
+        'queue_connection' => null,
+        'queue_name' => null,
+        'available_at' => now(),
+        'reserved_at' => null,
+        'created_at' => now(),
+    ]);
+
+    $result = $outbox->drain([], 100);
+
+    expect($result->dispatched)->toBe(0)
+        ->and($result->skipped)->toBe(1)
+        ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(0);
 });
 
 test('drain filters by dispatch_type when specified', function (): void {
@@ -101,9 +159,10 @@ test('drain filters by dispatch_type when specified', function (): void {
     $outbox->enqueueStep($response->runId, 2, null, null);
 
     // Only drain branch type — should dispatch 0 (none are branch type)
-    $count = $outbox->drain([OutboxDispatchType::Branch], 100);
+    $result = $outbox->drain([OutboxDispatchType::Branch], 100);
 
-    expect($count)->toBe(0)
+    expect($result->dispatched)->toBe(0)
+        ->and($result->skipped)->toBe(0)
         ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(2);
 });
 
@@ -115,9 +174,10 @@ test('drain respects the limit parameter', function (): void {
     $outbox->enqueueStep($response->runId, 2, null, null);
     $outbox->enqueueStep($response->runId, 3, null, null);
 
-    $count = $outbox->drain([], 2);
+    $result = $outbox->drain([], 2);
 
-    expect($count)->toBe(2)
+    expect($result->dispatched)->toBe(2)
+        ->and($result->skipped)->toBe(0)
         ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(1);
 });
 
@@ -145,6 +205,27 @@ test('swarm:relay dispatches pending outbox entries and exits success', function
 
     expect($exitCode)->toBe(0);
     expect(Artisan::output())->toContain('Dispatched');
+});
+
+test('swarm:relay warns and exits success when invalid entries are skipped', function (): void {
+    $response = FakeSequentialSwarm::make()->dispatchDurable('task');
+
+    DB::table('swarm_durable_outbox')->insert([
+        'run_id' => $response->runId,
+        'dispatch_type' => 'not_a_real_type',
+        'payload' => '{}',
+        'queue_connection' => null,
+        'queue_name' => null,
+        'available_at' => now(),
+        'reserved_at' => null,
+        'created_at' => now(),
+    ]);
+
+    $exitCode = Artisan::call('swarm:relay');
+
+    expect($exitCode)->toBe(0)
+        ->and(Artisan::output())->toContain('Skipped')
+        ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(0);
 });
 
 test('swarm:relay --type=step filters by step type', function (): void {
