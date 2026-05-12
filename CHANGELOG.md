@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.1 - 2026-05-12
+
+### Fixed
+
+- `swarm:relay` / `DatabaseDurableOutbox::reserve()` threw `BadMethodCallException: Call to undefined method Builder::skipLocked()` on Laravel 13 with Postgres or MySQL. `FOR UPDATE SKIP LOCKED` must be expressed as a string passed to `->lock()` — there is no chainable `skipLocked()` method on `Illuminate\Database\Query\Builder`. ([#3](https://github.com/builtbyberry/laravel-swarm/issues/3))
+
 ## v0.3.0 - 2026-05-12
 
 ### Added
