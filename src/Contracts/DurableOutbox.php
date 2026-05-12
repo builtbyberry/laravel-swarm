@@ -35,6 +35,7 @@ interface DurableOutbox
      * reserved_at and are re-claimable after the configured reservation timeout.
      *
      * @param  array<OutboxDispatchType>  $types  Restrict to these types; empty means all.
+     * @param  int  $limit  Maximum rows to claim per call. Values < 1 return an empty DrainResult immediately.
      */
     public function drain(array $types = [], int $limit = 100): DrainResult;
 }

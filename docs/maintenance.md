@@ -184,6 +184,22 @@ dispatch.
 For durable run waits, recovery releases timed-out waits back to pending so the
 next durable step can observe a timeout outcome.
 
+**Two intentional exceptions to the outbox guarantee:**
+
+- **Step 0 (`dispatchDurable()`)** — The very first job (advancing step 0) is
+  dispatched inline, not through the outbox. The run row doesn't exist yet at
+  dispatch time, so there is no FK target for an outbox row. If the worker
+  crashes between the run-creation transaction committing and the queue driver
+  accepting the job, `swarm:recover` picks up the stuck `pending` run and
+  redispatches it on the next poll.
+
+- **`swarm:recover` itself** — Recovery dispatches directly without writing to
+  the outbox. This is by design: recover is the repair tool for exactly the
+  crash window the outbox prevents, so it cannot use the outbox to dispatch
+  (that would be circular). Recovery has the same narrow crash window as
+  pre-outbox dispatch; if recover crashes mid-dispatch, the run remains
+  `pending` and the next `swarm:recover` invocation redispatches it.
+
 Prune-based retention is complementary to queue design, not a substitute for
 it. The built-in lightweight queue mode is a good fit for normal background
 jobs, but very long-running workflows may still outgrow the practical limits of

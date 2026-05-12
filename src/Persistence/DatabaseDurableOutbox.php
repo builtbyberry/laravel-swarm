@@ -42,6 +42,10 @@ class DatabaseDurableOutbox implements DurableOutbox
      */
     public function drain(array $types = [], int $limit = 100): DrainResult
     {
+        if ($limit < 1) {
+            return new DrainResult(0, 0);
+        }
+
         $reservationTimeoutSeconds = (int) $this->config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
         $now = Carbon::now('UTC');
         $staleThreshold = $now->copy()->subSeconds($reservationTimeoutSeconds);

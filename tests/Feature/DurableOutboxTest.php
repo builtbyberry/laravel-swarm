@@ -266,6 +266,25 @@ test('swarm:relay --limit is respected', function (): void {
     expect(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(1);
 });
 
+test('swarm:relay --drain-until-empty processes all entries across multiple passes', function (): void {
+    $outbox = app(DurableOutbox::class);
+    $response = FakeSequentialSwarm::make()->dispatchDurable('task');
+
+    // Drain the initial row, then insert more than one batch's worth
+    $outbox->drain([], 100);
+    $outbox->enqueueStep($response->runId, 1, null, null);
+    $outbox->enqueueStep($response->runId, 2, null, null);
+    $outbox->enqueueStep($response->runId, 3, null, null);
+    $outbox->enqueueStep($response->runId, 4, null, null);
+    $outbox->enqueueStep($response->runId, 5, null, null);
+
+    // limit=2 means three passes are required to drain all five entries
+    $exitCode = Artisan::call('swarm:relay', ['--limit' => 2, '--drain-until-empty' => true]);
+
+    expect($exitCode)->toBe(0)
+        ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(0);
+});
+
 // ---------------------------------------------------------------------------
 // Checkpoint atomicity: outbox row survives transaction commit
 // ---------------------------------------------------------------------------
