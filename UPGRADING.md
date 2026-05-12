@@ -138,7 +138,9 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
-## Unreleased: transactional outbox and `swarm:relay` scheduler entry
+## Upgrading to v0.3.0
+
+### Transactional outbox and `swarm:relay` scheduler entry
 
 Run `php artisan migrate` after updating the package. Two migrations are added:
 
@@ -180,7 +182,7 @@ instance. The `dispatched` count is entries successfully dispatched to a queue d
 
 Applications that only *inject* `DurableOutbox` need no changes.
 
-## Unreleased: `run_id` foreign-key constraints
+### `run_id` foreign-key constraints
 
 Run `php artisan migrate` after updating the package. Migration
 `2026_05_04_000001_add_run_id_foreign_keys_to_swarm_tables` adds
@@ -211,7 +213,7 @@ any table, run the same orphan checks against your renamed tables and add the
 equivalent FK constraints to your published copies. Without them, orphan rows
 can accumulate once the parent table is pruned.
 
-## Unreleased: durable runtime schema split
+### Durable runtime schema split
 
 Run `php artisan migrate` after updating the package. The migration creates
 `swarm_durable_node_states` and `swarm_durable_run_state`, migrates existing
@@ -224,7 +226,7 @@ If you override table names, publish `config/swarm.php` and set
 `SWARM_DURABLE_NODE_STATES_TABLE` / `SWARM_DURABLE_RUN_STATE_TABLE` when you rename
 the new tables.
 
-## Unreleased: `DurableSwarmManager` surface trim
+### `DurableSwarmManager` surface trim
 
 `DurableSwarmManager` no longer exposes `create()`, `dispatchStepJob()`, or
 `dispatchBranchJob()`. Run row creation happens through `DurableRunStore` during
