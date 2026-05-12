@@ -30,7 +30,7 @@ class DurableRecoveryCoordinator
     /**
      * @return array<int, string>
      */
-    public function recover(?string $runId = null, ?string $swarmClass = null, int $limit = 50, callable $dispatchStep, callable $dispatchBranch): array
+    public function recover(?string $runId, ?string $swarmClass, int $limit, callable $dispatchStep, callable $dispatchBranch): array
     {
         $runs = $this->durableRuns->recoverable(
             runId: $runId,

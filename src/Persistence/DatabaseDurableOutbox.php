@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
-use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
+use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Throwable;
 use UnexpectedValueException;
@@ -63,7 +64,7 @@ class DatabaseDurableOutbox implements DurableOutbox
         // a successful queue push).
         $entries = $this->connection->transaction(function () use ($now, $staleThreshold, $typeValues, $limit) {
             $query = $this->table()
-                ->where(function ($q) use ($now, $staleThreshold): void {
+                ->where(function ($q) use ($staleThreshold): void {
                     $q->whereNull('reserved_at')
                         ->orWhere('reserved_at', '<', $staleThreshold);
                 })
@@ -142,7 +143,7 @@ class DatabaseDurableOutbox implements DurableOutbox
     /**
      * @param  list<string>  $knownConnections
      *
-     * @throws UnexpectedValueException  For permanently invalid entries (unknown type, bad payload).
+     * @throws UnexpectedValueException For permanently invalid entries (unknown type, bad payload).
      */
     protected function dispatchEntry(object $entry, array $knownConnections): void
     {
@@ -220,7 +221,7 @@ class DatabaseDurableOutbox implements DurableOutbox
         ]);
     }
 
-    protected function table(): \Illuminate\Database\Query\Builder
+    protected function table(): Builder
     {
         return $this->connection->table(
             (string) $this->config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox'),

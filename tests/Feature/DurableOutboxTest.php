@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -345,7 +345,9 @@ test('outbox row rollback rolls back the checkpoint', function (): void {
             $nextStepBefore + 1,
             RunContext::fromTask('test'),
             60,
-            function (): void { throw new RuntimeException('simulated outbox failure'); },
+            function (): void {
+                throw new RuntimeException('simulated outbox failure');
+            },
         );
     } catch (Throwable) {
         $threw = true;

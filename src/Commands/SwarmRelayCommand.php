@@ -106,7 +106,7 @@ class SwarmRelayCommand extends Command
     }
 
     /**
-     * @return array<OutboxDispatchType>|false  false signals a validation failure
+     * @return array<OutboxDispatchType>|false false signals a validation failure
      */
     protected function resolveTypes(): array|false
     {

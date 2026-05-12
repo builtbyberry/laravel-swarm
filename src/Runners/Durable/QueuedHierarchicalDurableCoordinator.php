@@ -119,7 +119,7 @@ class QueuedHierarchicalDurableCoordinator
                 'queue_hierarchical_waiting_parallel' => true,
             ]);
 
-        $this->connection->transaction(function () use ($runId, $token, $context, $boundary, $branches, $runRow, $state): void {
+        $this->connection->transaction(function () use ($runId, $token, $context, $boundary, $branches, $state): void {
             $this->durableRuns->waitForBranches($runId, new BranchWaitPayload(
                 executionToken: $token,
                 nextStepIndex: $boundary->nextStepIndexAfterJoin,
@@ -169,5 +169,4 @@ class QueuedHierarchicalDurableCoordinator
             throw new SwarmException('Failed to encode coordination payload for durable insert.', previous: $exception);
         }
     }
-
 }

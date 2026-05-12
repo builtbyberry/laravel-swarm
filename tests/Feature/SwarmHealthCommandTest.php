@@ -17,6 +17,7 @@ use Illuminate\Cache\Repository;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class SwarmHealthRecordingCacheStore extends ArrayStore
 {
@@ -159,14 +160,14 @@ describe('outbox staleness check', function (): void {
         // Insert a row with reserved_at = null and created_at well past the
         // default 2 × 60 s = 120 s staleness threshold.
         DB::table('swarm_durable_outbox')->insert([
-            'run_id'           => (string) \Illuminate\Support\Str::uuid(),
-            'dispatch_type'    => 'step',
-            'payload'          => '{}',
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
             'queue_connection' => null,
-            'queue_name'       => null,
-            'available_at'     => now()->subMinutes(3),
-            'reserved_at'      => null,
-            'created_at'       => now()->subMinutes(3),
+            'queue_name' => null,
+            'available_at' => now()->subMinutes(3),
+            'reserved_at' => null,
+            'created_at' => now()->subMinutes(3),
         ]);
 
         $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
@@ -181,14 +182,14 @@ describe('outbox staleness check', function (): void {
         // orWhere('reserved_at', '<', $staleThreshold) condition introduced in
         // the F2 fix; the test would fail if that clause were reverted.
         DB::table('swarm_durable_outbox')->insert([
-            'run_id'           => (string) \Illuminate\Support\Str::uuid(),
-            'dispatch_type'    => 'step',
-            'payload'          => '{}',
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
             'queue_connection' => null,
-            'queue_name'       => null,
-            'available_at'     => now()->subMinutes(3),
-            'reserved_at'      => now()->subMinutes(3),
-            'created_at'       => now()->subMinutes(3),
+            'queue_name' => null,
+            'available_at' => now()->subMinutes(3),
+            'reserved_at' => now()->subMinutes(3),
+            'created_at' => now()->subMinutes(3),
         ]);
 
         $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
