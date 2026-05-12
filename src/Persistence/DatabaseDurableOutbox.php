@@ -82,7 +82,7 @@ class DatabaseDurableOutbox implements DurableOutbox
             // is not supported and would produce a no-op at best. Both clauses are skipped
             // on SQLite so tests run cleanly without any locking divergence.
             if ($this->connection->getDriverName() !== 'sqlite') {
-                $query->lockForUpdate()->skipLocked();
+                $query->lock('for update skip locked');
             }
 
             $entries = $query->get();
