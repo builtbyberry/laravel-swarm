@@ -1,0 +1,48 @@
+name: Feature Request
+description: Propose a new feature or improvement
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are welcome. Please check the [open issues](https://github.com/builtbyberry/laravel-swarm/issues) first to avoid duplicates.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what is currently painful or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to see? A rough API sketch or description is fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds you have tried or other approaches you considered.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Topologies (sequential / parallel / hierarchical)
+        - Execution modes (prompt / queue / stream / durable)
+        - Durable execution
+        - Guardrails
+        - Testing utilities
+        - Observability (telemetry / audit)
+        - Persistence and history
+        - Artisan commands
+        - Documentation
+        - Other
+    validations:
+      required: true

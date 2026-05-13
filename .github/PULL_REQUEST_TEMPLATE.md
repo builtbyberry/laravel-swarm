@@ -1,0 +1,17 @@
+## Summary
+
+<!-- What does this PR do and why? -->
+
+## Changes
+
+<!-- Brief bullet list of what changed. -->
+
+## Checklist
+
+- [ ] Tests added or updated
+- [ ] `composer test` passes locally
+- [ ] `composer analyse` passes locally
+- [ ] `composer lint` passes locally
+- [ ] CHANGELOG entry added under `## Unreleased` (skip for docs-only or chore PRs)
+- [ ] Public surface changes reflected in `docs/public-surface.md`
+- [ ] New public APIs have example coverage or documentation updated

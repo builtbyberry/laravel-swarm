@@ -1,0 +1,84 @@
+name: Bug Report
+description: Report a reproducible bug in Laravel Swarm
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening a bug report, please check the [open issues](https://github.com/builtbyberry/laravel-swarm/issues) and [CHANGELOG](../../CHANGELOG.md) to see if it has already been reported or fixed.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug and what you expected to happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps or code snippet that reproduces the issue.
+      placeholder: |
+        1. Create a swarm with...
+        2. Call `queue()` with...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: topology
+    attributes:
+      label: Topology
+      options:
+        - Sequential
+        - Parallel
+        - Hierarchical
+        - Not topology-specific
+    validations:
+      required: true
+
+  - type: dropdown
+    id: execution_mode
+    attributes:
+      label: Execution mode
+      options:
+        - prompt() / run()
+        - queue()
+        - stream()
+        - broadcast() / broadcastNow() / broadcastOnQueue()
+        - dispatchDurable()
+        - Not execution-mode-specific
+    validations:
+      required: true
+
+  - type: input
+    id: swarm_version
+    attributes:
+      label: Laravel Swarm version
+      placeholder: "e.g. 0.3.2"
+    validations:
+      required: true
+
+  - type: input
+    id: laravel_version
+    attributes:
+      label: Laravel version
+      placeholder: "e.g. 13.12.0"
+    validations:
+      required: true
+
+  - type: input
+    id: php_version
+    attributes:
+      label: PHP version
+      placeholder: "e.g. 8.5.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Stack traces, config snippets, or anything else that might help.
