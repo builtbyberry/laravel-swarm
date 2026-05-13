@@ -44,7 +44,7 @@ class DatabaseDurableOutbox implements DurableOutbox
     public function drain(array $types = [], int $limit = 100): DrainResult
     {
         if ($limit < 1) {
-            return new DrainResult(0, 0);
+            return new DrainResult(0, 0, 0, 0, 0);
         }
 
         $reservationTimeoutSeconds = (int) $this->config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
@@ -97,8 +97,11 @@ class DatabaseDurableOutbox implements DurableOutbox
         });
 
         if ($entries->isEmpty()) {
-            return new DrainResult(0, 0);
+            return new DrainResult(0, 0, 0, 0, 0);
         }
+
+        $claimed = $entries->count();
+        $reclaimed = $entries->filter(fn (object $e): bool => $e->reserved_at !== null)->count();
 
         // Phase 2: dispatch each entry individually, outside any transaction.
         //
@@ -141,7 +144,7 @@ class DatabaseDurableOutbox implements DurableOutbox
             $this->table()->whereIn('id', $dispatchedIds)->delete();
         }
 
-        return new DrainResult($dispatched, $skipped, $failed);
+        return new DrainResult($dispatched, $skipped, $failed, $claimed, $reclaimed);
     }
 
     /**

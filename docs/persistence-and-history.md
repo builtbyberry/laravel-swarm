@@ -388,6 +388,8 @@ messages, and failure event messages. They do not redact active route plans or
 developer-supplied metadata. Treat metadata as operational data only and do not
 put secrets, raw prompts, or provider payloads in it.
 
+To enforce a hard limit on metadata size, set `SWARM_MAX_METADATA_BYTES` (`swarm.limits.max_metadata_bytes`).
+
 ## Payload Limits
 
 Laravel Swarm can reject or truncate large payloads before they are written to

@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use Illuminate\Contracts\Config\Repository;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -194,6 +195,59 @@ test('drain returns empty result immediately when limit is zero or negative', fu
         ->and($result->skipped)->toBe(0)
         ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(1);
 })->with([0, -1, -100]);
+
+// ---------------------------------------------------------------------------
+// DrainResult::$claimed and $reclaimed counters
+// ---------------------------------------------------------------------------
+
+test('drain reports claimed and reclaimed counts when a stale reservation is re-claimed', function (): void {
+    $outbox = app(DurableOutbox::class);
+    $response = FakeSequentialSwarm::make()->dispatchDurable('task');
+
+    $outbox->enqueueStep($response->runId, 1, null, null);
+
+    // Simulate a previously-reserved row that was never completed (relay crashed mid-run)
+    DB::table('swarm_durable_outbox')
+        ->where('run_id', $response->runId)
+        ->update(['reserved_at' => now()->subMinutes(5)]);
+
+    $result = $outbox->drain([OutboxDispatchType::Step], 100);
+
+    expect($result->claimed)->toBe(1)
+        ->and($result->reclaimed)->toBe(1);
+});
+
+test('drain reports claimed count and zero reclaimed for fresh unclaimed rows', function (): void {
+    $outbox = app(DurableOutbox::class);
+    $response = FakeSequentialSwarm::make()->dispatchDurable('task');
+
+    // Drain the initial dispatchDurable row first
+    $outbox->drain([], 100);
+
+    $outbox->enqueueStep($response->runId, 1, null, null);
+    $outbox->enqueueStep($response->runId, 2, null, null);
+    $outbox->enqueueStep($response->runId, 3, null, null);
+
+    $result = $outbox->drain([OutboxDispatchType::Step], 100);
+
+    expect($result->claimed)->toBe(3)
+        ->and($result->reclaimed)->toBe(0);
+});
+
+test('drain reports all-zero counts when outbox is empty', function (): void {
+    $outbox = app(DurableOutbox::class);
+
+    // Make sure the outbox is empty (drain any initial rows)
+    $outbox->drain([], 100);
+
+    $result = $outbox->drain([], 100);
+
+    expect($result->dispatched)->toBe(0)
+        ->and($result->skipped)->toBe(0)
+        ->and($result->failed)->toBe(0)
+        ->and($result->claimed)->toBe(0)
+        ->and($result->reclaimed)->toBe(0);
+});
 
 // ---------------------------------------------------------------------------
 // swarm:relay Artisan command
@@ -408,7 +462,8 @@ test('swarm:health --durable reports ok when outbox is healthy', function (): vo
  */
 function outboxBindThrowingDispatcher(Throwable $exception): void
 {
-    $throwing = new class($exception) extends DurableJobDispatcher {
+    $throwing = new class($exception) extends DurableJobDispatcher
+    {
         public function __construct(private readonly Throwable $error) {}
 
         public function dispatchStep(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
@@ -490,7 +545,8 @@ test('drain counts mixed outcomes correctly across dispatched, skipped, and fail
     app(DurableOutbox::class)->enqueueStep($response->runId, 1, null, null);
     app(DurableOutbox::class)->enqueueStep($response->runId, 2, null, null);
 
-    $partialDispatcher = new class(app(Illuminate\Contracts\Config\Repository::class)) extends DurableJobDispatcher {
+    $partialDispatcher = new class(app(Repository::class)) extends DurableJobDispatcher
+    {
         public int $calls = 0;
 
         public function dispatchStep(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
@@ -502,7 +558,7 @@ test('drain counts mixed outcomes correctly across dispatched, skipped, and fail
             }
 
             // Return a no-op PendingDispatch so the first call "succeeds"
-            $job = new \BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm($runId, $stepIndex);
+            $job = new AdvanceDurableSwarm($runId, $stepIndex);
 
             return new PendingDispatch($job);
         }
@@ -681,7 +737,8 @@ function outboxBindStubOutbox(DrainResult ...$results): void
 {
     $remaining = $results;
 
-    $stub = new class($remaining) implements DurableOutbox {
+    $stub = new class($remaining) implements DurableOutbox
+    {
         /** @param array<DrainResult> $results */
         public function __construct(private array $results) {}
 

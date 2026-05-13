@@ -235,6 +235,53 @@ class S3AuditSink implements SwarmAuditSink
 }
 ```
 
+## Metadata Governance
+
+Run metadata is developer-supplied and is not validated or sanitized by the package. By default, metadata values are excluded from audit and telemetry payloads — only key names are included. Use the controls below to decide exactly what reaches your sinks.
+
+### Allowlist approach
+
+Set a comma-separated list of allowed metadata key names. Only keys in the list will have their values included in the `metadata` field of sink payloads:
+
+```env
+SWARM_AUDIT_METADATA_ALLOWLIST=customer_id,workflow_type
+SWARM_OBSERVABILITY_METADATA_ALLOWLIST=customer_id,workflow_type
+```
+
+The `metadata_keys` field (the array of all original key names) is always emitted regardless of the allowlist, so you know which keys were present without receiving any values. An empty allowlist (the default) means the `metadata` field in sink payloads is always an empty array.
+
+### Custom sink redaction
+
+For cases where dropping values is not enough — for example hashing a value rather than omitting it — implement a custom `SwarmAuditSink`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+
+class RedactingAuditSink implements SwarmAuditSink
+{
+    public function emit(string $category, array $payload): void
+    {
+        if (isset($payload['metadata']['account_number'])) {
+            $payload['metadata']['account_number'] = hash('sha256', $payload['metadata']['account_number']);
+        }
+
+        // forward $payload to your store
+    }
+}
+```
+
+Bind it in a service provider:
+
+```php
+$this->app->bind(SwarmAuditSink::class, RedactingAuditSink::class);
+```
+
+The same pattern applies to `SwarmTelemetrySink` via `SWARM_OBSERVABILITY_METADATA_ALLOWLIST`.
+
+### Scope
+
+These controls apply to **sink and telemetry payloads only**. They do not affect what is stored in `RunContext` at runtime or persisted to the database when `capture.active_context` is enabled. For storage-level protection, rely on the conservative capture defaults (all capture off by default) and `SWARM_ENCRYPT_AT_REST=true`.
+
 ## Production Checklist for Regulated Environments
 
 - [ ] Bind a custom `SwarmAuditSink` implementation in a service provider.

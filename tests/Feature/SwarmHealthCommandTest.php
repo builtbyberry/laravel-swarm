@@ -132,7 +132,7 @@ test('swarm health identifies failing cache component', function (): void {
 });
 
 // ---------------------------------------------------------------------------
-// swarm:health --durable outbox staleness checks
+// swarm:health --durable outbox staleness checks (Plan 1 — graduated states)
 // ---------------------------------------------------------------------------
 
 describe('outbox staleness check', function (): void {
@@ -154,6 +154,34 @@ describe('outbox staleness check', function (): void {
 
         expect($exitCode)->toBe(1);
         expect(Artisan::output())->toContain('does not exist');
+    });
+
+    test('empty outbox returns ok with "no pending rows"', function (): void {
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())->toContain('no pending rows');
+    });
+
+    test('young unclaimed rows return ok with relay-active message', function (): void {
+        // Row created just 5 seconds ago — well within the 120 s default threshold.
+        DB::table('swarm_durable_outbox')->insert([
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
+            'queue_connection' => null,
+            'queue_name' => null,
+            'available_at' => now()->subSeconds(5),
+            'reserved_at' => null,
+            'created_at' => now()->subSeconds(5),
+        ]);
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('pending row(s), relay appears active')
+            ->not->toContain('warning');
     });
 
     test('stale unclaimed rows produce a warning status', function (): void {
@@ -198,11 +226,109 @@ describe('outbox staleness check', function (): void {
         expect(Artisan::output())->toContain('warning');
     });
 
-    test('clean outbox returns ok status', function (): void {
-        // No rows — outbox is empty, health check should be clean.
+    test('custom stale_warning_threshold_seconds overrides the default 2x formula', function (): void {
+        // Set a very short threshold (10 s) so a 30 s old row triggers a warning.
+        config()->set('swarm.durable.relay.stale_warning_threshold_seconds', 10);
+
+        DB::table('swarm_durable_outbox')->insert([
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
+            'queue_connection' => null,
+            'queue_name' => null,
+            'available_at' => now()->subSeconds(30),
+            'reserved_at' => null,
+            'created_at' => now()->subSeconds(30),
+        ]);
+
         $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
 
         expect($exitCode)->toBe(0);
-        expect(Artisan::output())->not->toContain('failed');
+        expect(Artisan::output())->toContain('warning')->toContain('10s');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 2 — Relay scheduling note
+// ---------------------------------------------------------------------------
+
+describe('relay scheduling note', function (): void {
+    test('--durable output includes a Relay scheduling row with status note', function (): void {
+        Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect(Artisan::output())
+            ->toContain('Relay scheduling')
+            ->toContain('note');
+    });
+
+    test('exit code is 0 when only the note row is present alongside clean checks', function (): void {
+        // Outbox is empty; all stores are healthy — only note rows, no failures.
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 4 — Queue-routing mismatch detection
+// ---------------------------------------------------------------------------
+
+describe('queue routing check', function (): void {
+    beforeEach(function (): void {
+        config()->set('swarm.persistence.driver', 'database');
+        DB::statement('PRAGMA foreign_keys = OFF');
+    });
+
+    afterEach(function (): void {
+        DB::statement('PRAGMA foreign_keys = ON');
+    });
+
+    test('missing outbox table returns failed status for queue routing', function (): void {
+        config()->set('swarm.tables.durable_outbox', 'nonexistent_outbox_xyz');
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(1);
+        // Both the staleness check and routing check report failed for a missing table.
+        expect(Artisan::output())->toContain('does not exist');
+    });
+
+    test('outbox rows with known queue_connection return ok', function (): void {
+        // Use the sync connection which is always present in Laravel's default config.
+        DB::table('swarm_durable_outbox')->insert([
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
+            'queue_connection' => 'sync',
+            'queue_name' => null,
+            'available_at' => now()->subSeconds(5),
+            'reserved_at' => null,
+            'created_at' => now()->subSeconds(5),
+        ]);
+
+        Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect(Artisan::output())->toContain('all connections known');
+    });
+
+    test('outbox rows with unknown queue_connection return warning', function (): void {
+        DB::table('swarm_durable_outbox')->insert([
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
+            'queue_connection' => 'nonexistent_queue_driver_xyz',
+            'queue_name' => null,
+            'available_at' => now()->subSeconds(5),
+            'reserved_at' => null,
+            'created_at' => now()->subSeconds(5),
+        ]);
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('Outbox queue routing')
+            ->toContain('warning')
+            ->toContain('unknown queue_connection');
     });
 });

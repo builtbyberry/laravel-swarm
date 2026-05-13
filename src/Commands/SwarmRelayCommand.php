@@ -7,7 +7,6 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
-use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -84,6 +83,8 @@ class SwarmRelayCommand extends Command
         $totalDispatched = 0;
         $totalSkipped = 0;
         $totalFailed = 0;
+        $totalClaimed = 0;
+        $totalReclaimed = 0;
         $attempts = 0;
         $result = null;
 
@@ -94,6 +95,8 @@ class SwarmRelayCommand extends Command
                 $totalDispatched += $result->dispatched;
                 $totalSkipped += $result->skipped;
                 $totalFailed += $result->failed;
+                $totalClaimed += $result->claimed;
+                $totalReclaimed += $result->reclaimed;
 
                 $madeProgress = $result->total() > 0;
                 // Only retry transient failures when --max-attempts gives a finite budget.
@@ -113,6 +116,8 @@ class SwarmRelayCommand extends Command
                 'dispatched_count' => $totalDispatched,
                 'skipped_count' => $totalSkipped,
                 'failed_count' => $totalFailed,
+                'claimed_count' => $totalClaimed,
+                'reclaimed_count' => $totalReclaimed,
                 'status' => 'error',
             ]);
 
@@ -131,6 +136,8 @@ class SwarmRelayCommand extends Command
             'dispatched_count' => $totalDispatched,
             'skipped_count' => $totalSkipped,
             'failed_count' => $totalFailed,
+            'claimed_count' => $totalClaimed,
+            'reclaimed_count' => $totalReclaimed,
             'status' => $this->auditStatus($totalDispatched, $totalSkipped, $hasUnresolvedTransient),
         ]);
 

@@ -126,6 +126,13 @@ return [
     'limits' => [
         'max_input_bytes' => env('SWARM_MAX_INPUT_BYTES'),
         'max_output_bytes' => env('SWARM_MAX_OUTPUT_BYTES'),
+        /*
+         * Maximum size of the run metadata array when JSON-encoded, in bytes.
+         * null = uncapped (default). Enforced at run start across all execution modes.
+         * The truncate overflow strategy does not apply to metadata (structured array);
+         * only fail is supported when a limit is set.
+         */
+        'max_metadata_bytes' => env('SWARM_MAX_METADATA_BYTES'),
         'overflow' => env('SWARM_LIMIT_OVERFLOW', 'fail'),
     ],
 
@@ -253,6 +260,12 @@ return [
              * The --limit option on swarm:relay overrides this, capped at 10,000.
              */
             'limit' => (int) env('SWARM_DURABLE_RELAY_LIMIT', 100),
+
+            /*
+             * How old an unclaimed outbox row must be before swarm:health --durable reports a
+             * warning. Set to 0 to use 2 × reservation_timeout_seconds (the default).
+             */
+            'stale_warning_threshold_seconds' => (int) env('SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS', 0),
         ],
         'webhooks' => [
             'enabled' => env('SWARM_WEBHOOKS_ENABLED', false),

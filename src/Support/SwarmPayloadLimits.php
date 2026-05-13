@@ -31,6 +31,20 @@ class SwarmPayloadLimits
         $this->ensureWithinLimit($payload, 'input', $this->configuredBytes('max_input_bytes'));
     }
 
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
+    public function checkMetadata(array $metadata): void
+    {
+        try {
+            $payload = json_encode($metadata, JSON_THROW_ON_ERROR);
+        } catch (JsonException $e) {
+            throw new SwarmException('Swarm metadata must be plain data that can be encoded as JSON.', previous: $e);
+        }
+
+        $this->ensureWithinLimit($payload, 'metadata', $this->configuredBytes('max_metadata_bytes'));
+    }
+
     public function output(string $output): PayloadLimitResult
     {
         return $this->check($output, 'output', $this->configuredBytes('max_output_bytes'));

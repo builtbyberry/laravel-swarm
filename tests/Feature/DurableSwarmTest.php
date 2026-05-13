@@ -613,6 +613,36 @@ test('dispatch durable rejects invalid step timeout before writing state', funct
         ->and(DB::table('swarm_durable_runs')->count())->toBe(0);
 })->with([0, -1]);
 
+test('dispatch durable rejects oversized metadata before writing state', function () {
+    config()->set('swarm.limits.max_metadata_bytes', 5);
+
+    $context = RunContext::from([
+        'input' => 'task',
+        'metadata' => ['tenant_id' => 'acme'],
+    ], 'oversized-metadata-durable-run-id');
+
+    expect(fn () => FakeSequentialSwarm::make()->dispatchDurable($context))
+        ->toThrow(SwarmException::class, 'Swarm metadata payload is');
+
+    expect(DB::table('swarm_run_histories')->count())->toBe(0)
+        ->and(DB::table('swarm_contexts')->count())->toBe(0)
+        ->and(DB::table('swarm_durable_runs')->count())->toBe(0);
+});
+
+test('dispatch durable allows large metadata when max_metadata_bytes is null', function () {
+    config()->set('swarm.limits.max_metadata_bytes', null);
+
+    $context = RunContext::from([
+        'input' => 'durable-task',
+        'metadata' => ['data' => str_repeat('x', 10000)],
+    ], 'metadata-no-limit-durable-run-id');
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable($context);
+
+    expect($response->runId)->toBe('metadata-no-limit-durable-run-id');
+    expect(DB::table('swarm_durable_runs')->count())->toBe(1);
+});
+
 test('durable sequential swarms complete one step per job', function () {
     $response = FakeSequentialSwarm::make()->dispatchDurable('durable-task');
     $runId = $response->runId;

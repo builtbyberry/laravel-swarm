@@ -39,6 +39,7 @@ class DurableSwarmStarter
     public function start(Swarm $swarm, RunContext $context, Topology $topology, int $timeoutSeconds, int $totalSteps, DurableParallelFailurePolicy $parallelFailurePolicy = DurableParallelFailurePolicy::CollectFailures): DurableSwarmStart
     {
         $this->limits->checkInput($context->input);
+        $this->limits->checkMetadata($context->metadata);
 
         return $this->connection->transaction(function () use ($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $parallelFailurePolicy): DurableSwarmStart {
             $contextTtl = $this->runs->ttlSeconds();

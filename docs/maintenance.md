@@ -206,6 +206,44 @@ jobs, but very long-running workflows may still outgrow the practical limits of
 a single queued job. For those workflows, use `dispatchDurable()` instead of
 stretching `queue()` beyond what one job should own.
 
+### Recommended queue topology
+
+Three opinionated patterns from simplest to most isolated. Choose the one that matches your deployment.
+
+**Minimal** — single queue, suitable for development or non-durable use:
+
+```bash
+php artisan queue:work --queue=default
+```
+
+When to use: no durable execution, or a short-lived pilot where worker isolation is not yet needed.
+
+**Durable sequential** — dedicated queue and worker pool for durable work:
+
+```bash
+# Application workers
+php artisan queue:work --queue=default --timeout=60
+
+# Durable workers — timeout must exceed swarm.durable.step_timeout + swarm.durable.job.timeout_margin_seconds
+php artisan queue:work --queue=swarm-durable --timeout=120 --tries=3
+```
+
+Set `SWARM_DURABLE_QUEUE=swarm-durable`. The queue connection `retry_after` must exceed the worker `--timeout`; set it in `config/queue.php` for the connection your durable queue uses.
+
+When to use: any production durable workflow. Keeps durable step jobs off the application queue so a slow AI step does not delay unrelated background work.
+
+**Durable with parallel branches** — adds a third pool for branch jobs:
+
+```bash
+php artisan queue:work --queue=default --timeout=60
+php artisan queue:work --queue=swarm-durable --timeout=120 --tries=3
+php artisan queue:work --queue=swarm-branches --timeout=120 --tries=3
+```
+
+Set `SWARM_DURABLE_PARALLEL_QUEUE=swarm-branches`. Without this separation, branch jobs queue behind sequential step jobs on the same connection. On a saturated step queue, branches can never start — a deadlock that silently stalls the entire parallel group.
+
+When to use: parallel or hierarchical durable swarms in production.
+
 ## High-volume dashboards
 
 Swarm database tables are sized for operational throughput. List and aggregation

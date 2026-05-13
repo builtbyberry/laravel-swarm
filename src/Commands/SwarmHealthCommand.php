@@ -42,7 +42,15 @@ class SwarmHealthCommand extends Command
         );
 
         if ($this->option('durable') === true) {
+            $results[] = [
+                'component' => 'Relay scheduling',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'note',
+                'details' => "swarm:relay must run every minute for durable execution to advance — Schedule::command('swarm:relay')->everyMinute()",
+            ];
             $results[] = $this->runOutboxStalenessCheck($config, $connection);
+            $results[] = $this->runQueueRoutingCheck($config, $connection);
         }
 
         if ($this->option('json') === true) {
@@ -75,11 +83,18 @@ class SwarmHealthCommand extends Command
     {
         $outboxTable = (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox');
         $reservationTimeoutSeconds = (int) $config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
+
         // 2× the reservation timeout: gives the relay at least one full reclaim cycle
         // before alerting. A single missed relay run reclaims stale reservations on the
         // next run; two missed cycles indicates the relay is not running at all.
-        $stalenessThresholdSeconds = $reservationTimeoutSeconds * 2;
-        $staleThreshold = now()->subSeconds($stalenessThresholdSeconds);
+        $staleThreshold = now()->subSeconds($reservationTimeoutSeconds * 2);
+
+        // Resolve the warning threshold; 0 means "use 2× reservation_timeout_seconds".
+        $warningThresholdSeconds = (int) $config->get('swarm.durable.relay.stale_warning_threshold_seconds', 0);
+        if ($warningThresholdSeconds <= 0) {
+            $warningThresholdSeconds = $reservationTimeoutSeconds * 2;
+        }
+        $warningThreshold = now()->subSeconds($warningThresholdSeconds);
 
         try {
             if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
@@ -92,21 +107,34 @@ class SwarmHealthCommand extends Command
                 ];
             }
 
-            $staleCount = $connection->table($outboxTable)
-                ->where(function ($q) use ($staleThreshold): void {
-                    $q->whereNull('reserved_at')
-                        ->orWhere('reserved_at', '<', $staleThreshold);
-                })
-                ->where('created_at', '<', $staleThreshold)
+            // Total pending: unclaimed or with an expired reservation.
+            $totalPending = $connection->table($outboxTable)
+                ->where(fn ($q) => $q->whereNull('reserved_at')->orWhere('reserved_at', '<', $staleThreshold))
                 ->count();
 
-            if ($staleCount > 0) {
+            if ($totalPending === 0) {
+                return [
+                    'component' => 'Outbox relay',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'ok',
+                    'details' => 'no pending rows',
+                ];
+            }
+
+            // Aging: pending AND older than the warning threshold.
+            $agingCount = $connection->table($outboxTable)
+                ->where('created_at', '<', $warningThreshold)
+                ->where(fn ($q) => $q->whereNull('reserved_at')->orWhere('reserved_at', '<', $staleThreshold))
+                ->count();
+
+            if ($agingCount > 0) {
                 return [
                     'component' => 'Outbox relay',
                     'driver' => 'database',
                     'store' => 'n/a',
                     'status' => 'warning',
-                    'details' => "{$staleCount} unclaimed outbox row(s) older than {$stalenessThresholdSeconds}s — is swarm:relay scheduled?",
+                    'details' => "{$agingCount} row(s) aging past {$warningThresholdSeconds}s — is swarm:relay scheduled?",
                 ];
             }
 
@@ -115,11 +143,63 @@ class SwarmHealthCommand extends Command
                 'driver' => 'database',
                 'store' => 'n/a',
                 'status' => 'ok',
-                'details' => 'no stale rows',
+                'details' => "{$totalPending} pending row(s), relay appears active",
             ];
         } catch (Throwable $exception) {
             return [
                 'component' => 'Outbox relay',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runQueueRoutingCheck(ConfigRepository $config, Connection $connection): array
+    {
+        $outboxTable = (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox');
+        $knownConnections = array_keys((array) $config->get('queue.connections', []));
+
+        try {
+            if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
+                return [
+                    'component' => 'Outbox queue routing',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'failed',
+                    'details' => "Outbox table [{$outboxTable}] does not exist. Run migrations.",
+                ];
+            }
+
+            $unknownCount = $connection->table($outboxTable)
+                ->whereNotNull('queue_connection')
+                ->whereNotIn('queue_connection', $knownConnections)
+                ->count();
+
+            if ($unknownCount > 0) {
+                return [
+                    'component' => 'Outbox queue routing',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'warning',
+                    'details' => "{$unknownCount} row(s) reference an unknown queue_connection — these will be permanently skipped at drain. Verify queue.connections matches what was stored when runs were dispatched.",
+                ];
+            }
+
+            return [
+                'component' => 'Outbox queue routing',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'ok',
+                'details' => 'all connections known',
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Outbox queue routing',
                 'driver' => 'database',
                 'store' => 'n/a',
                 'status' => 'failed',

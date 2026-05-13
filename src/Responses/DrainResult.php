@@ -15,6 +15,10 @@ namespace BuiltByBerry\LaravelSwarm\Responses;
  *               unavailable, network blip, etc.). These are NOT deleted — they retain their
  *               reserved_at timestamp and become re-claimable after the configured reservation
  *               timeout. Each is reported via report() so the outage appears in the error tracker.
+ * - claimed:    total rows atomically reserved in phase 1 of this drain call.
+ * - reclaimed:  subset of claimed rows whose reserved_at was already set (non-null) before being
+ *               overwritten — indicates the relay previously claimed but did not complete these
+ *               entries (e.g. the relay process was killed or timed out mid-run).
  *
  * total() returns dispatched + skipped (entries removed from the outbox). It does not include
  * failed, because failed entries remain in the outbox and are not "done".
@@ -25,6 +29,8 @@ final class DrainResult
         public readonly int $dispatched,
         public readonly int $skipped,
         public readonly int $failed = 0,
+        public readonly int $claimed = 0,
+        public readonly int $reclaimed = 0,
     ) {}
 
     /**

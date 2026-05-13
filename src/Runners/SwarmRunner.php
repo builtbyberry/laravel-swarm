@@ -482,11 +482,13 @@ class SwarmRunner
     {
         if ($task instanceof RunContext || in_array($executionMode, [ExecutionMode::Queue, ExecutionMode::Durable], true)) {
             $this->limits->checkContextInput($context);
+            $this->limits->checkMetadata($context->metadata);
 
             return;
         }
 
         $this->limits->checkInput($context->input);
+        $this->limits->checkMetadata($context->metadata);
     }
 
     protected function ensureActiveContextCompatible(ExecutionMode $executionMode): void

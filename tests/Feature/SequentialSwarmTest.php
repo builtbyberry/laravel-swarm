@@ -228,6 +228,29 @@ test('input payload limits fail even when overflow truncation is enabled', funct
     FakeResearcher::assertNeverPrompted();
 });
 
+test('metadata payload limits fail before agent execution', function () {
+    config()->set('swarm.limits.max_metadata_bytes', 5);
+
+    $context = RunContext::from(['input' => 'task', 'metadata' => ['tenant_id' => 'acme']], 'metadata-limit-run-id');
+
+    expect(fn () => FakeSequentialSwarm::make()->run($context))
+        ->toThrow(SwarmException::class, 'Swarm metadata payload is');
+
+    FakeResearcher::assertNeverPrompted();
+});
+
+test('metadata payload limits are not applied when max_metadata_bytes is null', function () {
+    config()->set('swarm.limits.max_metadata_bytes', null);
+
+    $largeMetadata = ['data' => str_repeat('x', 10000)];
+    $context = RunContext::from(['input' => 'task', 'metadata' => $largeMetadata], 'metadata-no-limit-run-id');
+
+    $response = FakeSequentialSwarm::make()->run($context);
+
+    expect($response->output)->toBe('editor-out');
+    FakeResearcher::assertPrompted('task');
+});
+
 test('output payload limits fail before output persistence', function () {
     config()->set('swarm.limits.max_output_bytes', 5);
 
