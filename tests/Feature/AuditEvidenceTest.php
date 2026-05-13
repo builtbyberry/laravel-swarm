@@ -130,6 +130,8 @@ test('sequential run emits run.started, step and run.completed evidence', functi
 
 test('run.started evidence has schema_version and occurred_at', function (): void {
     FakeResearcher::fake(['out']);
+    FakeWriter::fake(['out']);
+    FakeEditor::fake(['out']);
 
     $sink = bindRecordingSink();
     FakeSequentialSwarm::make()->run('task');
@@ -202,6 +204,8 @@ test('failed stream emits run.failed evidence', function (): void {
 
 test('step evidence carries run_id and swarm_class', function (): void {
     FakeResearcher::fake(['step-out']);
+    FakeWriter::fake(['step-out']);
+    FakeEditor::fake(['step-out']);
 
     $sink = bindRecordingSink();
     FakeSequentialSwarm::make()->run('task');
