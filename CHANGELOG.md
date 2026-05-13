@@ -4,6 +4,10 @@
 
 ## v0.3.2 - 2026-05-13
 
+### Changed
+
+- Test suite verified against `laravel/ai` v0.6.8. Two test fixtures were relying on an implicit per-class agent fake fallback removed in v0.6.8; they now explicitly fake all agents in the swarm.
+
 ### Added
 
 - `swarm:relay --max-attempts=N`: limits the number of drain iterations when used with `--drain-until-empty`. Without this flag the loop continues only while there is real progress; with it, the loop also retries through batches of pure transient failures up to N times total, making it suitable for clearing backlogs during a recovering queue outage. Iterations run consecutively with no sleep — size N accordingly.
