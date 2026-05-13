@@ -58,3 +58,9 @@ Use Laravel AI's agent middleware for **single-agent** concerns. Swarm guardrail
 ## Queue lease schema errors
 
 When the configured history table is missing `execution_token` and `leased_until`, database-backed queued execution raises `MissingQueueLeaseSchemaException` (a configuration error). This is separate from `LostSwarmLeaseException`, which can represent runtime lease loss on some paths.
+
+## Example
+
+See [Guardrails Policy](../examples/guardrails-policy/README.md) for a copy-paste
+walkthrough of all three guardrail phases, `DefinesGuardrails`, global config
+registration, and unit-testing patterns.

@@ -7,6 +7,8 @@ Laravel Swarm includes two complementary testing styles:
 
 Most tests should start with fakes.
 
+**Guardrails and fakes:** `SwarmFake` records dispatch intent and bypasses the runner entirely. Guardrails do not fire when a swarm is faked. Test guardrail classes directly as plain PHP units using `RunContext::from()` and `GuardrailStepContext`; see [Guardrails Policy](../examples/guardrails-policy/README.md) for examples.
+
 ## Faking A Swarm
 
 Use `fake()` to intercept execution:

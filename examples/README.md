@@ -58,6 +58,8 @@ Read the examples in this order:
    events, broadcast app-owned updates, and pair them with Pulse metrics.
 16. [Privacy Capture](privacy-capture/README.md): configure capture flags for
    sensitive prompts and outputs.
+17. [Guardrails Policy](guardrails-policy/README.md): enforce input, step, and
+   output policy guardrails on a swarm.
 
 ## Topology Decision Table
 
@@ -96,6 +98,8 @@ Read the examples in this order:
 | `SwarmWebhooks::routes()` | [Durable Webhook Ingress](durable-webhook-ingress/README.md) |
 | Persistence and history | [Run Inspector](run-inspector/README.md) and [Persistence And History](../docs/persistence-and-history.md) |
 | Artifacts and structured context | [Structured Input](../docs/structured-input.md) |
+| Guardrails (input, step, output) | [Guardrails Policy](guardrails-policy/README.md) |
+| `DefinesGuardrails`, `GuardrailViolation` | [Guardrails Policy](guardrails-policy/README.md) |
 | Capture and privacy | [Privacy Capture](privacy-capture/README.md) |
 | Pulse metrics | [Operations Dashboard](operations-dashboard/README.md) and [Pulse](../docs/pulse.md) |
 | Testing | [Testing Swarms](testing-swarms/README.md) |

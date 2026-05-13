@@ -98,6 +98,10 @@ adding a new public API.
 | `RunHistoryStore` | Store run and step history. | [Persistence And History](persistence-and-history.md) |
 | `StreamEventStore` | Store replayable stream events. | [Streaming](streaming.md), [Persistence And History](persistence-and-history.md#replaying-stream-events) |
 | `DurableRunStore` | Durable runtime persistence. | [Durable Runtime Architecture](durable-runtime-architecture.md), [Durable Execution](durable-execution.md) |
+| `SwarmInputGuardrail` | Validate task input before any agent runs. | [Guardrails](guardrails.md), [Guardrails Policy](../examples/guardrails-policy/README.md) |
+| `SwarmStepGuardrail` | Validate each agent output before the step is recorded. | [Guardrails](guardrails.md), [Guardrails Policy](../examples/guardrails-policy/README.md) |
+| `SwarmOutputGuardrail` | Validate final output before completion is persisted. | [Guardrails](guardrails.md), [Guardrails Policy](../examples/guardrails-policy/README.md) |
+| `DefinesGuardrails` | Declare per-swarm guardrails resolved from the container. | [Guardrails](guardrails.md), [Guardrails Policy](../examples/guardrails-policy/README.md) |
 | `SwarmTelemetrySink` | Export operational telemetry payloads. | [Observability Correlation Contract](observability-correlation-contract.md) |
 | `SwarmAuditSink` | Export append-only audit evidence payloads. | [Audit Evidence Contract](audit-evidence-contract.md) |
 | `SwarmWebhooks::routes()` | Register authenticated durable webhook ingress. | [Durable Webhooks](durable-webhooks.md) |
