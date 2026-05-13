@@ -2,9 +2,20 @@
 
 ## Unreleased
 
+## v0.3.2 - 2026-05-13
+
 ### Added
 
 - `swarm:relay --max-attempts=N`: limits the number of drain iterations when used with `--drain-until-empty`. Without this flag the loop continues only while there is real progress; with it, the loop also retries through batches of pure transient failures up to N times total, making it suitable for clearing backlogs during a recovering queue outage. Iterations run consecutively with no sleep — size N accordingly.
+- `swarm:health --durable` outbox staleness check now reports three states: "no pending rows" (ok), "N pending rows, relay appears active" (ok), and "N rows aging past {threshold}s — is swarm:relay scheduled?" (warning). Previously the check was binary ok/warning with a single threshold.
+- `swarm.durable.relay.stale_warning_threshold_seconds` config key (`SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS`). `0` falls back to `2 × reservation_timeout_seconds` (backwards-compatible default).
+- Static "Relay scheduling" note row added to `swarm:health --durable` output. Reminds operators that `swarm:relay` must be scheduled. Status is `note` (informational only; does not affect exit code).
+- `swarm:health --durable` now includes an **Outbox queue routing** check: warns when outbox rows reference a `queue_connection` not present in `config/queue.php`. Rows with an unknown connection are permanently skipped at drain time; this surfaces them before they accumulate silently.
+- `DrainResult` gains two new fields: `claimed` (rows reserved in phase 1) and `reclaimed` (subset whose `reserved_at` was already set, indicating a prior relay worker did not complete dispatch). Both default to `0` (backwards-compatible). Custom `DurableOutbox` implementations may populate these fields when returning `DrainResult`; applications that only consume the result need no changes.
+- `swarm:relay` audit payload now includes `claimed_count` and `reclaimed_count` alongside the existing `dispatched_count`, `skipped_count`, and `failed_count`.
+- `swarm.limits.max_metadata_bytes` config key (`SWARM_MAX_METADATA_BYTES`; `null` = uncapped). Enforced via `SwarmPayloadLimits::checkMetadata()` at run start in `SwarmRunner` and `DurableSwarmStarter`. The `truncate` overflow policy does not apply to metadata; only `fail` fires when the limit is exceeded.
+- Documented recommended queue topology patterns in `docs/maintenance.md`: minimal (single queue), durable sequential (separate worker pool), and durable with parallel branches (third pool to prevent saturation deadlock on saturated step queues).
+- Added `## Metadata Governance` section to `docs/audit-evidence-contract.md` covering the allowlist approach, custom sink redaction example, and scope clarification (sink-layer only; does not affect `RunContext` or database capture).
 
 ### Fixed
 

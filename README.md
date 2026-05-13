@@ -406,6 +406,7 @@ Common settings include:
 - `swarm.streaming.replay.*`
 - `swarm.observability.*`
 - `swarm.audit.*`
+- `swarm.limits.*`
 
 Capture defaults are conservative. Prompts, outputs, automatic step artifacts, and rich active-context snapshots are not persisted unless you opt in. When the global persistence driver or a per-store override uses `database`, `swarm.persistence.encrypt_at_rest` defaults to true and seals designated sensitive string columns with Laravel's encrypter.
 
@@ -423,7 +424,7 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 - Treat operational swarm tables as TTL-based runtime storage, not immutable compliance archives.
 - Bind `SwarmAuditSink` for regulated evidence export.
 - Bind `SwarmTelemetrySink` for logs, metrics, or tracing correlation.
-- Avoid secrets in metadata. Capture redaction does not sanitize arbitrary developer-supplied metadata.
+- Avoid secrets in metadata. Capture redaction does not sanitize arbitrary developer-supplied metadata. Set `SWARM_MAX_METADATA_BYTES` to enforce a hard size cap.
 - Build run inspection around `run_id`, lifecycle events, `SwarmHistory`, and durable runtime state.
 
 ## Documentation
