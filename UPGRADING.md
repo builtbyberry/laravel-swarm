@@ -98,6 +98,50 @@ The package uses `"minimum-stability": "dev"` with `"prefer-stable": true` in
 [`composer.json`](composer.json). Applications should keep **`prefer-stable` enabled**
 so Composer prefers stable releases for transitive dependencies where possible.
 
+## Durable Outbox: Queue Connection Rename Hazard
+
+When a durable run is dispatched, the outbox row stores the `queue_connection`
+name that was active at dispatch time. As of the fix for the silent-rerouting
+bug, an outbox row whose `queue_connection` no longer matches any key in
+`config/queue.connections` is treated as **permanently invalid**: the row is
+deleted, the failure is reported to the error tracker, and `swarm:relay` exits
+with status 1.
+
+**Impact:** If you rename a queue connection in the same release that deploys
+this fix, any outbox rows written under the old connection name will be
+permanently deleted when workers running the new code drain them. Before this
+fix, those rows were silently dispatched on the application default queue
+instead; now they are removed.
+
+**Action required when renaming a queue connection:**
+
+1. Drain the outbox to empty **before** deploying:
+   ```bash
+   php artisan swarm:relay --drain-until-empty
+   ```
+2. Confirm the outbox is empty:
+   ```bash
+   php artisan swarm:health --durable
+   ```
+3. Deploy the connection rename.
+
+Alternatively, keep the old connection key in `config/queue.connections`
+alongside the new one for at least one deploy cycle so that any in-flight rows
+can drain normally.
+
+## Durable Outbox: swarm:relay Exit Codes
+
+`swarm:relay` now exits with **status 1** in two cases:
+
+- An unhandled exception escaped the drain loop (was already status 1 in earlier versions via Laravel's command exception handling, but is now emitted before the exception is re-thrown so the audit event is always written).
+- One or more entries could not be dispatched due to a **transient error** (queue driver unavailable, network blip). The rows remain in the outbox and will be re-claimed after the reservation timeout; the exit code gives monitoring systems an actionable signal without losing the work.
+
+Exit status 0 now means the outbox is genuinely clean — every claimed entry was
+either dispatched or permanently removed. Update any monitoring rules that only
+alert on non-zero exits to distinguish the two failure cases using the
+`status` field in the `command.relay` audit event (`transient_failure` vs
+`error`).
+
 ## Contract Changes
 
 Most applications should interact with swarms through Laravel-style public

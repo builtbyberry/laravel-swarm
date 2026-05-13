@@ -28,12 +28,17 @@ interface DurableOutbox
     public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void;
 
     /**
-     * Claim and dispatch pending outbox entries, then delete them.
+     * Claim and dispatch pending outbox entries, then delete successfully dispatched rows.
      *
-     * Returns a DrainResult describing how many entries were dispatched to a queue
-     * driver and how many were permanently invalid and deleted without dispatch.
-     * Transient dispatch failures are counted in neither — those entries retain their
-     * reserved_at and are re-claimable after the configured reservation timeout.
+     * Returns a DrainResult with three counters:
+     *   - dispatched: entries sent to a queue driver and deleted from the outbox.
+     *   - skipped:    entries permanently invalid (unknown dispatch_type, unknown
+     *                 queue_connection, or malformed payload) and deleted without dispatch.
+     *                 Each is reported via report() so it surfaces in the error tracker.
+     *   - failed:     entries that could not be dispatched due to a transient error
+     *                 (queue driver unavailable, network blip, etc.). These are NOT deleted;
+     *                 they retain reserved_at and are re-claimable after the reservation
+     *                 timeout. Each is reported via report() so the outage is visible.
      *
      * @param  array<OutboxDispatchType>  $types  Restrict to these types; empty means all.
      * @param  int  $limit  Maximum rows to claim per call. Values < 1 return an empty DrainResult immediately.

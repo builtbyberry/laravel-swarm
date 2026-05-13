@@ -7,25 +7,31 @@ namespace BuiltByBerry\LaravelSwarm\Responses;
 /**
  * Result of a single DurableOutbox::drain() invocation.
  *
- * - dispatched: entries that were successfully dispatched to a queue driver and deleted.
- * - skipped:    entries that were permanently invalid (unknown dispatch_type or malformed
- *               payload) and deleted without being dispatched. These are reported via
- *               report() so they appear in the application error tracker.
+ * - dispatched: entries successfully dispatched to a queue driver and deleted from the outbox.
+ * - skipped:    entries permanently invalid (unknown dispatch_type, unknown queue_connection,
+ *               or malformed payload) and deleted without dispatch. Each is reported via
+ *               report() so it appears in the application error tracker.
+ * - failed:     entries that could not be dispatched due to a transient error (queue driver
+ *               unavailable, network blip, etc.). These are NOT deleted — they retain their
+ *               reserved_at timestamp and become re-claimable after the configured reservation
+ *               timeout. Each is reported via report() so the outage appears in the error tracker.
  *
- * Entries that failed dispatch due to a transient error (queue driver unavailable, network
- * blip, etc.) are counted in neither field — they retain their reserved_at timestamp and
- * become re-claimable after the configured reservation timeout.
+ * total() returns dispatched + skipped (entries removed from the outbox). It does not include
+ * failed, because failed entries remain in the outbox and are not "done".
  */
 final class DrainResult
 {
     public function __construct(
         public readonly int $dispatched,
         public readonly int $skipped,
+        public readonly int $failed = 0,
     ) {}
 
     /**
      * Total entries removed from the outbox in this drain (dispatched + skipped).
-     * Useful as a loop-continuation signal when using --drain-until-empty.
+     *
+     * Does not include transient failures — those entries remain in the outbox and
+     * will be re-claimed after the reservation timeout. Use $failed to detect them.
      */
     public function total(): int
     {

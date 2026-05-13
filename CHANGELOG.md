@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `swarm:relay --max-attempts=N`: limits the number of drain iterations when used with `--drain-until-empty`. Without this flag the loop continues only while there is real progress; with it, the loop also retries through batches of pure transient failures up to N times total, making it suitable for clearing backlogs during a recovering queue outage. Iterations run consecutively with no sleep — size N accordingly.
+
+### Fixed
+
+- `swarm:relay` / `DatabaseDurableOutbox::drain()` reported a false green when all entries in a batch failed transiently (queue driver down): `total()` returned 0, `--drain-until-empty` exited, and the command printed "No pending outbox entries were found." The new `DrainResult::$failed` counter tracks transient failures separately; the command now exits with status 1 and a descriptive warning when unresolved transient failures remain at exit, and the "no pending entries" message is only printed when the outbox is genuinely empty.
+- `DatabaseDurableOutbox::drain()` silently rerouted entries with an unknown `queue_connection` to the application default queue instead of treating them as permanently invalid. An unknown stored connection name is now an `UnexpectedValueException` (row deleted, reported, counted as `skipped`) — the same contract as an unknown `dispatch_type`. The previous behaviour undermined queue-isolation guarantees.
+- `DatabaseDurableOutbox::dispatchEntry()` blindly cast missing or non-integer `step_index` payload fields to `(int)` (giving step 0) and missing or empty `branch_id` fields to `(string)` (giving `''`). Both cases are now validated and throw `UnexpectedValueException` when the required field is absent or the wrong type, correctly treating the row as permanently invalid rather than dispatching the wrong job.
+
 ## v0.3.1 - 2026-05-12
 
 ### Fixed

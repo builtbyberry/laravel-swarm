@@ -513,6 +513,30 @@ use Illuminate\Support\Facades\Schedule;
 Schedule::command('swarm:relay')->everyMinute();
 ```
 
+**Exit codes:** `swarm:relay` exits 0 only when the outbox is genuinely clean —
+every claimed entry was dispatched or permanently removed. It exits 1 when entries
+could not be dispatched due to a transient error (queue driver unavailable). Those
+entries remain in the outbox and are re-claimed on the next relay run. Alert on
+non-zero exit codes and cross-reference the `command.relay` audit event
+(`status: "transient_failure"`) to distinguish a queue outage from a hard error
+(`status: "error"`).
+
+**Clearing a backlog after a queue outage:** use `--drain-until-empty` to process
+all pending rows in a single invocation. Add `--max-attempts N` to retry through
+batches of transient failures — useful when the queue driver is recovering and you
+want to clear the backlog without waiting for the scheduler:
+
+```bash
+# Drain everything; stop if only transient failures remain
+php artisan swarm:relay --drain-until-empty
+
+# Retry up to 10 times, including through transient failure batches
+php artisan swarm:relay --drain-until-empty --max-attempts=10
+```
+
+`--max-attempts` iterations run consecutively with no sleep. Size N for a short
+recovery window rather than a large one-off number during a sustained outage.
+
 Schedule recovery so runs that were checkpointed but whose queue job was never
 dispatched are rediscovered and retried:
 

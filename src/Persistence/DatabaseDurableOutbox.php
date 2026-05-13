@@ -104,15 +104,17 @@ class DatabaseDurableOutbox implements DurableOutbox
         //
         // Three outcomes per entry:
         //   a) Success       — dispatched to queue, ID collected for batched delete, $dispatched++
-        //   b) Invalid entry — permanently corrupt (unknown type, malformed JSON); deleted
-        //                      immediately, reported to the error handler, $skipped++
+        //   b) Invalid entry — permanently corrupt (unknown type, unknown queue_connection,
+        //                      or malformed/missing payload fields); deleted immediately,
+        //                      reported to the error handler, $skipped++
         //   c) Transient err — queue driver unavailable etc.; entry retains reserved_at and
-        //                      becomes re-claimable after the reservation timeout expires
+        //                      becomes re-claimable after the reservation timeout expires, $failed++
         //
         // Collecting successful IDs and deleting in a single WHERE IN at the end is more
         // efficient than N individual DELETEs, particularly when limit is large.
         $dispatched = 0;
         $skipped = 0;
+        $failed = 0;
         $dispatchedIds = [];
 
         foreach ($entries as $entry) {
@@ -129,7 +131,9 @@ class DatabaseDurableOutbox implements DurableOutbox
                 $skipped++;
             } catch (Throwable $e) {
                 // Transient failure: preserve reserved_at so the entry is re-claimable.
+                // Report so the outage surfaces in the error tracker.
                 report($e);
+                $failed++;
             }
         }
 
@@ -137,13 +141,14 @@ class DatabaseDurableOutbox implements DurableOutbox
             $this->table()->whereIn('id', $dispatchedIds)->delete();
         }
 
-        return new DrainResult($dispatched, $skipped);
+        return new DrainResult($dispatched, $skipped, $failed);
     }
 
     /**
      * @param  list<string>  $knownConnections
      *
-     * @throws UnexpectedValueException For permanently invalid entries (unknown type, bad payload).
+     * @throws UnexpectedValueException For permanently invalid entries: unknown dispatch_type,
+     *                                  unknown queue_connection, or malformed/missing payload fields.
      */
     protected function dispatchEntry(object $entry, array $knownConnections): void
     {
@@ -173,9 +178,17 @@ class DatabaseDurableOutbox implements DurableOutbox
             );
         }
 
-        $connection = in_array($entry->queue_connection, $knownConnections, true)
-            ? $entry->queue_connection
-            : null;
+        // An unknown queue_connection is a permanently invalid row — the connection name
+        // will not appear in config without a deployment, so retrying indefinitely is useless
+        // and silently falling back to the default queue would break queue-isolation guarantees.
+        if ($entry->queue_connection !== null && ! in_array($entry->queue_connection, $knownConnections, true)) {
+            throw new UnexpectedValueException(
+                "Unknown queue_connection [{$entry->queue_connection}] for outbox entry [{$entry->id}]. "
+                .'Verify your queue.connections config matches what was stored when the run was dispatched.'
+            );
+        }
+
+        $connection = $entry->queue_connection ?: null;
 
         // An empty queue_name string is treated as null (use the driver's default queue).
         // Writers that have no queue preference store null or '' — the ?: operator normalises both.
@@ -184,13 +197,13 @@ class DatabaseDurableOutbox implements DurableOutbox
         match ($type) {
             OutboxDispatchType::Step => $this->jobs->dispatchStep(
                 $entry->run_id,
-                (int) $payload['step_index'],
+                $this->extractStepIndex($entry->id, $payload),
                 $connection,
                 $queue,
             ),
             OutboxDispatchType::Branch => $this->jobs->dispatchBranch(
                 $entry->run_id,
-                (string) $payload['branch_id'],
+                $this->extractBranchId($entry->id, $payload),
                 $connection,
                 $queue,
             ),
@@ -200,6 +213,56 @@ class DatabaseDurableOutbox implements DurableOutbox
                 $queue,
             ),
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     *
+     * @throws UnexpectedValueException
+     */
+    protected function extractStepIndex(int|string $entryId, array $payload): int
+    {
+        if (! array_key_exists('step_index', $payload)) {
+            throw new UnexpectedValueException(
+                "Missing required payload field [step_index] for step outbox entry [{$entryId}]."
+            );
+        }
+
+        $value = $payload['step_index'];
+
+        if (! is_int($value)) {
+            throw new UnexpectedValueException(
+                "Invalid payload field [step_index] for step outbox entry [{$entryId}]: expected int, got "
+                .get_debug_type($value).'.'
+            );
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     *
+     * @throws UnexpectedValueException
+     */
+    protected function extractBranchId(int|string $entryId, array $payload): string
+    {
+        if (! array_key_exists('branch_id', $payload)) {
+            throw new UnexpectedValueException(
+                "Missing required payload field [branch_id] for branch outbox entry [{$entryId}]."
+            );
+        }
+
+        $value = $payload['branch_id'];
+
+        if (! is_string($value) || $value === '') {
+            throw new UnexpectedValueException(
+                "Invalid payload field [branch_id] for branch outbox entry [{$entryId}]: expected non-empty string, got "
+                .(is_string($value) ? 'empty string' : get_debug_type($value)).'.'
+            );
+        }
+
+        return $value;
     }
 
     /**
