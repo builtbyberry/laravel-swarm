@@ -124,7 +124,7 @@ class SwarmRelayCommand extends Command
             throw $exception;
         }
 
-        $hasUnresolvedTransient = $result !== null && $result->failed > 0;
+        $hasUnresolvedTransient = $result->failed > 0;
 
         $audit->emit('command.relay', [
             'types' => array_map(static fn (OutboxDispatchType $t): string => $t->value, $types),

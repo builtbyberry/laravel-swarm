@@ -103,7 +103,7 @@ class DurableLifecycleController
             $context = $this->runs->loadContext($runId);
             $this->historyStore->syncDurableState($runId, $updated['status'], $this->capture->context($context), $context->metadata, $this->runs->ttlSeconds(), false);
 
-            if (! is_array($updated) || $updated['status'] === 'waiting') {
+            if ($updated['status'] === 'waiting') {
                 return true;
             }
 
