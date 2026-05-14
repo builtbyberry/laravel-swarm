@@ -24,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMissingStruc
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMultiRouteSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalSingleRouteSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
+use Carbon\CarbonInterval;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Contracts\Concurrency\Driver;
 use Illuminate\Support\Defer\DeferredCallback;
@@ -139,7 +140,7 @@ test('hierarchical swarm fails when parallel branch results are missing', functi
         {
             return new class implements Driver
             {
-                public function run(Closure|array $tasks): array
+                public function run(Closure|array $tasks, CarbonInterval|int|null $timeout = null): array
                 {
                     return [];
                 }

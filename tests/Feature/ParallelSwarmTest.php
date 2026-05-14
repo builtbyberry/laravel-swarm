@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableParallelSwarm;
+use Carbon\CarbonInterval;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Contracts\Concurrency\Driver;
 use Illuminate\Support\Defer\DeferredCallback;
@@ -63,7 +64,7 @@ test('parallel swarm crosses the concurrency serialization boundary without agen
         {
             return new class implements Driver
             {
-                public function run(Closure|array $tasks): array
+                public function run(Closure|array $tasks, CarbonInterval|int|null $timeout = null): array
                 {
                     $results = [];
 
@@ -100,7 +101,7 @@ test('parallel swarm fails when concurrency returns a sparse result set', functi
         {
             return new class implements Driver
             {
-                public function run(Closure|array $tasks): array
+                public function run(Closure|array $tasks, CarbonInterval|int|null $timeout = null): array
                 {
                     return [];
                 }
