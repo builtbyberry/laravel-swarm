@@ -68,7 +68,7 @@ category that carries them are listed below.
 | `run_id`         | All run, step, durable, wait, and signal categories. |
 | `parent_run_id`  | Set when the run was spawned as a child run. |
 | `swarm_class`    | FQCN of the swarm.                    |
-| `topology`       | `sequential`, `parallel`, or `hierarchical`. |
+| `topology`       | `sequential`, `parallel`, `hierarchical`, or `static_hierarchical`. |
 | `execution_mode` | `run`, `queue`, `stream`, or `durable`. |
 | `status`         | Current outcome of the event.         |
 

@@ -81,7 +81,7 @@ Emitted by `SwarmTelemetryEventListener` when `listen_to_events` is `true`:
 
 | Category | Source |
 | --- | --- |
-| `stream.event` | `SequentialStreamRunner` — one record per typed `SwarmStreamEvent` (`event_type`, `sequence_index`, `duration_ms` since stream start, `is_replay`). |
+| `stream.event` | `SequentialStreamRunner` and `StaticHierarchicalStreamRunner` — one record per typed `SwarmStreamEvent` (`event_type`, `sequence_index`, `duration_ms` since stream start, `is_replay`). |
 | `broadcast.event` | `BroadcastSwarm` job — same shape plus `channel_names`. |
 
 ### Package queue jobs (listener filter)

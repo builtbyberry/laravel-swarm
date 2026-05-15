@@ -362,3 +362,26 @@ Hierarchical routing is the right fit when the planner's decision is part of
 the business logic. If your real workflow is simply "run these agents in order"
 or "run these agents all at once," sequential or parallel stays easier to
 reason about.
+
+## Choosing Hierarchical vs StaticHierarchical
+
+If the agent graph is always the same — same workers, same fan-out, same order,
+regardless of input — reach for `StaticHierarchical` instead. You define the
+route plan as a PHP array in `plan()`, and Laravel Swarm validates and executes
+it without making a coordinator LLM call. The savings are real: one fewer API
+round-trip and one fewer set of input/output tokens per run.
+
+Use `Hierarchical` when:
+
+- the set of workers to run, or their order, depends on the task input
+- a coordinator must read the request and decide routing at runtime
+
+Use `StaticHierarchical` when:
+
+- the agent graph is always the same regardless of input
+- you want to eliminate coordinator token cost and latency
+- you need `stream()` support for parallel groups with configurable concurrent or sequential branch streaming
+
+See [Static Hierarchical Topology](static-hierarchical-topology.md) for
+implementation details, plan format, streaming modes, and `MaxAgentSteps`
+semantics.

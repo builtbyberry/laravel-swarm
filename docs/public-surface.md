@@ -11,7 +11,7 @@ adding a new public API.
 | `prompt()` | Run a swarm synchronously and return `SwarmResponse`. | [README: Running A Swarm](../README.md#running-a-swarm), [Sequential Content Pipeline](../examples/sequential-content-pipeline/README.md) |
 | `run()` | Compatibility alias for `prompt()`. | [README: Running A Swarm](../README.md#running-a-swarm) |
 | `queue()` | Dispatch a lightweight background swarm job. | [README: Queueing A Swarm](../README.md#queueing-a-swarm), [Queued Workflow Events](../examples/queued-workflow-events/README.md) |
-| `stream()` | Run a sequential swarm and yield typed stream events. | [Streaming](streaming.md), [Streaming Progress](../examples/streaming-progress/README.md) |
+| `stream()` | Run a sequential or static-hierarchical swarm and yield typed stream events. | [Streaming](streaming.md), [Static Hierarchical Topology](static-hierarchical-topology.md#streaming), [Streaming Progress](../examples/streaming-progress/README.md) |
 | `broadcast()` | Stream and broadcast typed events immediately. | [Streaming](streaming.md#broadcasting-stream-events) |
 | `broadcastNow()` | Stream and broadcast typed events with immediate delivery. | [Streaming](streaming.md#broadcasting-stream-events) |
 | `broadcastOnQueue()` | Queue a worker to stream and broadcast typed events. | [Streaming](streaming.md#broadcasting-stream-events) |
@@ -32,9 +32,10 @@ adding a new public API.
 
 | Attribute | Purpose | Primary documentation |
 | --- | --- | --- |
-| `#[Topology]` | Set sequential, parallel, or hierarchical topology. | [README: Topologies](../README.md#topologies), [Hierarchical Routing](hierarchical-routing.md) |
+| `#[Topology]` | Set sequential, parallel, hierarchical, or static_hierarchical topology. | [README: Topologies](../README.md#topologies), [Hierarchical Routing](hierarchical-routing.md), [Static Hierarchical Topology](static-hierarchical-topology.md) |
+| `#[StreamParallelBranches]` | Control how parallel groups stream in a static-hierarchical swarm (`'concurrent'` or `'sequential'`). | [Static Hierarchical Topology](static-hierarchical-topology.md#streaming) |
 | `#[Timeout]` | Set the best-effort orchestration deadline. | [Durable Execution](durable-execution.md#timeouts-and-database-requirements), [Maintenance](maintenance.md) |
-| `#[MaxAgentSteps]` | Limit reachable coordinator and worker executions. | [Hierarchical Routing](hierarchical-routing.md#step-limits) |
+| `#[MaxAgentSteps]` | Limit reachable coordinator and worker executions. | [Hierarchical Routing](hierarchical-routing.md#step-limits), [Static Hierarchical Topology](static-hierarchical-topology.md#step-limits-and-maxagentsteps) |
 | `#[QueuedHierarchicalParallelCoordination]` | Opt a hierarchical queued swarm into multi-worker parallel coordination. | [Hierarchical Routing](hierarchical-routing.md#queue) |
 | `#[DurableParallelFailurePolicy]` | Configure durable parallel branch failure behavior. | [Durable Execution](durable-execution.md#durable-hierarchical-parallel-flow), [Parallel Research Swarm](../examples/parallel-research-swarm/README.md) |
 | `#[DurableRetry]` | Declare durable retry policy on a swarm or agent method. | [Durable Retries And Progress](durable-retries-and-progress.md) |
@@ -93,6 +94,7 @@ adding a new public API.
 
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
+| `HasRoutePlan` | Implement on a `StaticHierarchical` swarm to return a fixed route-plan array. | [Static Hierarchical Topology](static-hierarchical-topology.md) |
 | `ContextStore` | Store active run context. | [Persistence And History](persistence-and-history.md) |
 | `ArtifactRepository` | Store step and run artifacts. | [Persistence And History](persistence-and-history.md) |
 | `RunHistoryStore` | Store run and step history. | [Persistence And History](persistence-and-history.md) |
