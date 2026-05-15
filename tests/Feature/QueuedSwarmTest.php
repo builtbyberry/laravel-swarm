@@ -131,7 +131,7 @@ test('queue fails before dispatching invalid topology config', function () {
     config()->set('swarm.topology', 'pipeline');
 
     expect(fn () => ConfigDrivenSequentialSwarm::make()->queue('queued-task'))
-        ->toThrow(SwarmException::class, 'Invalid swarm topology [pipeline]. Supported topologies: sequential, parallel, hierarchical.');
+        ->toThrow(SwarmException::class, 'Invalid swarm topology [pipeline]. Supported topologies: sequential, parallel, hierarchical, static_hierarchical.');
 });
 
 test('queue fails before dispatching invalid timeout config', function () {

@@ -63,3 +63,53 @@ STUB);
         File::put($stubPath, $original);
     }
 });
+
+test('make swarm generates a static-hierarchical stub when --topology=static-hierarchical is passed', function () {
+    $path = app_path('Ai/Swarms/StaticRoutingSwarm.php');
+
+    if (File::exists($path)) {
+        File::delete($path);
+    }
+
+    File::ensureDirectoryExists(dirname($path));
+
+    Artisan::call('make:swarm', ['name' => 'StaticRoutingSwarm', '--topology' => 'static-hierarchical']);
+
+    expect(File::exists($path))->toBeTrue();
+
+    $contents = File::get($path);
+
+    expect($contents)
+        ->toContain('namespace App\Ai\Swarms;')
+        ->toContain('class StaticRoutingSwarm implements Swarm, HasRoutePlan')
+        ->toContain('use Runnable;')
+        ->toContain('StaticHierarchical')
+        ->toContain('HasRoutePlan')
+        ->toContain('public function plan(): array');
+
+    File::delete($path);
+});
+
+test('make swarm defaults to sequential stub when no topology option is provided', function () {
+    $path = app_path('Ai/Swarms/DefaultTopologySwarm.php');
+
+    if (File::exists($path)) {
+        File::delete($path);
+    }
+
+    File::ensureDirectoryExists(dirname($path));
+
+    Artisan::call('make:swarm', ['name' => 'DefaultTopologySwarm']);
+
+    expect(File::exists($path))->toBeTrue();
+
+    $contents = File::get($path);
+
+    expect($contents)
+        ->toContain('class DefaultTopologySwarm implements Swarm')
+        ->toContain('TopologyEnum::Sequential')
+        ->not->toContain('HasRoutePlan')
+        ->not->toContain('plan()');
+
+    File::delete($path);
+});
