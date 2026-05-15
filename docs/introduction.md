@@ -96,12 +96,12 @@ orchestration—one agent, one response, no pipeline.
 
 - **Sequential** — agents run in a fixed chain; each agent receives the previous
   agent's output as its input. Best for pipelines where each step refines or
-  transforms the previous result. See [Sequential Topology](../README.md#sequential).
+  transforms the previous result. See [Sequential Topology](sequential.md).
 
 - **Parallel** — all agents receive the same original task and run concurrently;
   results are collected into a single response. Best for independent research,
   validation, or generation tasks that do not depend on each other.
-  See [Parallel Topology](../examples/parallel-research-swarm/README.md).
+  See [Parallel Topology](parallel.md).
 
 - **Hierarchical** — a coordinator agent runs first, reads the task, and returns a
   dynamic route plan that determines which worker agents execute and in what order.
@@ -147,7 +147,7 @@ orchestration—one agent, one response, no pipeline.
 Choose based on what you need to accomplish:
 
 - **I want to build a multi-step AI pipeline where each step refines the last.**
-  - Start with [Sequential Topology](../README.md#sequential).
+  - Start with [Sequential Topology](sequential.md).
 
 - **I want to run agents in the background without blocking the HTTP response.**
   - Read the queue section in [Execution Modes](../README.md#queueing-a-swarm).
@@ -169,7 +169,7 @@ Choose based on what you need to accomplish:
 ## First Paths by Audience
 
 **Novice developer — new to multi-agent AI:**
-Introduction (this page) → [Sequential Topology](../README.md#sequential) →
+Introduction (this page) → [Sequential Topology](sequential.md) →
 [Execution Modes](../README.md#running-a-swarm) → [Testing](testing.md)
 
 **Senior engineer evaluating the package:**

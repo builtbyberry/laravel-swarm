@@ -310,6 +310,7 @@ For the full fake and assertion API see [Testing](testing.md). For lifecycle eve
 
 ## Related
 
+- [RunContext](run-context.md) — the envelope that carries input, run identity, and accumulated artifacts through a run
 - [Structured Input](structured-input.md) — constructing a `RunContext` with pre-attached artifacts before dispatch
 - [Persistence And History](persistence-and-history.md) — driver selection, encryption at rest, capture flags, and payload limits
 - [Testing](testing.md) — fake API, persisted run assertions, and lifecycle event assertions

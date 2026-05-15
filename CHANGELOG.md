@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `make:swarm` now scaffolds all four topologies (sequential, parallel, hierarchical, static-hierarchical). Previously only sequential and static-hierarchical were supported.
+- `make:swarm` prompts interactively for topology when run from a TTY and `--topology` is not provided. Non-interactive calls (e.g. `Artisan::call()`) default to sequential.
+- New published stubs: `swarm.hierarchical.stub` and `swarm.parallel.stub` — available via `php artisan vendor:publish --tag=swarm-stubs`.
+- `swarm:recover` now warns when outbox rows are aging past the staleness threshold without being relayed. Surfaces the message "N outbox row(s) aging past Xs without being relayed — is swarm:relay scheduled?" to help operators detect an unscheduled relay.
+- Full documentation audit: 9 new reference docs (`introduction.md`, `sequential.md`, `parallel.md`, `execution-modes.md`, `events.md`, `run-context.md`, `artifacts.md`, `error-handling.md`, `configuration.md`), 4 expanded docs (`pulse.md`, `guardrails.md`, `durable-execution.md`, `observability-logging-tracing.md`), new `examples/static-hierarchical-content-swarm/` example, and a restructured `docs/README.md` with audience-based navigation.
+
 ## v0.3.3 - 2026-05-15
 
 ### Added
