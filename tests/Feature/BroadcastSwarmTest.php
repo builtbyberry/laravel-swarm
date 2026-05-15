@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamedSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
@@ -181,7 +182,7 @@ test('broadcast job streams once and broadcasts immediately', function () {
     $job = $queued->getJob();
     preventQueuedBroadcastSwarmRedispatch($queued);
 
-    $job->handle(app(SwarmRunner::class));
+    $job->handle(app(SwarmRunner::class), app(SwarmAttributeResolver::class));
 
     FakeResearcher::assertPrompted('queued-broadcast-task');
     FakeWriter::assertPrompted('research-out');
@@ -202,7 +203,7 @@ test('broadcast job streams once and broadcasts immediately', function () {
 });
 
 test('broadcast helpers fail clearly for non sequential swarms', function () {
-    $message = 'Streaming is only supported for sequential swarms. parallel topology does not support streaming.';
+    $message = 'Streaming is only supported for sequential and static_hierarchical swarms. parallel topology does not support streaming.';
 
     expect(fn () => FakeParallelSwarm::make()->broadcast('broadcast-task', new Channel('swarm.run')))
         ->toThrow(SwarmException::class, $message);
@@ -299,7 +300,7 @@ test('queued broadcast transport failures fail the job', function () {
     $job = $queued->getJob();
     preventQueuedBroadcastSwarmRedispatch($queued);
 
-    expect(fn () => $job->handle(app(SwarmRunner::class)))
+    expect(fn () => $job->handle(app(SwarmRunner::class), app(SwarmAttributeResolver::class)))
         ->toThrow(RuntimeException::class, 'Simulated broadcast transport failure.');
 
     $history = app(SwarmHistory::class)->find($runId);
@@ -322,7 +323,7 @@ test('terminal queued broadcast transport failures fail the job but preserve com
     $job = $queued->getJob();
     preventQueuedBroadcastSwarmRedispatch($queued);
 
-    expect(fn () => $job->handle(app(SwarmRunner::class)))
+    expect(fn () => $job->handle(app(SwarmRunner::class), app(SwarmAttributeResolver::class)))
         ->toThrow(RuntimeException::class, 'Simulated broadcast transport failure.');
 
     $history = app(SwarmHistory::class)->find($runId);

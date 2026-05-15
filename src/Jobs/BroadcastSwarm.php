@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Jobs;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\EmitsSwarmJobTelemetry;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -47,9 +48,9 @@ class BroadcastSwarm implements ShouldQueue
     /**
      * Execute the job.
      */
-    public function handle(SwarmRunner $runner): void
+    public function handle(SwarmRunner $runner, SwarmAttributeResolver $resolver): void
     {
-        $this->withSwarmJobTelemetry(function () use ($runner): void {
+        $this->withSwarmJobTelemetry(function () use ($runner, $resolver): void {
             $swarm = Container::getInstance()->make($this->swarmClass);
             $context = RunContext::fromPayload($this->task);
 
@@ -63,14 +64,14 @@ class BroadcastSwarm implements ShouldQueue
             $channelNames = self::normalizeBroadcastChannelNames($this->channels);
 
             $runner->stream($swarm, $context)
-                ->each(function (SwarmStreamEvent $event) use ($telemetry, $context, $swarm, &$sequenceIndex, $streamStart, $channelNames): void {
+                ->each(function (SwarmStreamEvent $event) use ($telemetry, $context, $swarm, &$sequenceIndex, $streamStart, $channelNames, $resolver): void {
                     $type = $event->toArray()['type'] ?? 'unknown';
 
                     $telemetry->emit('broadcast.event', [
                         'run_id' => $context->runId,
                         'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
                         'swarm_class' => $swarm::class,
-                        'topology' => 'sequential',
+                        'topology' => $resolver->resolveTopology($swarm)->value,
                         'execution_mode' => 'stream',
                         'event_type' => $type,
                         'sequence_index' => $sequenceIndex,
