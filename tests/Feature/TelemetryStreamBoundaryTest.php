@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamSequentialSwarm;
 use Illuminate\Broadcasting\Channel;
 
 test('stream emits stream.event telemetry with monotonic sequence indices', function (): void {
@@ -50,6 +51,29 @@ test('broadcast on queue emits broadcast.event telemetry with channel names', fu
 
     $first = $broadcastEvents[0];
     expect($first['channel_names'])->toBe(['telemetry-test-channel'])
+        ->and($first)->toHaveKey('event_type')
+        ->and($first)->toHaveKey('sequence_index');
+});
+
+test('broadcast on queue emits broadcast.event telemetry with correct topology for static hierarchical swarms', function (): void {
+    config(['queue.default' => 'sync']);
+
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+
+    $sink = new RecordingSwarmTelemetrySink;
+    app()->instance(SwarmTelemetrySink::class, $sink);
+    app()->forgetInstance(SwarmTelemetryDispatcher::class);
+
+    FakeStaticHierarchicalStreamSequentialSwarm::make()
+        ->broadcastOnQueue('broadcast-task', new Channel('telemetry-static-channel'));
+
+    $broadcastEvents = $sink->recordsForCategory('broadcast.event');
+    expect($broadcastEvents)->not->toBeEmpty();
+
+    $first = $broadcastEvents[0];
+    expect($first['topology'])->toBe('static_hierarchical')
+        ->and($first['channel_names'])->toBe(['telemetry-static-channel'])
         ->and($first)->toHaveKey('event_type')
         ->and($first)->toHaveKey('sequence_index');
 });
