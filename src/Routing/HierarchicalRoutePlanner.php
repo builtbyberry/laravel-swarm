@@ -45,6 +45,37 @@ class HierarchicalRoutePlanner
      */
     protected function normalizeAndValidate(Agent $coordinator, array $workers, array $payload, string $swarmClass): HierarchicalRoutePlan
     {
+        return $this->normalizeAndValidateWithCoordinatorClass(
+            coordinatorClass: $coordinator::class,
+            workerClasses: array_map(static fn (Agent $agent): string => $agent::class, $workers),
+            payload: $payload,
+            swarmClass: $swarmClass,
+        );
+    }
+
+    /**
+     * Build and validate a route plan from a static (developer-defined) plan array.
+     * No coordinator class is involved — all agent classes are treated as workers.
+     *
+     * @param  array<int, Agent>  $workers
+     * @param  array<string, mixed>  $payload
+     */
+    public function fromStaticPlan(array $workers, array $payload, string $swarmClass): HierarchicalRoutePlan
+    {
+        return $this->normalizeAndValidateWithCoordinatorClass(
+            coordinatorClass: null,
+            workerClasses: array_map(static fn (Agent $agent): string => $agent::class, $workers),
+            payload: $payload,
+            swarmClass: $swarmClass,
+        );
+    }
+
+    /**
+     * @param  array<int, string>  $workerClasses
+     * @param  array<string, mixed>  $payload
+     */
+    private function normalizeAndValidateWithCoordinatorClass(?string $coordinatorClass, array $workerClasses, array $payload, string $swarmClass): HierarchicalRoutePlan
+    {
         $startAt = $payload['start_at'] ?? null;
         $nodesPayload = $payload['nodes'] ?? null;
 
@@ -56,7 +87,6 @@ class HierarchicalRoutePlanner
             throw new SwarmException('Hierarchical route plans must define [nodes] as an object keyed by node id.');
         }
 
-        $workerClasses = array_map(static fn (Agent $agent): string => $agent::class, $workers);
         $nodes = [];
 
         foreach ($nodesPayload as $nodeId => $nodePayload) {
@@ -68,7 +98,7 @@ class HierarchicalRoutePlanner
                 throw new SwarmException("Hierarchical route node [{$nodeId}] must be an object.");
             }
 
-            $nodes[$nodeId] = $this->normalizeNode($nodeId, $nodePayload, $coordinator::class, $workerClasses, $swarmClass);
+            $nodes[$nodeId] = $this->normalizeNode($nodeId, $nodePayload, $coordinatorClass, $workerClasses, $swarmClass);
         }
 
         if (! array_key_exists($startAt, $nodes)) {
@@ -90,7 +120,7 @@ class HierarchicalRoutePlanner
      * @param  array<string, mixed>  $payload
      * @param  array<int, string>  $workerClasses
      */
-    protected function normalizeNode(string $nodeId, array $payload, string $coordinatorClass, array $workerClasses, string $swarmClass): HierarchicalRouteNode
+    protected function normalizeNode(string $nodeId, array $payload, ?string $coordinatorClass, array $workerClasses, string $swarmClass): HierarchicalRouteNode
     {
         $type = $payload['type'] ?? null;
         $metadata = $this->normalizeMetadata($payload['metadata'] ?? []);
@@ -117,7 +147,7 @@ class HierarchicalRoutePlanner
      * @param  array<string, mixed>  $metadata
      * @param  array<int, string>  $workerClasses
      */
-    protected function normalizeWorkerNode(string $nodeId, array $payload, array $metadata, ?string $next, string $coordinatorClass, array $workerClasses): HierarchicalWorkerNode
+    protected function normalizeWorkerNode(string $nodeId, array $payload, array $metadata, ?string $next, ?string $coordinatorClass, array $workerClasses): HierarchicalWorkerNode
     {
         $agentClass = $payload['agent'] ?? null;
         $prompt = $payload['prompt'] ?? null;
@@ -127,7 +157,7 @@ class HierarchicalRoutePlanner
             throw new SwarmException("Hierarchical worker node [{$nodeId}] must define a non-empty [agent] class.");
         }
 
-        if ($agentClass === $coordinatorClass) {
+        if ($coordinatorClass !== null && $agentClass === $coordinatorClass) {
             throw new SwarmException("Hierarchical route node [{$nodeId}] cannot route the coordinator [{$coordinatorClass}] as a worker.");
         }
 

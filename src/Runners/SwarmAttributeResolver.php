@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 use BuiltByBerry\LaravelSwarm\Attributes\DurableParallelFailurePolicy as DurableParallelFailurePolicyAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\MaxAgentSteps as MaxAgentStepsAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\QueuedHierarchicalParallelCoordination as QueuedHierarchicalParallelCoordinationAttribute;
+use BuiltByBerry\LaravelSwarm\Attributes\StreamParallelBranches as StreamParallelBranchesAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Timeout as TimeoutAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
@@ -37,7 +38,7 @@ class SwarmAttributeResolver
         try {
             return Topology::from($configured);
         } catch (ValueError $exception) {
-            throw new SwarmException("Invalid swarm topology [{$configured}]. Supported topologies: sequential, parallel, hierarchical.", previous: $exception);
+            throw new SwarmException("Invalid swarm topology [{$configured}]. Supported topologies: sequential, parallel, hierarchical, static_hierarchical.", previous: $exception);
         }
     }
 
@@ -99,6 +100,33 @@ class SwarmAttributeResolver
 
         if (! in_array($configured, ['in_process', 'multi_worker'], true)) {
             throw new SwarmException("Invalid swarm.queue.hierarchical_parallel.coordination [{$configured}]. Supported values: in_process, multi_worker.");
+        }
+
+        return $configured;
+    }
+
+    /**
+     * @return 'concurrent'|'sequential'
+     */
+    public function resolveStreamParallelBranches(Swarm $swarm): string
+    {
+        $reflection = new ReflectionClass($swarm);
+        $attributes = $reflection->getAttributes(StreamParallelBranchesAttribute::class);
+
+        if ($attributes !== []) {
+            $value = $attributes[0]->newInstance()->mode;
+
+            if (! in_array($value, ['concurrent', 'sequential'], true)) {
+                throw new SwarmException("Invalid stream parallel branches mode [{$value}]. Supported values: concurrent, sequential.");
+            }
+
+            return $value;
+        }
+
+        $configured = (string) $this->config->get('swarm.static_hierarchical.stream_parallel_branches', 'concurrent');
+
+        if (! in_array($configured, ['concurrent', 'sequential'], true)) {
+            throw new SwarmException("Invalid swarm.static_hierarchical.stream_parallel_branches [{$configured}]. Supported values: concurrent, sequential.");
         }
 
         return $configured;
