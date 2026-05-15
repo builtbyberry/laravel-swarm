@@ -3,12 +3,15 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Events\Stream\SwarmStepEnd;
+use BuiltByBerry\LaravelSwarm\Events\Stream\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchOne;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchTwo;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryHierarchicalParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryStaticHierarchicalParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 
@@ -69,4 +72,34 @@ test('hierarchical swarm executes parallel group and join under the real process
 test('parallel swarm agents must be container resolvable before process concurrency dispatch', function () {
     expect(fn () => UnresolvableParallelSwarm::make()->run('shared-task'))
         ->toThrow(SwarmException::class, UnresolvableParallelSwarm::class.': parallel agent ['.UnresolvableParallelAgent::class.'] must be container-resolvable because Laravel Concurrency serializes worker callbacks.');
+});
+
+test('static hierarchical parallel prompt() crosses the real process concurrency driver without agent instance state', function () {
+    $response = SerializationBoundaryStaticHierarchicalParallelSwarm::make()->prompt('static-task');
+
+    expect($response->steps)->toHaveCount(2);
+    expect((string) $response)->toContain('serialization-boundary:branch-one');
+
+    expect($response->metadata['executed_node_ids'])->toBe(['parallel_node', 'branch_one', 'branch_two', 'finish_node']);
+    expect($response->metadata['parallel_groups'])->toBe([
+        ['node_id' => 'parallel_node', 'branches' => ['branch_one', 'branch_two']],
+    ]);
+});
+
+test('static hierarchical parallel stream() crosses the real process concurrency driver in concurrent mode', function () {
+    $events = iterator_to_array(
+        SerializationBoundaryStaticHierarchicalParallelSwarm::make()->stream('static-stream-task'),
+        preserve_keys: false,
+    );
+
+    $stepEndEvents = array_values(array_filter($events, fn ($e) => $e instanceof SwarmStepEnd));
+    $textDeltaEvents = array_values(array_filter($events, fn ($e) => $e instanceof SwarmTextDelta));
+
+    // Concurrent branches yield SwarmStepEnd (not text deltas) after ConcurrencyManager completes
+    expect($stepEndEvents)->toHaveCount(2);
+    expect($textDeltaEvents)->toHaveCount(0);
+
+    $agentClasses = array_map(fn ($e) => $e->agentClass, $stepEndEvents);
+    expect($agentClasses)->toContain(SerializationBoundaryParallelBranchOne::class);
+    expect($agentClasses)->toContain(SerializationBoundaryParallelBranchTwo::class);
 });
