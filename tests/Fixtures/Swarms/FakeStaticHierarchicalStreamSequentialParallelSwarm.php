@@ -16,7 +16,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 
 #[Topology(TopologyEnum::StaticHierarchical)]
 #[StreamParallelBranches('sequential')]
-class FakeStaticHierarchicalStreamSequentialParallelSwarm implements Swarm, HasRoutePlan
+class FakeStaticHierarchicalStreamSequentialParallelSwarm implements HasRoutePlan, Swarm
 {
     use Runnable;
 

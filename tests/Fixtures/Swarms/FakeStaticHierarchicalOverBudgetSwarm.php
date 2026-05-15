@@ -15,7 +15,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 
 #[Topology(TopologyEnum::StaticHierarchical)]
 #[MaxAgentSteps(1)]
-class FakeStaticHierarchicalOverBudgetSwarm implements Swarm, HasRoutePlan
+class FakeStaticHierarchicalOverBudgetSwarm implements HasRoutePlan, Swarm
 {
     use Runnable;
 

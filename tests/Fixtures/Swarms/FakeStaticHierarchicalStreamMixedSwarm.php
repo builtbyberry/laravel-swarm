@@ -18,7 +18,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
  * Used to test streaming behaviour in mixed sequential+parallel plans.
  */
 #[Topology(TopologyEnum::StaticHierarchical)]
-class FakeStaticHierarchicalStreamMixedSwarm implements Swarm, HasRoutePlan
+class FakeStaticHierarchicalStreamMixedSwarm implements HasRoutePlan, Swarm
 {
     use Runnable;
 

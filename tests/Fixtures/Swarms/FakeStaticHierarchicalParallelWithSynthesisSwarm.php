@@ -14,7 +14,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 
 #[Topology(TopologyEnum::StaticHierarchical)]
-class FakeStaticHierarchicalParallelWithSynthesisSwarm implements Swarm, HasRoutePlan
+class FakeStaticHierarchicalParallelWithSynthesisSwarm implements HasRoutePlan, Swarm
 {
     use Runnable;
 

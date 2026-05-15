@@ -254,7 +254,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
     /**
      * @param  array<class-string, Agent>  $workerMap
-     * @return \Generator<int, SwarmStreamEvent, mixed, SwarmResponse>
+     * @return \Generator<int, SwarmStreamEvent, null, SwarmResponse>
      */
     protected function executeStaticPlan(
         SwarmExecutionState $state,
@@ -388,6 +388,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                     $nextIndex++;
                     $currentNodeId = $node->next;
+
                     continue;
                 }
 
@@ -489,10 +490,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                 'node' => $branch,
                                 'input' => $input,
                                 'index' => $nextIndex + $ordinal,
+                                'ordinal' => $ordinal,
                             ];
 
                             $agentClass = $branch->agentClass;
-                            $callbacks[$branchNodeId] = function () use ($agentClass, $input): array {
+                            $callbacks[$ordinal] = function () use ($agentClass, $input): array {
                                 $worker = Container::getInstance()->make($agentClass);
 
                                 if (! $worker instanceof Agent) {
@@ -524,12 +526,13 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                 $branch = $branchDefinitions[$branchNodeId]['node'];
                                 $input = $branchDefinitions[$branchNodeId]['input'];
                                 $index = $branchDefinitions[$branchNodeId]['index'];
+                                $ordinal = $branchDefinitions[$branchNodeId]['ordinal'];
 
-                                if (! array_key_exists($branchNodeId, $results)) {
+                                if (! array_key_exists($ordinal, $results)) {
                                     throw new SwarmException($swarm::class.": static hierarchical parallel execution did not return a result for branch node [{$branchNodeId}].");
                                 }
 
-                                $row = $results[$branchNodeId];
+                                $row = $results[$ordinal];
                                 $this->guardrails->validateStep(
                                     $swarm,
                                     GuardrailStepContext::fromState(
@@ -551,11 +554,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             $input = $branchDefinitions[$branchNodeId]['input'];
                             $index = $branchDefinitions[$branchNodeId]['index'];
 
-                            if (! array_key_exists($branchNodeId, $results)) {
+                            if (! array_key_exists($ordinal, $results)) {
                                 throw new SwarmException($swarm::class.": static hierarchical parallel execution did not return a result for branch node [{$branchNodeId}].");
                             }
 
-                            $row = $results[$branchNodeId];
+                            $row = $results[$ordinal];
                             $mergedMeta = array_merge($branch->metadata, [
                                 'node_id' => $branch->id,
                                 'parent_parallel_node_id' => $node->id,
@@ -608,6 +611,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     }
 
                     $currentNodeId = $node->next;
+
                     continue;
                 }
 

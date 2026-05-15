@@ -182,6 +182,35 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.3.3
+
+No migrations. No breaking changes. Run the standard upgrade flow:
+
+```bash
+composer update builtbyberry/laravel-swarm
+php artisan config:clear
+```
+
+### New config key: `static_hierarchical.stream_parallel_branches`
+
+A new key controls how parallel groups behave when a `StaticHierarchical` swarm is
+streamed. The package default is `concurrent`.
+
+If you have **published `config/swarm.php`**, add the new block so the key is
+configurable from your application config:
+
+```php
+'static_hierarchical' => [
+    'stream_parallel_branches' => env('SWARM_STATIC_HIERARCHICAL_STREAM_PARALLEL_BRANCHES', 'concurrent'),
+],
+```
+
+Applications that have not published the config are unaffected — the missing key falls
+back to the package default automatically.
+
+See [Static Hierarchical Topology — Streaming](docs/static-hierarchical-topology.md#streaming)
+for valid values (`concurrent`, `sequential`) and their behavior.
+
 ## Upgrading to v0.3.0
 
 ### Transactional outbox and `swarm:relay` scheduler entry

@@ -11,7 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 
 #[Topology(TopologyEnum::StaticHierarchical)]
-class {{ class }} implements Swarm, HasRoutePlan
+class {{ class }} implements HasRoutePlan, Swarm
 {
     use Runnable;
 

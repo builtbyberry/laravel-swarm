@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
-use BuiltByBerry\LaravelSwarm\Events\Stream\SwarmStepEnd;
-use BuiltByBerry\LaravelSwarm\Events\Stream\SwarmTextDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchOne;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchTwo;

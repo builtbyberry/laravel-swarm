@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Testing;
 
+use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
@@ -72,6 +74,8 @@ class SwarmFake implements Swarm
         'inspections' => [],
     ];
 
+    private string $fakeTopology;
+
     /**
      * @param  class-string  $swarmClass
      * @param  array<int, string>|callable|null  $responses
@@ -79,7 +83,13 @@ class SwarmFake implements Swarm
     public function __construct(
         protected string $swarmClass,
         protected mixed $responses = null,
-    ) {}
+    ) {
+        $reflection = new \ReflectionClass($swarmClass);
+        $attributes = $reflection->getAttributes(TopologyAttribute::class);
+        $this->fakeTopology = $attributes !== []
+            ? $attributes[0]->newInstance()->topology->value
+            : TopologyEnum::Sequential->value;
+    }
 
     /**
      * Required by the Swarm contract — not used during faking.
@@ -248,7 +258,7 @@ class SwarmFake implements Swarm
                 id: SwarmStreamEvent::newId(),
                 runId: 'fake-run-id',
                 swarmClass: $this->swarmClass,
-                topology: 'sequential',
+                topology: $this->fakeTopology,
                 input: is_string($task) ? $task : 'structured-task',
                 metadata: ['run_id' => 'fake-run-id'],
                 timestamp: SwarmStreamEvent::timestamp(),

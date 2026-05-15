@@ -12,7 +12,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 
 #[Topology(TopologyEnum::StaticHierarchical)]
-class FakeStaticHierarchicalSingleWorkerSwarm implements Swarm, HasRoutePlan
+class FakeStaticHierarchicalSingleWorkerSwarm implements HasRoutePlan, Swarm
 {
     use Runnable;
 

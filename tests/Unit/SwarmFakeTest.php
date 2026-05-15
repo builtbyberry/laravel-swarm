@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ContainerResolvedQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyRunnableSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingleWorkerSwarm;
 use Illuminate\Broadcasting\AnonymousEvent;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Support\Facades\Event;
@@ -105,6 +107,17 @@ test('fake intercepts stream calls', function () {
     expect($events[2]->delta)->toBe('streamed-output');
 
     EmptyRunnableSwarm::assertStreamed('stream-task');
+});
+
+test('fake stream emits topology from the swarm class attribute', function () {
+    FakeStaticHierarchicalSingleWorkerSwarm::fake(['topology-test-output']);
+
+    $events = iterator_to_array(FakeStaticHierarchicalSingleWorkerSwarm::make()->stream('topology-task'));
+
+    $start = $events[0];
+
+    expect($start)->toBeInstanceOf(SwarmStreamStart::class);
+    expect($start->topology)->toBe('static_hierarchical');
 });
 
 test('fake intercepts broadcast calls as stream calls', function () {

@@ -302,7 +302,7 @@ Start with [Durable Execution](docs/durable-execution.md), then use the topic gu
 
 ## Topologies
 
-Laravel Swarm supports three topologies.
+Laravel Swarm supports four topologies.
 
 ### Sequential
 
@@ -362,6 +362,35 @@ class SupportRoutingSwarm implements Swarm
 ```
 
 Read [Hierarchical Routing](docs/hierarchical-routing.md) for the route plan schema, validation rules, queue behavior, and durable branch coordination.
+
+### Static Hierarchical
+
+The route plan is defined in PHP — no coordinator LLM call runs at runtime. Use it when the graph of agents is always the same and only the content changes.
+
+```php
+#[Topology(TopologyEnum::StaticHierarchical)]
+class ContentSwarm implements HasRoutePlan, Swarm
+{
+    use Runnable;
+
+    public function agents(): array
+    {
+        return [new Researcher, new Writer, new Editor];
+    }
+
+    public function plan(): array
+    {
+        return [
+            'start_at' => 'finish',
+            'nodes' => [
+                'finish' => ['type' => 'finish', 'output' => ''],
+            ],
+        ];
+    }
+}
+```
+
+Read [Static Hierarchical Topology](docs/static-hierarchical-topology.md) for the plan schema, streaming modes, step budgets, and execution mode support.
 
 ## Testing
 

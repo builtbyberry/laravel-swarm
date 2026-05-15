@@ -45,7 +45,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 
 #[Topology(TopologyEnum::StaticHierarchical)]
-class ContentSwarm implements Swarm, HasRoutePlan
+class ContentSwarm implements HasRoutePlan, Swarm
 {
     use Runnable;
 
@@ -197,7 +197,7 @@ use BuiltByBerry\LaravelSwarm\Attributes\StreamParallelBranches;
 
 #[Topology(TopologyEnum::StaticHierarchical)]
 #[StreamParallelBranches('sequential')]
-class ContentSwarm implements Swarm, HasRoutePlan { ... }
+class ContentSwarm implements HasRoutePlan, Swarm { ... }
 ```
 
 ```
@@ -239,7 +239,7 @@ Parallel and finish nodes are control nodes and do not count by themselves.
 ```php
 #[MaxAgentSteps(6)]
 #[Topology(TopologyEnum::StaticHierarchical)]
-class ReadinessAnalysisSwarm implements Swarm, HasRoutePlan { ... }
+class ReadinessAnalysisSwarm implements HasRoutePlan, Swarm { ... }
 ```
 
 If the plan requires more executions than the budget allows, Laravel Swarm

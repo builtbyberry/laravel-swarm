@@ -2,7 +2,11 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
@@ -13,17 +17,16 @@ use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
-use Illuminate\Broadcasting\Channel;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
-use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Jobs\NoOpQueuedJob;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalChainSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalMissingInterfaceSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalOverBudgetSwarm;
@@ -32,8 +35,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingle
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamConcurrentSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamMixedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamSequentialParallelSwarm;
-use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Jobs\NoOpQueuedJob;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamSequentialSwarm;
+use Illuminate\Broadcasting\Channel;
 use Illuminate\Support\Facades\Event;
 
 // -------------------------------------------------------------------------
@@ -125,9 +128,9 @@ test('static hierarchical finish node resolves output_from the referenced worker
 
 test('static hierarchical finish node can use a literal output string', function () {
     // Create an anonymous swarm whose finish node uses output: 'done-literal'
-    $swarm = new #[\BuiltByBerry\LaravelSwarm\Attributes\Topology(\BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements BuiltByBerry\LaravelSwarm\Contracts\Swarm, BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan
+    $swarm = new #[Topology(BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements HasRoutePlan, Swarm
     {
-        use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+        use Runnable;
 
         public function agents(): array
         {
@@ -177,9 +180,9 @@ test('static hierarchical swarm throws when HasRoutePlan is not implemented', fu
 });
 
 test('static hierarchical swarm throws when agents() returns an empty array', function () {
-    $swarm = new #[\BuiltByBerry\LaravelSwarm\Attributes\Topology(\BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements BuiltByBerry\LaravelSwarm\Contracts\Swarm, BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan
+    $swarm = new #[Topology(BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements HasRoutePlan, Swarm
     {
-        use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+        use Runnable;
 
         public function agents(): array
         {
@@ -197,9 +200,9 @@ test('static hierarchical swarm throws when agents() returns an empty array', fu
 });
 
 test('static hierarchical swarm rejects plans with unknown node references before any agent runs', function () {
-    $swarm = new #[\BuiltByBerry\LaravelSwarm\Attributes\Topology(\BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements BuiltByBerry\LaravelSwarm\Contracts\Swarm, BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan
+    $swarm = new #[Topology(BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements HasRoutePlan, Swarm
     {
-        use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+        use Runnable;
 
         public function agents(): array
         {
@@ -275,9 +278,9 @@ test('static hierarchical swarm dispatches correct lifecycle events', function (
 });
 
 test('static hierarchical swarm rejects duplicate worker agent classes', function () {
-    $swarm = new #[\BuiltByBerry\LaravelSwarm\Attributes\Topology(\BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements BuiltByBerry\LaravelSwarm\Contracts\Swarm, BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan
+    $swarm = new #[Topology(BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements HasRoutePlan, Swarm
     {
-        use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+        use Runnable;
 
         public function agents(): array
         {
@@ -540,4 +543,23 @@ test('broadcastOnQueue() accepts static hierarchical swarms without throwing', f
     $jobProperty = new ReflectionProperty($dispatchable, 'job');
     $jobProperty->setAccessible(true);
     $jobProperty->setValue($dispatchable, new NoOpQueuedJob);
+});
+
+test('broadcast() routes a static hierarchical swarm through the stream runner', function () {
+    $response = FakeStaticHierarchicalSingleWorkerSwarm::make()
+        ->broadcast('broadcast-task', new Channel('swarm.test'));
+
+    // broadcast() consumes the stream internally via each(); $response is the StreamableSwarmResponse.
+    expect($response)->toBeInstanceOf(StreamableSwarmResponse::class);
+    expect($response->streamedResponse)->not->toBeNull();
+    expect($response->streamedResponse->metadata['topology'])->toBe('static_hierarchical');
+});
+
+test('broadcastNow() routes a static hierarchical swarm through the stream runner', function () {
+    $response = FakeStaticHierarchicalSingleWorkerSwarm::make()
+        ->broadcastNow('broadcast-now-task', new Channel('swarm.test'));
+
+    expect($response)->toBeInstanceOf(StreamableSwarmResponse::class);
+    expect($response->streamedResponse)->not->toBeNull();
+    expect($response->streamedResponse->metadata['topology'])->toBe('static_hierarchical');
 });

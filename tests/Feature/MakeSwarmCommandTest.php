@@ -81,13 +81,19 @@ test('make swarm generates a static-hierarchical stub when --topology=static-hie
 
     expect($contents)
         ->toContain('namespace App\Ai\Swarms;')
-        ->toContain('class StaticRoutingSwarm implements Swarm, HasRoutePlan')
+        ->toContain('class StaticRoutingSwarm implements HasRoutePlan, Swarm')
         ->toContain('use Runnable;')
         ->toContain('StaticHierarchical')
         ->toContain('HasRoutePlan')
         ->toContain('public function plan(): array');
 
     File::delete($path);
+});
+
+test('make swarm rejects an unknown --topology value with an error', function () {
+    $this->artisan('make:swarm', ['name' => 'Foo', '--topology' => 'hierarchical'])
+        ->expectsOutputToContain('Invalid topology [hierarchical]')
+        ->assertExitCode(1);
 });
 
 test('make swarm defaults to sequential stub when no topology option is provided', function () {

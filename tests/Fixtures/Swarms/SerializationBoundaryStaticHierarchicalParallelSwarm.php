@@ -13,7 +13,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParalle
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchTwo;
 
 #[Topology(TopologyEnum::StaticHierarchical)]
-class SerializationBoundaryStaticHierarchicalParallelSwarm implements Swarm, HasRoutePlan
+class SerializationBoundaryStaticHierarchicalParallelSwarm implements HasRoutePlan, Swarm
 {
     use Runnable;
 
