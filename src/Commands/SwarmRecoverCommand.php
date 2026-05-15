@@ -8,6 +8,8 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Database\Connection;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
@@ -20,7 +22,7 @@ class SwarmRecoverCommand extends Command
 
     protected $description = 'Redispatch recoverable durable swarm runs';
 
-    public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit): int
+    public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit, ConfigRepository $config, Connection $connection): int
     {
         $runIdOption = $this->option('run-id');
         $swarmOption = $this->option('swarm');
@@ -56,12 +58,49 @@ class SwarmRecoverCommand extends Command
 
         if ($runIds === []) {
             $this->components->info('No recoverable durable swarm runs were found.');
+            $this->warnIfRelayNotRunning($config, $connection);
 
             return self::SUCCESS;
         }
 
         $this->components->info('Redispatched '.count($runIds).' durable swarm run(s).');
+        $this->warnIfRelayNotRunning($config, $connection);
 
         return self::SUCCESS;
+    }
+
+    private function warnIfRelayNotRunning(ConfigRepository $config, Connection $connection): void
+    {
+        if ($config->get('swarm.persistence.driver') !== 'database') {
+            return;
+        }
+
+        $outboxTable = (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox');
+        $reservationTimeoutSeconds = (int) $config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
+
+        $warningThresholdSeconds = (int) $config->get('swarm.durable.relay.stale_warning_threshold_seconds', 0);
+        if ($warningThresholdSeconds <= 0) {
+            $warningThresholdSeconds = $reservationTimeoutSeconds * 2;
+        }
+
+        $warningThreshold = now()->subSeconds($warningThresholdSeconds);
+        $staleThreshold = now()->subSeconds($reservationTimeoutSeconds * 2);
+
+        try {
+            if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
+                return;
+            }
+
+            $agingCount = $connection->table($outboxTable)
+                ->where('created_at', '<', $warningThreshold)
+                ->where(fn ($q) => $q->whereNull('reserved_at')->orWhere('reserved_at', '<', $staleThreshold))
+                ->count();
+
+            if ($agingCount > 0) {
+                $this->components->warn("{$agingCount} outbox row(s) aging past {$warningThresholdSeconds}s without being relayed — is swarm:relay scheduled?");
+            }
+        } catch (Throwable) {
+            // This check must never crash recover.
+        }
     }
 }

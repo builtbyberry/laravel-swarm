@@ -20,6 +20,24 @@ Define a swarm once, return the Laravel AI agents that participate in it, and ru
 - **Upgrading:** [UPGRADING.md](UPGRADING.md)
 - **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
 
+## Quick Start
+
+```bash
+composer require builtbyberry/laravel-swarm
+php artisan migrate
+php artisan make:swarm ContentPipeline
+```
+
+```php
+use App\Ai\Swarms\ContentPipeline;
+
+$response = ContentPipeline::make()->prompt('Draft a launch post about Laravel queues.');
+
+echo $response->output;
+```
+
+For background execution, streaming, and durable workflows, see [Choosing An Execution Mode](#choosing-an-execution-mode).
+
 ## Requirements
 
 - PHP **8.5+**
@@ -64,6 +82,12 @@ Publish the configuration when you want to change defaults:
 
 ```bash
 php artisan vendor:publish --tag=swarm-config
+```
+
+Publish the stubs when you want to customize the `make:swarm` template:
+
+```bash
+php artisan vendor:publish --tag=swarm-stubs
 ```
 
 Check the configured stores before deploying a new environment:

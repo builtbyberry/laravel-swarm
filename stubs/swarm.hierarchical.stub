@@ -1,0 +1,28 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+
+#[Topology(TopologyEnum::Hierarchical)]
+class {{ class }} implements Swarm
+{
+    use Runnable;
+
+    /**
+     * The first agent is the coordinator; it returns a structured route plan.
+     * Remaining agents are workers the coordinator routes to at runtime.
+     */
+    public function agents(): array
+    {
+        return [
+            // new YourCoordinatorAgent,
+            //
+        ];
+    }
+}

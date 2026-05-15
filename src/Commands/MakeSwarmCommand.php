@@ -36,20 +36,36 @@ class MakeSwarmCommand extends GeneratorCommand
     protected $type = 'Swarm';
 
     /**
+     * The resolved topology, set during handle() before stub resolution.
+     */
+    protected string $resolvedTopology = 'sequential';
+
+    /**
      * Validate the --topology option before generating.
      */
     public function handle(): ?bool
     {
-        $topology = $this->optionString('topology');
-        $valid = ['sequential', 'static-hierarchical'];
+        $topology = $this->optionalOptionString('topology');
+        $valid = ['sequential', 'parallel', 'hierarchical', 'static-hierarchical'];
+
+        if ($topology === null) {
+            if ($this->input->isInteractive()) {
+                $chosen = $this->choice('Which topology?', ['sequential', 'parallel', 'hierarchical', 'static-hierarchical'], 'sequential');
+                $topology = is_string($chosen) ? $chosen : 'sequential';
+            } else {
+                $topology = 'sequential';
+            }
+        }
 
         if (! in_array($topology, $valid, true)) {
             $this->error(
-                "Invalid topology [{$topology}]. Valid options are: ".implode(', ', $valid).'.'
+                'Invalid topology ['.$topology.']. Valid options are: '.implode(', ', $valid).'.'
             );
 
             return true;
         }
+
+        $this->resolvedTopology = $topology;
 
         return parent::handle();
     }
@@ -67,9 +83,9 @@ class MakeSwarmCommand extends GeneratorCommand
      */
     protected function resolveStubPath(): string
     {
-        $topology = $this->optionString('topology');
-
-        $stubFile = match ($topology) {
+        $stubFile = match ($this->resolvedTopology) {
+            'parallel' => 'swarm.parallel.stub',
+            'hierarchical' => 'swarm.hierarchical.stub',
             'static-hierarchical' => 'swarm.static-hierarchical.stub',
             default => 'swarm.stub',
         };
@@ -97,7 +113,7 @@ class MakeSwarmCommand extends GeneratorCommand
     protected function getOptions(): array
     {
         return [
-            ['topology', 't', InputOption::VALUE_OPTIONAL, 'The topology for the swarm (sequential, static-hierarchical)', 'sequential'],
+            ['topology', 't', InputOption::VALUE_OPTIONAL, 'The topology for the swarm (sequential, parallel, hierarchical, static-hierarchical)', null],
         ];
     }
 }
