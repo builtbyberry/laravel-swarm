@@ -1,3 +1,89 @@
+## Your First Durable Swarm
+
+This section walks through the minimum setup to dispatch and monitor a durable
+swarm. Read it before diving into the deeper sections below — it gives you the
+full happy path in one place.
+
+### 1. Dispatch the swarm
+
+```php
+$response = ReportGenerationSwarm::make()
+    ->dispatchDurable('Generate Q4 financial report for ACME Corp');
+
+$runId = $response->runId;
+```
+
+`dispatchDurable()` returns immediately. It registers a durable run in the
+database, writes the first step to the outbox, and gives you back a run ID. The
+swarm itself runs in the background through your queue worker — you do not wait
+for it here.
+
+### 2. Store the run ID
+
+Persist `$runId` to your database or session now. It is the only handle you
+have for checking status, pausing, cancelling, or retrieving output later. If
+you lose it, the run continues unaffected but becomes harder to track.
+
+```php
+$report = Report::create([
+    'user_id' => auth()->id(),
+    'swarm_run_id' => $runId,
+    'status' => 'pending',
+]);
+```
+
+### 3. Schedule the relay
+
+The relay drains the durable outbox so each completed checkpoint dispatches its
+next queue job. Without it, the swarm starts but never advances past the first
+step.
+
+```php
+// bootstrap/app.php or Console/Kernel.php
+Schedule::command('swarm:relay')->everyMinute();
+```
+
+This is required — not optional. A durable run stalls permanently if the relay
+is not running. See [Timeouts And Database Requirements](#timeouts-and-database-requirements)
+for the full relay reference, including how to recover from a queue outage.
+
+### 4. Schedule recovery
+
+The recovery command finds runs whose queue workers died after checkpointing but
+before dispatching the next job — a narrow but real crash window. Schedule it
+frequently so a stranded run is caught within minutes, not hours.
+
+```php
+Schedule::command('swarm:recover')->everyFiveMinutes();
+```
+
+See [Pause, Resume, Cancel, And Recover](#pause-resume-cancel-and-recover) for
+what recovery covers and how it handles durable parallel branches.
+
+### 5. Listen for completion
+
+Durable runs are event-driven. Register a listener for `SwarmCompleted` to act
+on the result — send a notification, update a database record, or kick off a
+downstream job.
+
+```php
+// In EventServiceProvider
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+
+protected $listen = [
+    SwarmCompleted::class => [SendReportNotification::class],
+];
+```
+
+You can also listen to `SwarmFailed` to handle the failure path. Do not use
+`then()` or `catch()` on durable responses — those callbacks are not supported
+for durable runs.
+
+That is the full happy path. The rest of this document covers the mechanics,
+operational surface, and production requirements in depth.
+
+---
+
 # Durable Execution
 
 Use `dispatchDurable()` when a swarm needs checkpointed execution instead of a
@@ -294,7 +380,7 @@ predicates:
   for routing joins — still avoid `WHERE` JSON-path scans; narrow by typed
   columns first)
 
-Laravel Swarm’s recovery, retry, and join helpers query only typed fields.
+Laravel Swarm's recovery, retry, and join helpers query only typed fields.
 
 ### Indexes the package relies on
 

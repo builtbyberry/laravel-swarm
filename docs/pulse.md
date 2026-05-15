@@ -62,3 +62,142 @@ Then add the swarm cards to `resources/views/vendor/pulse/dashboard.blade.php`:
 ```
 
 `<livewire:swarm.runs />` shows per-swarm totals, failures, failure rate, average run duration, and topology mix. `<livewire:swarm.steps />` shows the slowest average swarm steps by agent.
+
+## What Pulse Aggregates
+
+### swarm.runs card
+
+The `swarm.runs` card queries the following Pulse aggregate types, all keyed by swarm class:
+
+| Aggregate type | What it represents |
+| --- | --- |
+| `swarm_run_total` | Total completed and failed runs (sum) |
+| `swarm_run_failed` | Total failed runs (sum) |
+| `swarm_topology_sequential` | Runs that used the sequential topology (sum) |
+| `swarm_topology_parallel` | Runs that used the parallel topology (sum) |
+| `swarm_topology_hierarchical` | Runs that used the hierarchical topology (sum) |
+| `swarm_run_duration_total_ms` | Summed run duration in milliseconds (used to calculate average) |
+| `swarm_run_duration_samples` | Sample count (used as the denominator for average duration) |
+
+From these, the card derives:
+
+- **Total runs** — `swarm_run_total` sum for the selected period.
+- **Failures** — `swarm_run_failed` sum.
+- **Failure rate** — `failures / totalRuns * 100`, rounded to one decimal place.
+- **Average run duration** — `swarm_run_duration_total_ms / swarm_run_duration_samples`, rounded to the nearest millisecond.
+- **Topology mix** — counts for each topology sorted by usage, displayed only for topologies that appeared in the period.
+
+Rows are sorted by total run count descending. The card displays up to 100 swarm classes.
+
+The `SwarmRuns` recorder fires on `SwarmCompleted` and `SwarmFailed`. Runs that are pending, queued but not yet started, or still in progress do not appear in this card until they reach a terminal state.
+
+### swarm.steps card
+
+The `swarm.steps` card queries the `swarm_step_duration` aggregate type, keyed by a composite of swarm class, topology, and agent class. For each combination it records:
+
+- **Average step duration (ms)** — the `avg` aggregate of `durationMs` from `SwarmStepCompleted` events.
+- **Step count** — how many step completions contributed to the average.
+
+The card shows up to 25 entries sorted by average duration descending — the slowest agent steps across all swarms. Both swarm class and agent class are surfaced per row so you can identify which agent inside which swarm is responsible.
+
+The `SwarmStepDurations` recorder fires on `SwarmStepCompleted`.
+
+### Period selectors
+
+Both cards inherit Pulse's standard period controls (1h, 24h, 7d). The period applies to all aggregates on the card simultaneously. Pulse stores bucketed time-series data, so switching periods reloads pre-aggregated buckets rather than scanning raw events.
+
+## Relationship to Telemetry
+
+Pulse and the telemetry sink are complementary layers that serve different purposes.
+
+**Pulse** is the aggregate layer. It shows totals, failure rates, average durations, and topology distributions over time. It answers questions like: "Are failure rates rising?", "Which swarm is slowest on average?", "How many runs completed in the last 24 hours?" Pulse data is bucketed and pre-aggregated; it cannot answer questions about a single run.
+
+**The telemetry sink** is the per-event layer. Every lifecycle event (`SwarmStarted`, `SwarmStepCompleted`, `SwarmFailed`, job boundaries, etc.) flows through the sink with a `run_id`, timestamps, and correlation fields. It answers questions like: "Why did run `abc-123` fail?", "How long did each step take in this specific run?", "What exception was thrown?"
+
+The practical division:
+
+- Use Pulse for dashboards, trend monitoring, and alerting on aggregate thresholds.
+- Use the telemetry sink and lifecycle events for investigating individual runs and correlating logs across worker processes.
+
+For details on the telemetry sink, correlation fields, and structured log patterns see [Observability: Logging And Tracing](observability-logging-tracing.md).
+
+## Customizing Card Display
+
+The Livewire cards accept the standard Pulse `Card` props for layout control:
+
+```blade
+<livewire:swarm.runs cols="8" rows="4" />
+<livewire:swarm.steps cols="4" rows="4" />
+```
+
+| Prop | Default | Notes |
+| --- | --- | --- |
+| `cols` | Pulse default | Number of dashboard grid columns the card spans. |
+| `rows` | Pulse default | Number of dashboard grid rows the card spans. |
+
+Column visibility, metric selection, and sort order are not configurable at the card level — the displayed columns and their order are fixed. The `enabled` flag in `config/pulse.php` is the supported way to disable a recorder without removing it from the config array:
+
+```php
+SwarmRuns::class => [
+    'enabled' => env('PULSE_SWARM_RUNS_ENABLED', true),
+],
+```
+
+Setting `PULSE_SWARM_RUNS_ENABLED=false` (or `PULSE_SWARM_STEP_DURATIONS_ENABLED=false`) stops the recorder from writing to Pulse. Cards for a disabled recorder will show no data for periods after the recorder was disabled but will still render historical data already stored.
+
+## Troubleshooting
+
+**No data appearing in Pulse**
+
+Check the following in order:
+
+1. Confirm `SWARM_OBSERVABILITY_ENABLED=true` is set (or that `swarm.observability.enabled` is `true` in `config/swarm.php`). The Pulse recorders listen to lifecycle events; if observability is disabled the events are never dispatched.
+2. Confirm the `SwarmRuns` and `SwarmStepDurations` recorders are present in the `recorders` array in `config/pulse.php`. If the array is missing either entry, Pulse will not subscribe to the events.
+3. Confirm `PULSE_SWARM_RUNS_ENABLED` and `PULSE_SWARM_STEP_DURATIONS_ENABLED` are not explicitly set to `false`.
+4. Run a swarm synchronously (`prompt()`) and check the `pulse_entries` table (or equivalent configured Pulse storage) for rows with types matching `swarm_run_*` or `swarm_step_duration`. If rows appear, the recorder is working and the issue is the dashboard card — verify the card tags are present in `dashboard.blade.php`.
+
+**Card registration error**
+
+If you see a Livewire component resolution error, verify that `laravel/pulse` is installed and that the package service provider has run. The package registers the `swarm.runs` and `swarm.steps` Livewire components automatically when `Laravel\Pulse\Pulse` is resolvable, so the components are not available if Pulse is not installed.
+
+**Metrics stop updating**
+
+For queued and durable runs, the `SwarmCompleted` and `SwarmFailed` events fire inside queue workers, not the HTTP process. If Pulse stops showing new data for queued swarms:
+
+- Confirm your queue worker is running and processing the queue that swarm jobs are dispatched to.
+- For durable runs, confirm that `swarm:relay` (or `swarm:recover`) is scheduled. Durable runs that are waiting will not emit a terminal event until they resume and complete.
+- Check your queue worker logs for failed `InvokeSwarm` or `AdvanceDurableSwarm` jobs. A job that fails without retries does not fire `SwarmFailed`; the run stays open and the Pulse card will not record it until the run reaches a terminal state.
+
+**Pulse aggregation lag**
+
+Pulse uses lazy recording by default — entries are flushed at the end of the request or job, not inline. If you are checking `pulse_entries` immediately after a synchronous run in a test or console script, confirm the Pulse flush has occurred. In tests, call `Pulse::flush()` or use the Pulse testing helpers if you need immediate visibility.
+
+## Using Pulse for Production Monitoring
+
+The two cards surface a small set of high-value signals for production operations.
+
+**Failed run rate (`swarm.runs` card)**
+
+A rising failure rate on any swarm class is the first signal to investigate. Common causes include provider timeouts, guardrail rejections, or depleted retries on durable runs. Compare the topology mix column: hierarchical swarms with a high coordinator step count are more exposed to structured-output validation failures.
+
+Pair with the telemetry sink to drill into `SwarmFailed` events for the affected swarm class and inspect `exception_class` and `message` fields.
+
+**Average run duration (`swarm.runs` card)**
+
+Sustained increases in average run duration may indicate provider latency degradation or growing task complexity (more tokens, more steps). Use the 1h view to detect sudden regressions and the 7d view to identify gradual drift.
+
+Average duration is computed from `swarm_run_duration_total_ms / swarm_run_duration_samples`, which includes all run outcomes that reached a terminal state. Failed runs that terminated early will pull the average down; if you see an unusually low average alongside a high failure rate, it may mean most runs are failing fast rather than completing successfully.
+
+**p95 step latency (`swarm.steps` card)**
+
+The steps card surfaces average step duration, not a true p95. For p95 estimation, use the telemetry sink to collect `durationMs` from `SwarmStepCompleted` events and compute percentiles in your log aggregator or metrics backend. The Pulse steps card is most useful for identifying which agent class is consistently slowest across swarms — use it to set realistic `#[Timeout]` attribute values on swarms where that agent appears.
+
+**Pending run accumulation**
+
+Pulse does not directly show pending runs (the `swarm.runs` card only counts terminal states). If you suspect queued or durable runs are accumulating without completing, use `php artisan swarm:status` to inspect the run history store. A growing backlog of runs that never reach `completed` or `failed` typically means:
+
+- Queue workers are overwhelmed or not running.
+- `swarm:relay` is not scheduled (for durable runs that advance through the relay command rather than pure queue jobs).
+- A durable run is stuck in a waiting state and the signal or resume condition has not been satisfied.
+
+The `swarm:recover` command can unstick durable runs that have exceeded their TTL without advancing.

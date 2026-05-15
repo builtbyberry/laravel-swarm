@@ -1,3 +1,49 @@
+## Minimal Setup
+
+Get structured logs, Pulse metrics, and OpenTelemetry-ready tracing spans in about 10 minutes.
+
+**Step 1 — Enable observability**
+
+Tell the package to route telemetry records (it defaults to `true`, so this is only needed if you previously turned it off):
+
+```
+SWARM_OBSERVABILITY_ENABLED=true
+```
+
+**Step 2 — Bind a telemetry sink**
+
+In `AppServiceProvider::register()`, replace the default `NoOpSwarmTelemetrySink` with your own implementation of `SwarmTelemetrySink`. The single `emit()` method receives every lifecycle and queue-job event as a normalized payload with `schema_version`, `category`, `occurred_at`, and correlation fields.
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+
+$this->app->bind(SwarmTelemetrySink::class, function () {
+    return new AppSwarmTelemetrySink(); // your class implementing SwarmTelemetrySink
+});
+```
+
+The package ships `NoOpSwarmTelemetrySink` as the default — nothing is emitted until you bind a real sink. See the [Queue And Job Context](#queue-and-job-context) section below for a minimal `AppSwarmTelemetrySink` example, and the [Observability Correlation Contract](observability-correlation-contract.md) for the full category list and payload schema.
+
+**Step 3 — Register Pulse recorders** (if Pulse is installed)
+
+Add the recorders to the `recorders` array in `config/pulse.php` so the Swarm cards appear on your Pulse dashboard:
+
+```php
+use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmRuns;
+use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmStepDurations;
+
+'recorders' => [
+    SwarmRuns::class          => ['enabled' => env('PULSE_SWARM_RUNS_ENABLED', true)],
+    SwarmStepDurations::class => ['enabled' => env('PULSE_SWARM_STEP_DURATIONS_ENABLED', true)],
+],
+```
+
+See [Pulse](pulse.md) for card setup and configuration options.
+
+**What you get after these three steps:** your `SwarmTelemetrySink` receives a structured record for every swarm lifecycle event and package queue-job boundary; the Pulse dashboard shows run totals, failure rates, topology usage, and step durations; and the correlation fields (`run_id`, `swarm_class`, `topology`, `execution_mode`) are ready to attach to any OpenTelemetry span you open in your sink.
+
+---
+
 # Observability: Logging And Tracing
 
 Laravel Swarm does **not** ship OpenTelemetry or a hard-wired logging stack. It
