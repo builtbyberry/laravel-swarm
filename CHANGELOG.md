@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- **StaticHierarchical topology** (`Topology::StaticHierarchical`): eliminates the coordinator LLM
+  call when routing is static. Swarms carry `#[Topology(TopologyEnum::StaticHierarchical)]`,
+  implement the new `HasRoutePlan` contract, and return a fixed route-plan array from `plan()`.
+  Supports `prompt()`, `run()`, `queue()` (in_process), and `stream()`. `dispatchDurable()` is
+  unsupported in v1 and throws before any infrastructure check fires.
+  - Sequential worker nodes always stream live text deltas.
+  - Parallel groups in `stream()` use `concurrent` mode by default (branches run via
+    `ConcurrencyManager`; the sequential tail streams live) or `sequential` mode (each branch
+    streams in declaration order). Controlled by `#[StreamParallelBranches('concurrent'|'sequential')]`
+    on the swarm class, or the `swarm.static_hierarchical.stream_parallel_branches` config key
+    (`SWARM_STATIC_HIERARCHICAL_STREAM_PARALLEL_BRANCHES`).
+  - Same parallel groups, `with_outputs` named-output synthesis, DAG validation, and `MaxAgentSteps`
+    enforcement as hierarchical. `MaxAgentSteps` counts worker nodes only — there is no coordinator
+    step.
+  - Swarm response and `SwarmCompleted` metadata include `topology`, `route_plan_start`,
+    `executed_node_ids`, `executed_agent_classes`, `parallel_groups`, `executed_steps`, and
+    `execution_mode`. `coordinator_agent_class` is intentionally absent.
+  - Documentation: `docs/static-hierarchical-topology.md`.
+
 ## v0.3.2 - 2026-05-13
 
 ### Changed
