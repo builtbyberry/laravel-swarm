@@ -71,6 +71,8 @@ class SwarmRunner
         protected SequentialStreamRunner $sequentialStream,
         protected ParallelRunner $parallel,
         protected HierarchicalRunner $hierarchical,
+        protected StaticHierarchicalRunner $staticHierarchical,
+        protected StaticHierarchicalStreamRunner $staticHierarchicalStream,
         protected DurableSwarmManager $durable,
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
@@ -218,6 +220,7 @@ class SwarmRunner
                 Topology::Hierarchical => ($executionMode === ExecutionMode::Queue && $queueHierarchicalCoord === 'multi_worker')
                     ? $this->queuedHierarchicalCoordinator->runInvokeSegment($state)
                     : $this->hierarchical->run($state),
+                Topology::StaticHierarchical => $this->staticHierarchical->run($state),
             };
 
             if ($response === null) {
@@ -285,6 +288,14 @@ class SwarmRunner
      */
     public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
     {
+        $topology = $this->resolver->resolveTopology($swarm);
+
+        if ($topology === Topology::StaticHierarchical) {
+            return $this->staticHierarchicalStream->stream($swarm, $task);
+        }
+
+        $this->ensureStreamableTopology($swarm);
+
         return $this->sequentialStream->stream($swarm, $task);
     }
 
@@ -374,9 +385,17 @@ class SwarmRunner
         $this->ensureSwarmHasAgents($swarm);
         $this->ensureQueueable($swarm);
         $this->ensureContainerResolvable($swarm);
-        $this->ensureDatabaseDurableInfrastructure();
 
         $topology = $this->resolver->resolveTopology($swarm);
+
+        if ($topology === Topology::StaticHierarchical) {
+            throw new SwarmException(
+                $swarm::class.': static hierarchical swarms do not yet support dispatchDurable(). Use prompt(), queue(), or stream() instead.'
+            );
+        }
+
+        $this->ensureDatabaseDurableInfrastructure();
+
         if ($topology === Topology::Parallel) {
             $this->parallel->ensureAgentsAreContainerResolvable($swarm->agents(), $swarm::class);
         }
@@ -534,9 +553,10 @@ class SwarmRunner
     protected function ensureStreamableTopology(Swarm $swarm): void
     {
         $topology = $this->resolver->resolveTopology($swarm);
+        $streamable = [Topology::Sequential, Topology::StaticHierarchical];
 
-        if ($topology !== Topology::Sequential) {
-            throw new SwarmException("Streaming is only supported for sequential swarms. {$topology->value} topology does not support streaming.");
+        if (! in_array($topology, $streamable, true)) {
+            throw new SwarmException("Streaming is only supported for sequential and static_hierarchical swarms. {$topology->value} topology does not support streaming.");
         }
     }
 
