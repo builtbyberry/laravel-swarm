@@ -11,4 +11,6 @@ enum Topology: string
     case Parallel = 'parallel';
 
     case Hierarchical = 'hierarchical';
+
+    case StaticHierarchical = 'static_hierarchical';
 }

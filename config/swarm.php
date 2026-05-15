@@ -176,6 +176,17 @@ return [
         'latest_prefix' => env('SWARM_HISTORY_LATEST_PREFIX', 'swarm:index:latest'),
     ],
 
+    'static_hierarchical' => [
+        /*
+         * How parallel groups behave when a static hierarchical swarm is streamed.
+         * concurrent  — branches run via ConcurrencyManager (no live text deltas from branches);
+         *               sequential nodes after the join stream normally.
+         * sequential  — branches stream one at a time in declaration order;
+         *               sequential nodes after the join stream normally.
+         */
+        'stream_parallel_branches' => env('SWARM_STATIC_HIERARCHICAL_STREAM_PARALLEL_BRANCHES', 'concurrent'),
+    ],
+
     'streaming' => [
         'replay' => [
             'enabled' => env('SWARM_STREAM_REPLAY_ENABLED', false),
