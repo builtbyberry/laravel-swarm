@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use Illuminate\Console\GeneratorCommand;
 use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Input\InputOption;
 
 #[AsCommand(name: 'make:swarm')]
 class MakeSwarmCommand extends GeneratorCommand
@@ -44,9 +45,16 @@ class MakeSwarmCommand extends GeneratorCommand
      */
     protected function resolveStubPath(): string
     {
-        return file_exists($customPath = $this->laravel->basePath('stubs/swarm.stub'))
+        $topology = $this->option('topology');
+
+        $stubFile = match ($topology) {
+            'static-hierarchical' => 'swarm.static-hierarchical.stub',
+            default               => 'swarm.stub',
+        };
+
+        return file_exists($customPath = $this->laravel->basePath("stubs/{$stubFile}"))
             ? $customPath
-            : __DIR__.'/../../stubs/swarm.stub';
+            : __DIR__."/../../stubs/{$stubFile}";
     }
 
     /**
@@ -57,5 +65,17 @@ class MakeSwarmCommand extends GeneratorCommand
     protected function getDefaultNamespace($rootNamespace): string
     {
         return $rootNamespace.'\Ai\Swarms';
+    }
+
+    /**
+     * Get the console command options.
+     *
+     * @return array<int, array<int, mixed>>
+     */
+    protected function getOptions(): array
+    {
+        return [
+            ['topology', 't', InputOption::VALUE_OPTIONAL, 'The topology for the swarm (sequential, static-hierarchical)', 'sequential'],
+        ];
     }
 }

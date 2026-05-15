@@ -1,0 +1,43 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+
+#[Topology(TopologyEnum::StaticHierarchical)]
+class {{ class }} implements Swarm, HasRoutePlan
+{
+    use Runnable;
+
+    /**
+     * Get the agents for the swarm.
+     */
+    public function agents(): array
+    {
+        return [
+            //
+        ];
+    }
+
+    /**
+     * Get the static route plan for the swarm.
+     */
+    public function plan(): array
+    {
+        return [
+            'start_at' => 'finish',
+            'nodes' => [
+                'finish' => [
+                    'type' => 'finish',
+                    'output' => '',
+                ],
+            ],
+        ];
+    }
+}
