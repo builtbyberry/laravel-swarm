@@ -1,14 +1,18 @@
 # Changelog
 
-## Unreleased
+## v0.3.4 - 2026-05-15
 
 ### Added
 
 - `make:swarm` now scaffolds all four topologies (sequential, parallel, hierarchical, static-hierarchical). Previously only sequential and static-hierarchical were supported.
-- `make:swarm` prompts interactively for topology when run from a TTY and `--topology` is not provided. Non-interactive calls (e.g. `Artisan::call()`) default to sequential.
+- `make:swarm` now prompts interactively for topology when run from a TTY without `--topology`. Pass `--topology=sequential` to preserve the previous non-interactive behavior in scripts. Non-interactive callers (`Artisan::call()`, piped stdin) continue to default to sequential.
 - New published stubs: `swarm.hierarchical.stub` and `swarm.parallel.stub` — available via `php artisan vendor:publish --tag=swarm-stubs`.
 - `swarm:recover` now warns when outbox rows are aging past the staleness threshold without being relayed. Surfaces the message "N outbox row(s) aging past Xs without being relayed — is swarm:relay scheduled?" to help operators detect an unscheduled relay.
 - Full documentation audit: 9 new reference docs (`introduction.md`, `sequential.md`, `parallel.md`, `execution-modes.md`, `events.md`, `run-context.md`, `artifacts.md`, `error-handling.md`, `configuration.md`), 4 expanded docs (`pulse.md`, `guardrails.md`, `durable-execution.md`, `observability-logging-tracing.md`), new `examples/static-hierarchical-content-swarm/` example, and a restructured `docs/README.md` with audience-based navigation.
+
+### Changed
+
+- Package homepage and Packagist documentation link now point to the new documentation site at https://swarm.builtbyberry.com. `composer.json` `homepage` was updated and a new `support.docs` entry was added. README adds a documentation-site badge, a top-of-file callout, and promotes the docs site to the first bullet in the metadata list; the in-repo `docs/README.md` is now labeled "In-repo docs" and recommended for offline use.
 
 ## v0.3.3 - 2026-05-15
 

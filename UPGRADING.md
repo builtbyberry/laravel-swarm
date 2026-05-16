@@ -182,6 +182,30 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.3.4
+
+No migrations. No breaking changes. Run the standard upgrade flow:
+
+```bash
+composer update builtbyberry/laravel-swarm
+php artisan config:clear
+```
+
+### `make:swarm` now prompts for topology on TTY
+
+`make:swarm` now prompts interactively for topology when run from a TTY without
+`--topology`. Existing scripts and CI invocations that piped a topology or
+relied on the previous silent default of `sequential` are unaffected:
+non-interactive callers (`Artisan::call()`, piped stdin) continue to default to
+`sequential`. If you want to preserve the previous one-shot behavior in
+interactive shells, pass `--topology=sequential` explicitly.
+
+### Documentation site
+
+The full documentation now lives at https://swarm.builtbyberry.com. The
+in-repo `docs/` directory remains the offline mirror. No application action is
+required — Composer metadata updates automatically when you upgrade.
+
 ## Upgrading to v0.3.3
 
 No migrations. No breaking changes. Run the standard upgrade flow:

@@ -7,15 +7,19 @@
 [![Tests](https://github.com/builtbyberry/laravel-swarm/actions/workflows/tests.yml/badge.svg)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/tests.yml)
 [![License](https://img.shields.io/packagist/l/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
 [![PHP Version Require](https://img.shields.io/packagist/dependency-v/builtbyberry/laravel-swarm/php.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
+[![Documentation](https://img.shields.io/badge/docs-swarm.builtbyberry.com-2563eb.svg)](https://swarm.builtbyberry.com)
+
+> **📚 Full documentation: [swarm.builtbyberry.com](https://swarm.builtbyberry.com)**
 
 Laravel Swarm brings reusable multi-agent orchestration to [Laravel](https://laravel.com) on top of the official [Laravel AI](https://github.com/laravel/ai) package.
 
 Define a swarm once, return the Laravel AI agents that participate in it, and run the workflow synchronously, on a queue, as a stream, or as a checkpointed durable run.
 
+- **Documentation:** [swarm.builtbyberry.com](https://swarm.builtbyberry.com)
 - **Packagist:** `builtbyberry/laravel-swarm`
 - **Namespace:** `BuiltByBerry\LaravelSwarm`
 - **Repository:** https://github.com/builtbyberry/laravel-swarm
-- **Documentation:** [docs/README.md](docs/README.md)
+- **In-repo docs:** [docs/README.md](docs/README.md)
 - **Examples:** [examples/README.md](examples/README.md)
 - **Upgrading:** [UPGRADING.md](UPGRADING.md)
 - **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
@@ -482,7 +486,9 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 
 ## Documentation
 
-Start with the [documentation index](docs/README.md).
+The full documentation site is at **[swarm.builtbyberry.com](https://swarm.builtbyberry.com)** — searchable, versioned, and the recommended starting point.
+
+The same content is mirrored in this repository; start with the [in-repo documentation index](docs/README.md) when working offline.
 
 - [Structured Input](docs/structured-input.md)
 - [Streaming](docs/streaming.md)
