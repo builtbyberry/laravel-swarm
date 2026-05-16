@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 // ---------------------------------------------------------------------------
@@ -29,18 +28,18 @@ describe('warnIfRelayNotRunning', function (): void {
         // Insert a row old enough to exceed 2 × reservation_timeout_seconds with
         // reserved_at = null so it is both unclaimed and stale.
         DB::table('swarm_durable_outbox')->insert([
-            'run_id'           => (string) Str::uuid(),
-            'dispatch_type'    => 'step',
-            'payload'          => '{}',
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
             'queue_connection' => null,
-            'queue_name'       => null,
-            'available_at'     => now()->subSeconds($reservationTimeout * 2 + 30),
-            'reserved_at'      => null,
-            'created_at'       => now()->subSeconds($reservationTimeout * 2 + 30),
+            'queue_name' => null,
+            'available_at' => now()->subSeconds($reservationTimeout * 2 + 30),
+            'reserved_at' => null,
+            'created_at' => now()->subSeconds($reservationTimeout * 2 + 30),
         ]);
 
         $exitCode = Artisan::call('swarm:recover');
-        $output   = Artisan::output();
+        $output = Artisan::output();
 
         expect($exitCode)->toBe(0);
         expect($output)->toContain('outbox row(s) aging');
@@ -52,7 +51,7 @@ describe('warnIfRelayNotRunning', function (): void {
         expect(DB::table('swarm_durable_outbox')->count())->toBe(0);
 
         $exitCode = Artisan::call('swarm:recover');
-        $output   = Artisan::output();
+        $output = Artisan::output();
 
         expect($exitCode)->toBe(0);
         expect($output)->not->toContain('is swarm:relay scheduled?');
@@ -62,7 +61,7 @@ describe('warnIfRelayNotRunning', function (): void {
         config()->set('swarm.persistence.driver', 'cache');
 
         $exitCode = Artisan::call('swarm:recover');
-        $output   = Artisan::output();
+        $output = Artisan::output();
 
         expect($exitCode)->toBe(0);
         expect($output)->not->toContain('is swarm:relay scheduled?');
