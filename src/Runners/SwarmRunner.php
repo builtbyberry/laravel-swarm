@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
@@ -20,6 +21,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\MissingActorException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
@@ -80,6 +82,7 @@ class SwarmRunner
         protected QueuedHierarchicalCoordinator $queuedHierarchicalCoordinator,
         protected SwarmAuditDispatcher $audit,
         protected SwarmGuardrailRunner $guardrails,
+        protected ActorResolver $actorResolver,
     ) {}
 
     /**
@@ -119,6 +122,7 @@ class SwarmRunner
             'swarm_class' => $swarm::class,
             'topology' => $topology->value,
         ]);
+        $this->resolveActor($context);
 
         $queueHierarchicalCoord = null;
 
@@ -289,14 +293,16 @@ class SwarmRunner
     public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
     {
         $topology = $this->resolver->resolveTopology($swarm);
+        $context = RunContext::fromTask($task);
+        $this->resolveActor($context);
 
         if ($topology === Topology::StaticHierarchical) {
-            return $this->staticHierarchicalStream->stream($swarm, $task);
+            return $this->staticHierarchicalStream->stream($swarm, $context);
         }
 
         $this->ensureStreamableTopology($swarm);
 
-        return $this->sequentialStream->stream($swarm, $task);
+        return $this->sequentialStream->stream($swarm, $context);
     }
 
     /**
@@ -323,6 +329,7 @@ class SwarmRunner
         $context = RunContext::fromTask($task);
         $this->checkInputPayload($task, $context, ExecutionMode::Queue);
         $this->ensureActiveContextCompatible(ExecutionMode::Queue);
+        $this->resolveActor($context);
         try {
             $this->guardrails->validateInput($swarm, $context);
         } catch (GuardrailViolation $e) {
@@ -357,6 +364,7 @@ class SwarmRunner
         $context = RunContext::fromTask($task);
         $this->checkInputPayload($task, $context, ExecutionMode::Queue);
         $this->ensureActiveContextCompatible(ExecutionMode::Queue);
+        $this->resolveActor($context);
         try {
             $this->guardrails->validateInput($swarm, $context);
         } catch (GuardrailViolation $e) {
@@ -412,6 +420,7 @@ class SwarmRunner
         $context = RunContext::fromTask($task);
         $this->checkInputPayload($task, $context, ExecutionMode::Durable);
         $this->ensureActiveContextCompatible(ExecutionMode::Durable);
+        $this->resolveActor($context);
 
         try {
             $this->guardrails->validateInput($swarm, $context);
@@ -528,6 +537,36 @@ class SwarmRunner
         }
 
         throw new SwarmException(class_basename($swarm).': swarm has no agents. Add at least one agent to agents().');
+    }
+
+    /**
+     * Resolve the actor for this run when none is bound via RunContext::withActor.
+     *
+     * Honors a pre-bound actor untouched. Otherwise calls ActorResolver::resolve()
+     * and stores the result under metadata.actor. When swarm.audit.actor.required
+     * is true and resolution yields no actor, throws MissingActorException.
+     */
+    protected function resolveActor(RunContext $context): void
+    {
+        $existing = $context->metadata['actor'] ?? null;
+
+        if (is_array($existing) && $existing !== []) {
+            return;
+        }
+
+        $resolved = $this->actorResolver->resolve();
+
+        if ($resolved !== null) {
+            $context->mergeMetadata(['actor' => $resolved->toArray()]);
+
+            return;
+        }
+
+        if ((bool) $this->config->get('swarm.audit.actor.required', false)) {
+            throw new MissingActorException(
+                'No actor could be resolved for this swarm run. Bind one via $context->withActor(...) before dispatch, set Context::add(\'swarm:actor\', ...) inside a request boundary, or set swarm.audit.actor.required=false to allow anonymous runs.'
+            );
+        }
     }
 
     protected function validateForDispatch(Swarm $swarm): void

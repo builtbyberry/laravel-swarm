@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\DurableWaitOutcome;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
+use Illuminate\Contracts\Auth\Authenticatable;
 use JsonException;
 
 class RunContext
@@ -108,6 +110,39 @@ class RunContext
         $this->metadata = array_merge($this->metadata, $values);
 
         return $this;
+    }
+
+    /**
+     * Bind the actor for this run. Accepts an Actor value object, an
+     * Authenticatable, a "type:id" or bare-id string, or null to clear.
+     *
+     * The normalized actor is stored under the reserved metadata key "actor",
+     * which the audit dispatcher always emits regardless of the metadata
+     * allowlist. Calling withActor() takes precedence over the bound
+     * ActorResolver at run entry.
+     */
+    public function withActor(Actor|Authenticatable|string|null $actor): self
+    {
+        if ($actor === null) {
+            unset($this->metadata['actor']);
+
+            return $this;
+        }
+
+        $this->metadata['actor'] = Actor::fromAny($actor)->toArray();
+
+        return $this;
+    }
+
+    public function actor(): ?Actor
+    {
+        $payload = $this->metadata['actor'] ?? null;
+
+        if (! is_array($payload) || $payload === []) {
+            return null;
+        }
+
+        return Actor::fromArray($payload);
     }
 
     public function addArtifact(SwarmArtifact $artifact): self

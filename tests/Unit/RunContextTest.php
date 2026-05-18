@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -267,4 +268,58 @@ test('from payload normalizes serialized artifact defaults and ignores unknown k
         'metadata' => [],
         'step_agent_class' => null,
     ]);
+});
+
+test('withActor accepts an Actor instance and stores it under metadata.actor', function () {
+    $context = RunContext::fromTask('task')
+        ->withActor(new Actor(id: 'u-1', type: 'user'));
+
+    expect($context->metadata['actor'])->toBe([
+        'id' => 'u-1',
+        'type' => 'user',
+        'name' => null,
+        'metadata' => [],
+    ]);
+});
+
+test('withActor accepts string shorthand', function () {
+    $context = RunContext::fromTask('task')->withActor('api_token:abc-123');
+
+    expect($context->metadata['actor']['type'])->toBe('api_token');
+    expect($context->metadata['actor']['id'])->toBe('abc-123');
+});
+
+test('withActor with null clears the actor binding', function () {
+    $context = RunContext::fromTask('task')->withActor('system:cron');
+    expect($context->metadata)->toHaveKey('actor');
+
+    $context->withActor(null);
+    expect($context->metadata)->not->toHaveKey('actor');
+});
+
+test('actor() returns null when no actor is bound', function () {
+    $context = RunContext::fromTask('task');
+
+    expect($context->actor())->toBeNull();
+});
+
+test('actor() rehydrates the bound Actor from metadata', function () {
+    $context = RunContext::fromTask('task')
+        ->withActor(new Actor(id: 'u-9', type: 'user', name: 'Ada'));
+
+    $actor = $context->actor();
+
+    expect($actor)->not->toBeNull();
+    expect($actor->id)->toBe('u-9');
+    expect($actor->name)->toBe('Ada');
+});
+
+test('withActor survives queue payload serialization roundtrip', function () {
+    $context = RunContext::fromTask('task')
+        ->withActor(new Actor(id: 'u-9', type: 'user'));
+
+    $rehydrated = RunContext::fromPayload($context->toQueuePayload());
+
+    expect($rehydrated->metadata['actor']['id'])->toBe('u-9');
+    expect($rehydrated->metadata['actor']['type'])->toBe('user');
 });

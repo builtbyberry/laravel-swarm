@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm;
 
+use BuiltByBerry\LaravelSwarm\Audit\DefaultActorResolver;
 use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
@@ -19,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmRelayCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmSignalCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
+use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
@@ -99,6 +101,7 @@ class SwarmServiceProvider extends ServiceProvider
 
         $this->app->singleton(SwarmAuditSink::class, NoOpSwarmAuditSink::class);
         $this->app->singleton(SwarmAuditDispatcher::class);
+        $this->app->singleton(ActorResolver::class, DefaultActorResolver::class);
 
         $this->app->singleton(SwarmTelemetrySink::class, NoOpSwarmTelemetrySink::class);
         $this->app->singleton(SwarmTelemetryDispatcher::class);

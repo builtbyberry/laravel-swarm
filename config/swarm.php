@@ -90,9 +90,19 @@ return [
      *   log     — record via application logger, then continue.
      *
      * Sink failures never propagate into swarm execution regardless of policy.
+     *
+     * actor.required: when true, runs entering the runner without a resolvable
+     * Actor throw MissingActorException. Bind an Actor via $context->withActor()
+     * before dispatch, Context::add('swarm:actor', $actor) inside a request, or
+     * supply a custom ActorResolver in the container. Default false — set to
+     * true for regulated deployments that treat unattributed runs as a
+     * compliance violation.
      */
     'audit' => [
         'failure_policy' => env('SWARM_AUDIT_FAILURE_POLICY', 'swallow'),
+        'actor' => [
+            'required' => filter_var(env('SWARM_AUDIT_ACTOR_REQUIRED', false), FILTER_VALIDATE_BOOLEAN),
+        ],
         'metadata_allowlist' => array_values(array_filter(array_map(
             'trim',
             explode(',', (string) env('SWARM_AUDIT_METADATA_ALLOWLIST', '')),

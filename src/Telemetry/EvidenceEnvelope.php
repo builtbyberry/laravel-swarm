@@ -14,6 +14,15 @@ final class EvidenceEnvelope
     public const SCHEMA_VERSION = '1';
 
     /**
+     * Top-level metadata keys that are always emitted on audit and telemetry
+     * payloads regardless of the configured allowlist. The "actor" key is
+     * reserved for the resolved Actor identity bound at run entry.
+     *
+     * @var array<int, string>
+     */
+    public const RESERVED_METADATA_KEYS = ['actor'];
+
+    /**
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */
@@ -68,6 +77,12 @@ final class EvidenceEnvelope
         sort($keys, SORT_STRING);
 
         $allowed = [];
+
+        foreach (self::RESERVED_METADATA_KEYS as $reservedKey) {
+            if (array_key_exists($reservedKey, $metadata)) {
+                $allowed[$reservedKey] = $metadata[$reservedKey];
+            }
+        }
 
         foreach ($allowlist as $key) {
             if (array_key_exists($key, $metadata)) {
