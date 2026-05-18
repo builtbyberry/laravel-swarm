@@ -11,7 +11,11 @@ use Carbon\CarbonImmutable;
 use Laravel\Pulse\Pulse;
 
 /**
- * @internal
+ * Pulse recorder for swarm run totals, failures, failure rate inputs,
+ * topology usage, and average duration.
+ *
+ * Registered by class string in config/pulse.php — part of the public
+ * package surface per docs/pulse.md.
  */
 class SwarmRuns
 {

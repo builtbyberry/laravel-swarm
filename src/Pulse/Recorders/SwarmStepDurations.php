@@ -10,7 +10,11 @@ use Carbon\CarbonImmutable;
 use Laravel\Pulse\Pulse;
 
 /**
- * @internal
+ * Pulse recorder for average swarm step duration by swarm, topology, and
+ * agent.
+ *
+ * Registered by class string in config/pulse.php — part of the public
+ * package surface per docs/pulse.md.
  */
 class SwarmStepDurations
 {
