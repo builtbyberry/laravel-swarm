@@ -5,6 +5,7 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
 [![Total Downloads](https://img.shields.io/packagist/dt/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
 [![Tests](https://github.com/builtbyberry/laravel-swarm/actions/workflows/tests.yml/badge.svg)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/tests.yml)
+[![Nightly (Laravel dev-main)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/nightly.yml/badge.svg)](https://github.com/builtbyberry/laravel-swarm/actions/workflows/nightly.yml)
 [![License](https://img.shields.io/packagist/l/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
 [![PHP Version Require](https://img.shields.io/packagist/dependency-v/builtbyberry/laravel-swarm/php.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)
 [![Documentation](https://img.shields.io/badge/docs-swarm.builtbyberry.com-2563eb.svg)](https://swarm.builtbyberry.com)
