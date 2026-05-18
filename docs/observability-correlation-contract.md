@@ -39,7 +39,7 @@ $this->app->bind(SwarmTelemetrySink::class, MyAppTelemetrySink::class);
 | `swarm.observability.enabled` | `SWARM_OBSERVABILITY_ENABLED` | `true` | Master switch: when `false`, `SwarmTelemetryDispatcher::emit` is a no-op. |
 | `swarm.observability.listen_to_events` | `SWARM_OBSERVABILITY_LISTEN_EVENTS` | `true` | When `false`, the package does not subscribe `SwarmTelemetryEventListener` to lifecycle or queue events. Direct `stream.event` / `broadcast.event` hooks still respect `enabled`. |
 | `swarm.observability.failure_policy` | `SWARM_OBSERVABILITY_FAILURE_POLICY` | `swallow` | `swallow` or `log` when the sink throws. |
-| `swarm.observability.metadata_allowlist` | `SWARM_OBSERVABILITY_METADATA_ALLOWLIST` | `[]` | Comma-separated allowlist of top-level metadata keys whose values may appear in telemetry payloads (same pattern as audit). |
+| `swarm.observability.metadata_allowlist` | `SWARM_OBSERVABILITY_METADATA_ALLOWLIST` | `[]` | Comma-separated allowlist of top-level metadata keys whose values may appear in telemetry payloads (same pattern as audit). See [Metadata Allowlist Governance](metadata-allowlist-governance.md) before extending. |
 | `swarm.observability.categories.include` | — | `null` | When a non-empty array, only these categories are emitted. |
 | `swarm.observability.categories.exclude` | — | `null` | When a non-empty array, listed categories are suppressed. |
 

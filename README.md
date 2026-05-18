@@ -48,7 +48,16 @@ For background execution, streaming, and durable workflows, see [Choosing An Exe
 - Laravel **13+**
 - `laravel/ai` **^0.6**
 
-This package declares `"minimum-stability": "dev"` with `"prefer-stable": true`. Keep `prefer-stable` enabled in consuming applications unless you intentionally want Composer to resolve unstable transitive releases.
+This package declares `"minimum-stability": "dev"` with `"prefer-stable": true` because `laravel/ai` is still pre-1.0 and ships dev-tagged releases. Composer will not resolve a pre-stable transitive dependency from a stable consuming project, so your application's `composer.json` must also set:
+
+```json
+{
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
+```
+
+`prefer-stable` keeps Composer biased toward tagged releases — only dependencies without a stable release (today, `laravel/ai`) resolve to a `dev-` constraint. This requirement will be dropped when `laravel/ai` reaches 1.0; the package will then move to `"minimum-stability": "stable"` and consuming applications will be free to do the same.
 
 Laravel Swarm orchestrates the same Laravel AI agents, providers, and streams as your application. Treat Composer updates to Laravel or `laravel/ai` as integration-test events: run your test suite and any queued, streamed, or durable swarm smoke paths after dependency changes. This package's [changelog](CHANGELOG.md) covers Swarm-owned changes; it does not replace verification against upstream Laravel or Laravel AI releases.
 
@@ -475,9 +484,9 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 - Use database persistence for durable execution, long-lived history, active-run pruning protection, or operational dashboards.
 - Set `SWARM_CAPTURE_ACTIVE_CONTEXT=true` for queued and durable swarms.
 - Size queue worker timeouts and queue `retry_after` above the longest expected provider call.
-- Schedule `swarm:relay` every minute for durable execution — without it, durable runs stall after the first checkpoint.
-- Schedule `swarm:recover` for durable execution and coordinated multi-worker hierarchical queueing.
-- Schedule `swarm:prune` for database retention cleanup, or set `SWARM_PREVENT_PRUNE=true` when retention is managed outside the package.
+- Schedule `swarm:relay` every minute for durable execution. The relay drains the transactional outbox after each checkpoint — without it, durable runs stall after the first step. See [Durable Execution](docs/durable-execution.md) for the full relay reference.
+- Schedule `swarm:recover` every five minutes for durable execution and coordinated multi-worker hierarchical queueing. Recovery redispatches runs whose workers died between checkpoint and dispatch. See [Maintenance](docs/maintenance.md).
+- Schedule `swarm:prune` daily for database retention cleanup, or set `SWARM_PREVENT_PRUNE=true` when retention is managed outside the package.
 - Treat operational swarm tables as TTL-based runtime storage, not immutable compliance archives.
 - Bind `SwarmAuditSink` for regulated evidence export.
 - Bind `SwarmTelemetrySink` for logs, metrics, or tracing correlation.

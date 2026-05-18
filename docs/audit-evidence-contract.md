@@ -239,6 +239,8 @@ class S3AuditSink implements SwarmAuditSink
 
 Run metadata is developer-supplied and is not validated or sanitized by the package. By default, metadata values are excluded from audit and telemetry payloads — only key names are included. Use the controls below to decide exactly what reaches your sinks.
 
+> See [Metadata Allowlist Governance](metadata-allowlist-governance.md) for the policy guide — what belongs in metadata, named anti-patterns (raw user identifiers, regulated product names, authentication material), and the review checklist to apply when extending the allowlist.
+
 ### Allowlist approach
 
 Set a comma-separated list of allowed metadata key names. Only keys in the list will have their values included in the `metadata` field of sink payloads:

@@ -68,6 +68,7 @@ The recommended reading path for new users.
 - [Logging & Tracing](observability-logging-tracing.md) — telemetry sink, structured logs, OTEL
 - [Correlation Contract](observability-correlation-contract.md)
 - [Audit Evidence](audit-evidence-contract.md)
+- [Metadata Allowlist Governance](metadata-allowlist-governance.md) — what belongs in metadata, named anti-patterns, and the allowlist review pattern
 - [Pulse](pulse.md) — Laravel Pulse cards for run counts and step latencies
 
 ---
@@ -77,6 +78,7 @@ The recommended reading path for new users.
 - [Configuration](configuration.md) — every config key, grouped and searchable
 - [Public Surface](public-surface.md)
 - [Maintenance](maintenance.md)
+- [APP_KEY Rotation](app-key-rotation.md) — runbook for rotating the application key alongside sealed swarm rows
 
 ---
 
