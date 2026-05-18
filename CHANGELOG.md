@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.3.5 - 2026-05-18
+
+### Added
+
+- `swarm:health --durable` now proactively checks `SWARM_CAPTURE_ACTIVE_CONTEXT` and reports `failed` when the env var is not enabled. Queued and durable dispatch require active-context capture; the runner has always thrown `SwarmException` at dispatch when it is missing, but the misconfiguration is now caught at preflight rather than at the first live run. CI/CD pipelines that gate on `swarm:health --durable` exit code may newly exit `1` in environments where the env was implicitly relied on but unset — see [UPGRADING.md](UPGRADING.md#swarmhealth---durable-now-fails-on-missing-swarm_capture_active_context).
+- New `docs/app-key-rotation.md`: runbook covering the encryption asymmetry between sealed operational rows and unaffected audit evidence, the drain-then-rotate and in-place re-encryption strategies, and how retention windows interact with key rotation. Cross-linked from `docs/configuration.md`, `docs/persistence-and-history.md`, and the docs index.
+- New `docs/metadata-allowlist-governance.md`: governance doc covering metadata vs capture payloads, named anti-patterns (raw user identifiers, regulated product names, authentication material, high-cardinality free text, mutable PII buckets), and the allowlist review checklist. Cross-linked from `docs/audit-evidence-contract.md`, `docs/observability-correlation-contract.md`, and the docs index.
+- `.github/workflows/nightly.yml`: informational nightly job runs the full suite against `laravel/framework:dev-main` with as-aliased `illuminate/*` packages so Composer accepts them against the package's `^13.0` constraints. Marked `continue-on-error: true`; surfaces upstream churn without gating PR CI. README gets a dedicated nightly status badge.
+- `.github/workflows/mutation.yml`: daily Pest mutation testing job via `pestphp/pest-plugin-mutate` (already a Pest 4 transitive). Runs at 07:17 UTC plus `workflow_dispatch` for on-demand. 120-minute timeout cap; `continue-on-error: true`. A gating threshold via `--min` will land in a follow-up once baseline scores stabilise.
+
+### Changed
+
+- README production checklist surfaces `swarm:relay` alongside `swarm:recover` and `swarm:prune` with frequency, purpose, and a cross-link to `docs/durable-execution.md`. Operators wiring durable swarms from the README no longer have to discover separately that the outbox drain command must be scheduled.
+- README and UPGRADING document the `minimum-stability: dev` / `prefer-stable: true` propagation requirement explicitly, the rationale (`laravel/ai` is pre-1.0 and ships dev-tagged releases), and the plan to drop the requirement when `laravel/ai` reaches 1.0.
+- `examples/README.md` clarifies that example files are reference-only and must be copied into the consuming application's namespace before use. Previously the autoload behavior was implied but never stated.
+- CI enforces an 80% line-coverage floor via the new `composer test:coverage:ci` script (Pest `--coverage --min=80`). Local `composer test:coverage` is left unchanged so iteration is not slowed by an enforced threshold. The 80% floor is set deliberately below currently measured coverage so the gate enforces rather than aspires; raise it deliberately as the suite grows.
+- `composer test:mutation` swapped from `infection/infection` to Pest's native mutation plugin (`pestphp/pest-plugin-mutate`). Infection 0.33's auto-generated PHPUnit config emits the legacy `<filter>` element, which Pest 4 rejects — producing a false negative even when every test passes. The Pest-native path integrates with the existing test runner and removes the XML mismatch.
+
+### Fixed
+
+- `tests/Feature/SwarmRecoverCommandTest.php`: applied missed Pint formatting.
+
 ## v0.3.4 - 2026-05-15
 
 ### Added

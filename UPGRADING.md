@@ -196,6 +196,31 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.3.5
+
+No migrations. No breaking changes. Run the standard upgrade flow:
+
+```bash
+composer update builtbyberry/laravel-swarm
+php artisan config:clear
+```
+
+### `swarm:health --durable` now fails on missing `SWARM_CAPTURE_ACTIVE_CONTEXT`
+
+`swarm:health --durable` now reports a `failed` status (and exits `1`) when
+`SWARM_CAPTURE_ACTIVE_CONTEXT` is not enabled. The runner has always thrown
+`SwarmException` at dispatch when this env is missing for queued or durable
+execution; the new check surfaces the misconfiguration at preflight rather
+than at the first live run.
+
+Operators whose deployments already rely on `SWARM_CAPTURE_ACTIVE_CONTEXT=true`
+need take no action. CI/CD pipelines that previously passed `swarm:health
+--durable` in an environment where the env was unset but durable execution was
+never actually exercised may newly exit `1` on the same command. Set
+`SWARM_CAPTURE_ACTIVE_CONTEXT=true` in any environment that runs queued or
+durable swarms — the value was already required at runtime; the check has only
+become more honest about it.
+
 ## Upgrading to v0.3.4
 
 No migrations. No breaking changes. Run the standard upgrade flow:
