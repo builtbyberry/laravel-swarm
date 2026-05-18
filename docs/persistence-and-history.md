@@ -269,6 +269,8 @@ Set `SWARM_ENCRYPT_AT_REST=false` only when you intentionally rely on
 database- or infrastructure-level encryption instead of application-layer
 sealing. Rotating `APP_KEY` without a re-encryption plan leaves existing sealed
 rows unreadable; treat key rotation like any other encrypted-at-rest data.
+See [APP_KEY Rotation](app-key-rotation.md) for the full runbook, including
+the asymmetry between operational rows and audit evidence.
 
 This feature does **not** replace transparent database encryption (TDE),
 volume encryption, or an immutable compliance archive. It reduces exposure if

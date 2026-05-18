@@ -40,7 +40,7 @@ Controls the primary persistence driver and at-rest encryption behavior. Changin
 
 > **Note:** JSON columns (context data, metadata, artifacts) remain structured JSON in the database; `encrypt_at_rest` seals designated string columns only. Do not store secrets inside JSON payloads unless your application encrypts them separately.
 
-> **Key rotation:** Rotating `APP_KEY` without re-encrypting existing rows leaves them undecipherable. Plan key rotation with your operational model.
+> **Key rotation:** Rotating `APP_KEY` without re-encrypting existing rows leaves them undecipherable. Plan key rotation with your operational model. See [APP_KEY Rotation](app-key-rotation.md) for the runbook.
 
 ---
 

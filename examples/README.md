@@ -1,7 +1,11 @@
 # Laravel Swarm Examples
 
-These examples are copy-paste starting points for Laravel applications. They
-are not autoloaded by the package and are not a runnable demo app.
+These examples are reference-only. The files in this directory are **not
+autoloaded** by the package, are not registered with your service container,
+and are not a runnable demo app. Copy the swarm, agent, and supporting classes
+you want into your application's namespace (typically `app/Ai/Swarms` and
+`app/Ai/Agents`) before running them. Update the namespace declarations to
+match — every example uses `App\Ai\...` as the destination namespace.
 
 Examples assume your app has Laravel AI configured. When an example does not
 show `#[Provider]` and `#[Model]`, the agent uses your Laravel AI defaults. The

@@ -95,8 +95,22 @@ nested secrets inside JSON unless your application handles that separately.
 ## Composer minimum-stability
 
 The package uses `"minimum-stability": "dev"` with `"prefer-stable": true` in
-[`composer.json`](composer.json). Applications should keep **`prefer-stable` enabled**
-so Composer prefers stable releases for transitive dependencies where possible.
+[`composer.json`](composer.json) because `laravel/ai` is pre-1.0 and ships
+dev-tagged releases. Composer will not resolve a pre-stable transitive from a
+stable consuming project, so applications **must propagate the same setting**:
+
+```json
+{
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
+```
+
+`prefer-stable` keeps Composer biased toward tagged releases — only
+dependencies without a stable release (today, `laravel/ai`) resolve to a `dev-`
+constraint. This requirement will be dropped when `laravel/ai` reaches 1.0; the
+package will then move to `"minimum-stability": "stable"` and consuming
+applications will be free to do the same.
 
 ## Durable Outbox: Queue Connection Rename Hazard
 
