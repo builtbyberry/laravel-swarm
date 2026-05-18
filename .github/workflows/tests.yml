@@ -48,8 +48,9 @@ jobs:
           fi
 
       # Same quality gates on stable-latest and lowest (see CONTRIBUTING.md if nightly split is needed).
+      # The CI script enforces a line-coverage floor; raise it deliberately as the suite grows.
       - name: Execute tests with coverage
-        run: composer test:coverage
+        run: composer test:coverage:ci
 
       - name: Execute process concurrency validation
         run: composer test:process-concurrency:ci

@@ -74,7 +74,8 @@
         "test": "vendor/bin/pest tests/Feature tests/Unit",
         "test:process-concurrency": "vendor/bin/pest tests/ProcessConcurrency",
         "test:process-concurrency:ci": "vendor/bin/pest tests/ProcessConcurrency --fail-on-skipped",
-        "test:coverage": "vendor/bin/pest tests/Feature tests/Unit --coverage"
+        "test:coverage": "vendor/bin/pest tests/Feature tests/Unit --coverage",
+        "test:coverage:ci": "vendor/bin/pest tests/Feature tests/Unit --coverage --min=80"
     },
     "config": {
         "sort-packages": true,
