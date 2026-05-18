@@ -268,6 +268,228 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.4.0
+
+v0.4.0 ships four new contracts that extend the audit and identity surface:
+`ActorResolver`, `CapturePolicy`, `SinkFailureHandler`, and `SwarmAuditSigner`.
+Each one is bound in the service container with a conservative default that
+preserves v0.3 behavior. Applications that do not bind custom implementations
+do not need to change any code, but the new defaults and the deprecation of
+the boolean capture keys are documented below.
+
+### High Impact Changes
+
+There are no breaking changes in v0.4.0. Every new contract is additive and
+ships a default binding that matches v0.3 behavior.
+
+### Medium Impact Changes
+
+#### Actor binding for swarm runs
+
+A new `BuiltByBerry\LaravelSwarm\Audit\Actor` value object and
+`BuiltByBerry\LaravelSwarm\Contracts\ActorResolver` contract describe who
+initiated a swarm run. The container binds `ActorResolver` to
+`DefaultActorResolver` out of the box, which reads the actor from the active
+context and falls back to the authenticated user when one is available.
+
+Set the actor explicitly through `RunContext::withActor()`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+$context = RunContext::make()->withActor(
+    new Actor(id: (string) $user->getKey(), type: 'user', label: $user->email),
+);
+```
+
+You may also bind an actor onto the active context before dispatch:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Facades\Context;
+
+Context::add('swarm:actor', new Actor(
+    id: (string) auth()->id(),
+    type: 'user',
+    label: auth()->user()?->email,
+));
+```
+
+To enforce that every run carries an actor, set
+`swarm.audit.actor.required` to `true` (env `SWARM_AUDIT_ACTOR_REQUIRED`,
+default `false`). When the flag is on and resolution yields `null`, the
+runner throws `BuiltByBerry\LaravelSwarm\Exceptions\MissingActorException`
+at dispatch instead of starting a run without identity. The reserved
+metadata key `actor` always flows through to sinks regardless of the
+metadata allowlist.
+
+Regulated callers (21 CFR Part 11, SOC 2, and similar audit regimes) should
+set `SWARM_AUDIT_ACTOR_REQUIRED=true` and bind the actor explicitly through
+`Context::add('swarm:actor', ...)` or `RunContext::withActor()` before each
+dispatch. The default resolver is a convenience for application code, not
+an attestation that an actor was present.
+
+To bind a custom resolver, replace the default binding in a service
+provider:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
+
+public function register(): void
+{
+    $this->app->bind(ActorResolver::class, MyActorResolver::class);
+}
+```
+
+#### Capture policy contract supersedes the boolean capture keys
+
+The `BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy` contract replaces the
+`swarm.capture.*` boolean keys with per-field decisions. The container binds
+`CapturePolicy` to `BooleanCapturePolicy` by default, which reads the existing
+boolean keys and returns `CaptureDecision::Full` or `CaptureDecision::Redact`
+for each field. No action is required for applications that only use the
+booleans.
+
+The boolean capture keys are **deprecated** in v0.4 and are scheduled for
+removal in v0.5. They continue to work through `BooleanCapturePolicy` for the
+duration of the v0.4 line.
+
+`CaptureDecision::Skip` is reserved for the v0.5 audit dispatcher work. In
+v0.4 a `Skip` decision behaves identically to `Redact` at the field level;
+custom policies may return `Skip` today to declare intent ahead of the v0.5
+change.
+
+A minimal custom policy:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope;
+
+class TenantCapturePolicy implements CapturePolicy
+{
+    public function inputs(EvidenceEnvelope $envelope): CaptureDecision
+    {
+        return $envelope->tenantId() === 'regulated'
+            ? CaptureDecision::Redact
+            : CaptureDecision::Full;
+    }
+
+    public function outputs(EvidenceEnvelope $envelope): CaptureDecision { /* ... */ }
+    public function artifacts(EvidenceEnvelope $envelope): CaptureDecision { /* ... */ }
+    public function activeContext(EvidenceEnvelope $envelope): CaptureDecision { /* ... */ }
+}
+```
+
+Bind it in a service provider:
+
+```php
+$this->app->bind(CapturePolicy::class, TenantCapturePolicy::class);
+```
+
+#### Sink failure handler contract and `halt` failure policy
+
+The `BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler` contract makes
+the audit dispatcher's reaction to sink failures pluggable. The container
+binds it to `ConfiguredSinkFailureHandler` by default, which reads the
+existing `swarm.audit.failure_policy` config value.
+
+`failure_policy` accepts a new third value, `'halt'`, alongside the existing
+`'swallow'` and `'log'`. When a sink throws under `halt`, the dispatcher
+raises `BuiltByBerry\LaravelSwarm\Exceptions\AuditSinkHaltedException`, which
+implements the `HaltsSwarmExecution` marker interface so callers can
+distinguish it from generic sink errors.
+
+The default value of `swarm.audit.failure_policy` remains `'swallow'` in
+v0.4. The flip to a stronger default — currently planned as `'queue'` —
+waits for the audit outbox work in v0.5. Regulated workloads that require
+audit-or-abort behavior should set the value to `'halt'` today.
+
+The dispatcher retry loop is capped at `MAX_HANDLER_ITERATIONS = 5` so a
+handler that always returns `RetryInline` cannot loop indefinitely.
+
+A minimal custom handler:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\SinkFailureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
+use BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope;
+use Throwable;
+
+class TenantSinkFailureHandler implements SinkFailureHandler
+{
+    public function handle(EvidenceEnvelope $envelope, Throwable $error): SinkFailureDecision
+    {
+        return $envelope->tenantId() === 'regulated'
+            ? SinkFailureDecision::Halt
+            : SinkFailureDecision::Swallow;
+    }
+}
+```
+
+Bind it in a service provider:
+
+```php
+$this->app->bind(SinkFailureHandler::class, TenantSinkFailureHandler::class);
+```
+
+### Low Impact Changes
+
+#### Audit signing slot
+
+The `BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner` contract adds a
+signing slot inside the audit dispatcher. There is no default binding, so
+v0.3 behavior — unsigned envelopes — is preserved. When a signer is bound,
+it is invoked after envelope enrichment and before sink emit.
+
+Implementations must not mutate or remove existing envelope keys; they may
+only add signature fields. Signing failures route through the same
+`SinkFailureHandler` as sink failures, so strict regulated workloads should
+combine a signer with `failure_policy=halt`.
+
+A minimal custom signer:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
+use BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope;
+
+class HmacAuditSigner implements SwarmAuditSigner
+{
+    public function __construct(private readonly string $key) {}
+
+    public function sign(EvidenceEnvelope $envelope): EvidenceEnvelope
+    {
+        $signature = hash_hmac('sha256', $envelope->canonicalPayload(), $this->key);
+
+        return $envelope->withSignature(['alg' => 'HS256', 'value' => $signature]);
+    }
+}
+```
+
+Bind it in a service provider:
+
+```php
+$this->app->bind(SwarmAuditSigner::class, fn () => new HmacAuditSigner(config('app.audit_key')));
+```
+
+### Composer
+
+Run the standard upgrade flow:
+
+```bash
+composer update builtbyberry/laravel-swarm
+php artisan config:clear
+php artisan migrate
+```
+
+If your application caches configuration during deploys, rebuild the cache
+after publishing or editing config:
+
+```bash
+php artisan config:cache
+```
+
 ## Upgrading to v0.3.5
 
 No migrations. No breaking changes. Run the standard upgrade flow:
