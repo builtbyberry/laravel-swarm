@@ -4,22 +4,26 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Audit;
 
+use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Exceptions\AuditSinkHaltedException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
  * Routes normalized audit evidence to the bound SwarmAuditSink.
  *
- * Enriches every payload with schema_version, category, and occurred_at before
- * forwarding to the sink. Sink exceptions are isolated and handled according to
- * swarm.audit.failure_policy — they never propagate into swarm execution.
+ * Enriches every payload with schema_version, category, and occurred_at
+ * before forwarding. Sink failures are routed to the bound SinkFailureHandler,
+ * which decides whether to swallow, retry inline, or halt the run. The
+ * default ConfiguredSinkFailureHandler maps the swarm.audit.failure_policy
+ * config value to a decision.
  *
- * Supported failure policies:
- *   swallow — silently discard the exception (default, safest for production).
- *   log     — record the exception via the application logger, then continue.
+ * The dispatcher caps retry iterations at MAX_HANDLER_ITERATIONS (5) to
+ * prevent runaway loops from buggy custom handlers. Exceeding the cap throws
+ * a SwarmException carrying the original sink failure as $previous.
  */
 class SwarmAuditDispatcher
 {
@@ -28,10 +32,17 @@ class SwarmAuditDispatcher
      */
     public const SCHEMA_VERSION = EvidenceEnvelope::SCHEMA_VERSION;
 
+    /**
+     * Maximum number of sink emit attempts per evidence record. Exceeded only
+     * when a SinkFailureHandler keeps returning SinkFailureDecision::RetryInline
+     * past this threshold — a defensive guard against runaway custom handlers.
+     */
+    public const MAX_HANDLER_ITERATIONS = 5;
+
     public function __construct(
         protected SwarmAuditSink $sink,
         protected ConfigRepository $config,
-        protected LoggerInterface $logger,
+        protected SinkFailureHandler $failureHandler,
     ) {}
 
     /**
@@ -40,15 +51,47 @@ class SwarmAuditDispatcher
      * @param  array<string, mixed>  $payload  Domain-specific correlation fields.
      *                                         schema_version, category, and occurred_at
      *                                         are merged automatically.
+     *
+     * @throws AuditSinkHaltedException When the SinkFailureHandler returns Halt.
+     *                                  Carries HaltsSwarmExecution marker.
      */
     public function emit(string $category, array $payload): void
     {
         $enriched = EvidenceEnvelope::enrich($category, $payload);
 
-        try {
-            $this->sink->emit($category, $enriched);
-        } catch (Throwable $exception) {
-            $this->handleSinkFailure($category, $exception);
+        $attempts = 0;
+
+        while (true) {
+            try {
+                $this->sink->emit($category, $enriched);
+
+                return;
+            } catch (Throwable $exception) {
+                $attempts++;
+
+                if ($attempts > self::MAX_HANDLER_ITERATIONS) {
+                    throw new SwarmException(
+                        sprintf(
+                            'Sink failure handler exceeded the maximum of %d iterations while emitting [%s].',
+                            self::MAX_HANDLER_ITERATIONS,
+                            $category,
+                        ),
+                        0,
+                        $exception,
+                    );
+                }
+
+                $decision = $this->failureHandler->handle($this->sink, $category, $enriched, $exception);
+
+                switch ($decision) {
+                    case SinkFailureDecision::Swallow:
+                        return;
+                    case SinkFailureDecision::RetryInline:
+                        continue 2;
+                    case SinkFailureDecision::Halt:
+                        throw new AuditSinkHaltedException($category, $exception);
+                }
+            }
         }
     }
 
@@ -61,21 +104,6 @@ class SwarmAuditDispatcher
     public function metadata(array $metadata): array
     {
         return EvidenceEnvelope::metadata($metadata, $this->metadataAllowlist());
-    }
-
-    protected function handleSinkFailure(string $category, Throwable $exception): void
-    {
-        $policy = (string) $this->config->get('swarm.audit.failure_policy', 'swallow');
-
-        if ($policy === 'log') {
-            $this->logger->error('Swarm audit sink failed.', [
-                'category' => $category,
-                'exception' => $exception->getMessage(),
-                'class' => $exception::class,
-            ]);
-        }
-
-        // Never rethrow — sink failures must not affect swarm execution.
     }
 
     /**

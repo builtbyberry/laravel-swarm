@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\HaltsSwarmExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
@@ -271,17 +272,23 @@ class SwarmRunner
                 executionMode: $executionMode->value,
                 exceptionClass: $exception::class,
             ));
-            $this->audit->emit('run.failed', [
-                'run_id' => $context->runId,
-                'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-                'swarm_class' => $swarm::class,
-                'topology' => $topology->value,
-                'execution_mode' => $executionMode->value,
-                'status' => 'failed',
-                'exception_class' => $exception::class,
-                'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
-                ...$this->audit->metadata($context->metadata),
-            ]);
+
+            // Skip the run.failed audit emit when the cause was an audit halt —
+            // re-emitting through the same dispatcher would just halt again and
+            // mask the original sink failure with a duplicate halt exception.
+            if (! $exception instanceof HaltsSwarmExecution) {
+                $this->audit->emit('run.failed', [
+                    'run_id' => $context->runId,
+                    'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+                    'swarm_class' => $swarm::class,
+                    'topology' => $topology->value,
+                    'execution_mode' => $executionMode->value,
+                    'status' => 'failed',
+                    'exception_class' => $exception::class,
+                    'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                    ...$this->audit->metadata($context->metadata),
+                ]);
+            }
 
             throw $exception;
         }
