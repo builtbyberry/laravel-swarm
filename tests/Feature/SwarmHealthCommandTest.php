@@ -132,6 +132,43 @@ test('swarm health identifies failing cache component', function (): void {
 });
 
 // ---------------------------------------------------------------------------
+// swarm:health --durable active context capture check (issue #11)
+// ---------------------------------------------------------------------------
+
+describe('active context capture check', function (): void {
+    test('reports ok when swarm.capture.active_context is enabled', function (): void {
+        config()->set('swarm.capture.active_context', true);
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('Active context capture')
+            ->toContain('swarm.capture.active_context is enabled');
+    });
+
+    test('reports failed when swarm.capture.active_context is disabled under --durable', function (): void {
+        config()->set('swarm.capture.active_context', false);
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true]);
+
+        expect($exitCode)->toBe(1);
+        expect(Artisan::output())
+            ->toContain('Active context capture')
+            ->toContain('SWARM_CAPTURE_ACTIVE_CONTEXT=true');
+    });
+
+    test('does not run without --durable', function (): void {
+        config()->set('swarm.capture.active_context', false);
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())->not->toContain('Active context capture');
+    });
+});
+
+// ---------------------------------------------------------------------------
 // swarm:health --durable outbox staleness checks (Plan 1 — graduated states)
 // ---------------------------------------------------------------------------
 

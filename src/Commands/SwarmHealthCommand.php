@@ -42,6 +42,7 @@ class SwarmHealthCommand extends Command
         );
 
         if ($this->option('durable') === true) {
+            $results[] = $this->runActiveContextCaptureCheck($config);
             $results[] = [
                 'component' => 'Relay scheduling',
                 'driver' => 'n/a',
@@ -74,6 +75,32 @@ class SwarmHealthCommand extends Command
         return collect($results)->contains(fn (array $result): bool => $result['status'] === 'failed')
             ? self::FAILURE
             : self::SUCCESS;
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runActiveContextCaptureCheck(ConfigRepository $config): array
+    {
+        $enabled = (bool) $config->get('swarm.capture.active_context', false);
+
+        if ($enabled) {
+            return [
+                'component' => 'Active context capture',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'ok',
+                'details' => 'swarm.capture.active_context is enabled',
+            ];
+        }
+
+        return [
+            'component' => 'Active context capture',
+            'driver' => 'n/a',
+            'store' => 'n/a',
+            'status' => 'failed',
+            'details' => 'Queued and durable swarms require active runtime context persistence so workers can continue or recover the run. Enable [swarm.capture.active_context] (SWARM_CAPTURE_ACTIVE_CONTEXT=true) or use synchronous execution.',
+        ];
     }
 
     /**
