@@ -13,6 +13,78 @@ from **PHP**, **Laravel**, or **[Laravel AI](https://github.com/laravel/ai)**.
 Treat Composer upgrades that touch those dependencies as integration-test events
 for your app.
 
+## Stability and the public API
+
+Laravel Swarm distinguishes between a small public surface that is covered by
+semver and a larger set of internals that may change at any time. The lists
+below are the framing; specific class-level markers and the persisted schema
+freeze are documented in the per-version blocks as they land.
+
+### Public surfaces
+
+The following are public and covered by semver:
+
+- The `Swarm` and `SwarmHistory` Facades and their documented methods.
+- The `Runnable` contract that user swarms implement.
+- The keys published in `config/swarm.php`. Renaming or removing a key is a
+  breaking change; adding a new key with a backward-compatible default is not.
+- The documented event types dispatched by the runner, including
+  `SwarmStarted`, `SwarmCompleted`, `SwarmFailed`, and the other events listed
+  in the events documentation.
+- The signatures of the `swarm:*` Artisan commands — command name, documented
+  arguments, options, and exit codes.
+- The audit evidence envelope, including its `schema_version` field. Envelopes
+  are versioned and old `schema_version` values continue to be readable across
+  minor releases.
+
+Code that only uses these surfaces should upgrade with the steps listed in the
+per-version blocks below and nothing more.
+
+### Internal surfaces
+
+Everything that is not in the list above is internal. That includes runners,
+recorders, dispatchers, persistence stores, durable runtime components, queue
+and stream adapters, and any contract that does not carry a `@stable` marker.
+Internals may change in any minor release without notice. Applications that
+extend, subclass, or directly instantiate internal classes are responsible for
+re-validating those code paths on every upgrade.
+
+### Semver pre-1.0
+
+Laravel Swarm is pre-1.0 and follows the common pre-1.0 reading of semver:
+
+- A minor bump (`0.x.0` → `0.(x+1).0`) may change or remove public surfaces.
+  Each minor release ships a dedicated block in this file describing the
+  required migration.
+- A patch bump (`0.x.y` → `0.x.z`) is strictly additive on public surfaces.
+  Patch releases may add new methods, new events, or new config keys with
+  safe defaults, but will not remove or rename existing public surfaces.
+
+The per-version blocks below are the authoritative change record for what
+moved between releases.
+
+### How stability is marked in code
+
+Starting with v0.4, classes that are not part of the public surface listed
+above are annotated with an `@internal` PHPDoc tag. Anything inside the
+`BuiltByBerry\LaravelSwarm` namespace that is *not* marked `@internal` and is
+reachable through the public surfaces above is treated as public.
+
+Static analysis tools that respect `@internal` (PHPStan, Psalm) will flag
+application code that reaches into marked classes. Treat those warnings as a
+signal to switch to a public verb or open an issue describing the use case.
+
+### Deprecation policy
+
+When a public surface needs to change, the existing API is first marked with
+an `@deprecated` PHPDoc tag and a short note pointing at the replacement. The
+deprecated surface continues to work through the next minor release, then is
+removed in the minor release after that. Each removal gets its own block in
+this file describing the migration.
+
+The deprecation timeline applies only to public surfaces. Internals may be
+removed in the same release that introduces a replacement.
+
 ## Upgrade Checklist
 
 Use the normal Laravel package upgrade flow first:
