@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -11,12 +13,27 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Throwable;
 
+/**
+ * Adapter over the bound CapturePolicy.
+ *
+ * v0.4 keeps the v0.3 SwarmCapture surface (input/output/context/step/etc.)
+ * but routes every decision through CapturePolicy. Custom policies bound in
+ * the service container immediately affect every emit site without changes
+ * to call sites. The default BooleanCapturePolicy preserves v0.3 behavior
+ * (reads swarm.capture.* booleans).
+ *
+ * For v0.4, CaptureDecision::Skip behaves identically to ::Redact at the
+ * field level — the enum case is reserved for v0.5 audit dispatcher work
+ * that adds true per-field omission. Custom policies returning ::Skip today
+ * declare intent; the contract is locked.
+ */
 class SwarmCapture
 {
     public const REDACTED = '[redacted]';
 
     public function __construct(
         protected ConfigRepository $config,
+        protected CapturePolicy $policy,
     ) {}
 
     public function input(string $input): string
@@ -134,22 +151,22 @@ class SwarmCapture
 
     public function capturesInputs(): bool
     {
-        return (bool) $this->config->get('swarm.capture.inputs', false);
+        return $this->policy->inputs() === CaptureDecision::Full;
     }
 
     public function capturesOutputs(): bool
     {
-        return (bool) $this->config->get('swarm.capture.outputs', false);
+        return $this->policy->outputs() === CaptureDecision::Full;
     }
 
     public function capturesArtifacts(): bool
     {
-        return $this->capturesOutputs() && (bool) $this->config->get('swarm.capture.artifacts', false);
+        return $this->policy->artifacts() === CaptureDecision::Full;
     }
 
     public function capturesActiveContext(): bool
     {
-        return (bool) $this->config->get('swarm.capture.active_context', false);
+        return $this->policy->activeContext() === CaptureDecision::Full;
     }
 
     public function capturesFailures(): bool
