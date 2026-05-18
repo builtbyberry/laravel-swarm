@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Audit;
 
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\AuditSinkHaltedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
@@ -43,6 +44,7 @@ class SwarmAuditDispatcher
         protected SwarmAuditSink $sink,
         protected ConfigRepository $config,
         protected SinkFailureHandler $failureHandler,
+        protected ?SwarmAuditSigner $signer = null,
     ) {}
 
     /**
@@ -58,6 +60,24 @@ class SwarmAuditDispatcher
     public function emit(string $category, array $payload): void
     {
         $enriched = EvidenceEnvelope::enrich($category, $payload);
+
+        if ($this->signer !== null) {
+            try {
+                $enriched = $this->signer->sign($category, $enriched);
+            } catch (Throwable $exception) {
+                $decision = $this->failureHandler->handle($this->sink, $category, $enriched, $exception);
+
+                if ($decision === SinkFailureDecision::Halt) {
+                    throw new AuditSinkHaltedException($category, $exception);
+                }
+
+                // Swallow and RetryInline both stop the emit here — we cannot
+                // retry signing the same payload from inside the dispatcher
+                // without delegating that retry decision back to the signer
+                // itself, which is out of scope for v0.4.
+                return;
+            }
+        }
 
         $attempts = 0;
 
