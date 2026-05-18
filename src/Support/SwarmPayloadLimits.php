@@ -9,6 +9,9 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use JsonException;
 
+/**
+ * @internal
+ */
 class SwarmPayloadLimits
 {
     public function __construct(

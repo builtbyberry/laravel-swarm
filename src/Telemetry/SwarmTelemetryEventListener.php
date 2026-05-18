@@ -35,6 +35,8 @@ use Throwable;
 /**
  * Subscribes to swarm lifecycle and package queue events and forwards normalized
  * telemetry to SwarmTelemetryDispatcher. Does not replace lifecycle events.
+ *
+ * @internal
  */
 class SwarmTelemetryEventListener
 {

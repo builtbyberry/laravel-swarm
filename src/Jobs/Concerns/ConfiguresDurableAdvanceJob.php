@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Jobs\Concerns;
 
+/**
+ * @internal
+ */
 trait ConfiguresDurableAdvanceJob
 {
     public function tries(): int

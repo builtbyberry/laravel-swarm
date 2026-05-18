@@ -15,6 +15,8 @@ use ReflectionClass;
 
 /**
  * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ *
+ * @internal
  */
 class DurableBoundaryCoordinator
 {

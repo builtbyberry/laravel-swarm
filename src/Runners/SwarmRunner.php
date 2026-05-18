@@ -59,6 +59,8 @@ use Throwable;
 /**
  * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ *
+ * @internal
  */
 class SwarmRunner
 {

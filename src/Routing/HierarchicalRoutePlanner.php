@@ -9,6 +9,9 @@ use JsonException;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\HasStructuredOutput;
 
+/**
+ * @internal
+ */
 class HierarchicalRoutePlanner
 {
     /**

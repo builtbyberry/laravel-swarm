@@ -44,6 +44,8 @@ use Illuminate\Database\Connection;
 
 /**
  * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ *
+ * @internal
  */
 class DurableSwarmManager
 {

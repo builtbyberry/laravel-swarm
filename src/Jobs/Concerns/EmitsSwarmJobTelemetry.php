@@ -11,6 +11,9 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Throwable;
 
+/**
+ * @internal
+ */
 trait EmitsSwarmJobTelemetry
 {
     public int $enqueuedAtMs;

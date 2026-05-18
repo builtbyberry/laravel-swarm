@@ -10,6 +10,9 @@ use BuiltByBerry\LaravelSwarm\Pulse\Support\SwarmPulseKey;
 use Carbon\CarbonImmutable;
 use Laravel\Pulse\Pulse;
 
+/**
+ * @internal
+ */
 class SwarmRuns
 {
     /**

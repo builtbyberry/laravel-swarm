@@ -6,6 +6,8 @@ namespace BuiltByBerry\LaravelSwarm\Telemetry;
 
 /**
  * Immutable observability record emitted by the swarm runtime.
+ *
+ * @internal
  */
 final readonly class CanonicalTelemetryRecord
 {

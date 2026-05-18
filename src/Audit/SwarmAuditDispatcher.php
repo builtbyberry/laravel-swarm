@@ -25,6 +25,8 @@ use Throwable;
  * The dispatcher caps retry iterations at MAX_HANDLER_ITERATIONS (5) to
  * prevent runaway loops from buggy custom handlers. Exceeding the cap throws
  * a SwarmException carrying the original sink failure as $previous.
+ *
+ * @internal
  */
 class SwarmAuditDispatcher
 {

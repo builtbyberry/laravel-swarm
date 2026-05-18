@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+/**
+ * @internal
+ */
 class MonotonicTime
 {
     public static function now(): float

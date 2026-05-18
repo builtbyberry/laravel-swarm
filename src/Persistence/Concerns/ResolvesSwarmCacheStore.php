@@ -10,6 +10,9 @@ use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Throwable;
 
+/**
+ * @internal
+ */
 trait ResolvesSwarmCacheStore
 {
     protected function resolveCacheStore(CacheFactory $cacheFactory, ConfigRepository $config, string $configKey): CacheRepository

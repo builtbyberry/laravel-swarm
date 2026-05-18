@@ -6,6 +6,9 @@ namespace BuiltByBerry\LaravelSwarm\Concerns;
 
 use Laravel\Ai\Responses\AgentResponse;
 
+/**
+ * @internal
+ */
 trait MergesAgentUsage
 {
     /**

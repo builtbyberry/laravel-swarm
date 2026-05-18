@@ -6,6 +6,9 @@ namespace BuiltByBerry\LaravelSwarm\Routing;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 
+/**
+ * @internal
+ */
 class HierarchicalRoutePlan
 {
     /**

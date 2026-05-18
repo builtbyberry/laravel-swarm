@@ -15,6 +15,9 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
+/**
+ * @internal
+ */
 class InvokeSwarm implements ShouldQueue
 {
     use EmitsSwarmJobTelemetry;

@@ -6,6 +6,9 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 
+/**
+ * @internal
+ */
 class PlainData
 {
     /**

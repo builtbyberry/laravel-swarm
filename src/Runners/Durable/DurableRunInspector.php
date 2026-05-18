@@ -11,6 +11,9 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use Illuminate\Contracts\Events\Dispatcher;
 
+/**
+ * @internal
+ */
 class DurableRunInspector
 {
     public function __construct(

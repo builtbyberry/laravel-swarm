@@ -18,6 +18,9 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use ReflectionClass;
 use ValueError;
 
+/**
+ * @internal
+ */
 class SwarmAttributeResolver
 {
     public function __construct(

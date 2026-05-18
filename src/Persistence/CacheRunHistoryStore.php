@@ -17,6 +17,9 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Carbon;
 use Throwable;
 
+/**
+ * @internal
+ */
 class CacheRunHistoryStore implements RunHistoryStore
 {
     use ResolvesSwarmCacheStore;

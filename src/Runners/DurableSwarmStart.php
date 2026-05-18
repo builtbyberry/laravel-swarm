@@ -6,6 +6,9 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 
+/**
+ * @internal
+ */
 final readonly class DurableSwarmStart
 {
     public function __construct(

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Pulse\Support;
 
+/**
+ * @internal
+ */
 class SwarmPulseKey
 {
     public static function runStatus(string $swarmClass, string $topology, string $status): string

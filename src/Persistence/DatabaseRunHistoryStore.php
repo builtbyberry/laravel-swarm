@@ -23,6 +23,9 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Throwable;
 
+/**
+ * @internal
+ */
 class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistoryStore
 {
     use InteractsWithJsonColumns;

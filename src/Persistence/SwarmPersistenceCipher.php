@@ -13,6 +13,8 @@ use Psr\Log\LoggerInterface;
 /**
  * Application-level encryption for sensitive string columns written by database
  * persistence drivers, mirroring Laravel's Encrypter usage (same as encrypted casts).
+ *
+ * @internal
  */
 class SwarmPersistenceCipher
 {

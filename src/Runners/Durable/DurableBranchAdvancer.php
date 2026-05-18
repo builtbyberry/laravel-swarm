@@ -31,6 +31,9 @@ use Illuminate\Support\Carbon;
 use Laravel\Ai\Contracts\Agent;
 use Throwable;
 
+/**
+ * @internal
+ */
 class DurableBranchAdvancer
 {
     public function __construct(

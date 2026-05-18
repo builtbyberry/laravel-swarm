@@ -11,6 +11,9 @@ use Illuminate\Support\Facades\View;
 use Laravel\Pulse\Livewire\Card;
 use Livewire\Attributes\Lazy;
 
+/**
+ * @internal
+ */
 #[Lazy]
 class SwarmSteps extends Card
 {

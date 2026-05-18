@@ -7,6 +7,9 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 
+/**
+ * @internal
+ */
 class DurablePayloadCapture
 {
     public function __construct(

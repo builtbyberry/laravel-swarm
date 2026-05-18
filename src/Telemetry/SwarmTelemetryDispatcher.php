@@ -14,6 +14,8 @@ use Throwable;
  *
  * Enriches every payload with schema_version, category, and occurred_at before
  * forwarding to the sink. Sink exceptions are isolated per swarm.observability.failure_policy.
+ *
+ * @internal
  */
 class SwarmTelemetryDispatcher
 {

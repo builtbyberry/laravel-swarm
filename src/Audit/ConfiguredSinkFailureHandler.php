@@ -26,6 +26,8 @@ use Throwable;
  *
  * RetryInline is never returned by the default handler — it's reserved for
  * custom implementations that want transient-failure retry semantics.
+ *
+ * @internal
  */
 class ConfiguredSinkFailureHandler implements SinkFailureHandler
 {

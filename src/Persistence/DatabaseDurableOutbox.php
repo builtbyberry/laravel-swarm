@@ -15,6 +15,9 @@ use Illuminate\Support\Carbon;
 use Throwable;
 use UnexpectedValueException;
 
+/**
+ * @internal
+ */
 class DatabaseDurableOutbox implements DurableOutbox
 {
     public function __construct(

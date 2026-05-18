@@ -74,6 +74,8 @@ use Throwable;
  *   sequential  — branches stream one at a time in declaration order.
  *
  * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ *
+ * @internal
  */
 class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 {

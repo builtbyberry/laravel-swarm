@@ -8,6 +8,8 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
 
 /**
  * Fanout sink for first-party and application telemetry integrations.
+ *
+ * @internal
  */
 final class CompositeSwarmTelemetrySink implements SwarmTelemetrySink
 {

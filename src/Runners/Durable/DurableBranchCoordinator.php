@@ -12,6 +12,9 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Carbon;
 
+/**
+ * @internal
+ */
 class DurableBranchCoordinator
 {
     public function __construct(

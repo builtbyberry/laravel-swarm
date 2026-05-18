@@ -8,6 +8,8 @@ namespace BuiltByBerry\LaravelSwarm\Telemetry;
  * Shared envelope fields for audit evidence and observability telemetry payloads.
  *
  * Pure helpers — no container state. Dispatchers merge these into sink-bound payloads.
+ *
+ * @internal
  */
 final class EvidenceEnvelope
 {

@@ -14,6 +14,8 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
  * @example
  *   $this->app->bind(\BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink::class,
  *       MyAppAuditSink::class);
+ *
+ * @internal
  */
 final class NoOpSwarmAuditSink implements SwarmAuditSink
 {

@@ -13,6 +13,9 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Database\Connection;
 
+/**
+ * @internal
+ */
 class DurableTopLevelParallelAdvancer
 {
     public function __construct(

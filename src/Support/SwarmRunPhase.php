@@ -6,6 +6,8 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 /**
  * Derived CLI label for coordinated queued hierarchical parallel runs (does not affect persisted status filters).
+ *
+ * @internal
  */
 final class SwarmRunPhase
 {

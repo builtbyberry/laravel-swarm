@@ -17,6 +17,9 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 
+/**
+ * @internal
+ */
 class DatabaseDurableRunStore implements DurableRunStore
 {
     use InteractsWithJsonColumns;

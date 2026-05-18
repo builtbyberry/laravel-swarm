@@ -21,6 +21,9 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 
+/**
+ * @internal
+ */
 class DurableHierarchicalCoordinator
 {
     public function __construct(

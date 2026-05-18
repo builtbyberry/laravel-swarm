@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Concerns;
 
+/**
+ * @internal
+ */
 trait ResolvesStringConsoleInput
 {
     protected function argumentString(string $name): string

@@ -15,6 +15,8 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
  * Preserves the v0.3 capture behavior exactly. The boolean config keys are
  * deprecated in v0.4 and scheduled for removal in v0.5; bind a custom
  * CapturePolicy to make decisions per-run with context and actor visibility.
+ *
+ * @internal
  */
 class BooleanCapturePolicy implements CapturePolicy
 {

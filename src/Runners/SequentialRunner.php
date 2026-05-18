@@ -35,6 +35,9 @@ use Laravel\Ai\Streaming\Events\TextEnd;
 use Laravel\Ai\Streaming\Events\ToolCall;
 use Laravel\Ai\Streaming\Events\ToolResult;
 
+/**
+ * @internal
+ */
 class SequentialRunner
 {
     use MergesAgentUsage;

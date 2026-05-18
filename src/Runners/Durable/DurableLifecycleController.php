@@ -17,6 +17,9 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
 
+/**
+ * @internal
+ */
 class DurableLifecycleController
 {
     public function __construct(

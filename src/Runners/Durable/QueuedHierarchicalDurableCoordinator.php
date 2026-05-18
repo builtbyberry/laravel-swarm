@@ -20,6 +20,9 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use JsonException;
 
+/**
+ * @internal
+ */
 class QueuedHierarchicalDurableCoordinator
 {
     public function __construct(

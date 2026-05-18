@@ -13,6 +13,9 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
+/**
+ * @internal
+ */
 class ResumeQueuedHierarchicalSwarm implements ShouldQueue
 {
     use EmitsSwarmJobTelemetry;

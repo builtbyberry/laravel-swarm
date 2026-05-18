@@ -10,6 +10,9 @@ use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Foundation\Bus\PendingDispatch;
 
+/**
+ * @internal
+ */
 class DurableJobDispatcher
 {
     public function __construct(

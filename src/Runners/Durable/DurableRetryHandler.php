@@ -21,6 +21,9 @@ use Illuminate\Support\Carbon;
 use ReflectionClass;
 use Throwable;
 
+/**
+ * @internal
+ */
 class DurableRetryHandler
 {
     public function __construct(

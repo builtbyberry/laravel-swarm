@@ -22,6 +22,9 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use ReflectionClass;
 
+/**
+ * @internal
+ */
 class DurableSwarmStarter
 {
     public function __construct(

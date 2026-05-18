@@ -14,6 +14,9 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
+/**
+ * @internal
+ */
 class AdvanceDurableBranch implements ShouldQueue
 {
     use ConfiguresDurableAdvanceJob;

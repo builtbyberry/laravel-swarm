@@ -14,6 +14,9 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 
+/**
+ * @internal
+ */
 class DatabaseStreamEventStore implements StreamEventStore
 {
     use InteractsWithJsonColumns;

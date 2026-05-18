@@ -8,6 +8,9 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 
+/**
+ * @internal
+ */
 class FakeDurableSwarmManager extends DurableSwarmManager
 {
     public function __construct(

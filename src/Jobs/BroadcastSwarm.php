@@ -22,6 +22,8 @@ use Illuminate\Queue\SerializesModels;
 
 /**
  * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ *
+ * @internal
  */
 class BroadcastSwarm implements ShouldQueue
 {

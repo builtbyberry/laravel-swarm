@@ -13,6 +13,9 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Throwable;
 
+/**
+ * @internal
+ */
 class DurableStepAdvancer
 {
     public function __construct(

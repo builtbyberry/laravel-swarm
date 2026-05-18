@@ -13,6 +13,9 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 
+/**
+ * @internal
+ */
 class DurableRecoveryCoordinator
 {
     public function __construct(

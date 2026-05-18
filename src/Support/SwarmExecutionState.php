@@ -13,6 +13,9 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use Closure;
 use Illuminate\Contracts\Events\Dispatcher;
 
+/**
+ * @internal
+ */
 class SwarmExecutionState
 {
     public function __construct(

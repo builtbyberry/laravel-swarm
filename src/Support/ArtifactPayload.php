@@ -7,6 +7,9 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 
+/**
+ * @internal
+ */
 class ArtifactPayload
 {
     /**

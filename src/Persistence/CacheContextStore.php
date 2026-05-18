@@ -11,6 +11,9 @@ use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 
+/**
+ * @internal
+ */
 class CacheContextStore implements ContextStore
 {
     use ResolvesSwarmCacheStore;

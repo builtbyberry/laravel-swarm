@@ -6,6 +6,9 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 
+/**
+ * @internal
+ */
 final readonly class DurableHierarchicalStepResult
 {
     /**

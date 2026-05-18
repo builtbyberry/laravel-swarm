@@ -14,6 +14,9 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 
+/**
+ * @internal
+ */
 class SwarmStepRecorder
 {
     public function __construct(

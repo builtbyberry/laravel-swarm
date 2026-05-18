@@ -13,6 +13,9 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 
+/**
+ * @internal
+ */
 class DatabaseArtifactRepository implements ArtifactRepository
 {
     use InteractsWithJsonColumns;

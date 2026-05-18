@@ -18,6 +18,8 @@ use Throwable;
  * in Context::add('swarm:actor', $actor) keep actor attribution across worker
  * boundaries. The auth() fallback only works in-request; queued runs that need
  * attribution must bind explicitly via RunContext::withActor() or Context.
+ *
+ * @internal
  */
 class DefaultActorResolver implements ActorResolver
 {

@@ -10,6 +10,9 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 
+/**
+ * @internal
+ */
 class StaticHierarchicalRunner extends HierarchicalRunner
 {
     public function run(SwarmExecutionState $state): SwarmResponse

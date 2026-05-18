@@ -29,6 +29,9 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Laravel\Ai\Contracts\Agent;
 
+/**
+ * @internal
+ */
 class HierarchicalRunner
 {
     use AlignsQueuedHierarchicalParallelCursor;

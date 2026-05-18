@@ -6,6 +6,8 @@ namespace BuiltByBerry\LaravelSwarm\Telemetry;
 
 /**
  * Process-local guard for package job telemetry emitted inside job handlers.
+ *
+ * @internal
  */
 class PackageJobTelemetryState
 {

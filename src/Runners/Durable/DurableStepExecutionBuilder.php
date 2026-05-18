@@ -21,6 +21,9 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 
+/**
+ * @internal
+ */
 class DurableStepExecutionBuilder
 {
     public function __construct(

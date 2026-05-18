@@ -16,6 +16,9 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
 
+/**
+ * @internal
+ */
 class DurableSignalHandler
 {
     public function __construct(

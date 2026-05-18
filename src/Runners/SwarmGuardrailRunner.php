@@ -23,6 +23,8 @@ use Psr\Log\LoggerInterface;
  *
  * Merge order: global config entries for the phase, then swarm {@see DefinesGuardrails::guardrails()},
  * then (when {@see GuardrailChildInheritance::OwnGlobalAndParent} and parent run resolves) parent swarm guardrails.
+ *
+ * @internal
  */
 class SwarmGuardrailRunner
 {

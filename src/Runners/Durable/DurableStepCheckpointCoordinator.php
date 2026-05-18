@@ -12,6 +12,9 @@ use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
+/**
+ * @internal
+ */
 class DurableStepCheckpointCoordinator
 {
     protected mixed $beforeStepCheckpointHook = null;

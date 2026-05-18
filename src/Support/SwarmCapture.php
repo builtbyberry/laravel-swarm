@@ -26,6 +26,8 @@ use Throwable;
  * field level — the enum case is reserved for v0.5 audit dispatcher work
  * that adds true per-field omission. Custom policies returning ::Skip today
  * declare intent; the contract is locked.
+ *
+ * @internal
  */
 class SwarmCapture
 {

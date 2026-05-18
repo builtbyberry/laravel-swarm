@@ -11,6 +11,9 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 
+/**
+ * @internal
+ */
 trait AlignsQueuedHierarchicalParallelCursor
 {
     /**

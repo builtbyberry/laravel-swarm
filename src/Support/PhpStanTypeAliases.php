@@ -15,6 +15,8 @@ namespace BuiltByBerry\LaravelSwarm\Support;
  * @phpstan-type SwarmStructuredSubset array<string, mixed>
  * @phpstan-type LaravelAiAgentAttachments list<array<string, mixed>>
  * @phpstan-type LaravelAiAgentProvider \Laravel\Ai\Enums\Lab|array<string, mixed>|string|null
+ *
+ * @internal
  */
 final class PhpStanTypeAliases
 {

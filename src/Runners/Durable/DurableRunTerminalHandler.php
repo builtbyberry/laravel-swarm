@@ -20,6 +20,9 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Illuminate\Contracts\Events\Dispatcher;
 use Throwable;
 
+/**
+ * @internal
+ */
 class DurableRunTerminalHandler
 {
     public function __construct(

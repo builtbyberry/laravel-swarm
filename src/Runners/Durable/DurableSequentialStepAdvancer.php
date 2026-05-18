@@ -8,6 +8,9 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 
+/**
+ * @internal
+ */
 class DurableSequentialStepAdvancer
 {
     public function __construct(

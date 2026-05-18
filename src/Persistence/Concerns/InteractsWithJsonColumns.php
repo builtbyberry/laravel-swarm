@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence\Concerns;
 
+/**
+ * @internal
+ */
 trait InteractsWithJsonColumns
 {
     protected function encodeJson(mixed $value): string

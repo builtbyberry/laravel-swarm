@@ -6,6 +6,9 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 use Illuminate\Support\Carbon;
 
+/**
+ * @internal
+ */
 final class DatabaseTtl
 {
     public static function expiresAt(int $ttlSeconds): Carbon
