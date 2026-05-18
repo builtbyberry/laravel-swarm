@@ -332,3 +332,83 @@ they introduce coordinator prompts, route plans, and intermediate node outputs
 as runtime state. Do not begin with broad rollout across document-heavy or
 approval-critical workflows until storage growth, recovery behavior, and
 operator procedures have been proven in production-like use.
+
+## Informational CI workflows
+
+Laravel Swarm ships two scheduled GitHub Actions workflows that are
+intentionally non-blocking. Both run with `continue-on-error: true`, so a red
+run never gates a PR merge or release. They produce a signal the maintainer is
+expected to act on, not a gate the CI system enforces.
+
+These workflows rot silently if no one looks at them. The maintainer reviews
+their state weekly as part of release-readiness, and again before tagging any
+release.
+
+### Nightly Laravel dev-main
+
+`.github/workflows/nightly.yml`
+
+- **Purpose.** Canary against `laravel/framework:dev-main` and the matching
+  `illuminate/*` packages aliased to `13.x-dev`. Surfaces breakage from
+  upstream Laravel changes before a tagged release reaches the package's
+  supported version matrix.
+- **What it runs.** `composer test`, `composer test:process-concurrency:ci`,
+  and `composer analyse` on PHP 8.5 against the dev-main dependency set.
+- **Trigger.** Daily at 06:17 UTC and on `workflow_dispatch`.
+- **Owner and cadence of review.** The maintainer reviews failures weekly
+  during release-readiness, and rechecks before cutting a release.
+- **What to do when it fails.** Open the failing run and read the test or
+  analyse output. If the failure reflects a real upstream change, file an
+  issue tagged `laravel-canary` describing the breaking change, the offending
+  Laravel commit (if identifiable), and the package code affected. If the
+  failure is transient (network, package source flake), re-run the workflow
+  manually before filing. Do not block a release on a nightly failure unless
+  the same breakage is reproducible against a tagged Laravel release in the
+  supported matrix.
+
+### Daily Pest mutation
+
+`.github/workflows/mutation.yml`
+
+- **Purpose.** Tracks test-quality trend over time by mutating covered source
+  and verifying the affected tests fail. Surfaces test gaps that line coverage
+  alone hides. Replaced Infection in v0.3.5.
+- **What it runs.** `composer test:mutation`, which invokes
+  `vendor/bin/pest --mutate --coverage --parallel --covered-only` on PHP 8.5
+  with pcov. Wall time is hours, not minutes, which is why it runs daily on a
+  schedule rather than per PR.
+- **Trigger.** Daily at 07:17 UTC and on `workflow_dispatch`. Timeout is 120
+  minutes.
+- **Owner and cadence of review.** The maintainer reviews the mutation score
+  trend weekly during release-readiness. There is no per-PR signal to react
+  to.
+- **What to do when it fails.** Two failure modes:
+  - **Job error** (composer install, timeout, infrastructure). Re-run
+    manually. If it persists, treat it as a workflow bug.
+  - **Surviving mutants reported.** Open the run output and read the surviving
+    mutations. For each, decide whether the gap warrants a new test case, an
+    assertion strengthening, or an explicit ignore comment. Do not chase a
+    perfect score; the goal is a stable or rising trend.
+
+### Raising the Pest mutate `--min` floor
+
+The mutation workflow does not enforce a minimum mutation score today. Adding
+`--min=<score>` to `composer test:mutation` would turn surviving-mutant counts
+into a hard failure.
+
+Raise the floor only after the baseline is stable. The criteria:
+
+- The unfloored mutation score has held at or above the candidate floor for
+  **four consecutive weekly reviews**.
+- No recent surviving mutant reflects an intentional test gap that the
+  maintainer is unwilling to close.
+- The candidate floor is set **at least five points below the current stable
+  score** so a single new uncovered branch does not immediately turn the
+  workflow red.
+
+When those hold, set `--min=<floor>` in the `test:mutation` composer script
+and note the change in `CHANGELOG.md` under the release that adopts it.
+Continue to keep the workflow `continue-on-error: true` for one additional
+release after introducing a floor, so a regression surfaces as a red badge
+rather than a blocked merge. Promote to a blocking job only after the floor
+has held through a full release cycle.
