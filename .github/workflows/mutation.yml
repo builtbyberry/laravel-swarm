@@ -1,0 +1,56 @@
+name: mutation
+
+on:
+  push:
+    branches:
+      - main
+      - '*.x'
+  pull_request:
+
+jobs:
+  infection:
+    name: PHP 8.5 - Infection (baseline)
+    runs-on: ubuntu-24.04
+    # Non-blocking while we collect baseline MSI/CCM scores. A gating threshold
+    # will land in a follow-up once scores stabilise (see issue #12).
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # Infection diff mode (when we enable it) needs history to compare against.
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          coverage: pcov
+          ini-values: memory_limit=512M
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      # testbench-core no longer auto-creates this symlink in some versions; the
+      # process-concurrency tests spawn a real artisan subprocess that needs it.
+      - name: Prepare testbench vendor symlink
+        run: |
+          if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
+            ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
+          fi
+
+      - name: Run Infection
+        env:
+          INFECTION_BADGE_API_KEY: ${{ secrets.INFECTION_BADGE_API_KEY }}
+        run: composer test:mutation
+
+      - name: Upload Infection report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infection-report
+          path: build/infection/
+          if-no-files-found: warn
+          retention-days: 14

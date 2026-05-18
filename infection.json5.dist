@@ -1,0 +1,31 @@
+{
+    // Infection mutation testing config for laravel-swarm.
+    // The CI job runs this as a non-blocking baseline collector; no MSI/CCM
+    // threshold is enforced yet (see issue #12). Once we have steady scores
+    // we can lift these floors and gate on them.
+    //
+    // Pest 4 refuses to be invoked through `vendor/bin/phpunit` (it asks you
+    // to use `vendor/bin/pest` instead), so we redirect Infection's PHPUnit
+    // adapter at the Pest binary via `phpUnit.customPath`. Pest accepts the
+    // same CLI flags Infection passes through.
+    $schema: "vendor/infection/infection/resources/schema.json",
+    source: {
+        directories: [
+            "src"
+        ]
+    },
+    timeout: 30,
+    logs: {
+        text: "build/infection/infection.log",
+        html: "build/infection/infection.html",
+        summary: "build/infection/summary.log",
+        json: "build/infection/infection.json",
+        github: true
+    },
+    tmpDir: "build/infection/tmp",
+    minMsi: 0,
+    minCoveredMsi: 0,
+    phpUnit: {
+        customPath: "vendor/bin/pest"
+    }
+}

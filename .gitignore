@@ -10,6 +10,10 @@
 /.phpunit.cache
 /.phpunit.result.cache
 /.pest
+/.infection
+/build
+/infection.log
+/infection.json5
 
 composer.phar
 
