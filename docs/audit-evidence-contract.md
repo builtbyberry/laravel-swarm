@@ -38,15 +38,19 @@ merged in automatically by `SwarmAuditDispatcher`.
 
 ### Failure Policy
 
-Sink exceptions are isolated from swarm execution. Control the behavior with
+Sink exceptions are routed through a `SinkFailureHandler` (see [Sink Failure
+Handler](#sink-failure-handler) below). The default handler reads
 `swarm.audit.failure_policy` (`SWARM_AUDIT_FAILURE_POLICY`):
 
-| Policy    | Behavior                                                           |
-|-----------|--------------------------------------------------------------------|
-| `swallow` | Silently discard the exception (default — safest for production).  |
-| `log`     | Record the exception via the application logger, then continue.    |
+| Policy    | Behavior                                                                 |
+|-----------|--------------------------------------------------------------------------|
+| `swallow` | Silently discard the exception (default — safest for production).        |
+| `log`     | Record the exception via the application logger, then continue.          |
+| `halt`    | Log the exception, then throw `AuditSinkHaltedException` to fail the run.|
 
-Sink failures **never** fail or corrupt swarm execution regardless of policy.
+`swallow` and `log` keep swarm execution isolated from audit-write failures.
+`halt` is opt-in for regulated workloads that must not continue when evidence
+cannot be emitted.
 
 ## Evidence Payload Schema
 
@@ -235,6 +239,341 @@ class S3AuditSink implements SwarmAuditSink
 }
 ```
 
+## Audit Extension Points
+
+The audit dispatcher exposes four container-bindable surfaces that compose
+inside `SwarmAuditDispatcher::emit()`. Resolution order at run entry and emit
+time is: actor resolves once, capture policy decides per category, the signer
+(if bound) runs after envelope enrichment, and the failure handler arbitrates
+any sink or signing exception.
+
+### Actor Binding
+
+An `Actor` is the identity attached to a swarm run. Every evidence record
+includes the resolved actor under the reserved `metadata.actor` key, which is
+emitted regardless of the configured metadata allowlist.
+
+`BuiltByBerry\LaravelSwarm\Audit\Actor` is an immutable value object with
+`id`, `type`, optional `name`, and optional `metadata`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+
+$system = Actor::system('cron:nightly');
+$user   = Actor::user(auth()->user());
+$token  = Actor::fromAny('api_token:abc123');
+$any    = Actor::fromAny($mixedInput); // Actor | Authenticatable | string
+```
+
+Resolution happens once at run entry through the `ActorResolver` contract:
+
+```php
+namespace BuiltByBerry\LaravelSwarm\Contracts;
+
+interface ActorResolver
+{
+    public function resolve(): ?Actor;
+}
+```
+
+The default binding, `BuiltByBerry\LaravelSwarm\Audit\DefaultActorResolver`,
+reads `Context::get('swarm:actor')` first, then falls back to the
+authenticated user, then returns `null`. The `Context` lookup is preferred
+because Laravel context bindings survive queue serialization; the `auth()`
+fallback only works inside a request.
+
+Override the resolver to source identity from request state, signed job
+payloads, API token introspection, or any other application-specific surface:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
+
+$this->app->bind(ActorResolver::class, MyAppActorResolver::class);
+```
+
+Callers may also bind an actor directly on the `RunContext` before dispatch.
+`RunContext::withActor()` takes precedence over the resolver:
+
+```php
+$context->withActor($user);
+$context->withActor('api_token:abc123');
+$context->withActor(Actor::system('billing-cron'));
+```
+
+The `metadata.actor` key is reserved on `EvidenceEnvelope::RESERVED_METADATA_KEYS`.
+Reserved keys are always emitted on evidence and telemetry payloads regardless
+of `swarm.audit.metadata_allowlist`. Applications cannot override this slot via
+user-supplied metadata.
+
+For regulated deployments that treat unattributed runs as a compliance
+violation, set `swarm.audit.actor.required=true`
+(`SWARM_AUDIT_ACTOR_REQUIRED=true`). A run entering the runner without a
+resolvable actor then throws `MissingActorException`:
+
+```php
+'audit' => [
+    'actor' => [
+        'required' => true,
+    ],
+],
+```
+
+The default is `false` to preserve v0.3 behavior.
+
+### Capture Policy
+
+The capture policy decides, per category, whether captured inputs, outputs,
+artifacts, and active context are stored as-is, redacted, or skipped. Policies
+return a decision; they never see the captured payload itself, so policy code
+cannot couple to payload shapes or leak the unredacted payload through its
+own logging.
+
+```php
+namespace BuiltByBerry\LaravelSwarm\Contracts;
+
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+interface CapturePolicy
+{
+    public function inputs(?RunContext $context = null, ?Actor $actor = null): CaptureDecision;
+
+    public function outputs(?RunContext $context = null, ?Actor $actor = null): CaptureDecision;
+
+    public function artifacts(?RunContext $context = null, ?Actor $actor = null): CaptureDecision;
+
+    public function activeContext(?RunContext $context = null, ?Actor $actor = null): CaptureDecision;
+}
+```
+
+`BuiltByBerry\LaravelSwarm\Audit\CaptureDecision` has three cases:
+
+| Case     | Behavior                                                                 |
+|----------|--------------------------------------------------------------------------|
+| `Full`   | Store the payload as-is.                                                 |
+| `Redact` | Store the payload structure with scalar values replaced by `SwarmCapture::REDACTED`. |
+| `Skip`   | Omit the payload from audit and history. In v0.4 the runtime treats `Skip` identically to `Redact` at the field level. Per-field omit lands in v0.5 alongside the audit dispatcher `Skip`-aware path. The contract is locked; custom policies may return `Skip` today to declare intent. |
+
+The default binding, `BuiltByBerry\LaravelSwarm\Audit\BooleanCapturePolicy`,
+reads the existing `swarm.capture.*` booleans and returns `Full` when true /
+`Redact` when false, preserving v0.3 behavior exactly. The booleans are
+deprecated in v0.4 and scheduled for removal in v0.5.
+
+Bind a custom policy to make decisions per-run with context and actor
+visibility — for example, capture inputs only for runs initiated by service
+accounts, or redact outputs whenever a tenant flag is present:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+class TenantAwareCapturePolicy implements CapturePolicy
+{
+    public function inputs(?RunContext $context = null, ?Actor $actor = null): CaptureDecision
+    {
+        return $actor?->type === 'system'
+            ? CaptureDecision::Full
+            : CaptureDecision::Redact;
+    }
+
+    public function outputs(?RunContext $context = null, ?Actor $actor = null): CaptureDecision
+    {
+        return CaptureDecision::Redact;
+    }
+
+    public function artifacts(?RunContext $context = null, ?Actor $actor = null): CaptureDecision
+    {
+        return CaptureDecision::Redact;
+    }
+
+    public function activeContext(?RunContext $context = null, ?Actor $actor = null): CaptureDecision
+    {
+        return CaptureDecision::Skip;
+    }
+}
+```
+
+```php
+$this->app->bind(CapturePolicy::class, TenantAwareCapturePolicy::class);
+```
+
+### Audit Signing
+
+The signer slot runs inside `SwarmAuditDispatcher::emit()` after envelope
+enrichment (`schema_version`, `category`, `occurred_at`, and any reserved
+metadata such as `actor`) and before the payload is handed to the sink. No
+signer is bound by default; the dispatcher emits enriched payloads as-is,
+matching v0.3 behavior.
+
+```php
+namespace BuiltByBerry\LaravelSwarm\Contracts;
+
+interface SwarmAuditSigner
+{
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    public function sign(string $category, array $payload): array;
+}
+```
+
+Implementations MUST NOT mutate or remove existing keys. Signature fields are
+added alongside the existing envelope — conventionally `signature`,
+`signature_algorithm`, `signed_at`, and optionally `previous_signature_id` for
+chain-signing trails.
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
+
+class HmacAuditSigner implements SwarmAuditSigner
+{
+    public function __construct(private readonly string $key) {}
+
+    public function sign(string $category, array $payload): array
+    {
+        $canonical = json_encode($payload, JSON_UNESCAPED_SLASHES);
+
+        return $payload + [
+            'signature' => hash_hmac('sha256', $canonical, $this->key),
+            'signature_algorithm' => 'hmac-sha256',
+            'signed_at' => now()->toIso8601String(),
+        ];
+    }
+}
+```
+
+```php
+$this->app->bind(SwarmAuditSigner::class, fn () => new HmacAuditSigner(
+    config('app.swarm_signing_key'),
+));
+```
+
+Signing scope, algorithm, canonicalization, and chain-signing semantics are
+implementation concerns. A signer may also refuse to sign a given category by
+returning the input payload unchanged:
+
+```php
+public function sign(string $category, array $payload): array
+{
+    if (! str_starts_with($category, 'run.')) {
+        return $payload;
+    }
+
+    // ...sign run.* categories only
+}
+```
+
+Signing failures route through the bound `SinkFailureHandler`. Strict
+no-unsigned-evidence semantics are achieved by setting
+`swarm.audit.failure_policy=halt` or by binding a custom handler that
+inspects `$exception` to differentiate signing exceptions from sink
+exceptions.
+
+### Sink Failure Handler
+
+Sink and signing exceptions are arbitrated by the `SinkFailureHandler`
+contract. The handler is the dispatcher's loop control: as long as it returns
+`RetryInline`, the dispatcher retries the same emit synchronously.
+
+```php
+namespace BuiltByBerry\LaravelSwarm\Contracts;
+
+use BuiltByBerry\LaravelSwarm\Audit\SinkFailureDecision;
+use Throwable;
+
+interface SinkFailureHandler
+{
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    public function handle(
+        SwarmAuditSink $sink,
+        string $category,
+        array $payload,
+        Throwable $exception,
+    ): SinkFailureDecision;
+}
+```
+
+`BuiltByBerry\LaravelSwarm\Audit\SinkFailureDecision` has three cases:
+
+| Case          | Behavior                                                            |
+|---------------|---------------------------------------------------------------------|
+| `Swallow`     | Stop emitting; continue swarm execution.                            |
+| `RetryInline` | Retry the same emit synchronously.                                  |
+| `Halt`        | Throw `AuditSinkHaltedException` (carries `HaltsSwarmExecution`).   |
+
+The default binding, `BuiltByBerry\LaravelSwarm\Audit\ConfiguredSinkFailureHandler`,
+maps `swarm.audit.failure_policy` to a decision:
+
+- `swallow` → `Swallow` (no logging).
+- `log` → log via the application logger, then `Swallow`.
+- `halt` → log via the application logger, then `Halt`.
+
+Unknown policy values fall back to `Swallow` with a one-time warning, matching
+the conservative posture of the v0.3 dispatcher. The default handler never
+returns `RetryInline` — retry semantics are reserved for custom handlers.
+
+`AuditSinkHaltedException` carries the `HaltsSwarmExecution` marker interface.
+The runner detects the marker on caught exceptions and surfaces the halt as a
+deliberate, attributable run-level failure — the history store records the
+failure and the exception is rethrown to the dispatch caller. Reserve `Halt`
+for regulated workloads that require no-unsigned-evidence or
+no-unattributed-evidence semantics; the default audit configuration never
+produces a halting exception.
+
+The dispatcher caps retries at `SwarmAuditDispatcher::MAX_HANDLER_ITERATIONS = 5`.
+A handler that returns `RetryInline` past that bound triggers a runtime
+exception, preventing infinite loops from buggy custom handlers.
+
+Custom handlers may inspect `$exception` to differentiate sink failures from
+signing failures and route them through different paths:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\SinkFailureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use Throwable;
+
+class TieredSinkFailureHandler implements SinkFailureHandler
+{
+    public function __construct(
+        private readonly SinkFailureHandler $inner,
+        private readonly TransientErrorClassifier $classifier,
+    ) {}
+
+    public function handle(
+        SwarmAuditSink $sink,
+        string $category,
+        array $payload,
+        Throwable $exception,
+    ): SinkFailureDecision {
+        if ($this->classifier->isTransient($exception)) {
+            return SinkFailureDecision::RetryInline;
+        }
+
+        if ($exception instanceof SigningException) {
+            return SinkFailureDecision::Halt;
+        }
+
+        return $this->inner->handle($sink, $category, $payload, $exception);
+    }
+}
+```
+
+```php
+$this->app->bind(SinkFailureHandler::class, TieredSinkFailureHandler::class);
+```
+
+The `Queue` and `DeadLetter` cases land in v0.5 alongside the audit outbox
+table and the `swarm:relay --type=audit` lane. Adding enum cases later is
+non-breaking; handlers that return `Swallow`, `RetryInline`, or `Halt` today
+remain valid.
+
 ## Metadata Governance
 
 Run metadata is developer-supplied and is not validated or sanitized by the package. By default, metadata values are excluded from audit and telemetry payloads — only key names are included. Use the controls below to decide exactly what reaches your sinks.
@@ -290,7 +629,15 @@ These controls apply to **sink and telemetry payloads only**. They do not affect
 - [ ] Choose an append-only target (database with `INSERT`-only grants, object
   storage, SIEM, or audit-log service).
 - [ ] Set `swarm.audit.failure_policy` to `log` if silent failures are not
-  acceptable in your compliance model.
+  acceptable in your compliance model, or `halt` if runs must hard-fail when
+  evidence cannot be emitted.
+- [ ] Set `swarm.audit.actor.required=true` if unattributed runs are a
+  compliance violation, and bind an `ActorResolver` that sources identity
+  from your authentication surface.
+- [ ] Bind a `SwarmAuditSigner` if evidence records must be cryptographically
+  signed before they reach the sink.
+- [ ] Bind a `CapturePolicy` if capture decisions need to vary per run or
+  actor rather than via the static `swarm.capture.*` booleans.
 - [ ] Confirm that your sink does not expose raw prompt/output content; evidence
   payloads never include them, but verify your sink does not add them.
 - [ ] Configure `swarm.audit.metadata_allowlist` only for top-level metadata keys
