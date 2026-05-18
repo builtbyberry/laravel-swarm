@@ -1,19 +1,25 @@
 name: mutation
 
+# Mutation testing runs on a daily schedule rather than per PR. With ~24k LOC
+# of source, even `--covered-only` generates thousands of mutations, and each
+# survives or dies by running the affected tests — wall time is hours, not
+# minutes. Keeping this off the PR path avoids gating merges on a long-running
+# baseline job. Use `workflow_dispatch` for an on-demand run.
 on:
-  push:
-    branches:
-      - main
-      - '*.x'
-  pull_request:
+  schedule:
+    # 07:17 UTC daily — off-the-hour to avoid GitHub's cron stampede.
+    - cron: '17 7 * * *'
+  workflow_dispatch:
 
 jobs:
   mutate:
     name: PHP 8.5 - Pest Mutate (baseline)
     runs-on: ubuntu-24.04
-    # Non-blocking while we collect baseline mutation scores. A gating threshold
-    # via --min will land in a follow-up once scores stabilise (see issue #12).
+    # Non-blocking informational job — failure surfaces in the schedule run
+    # but does not gate any other workflow. A gating threshold via --min
+    # will land in a follow-up once baseline scores stabilise (see issue #12).
     continue-on-error: true
+    timeout-minutes: 120
 
     steps:
       - name: Checkout code
