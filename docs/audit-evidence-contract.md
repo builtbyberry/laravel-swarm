@@ -182,6 +182,283 @@ increment and the change will be documented in the changelog.
 Adding new optional fields does not increment `schema_version`. Applications
 should handle unknown keys gracefully.
 
+## Frozen Schema for the v0.x Line
+
+The following envelope shape is frozen for the entire `0.x` release line.
+Sinks that rely on these fields will continue to receive them, with the same
+names and types, across every `0.x` release. A breaking change to any frozen
+field — removal, rename, or type change — is reserved for a `schema_version`
+bump and the `1.0` major boundary.
+
+The frozen surface covers two things: the **envelope** that every payload
+carries, and the **set of evidence categories** the package emits along with
+their guaranteed correlation fields.
+
+### Stability Promise
+
+- The frozen envelope fields, the frozen list of category names, and the
+  correlation fields enumerated below will not change within `0.x` without a
+  `schema_version` bump.
+- New categories may be added in any `0.x` minor release. Sinks MUST tolerate
+  unknown categories.
+- New optional fields may be added to existing categories in any `0.x` minor
+  release. Sinks MUST tolerate unknown keys.
+- Existing fields will not be removed, renamed, or repurposed within `0.x`.
+- Pre-1.0 semver permits a `1.0` major bump to break the schema. The v0.x
+  promise does not extend across the `1.0` boundary; the upgrade guide for
+  `1.0` will enumerate any envelope changes alongside a `schema_version`
+  increment.
+
+### Frozen Envelope Fields
+
+Every payload, in every category, carries the following top-level fields:
+
+| Field            | Type   | Notes                                                                 |
+|------------------|--------|-----------------------------------------------------------------------|
+| `schema_version` | string | `"1"` for the v0.x line. Bumps signal a breaking envelope change.     |
+| `category`       | string | One of the frozen category names below.                               |
+| `occurred_at`    | string | ISO-8601 timestamp of the emission.                                   |
+
+In addition, on every category whose emit site routes metadata through
+`SwarmAuditDispatcher::metadata()` (run, step, durable runtime, and durable
+checkpoint categories), the envelope carries:
+
+| Field           | Type                  | Notes                                                                 |
+|-----------------|-----------------------|-----------------------------------------------------------------------|
+| `metadata_keys` | array&lt;string&gt;   | All original metadata key names, sorted. Always emitted.              |
+| `metadata`      | array&lt;string, mixed&gt; | Allowlisted metadata values plus reserved keys. May be empty.    |
+
+The `metadata` array always includes any reserved keys present on the run,
+regardless of the configured allowlist. The reserved set is published as
+`EvidenceEnvelope::RESERVED_METADATA_KEYS`. The only reserved key in `0.x` is
+`actor`. New reserved keys may be added additively; the constant is the
+authoritative list.
+
+`actor` is delivered in one of two slots depending on which emit site
+produced the record:
+
+| Source                                         | Slot                |
+|------------------------------------------------|---------------------|
+| Run, step, durable runtime, and webhook events | `metadata.actor`    |
+| Operator commands (`command.*`)                | Top-level `actor`   |
+
+Both slots are frozen for `0.x`. Sinks that need a single read path should
+fall back from `metadata.actor` to top-level `actor`.
+
+### Frozen Categories
+
+The package emits the categories below today. Sinks may rely on these names
+appearing across the `0.x` line; no frozen category will be renamed or
+removed without a `schema_version` bump.
+
+#### Run Lifecycle
+
+| Category        |
+|-----------------|
+| `run.started`   |
+| `run.completed` |
+| `run.failed`    |
+
+Correlation fields on every `run.*` event:
+
+| Field            | Type   | Notes                                                          |
+|------------------|--------|----------------------------------------------------------------|
+| `run_id`         | string | The run identifier.                                            |
+| `parent_run_id`  | string&#124;null | Set when the run was spawned as a child.               |
+| `swarm_class`    | string | FQCN of the swarm.                                             |
+| `topology`       | string | `sequential`, `parallel`, `hierarchical`, or `static_hierarchical`. |
+| `execution_mode` | string | `run`, `queue`, `stream`, or `durable`.                        |
+| `status`         | string | `started`, `completed`, or `failed`.                           |
+
+Additional frozen fields by category:
+
+| Category        | Additional frozen fields                       |
+|-----------------|------------------------------------------------|
+| `run.completed` | `duration_ms` (int)                            |
+| `run.failed`    | `exception_class` (string), `duration_ms` (int) |
+
+#### Step Lifecycle
+
+| Category          |
+|-------------------|
+| `step.started`    |
+| `step.completed`  |
+
+Correlation fields on every `step.*` event:
+
+| Field            | Type   | Notes                                                          |
+|------------------|--------|----------------------------------------------------------------|
+| `run_id`         | string |                                                                |
+| `parent_run_id`  | string&#124;null |                                                      |
+| `swarm_class`    | string |                                                                |
+| `topology`       | string |                                                                |
+| `execution_mode` | string |                                                                |
+| `step_index`     | int    | Zero-based step index within the run.                          |
+| `agent_class`    | string | FQCN of the agent that ran the step.                           |
+| `status`         | string | `started` or `completed`.                                      |
+
+Additional frozen fields by category:
+
+| Category         | Additional frozen fields  |
+|------------------|---------------------------|
+| `step.completed` | `duration_ms` (int)       |
+
+#### Durable Runtime
+
+| Category                              |
+|---------------------------------------|
+| `durable.checkpointed`                |
+| `durable.checkpointed_hierarchical`   |
+| `durable.paused`                      |
+| `durable.pause_requested`             |
+| `durable.resumed`                     |
+| `durable.cancelled`                   |
+| `durable.cancel_requested`            |
+| `durable.completed`                   |
+| `durable.failed`                      |
+
+Correlation fields on every `durable.*` event:
+
+| Field            | Type             | Notes                                                          |
+|------------------|------------------|----------------------------------------------------------------|
+| `run_id`         | string           |                                                                |
+| `parent_run_id`  | string&#124;null |                                                                |
+| `swarm_class`    | string&#124;null | Sourced from run metadata; null when metadata was absent.      |
+| `topology`       | string&#124;null | Sourced from run metadata; null when metadata was absent.      |
+| `execution_mode` | string           | Always `durable` for these categories.                         |
+| `status`         | string           | Category-specific status value.                                |
+
+Additional frozen fields by category:
+
+| Category                              | Additional frozen fields                                                            |
+|---------------------------------------|-------------------------------------------------------------------------------------|
+| `durable.checkpointed`                | `next_step_index` (int)                                                             |
+| `durable.checkpointed_hierarchical`   | `next_step_index` (int)                                                             |
+| `durable.pause_requested`             | `immediately_paused` (bool)                                                         |
+| `durable.cancel_requested`            | `immediately_cancelled` (bool)                                                      |
+| `durable.completed`                   | `duration_ms` (int)                                                                 |
+| `durable.failed`                      | `exception_class` (string), `timed_out` (bool), `duration_ms` (int)                 |
+
+#### Durable Wait and Signal
+
+| Category          |
+|-------------------|
+| `wait.created`    |
+| `signal.received` |
+
+Correlation fields on every `wait.created` and `signal.received` event:
+
+| Field            | Type   | Notes                                                          |
+|------------------|--------|----------------------------------------------------------------|
+| `run_id`         | string |                                                                |
+| `swarm_class`    | string |                                                                |
+| `topology`       | string |                                                                |
+| `execution_mode` | string |                                                                |
+| `status`         | string | Category-specific status value.                                |
+
+Additional frozen fields by category:
+
+| Category          | Additional frozen fields                                                            |
+|-------------------|-------------------------------------------------------------------------------------|
+| `wait.created`    | `wait_name` (string), `reason` (string&#124;null), `timeout_seconds` (int&#124;null) |
+| `signal.received` | `signal_name` (string), `accepted` (bool), `duplicate` (bool)                       |
+
+#### Operator Commands
+
+| Category          |
+|-------------------|
+| `command.pause`   |
+| `command.resume`  |
+| `command.cancel`  |
+| `command.recover` |
+| `command.relay`   |
+| `command.prune`   |
+
+Every `command.*` event carries:
+
+| Field    | Type   | Notes                                                          |
+|----------|--------|----------------------------------------------------------------|
+| `actor`  | string | Always `"artisan"` for emits from the bundled commands.        |
+| `status` | string | Category-specific status value.                                |
+
+Additional frozen fields by category:
+
+| Category          | Additional frozen fields                                                                                          |
+|-------------------|-------------------------------------------------------------------------------------------------------------------|
+| `command.pause`   | `run_id` (string). `exception_class` (string) when `status: "failed"`.                                            |
+| `command.resume`  | `run_id` (string). `exception_class` (string) when `status: "failed"`.                                            |
+| `command.cancel`  | `run_id` (string). `exception_class` (string) when `status: "failed"`.                                            |
+| `command.recover` | `target_run_id` (string&#124;null), `target_swarm_class` (string&#124;null). On success: `recovered_count` (int), `recovered_run_ids` (array&lt;string&gt;). On failure: `exception_class` (string). |
+| `command.relay`   | `types` (array&lt;string&gt;), `limit` (int), `drain_until_empty` (bool), `max_attempts` (int&#124;null), `attempts` (int), `dispatched_count` (int), `skipped_count` (int), `failed_count` (int), `claimed_count` (int), `reclaimed_count` (int). |
+| `command.prune`   | `dry_run` (bool), `prevent_prune` (bool), `counts` (array&lt;string, int&gt;).                                    |
+
+#### Webhook Idempotency
+
+| Category                  |
+|---------------------------|
+| `webhook.start_accepted`  |
+| `webhook.start_duplicate` |
+| `webhook.start_conflict`  |
+| `webhook.start_in_flight` |
+| `webhook.start_failed`    |
+| `webhook.signal_received` |
+
+Every `webhook.start_*` event carries:
+
+| Field                 | Type             | Notes                                                |
+|-----------------------|------------------|------------------------------------------------------|
+| `swarm_class`         | string           | FQCN of the swarm bound to the webhook route.        |
+| `has_idempotency_key` | bool             | Whether the request supplied `Idempotency-Key`.      |
+| `status`              | string           | Category-specific status value.                      |
+
+Additional frozen fields by category:
+
+| Category                  | Additional frozen fields                                                  |
+|---------------------------|---------------------------------------------------------------------------|
+| `webhook.start_accepted`  | `run_id` (string)                                                         |
+| `webhook.start_duplicate` | `run_id` (string&#124;null)                                               |
+| `webhook.start_failed`    | `exception_class` (string)                                                |
+
+The `webhook.signal_received` envelope is frozen with the following fields:
+`run_id` (string), `signal_name` (string), `accepted` (bool), `duplicate`
+(bool), `has_idempotency_key` (bool), and `status` (string).
+
+### What is Not Frozen
+
+The frozen list above is deliberately narrow. The following are out of scope
+for the `0.x` stability promise and may change without a `schema_version`
+bump:
+
+- Any field returned through `metadata_keys` and `metadata` beyond the
+  reserved `actor` key. Application metadata shape is application-owned.
+- The exact textual value of `status` strings on categories where the value
+  is described as "category-specific" — the field is frozen, the precise
+  enumeration is not. Status strings observed today are documented in the
+  Evidence Categories tables above; treat unknown values as additive.
+- Fields emitted by signers via `SwarmAuditSigner::sign()`. Signers compose
+  alongside the frozen envelope; the signature shape is implementation-owned.
+- The telemetry envelope emitted by `SwarmTelemetryDispatcher`. Telemetry is
+  a sibling stream with its own categories and is not part of this contract.
+
+### Version-Bump Path
+
+When a breaking change to the frozen surface becomes necessary, the package
+will:
+
+1. Increment `EvidenceEnvelope::SCHEMA_VERSION` to `"2"` (or the next
+   integer).
+2. Document the change in `CHANGELOG.md` and add a per-version migration
+   block to `UPGRADING.md` enumerating which fields moved, which were renamed
+   or removed, and how to read both shapes during a transitional period.
+3. Land the bump on a minor or major release boundary as appropriate. A
+   breaking envelope change inside `0.x` would land on a minor version
+   (`0.N+1.0`) per pre-1.0 semver; a `1.0` release may bundle envelope
+   changes with other breaking surfaces.
+
+Sinks that parse the envelope strictly SHOULD switch on `schema_version`
+before reading category-specific fields. Sinks that only forward the payload
+verbatim do not need to switch.
+
 ## Implementing a Custom Sink
 
 ### Append-Only Database Table
