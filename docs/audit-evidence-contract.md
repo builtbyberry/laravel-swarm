@@ -42,15 +42,84 @@ Sink exceptions are routed through a `SinkFailureHandler` (see [Sink Failure
 Handler](#sink-failure-handler) below). The default handler reads
 `swarm.audit.failure_policy` (`SWARM_AUDIT_FAILURE_POLICY`):
 
-| Policy    | Behavior                                                                 |
-|-----------|--------------------------------------------------------------------------|
-| `swallow` | Silently discard the exception (default — safest for production).        |
-| `log`     | Record the exception via the application logger, then continue.          |
-| `halt`    | Log the exception, then throw `AuditSinkHaltedException` to fail the run.|
+| Policy        | Behavior                                                                                                                       |
+|---------------|--------------------------------------------------------------------------------------------------------------------------------|
+| `swallow`     | Silently discard the exception.                                                                                                |
+| `log`         | Record the exception via the application logger, then continue.                                                                |
+| `queue`       | Persist the failed record to the audit outbox for retry via `swarm:relay --type=audit` (default since v0.5.0).                 |
+| `dead_letter` | Persist the failed record directly to the `dead_letter` status (no retry).                                                     |
+| `halt`        | Log the exception, then throw `AuditSinkHaltedException` to fail the run.                                                      |
 
-`swallow` and `log` keep swarm execution isolated from audit-write failures.
-`halt` is opt-in for regulated workloads that must not continue when evidence
-cannot be emitted.
+`swallow`, `log`, `queue`, and `dead_letter` keep swarm execution isolated
+from audit-write failures. `halt` is opt-in for regulated workloads that
+must not continue when evidence cannot be emitted.
+
+## Audit Outbox
+
+When `failure_policy` is `queue` or `dead_letter` (the v0.5 default is
+`queue`), failed evidence records are persisted to the `swarm_audit_outbox`
+table. The `swarm:relay --type=audit` lane (or bare `swarm:relay`, which
+drains both durable and audit lanes) re-emits pending records through the
+bound sink. The retry contract:
+
+- `pending` records are re-attempted up to
+  `swarm.audit.outbox.max_attempts` (default 5).
+- Each transient failure increments `attempts`, persists the truncated
+  exception message to `last_error`, and releases the reservation so the
+  row is re-claimable after the reservation timeout
+  (`swarm.durable.relay.reservation_timeout_seconds`, shared with the
+  durable lane).
+- When `attempts` reaches `max_attempts`, the row transitions to
+  `dead_letter` status. The package emits `Log::error` at the moment of
+  transition with `category`, `run_id`, `attempts`, and `last_error` so
+  monitoring stacks can alert on undelivered audit evidence.
+- On cache persistence, the audit outbox is unavailable and the dispatcher
+  degrades to log-and-swallow with a warning log. No data loss is silent.
+
+### Encryption at rest
+
+The `payload` and `last_error` columns are sealed via the same
+`SwarmPersistenceCipher` flow used by other database-backed persistence
+stores when `swarm.persistence.encrypt_at_rest` is enabled (the default
+when any database driver is active). Drained records are unsealed before
+re-emission so sinks observe the original payload regardless of storage
+encryption.
+
+### Retention
+
+Dead-letter rows are preserved indefinitely by default
+(`swarm.audit.outbox.dead_letter_retention_days = null`). Regulated callers
+should treat dead-lettered records as compliance evidence (an audit event
+that was supposed to land in the sink but never will) and reconcile them
+explicitly before pruning. Operators with high-volume retention obligations
+can opt in to automatic pruning via `swarm:prune` by setting
+`SWARM_AUDIT_OUTBOX_DEAD_LETTER_RETENTION_DAYS` to a positive integer N;
+the prune lane then deletes dead-letter rows where `last_attempted_at` is
+older than N days. Pending and reserved rows are never pruned by this lane.
+
+### Signer rotation
+
+`SwarmAuditSigner` (when bound) signs the payload at the moment of the
+original emit attempt. Records that fail and land in the outbox carry the
+signature produced under the key in effect at enqueue time. The outbox
+re-emits the **original signed payload** on replay — it does not re-sign
+under whatever key is currently bound. Sinks that verify signatures across
+a key-rotation window must accept old keys for at least the duration of
+the longest expected outbox backlog (typically bounded by
+`max_attempts × reservation_timeout`).
+
+### Health visibility
+
+`swarm:health` runs two audit outbox checks by default:
+
+- **Staleness:** pending rows whose `reserved_at` aged past 2× the relay
+  reservation timeout produce a `warning` — a signal that `swarm:relay` is
+  not running.
+- **Dead-letter count:** any non-zero count of `dead_letter` rows produces
+  a `warning` — a Part 11 compliance signal that requires reconciliation.
+
+Use `swarm:health --audit` to run only the audit checks for focused
+incident investigation.
 
 ## Evidence Payload Schema
 
@@ -133,7 +202,7 @@ advance execution.
 | `command.resume`  | `swarm:resume` was invoked for a run.                          |
 | `command.cancel`  | `swarm:cancel` was invoked for a run.                          |
 | `command.recover` | `swarm:recover` was invoked. Includes `recovered_count` and `recovered_run_ids`. |
-| `command.relay`   | `swarm:relay` completed or failed. Always includes `dispatched_count`, `skipped_count`, `failed_count`, `claimed_count` (rows reserved in phase 1), `reclaimed_count` (of those, rows with a stale prior reservation), `types`, `limit`, `drain_until_empty`, `max_attempts` (null when not set), and `attempts` (number of drain iterations executed). Status values: `dispatched` (at least one entry dispatched, no transient failures at exit); `skipped` (only permanently invalid entries processed, none dispatched); `none_found` (outbox was empty); `transient_failure` (one or more entries could not be dispatched due to a transient queue error — `failed_count` is > 0, entries remain in the outbox for reclaim); `error` (an unhandled exception escaped the drain loop — includes `exception_class`). Note: `exception_class` is present only on `status: "error"` events. Individual `run_id`s of permanently deleted rows (counted in `skipped_count`) are not in the audit payload — they are in the application error tracker via `report()`, where the exception message includes the outbox entry ID. Cross-reference by entry ID for post-incident reconstruction. |
+| `command.relay`   | `swarm:relay` completed or failed. Always includes `dispatched_count`, `skipped_count`, `failed_count`, `claimed_count` (rows reserved in phase 1), `reclaimed_count` (of those, rows with a stale prior reservation), `types`, `limit`, `drain_until_empty`, `max_attempts` (null when not set), and `attempts` (number of drain iterations executed). As of v0.5.0, also always includes `audit_replayed_count` (audit records successfully re-emitted through the bound sink during this drain) and `audit_dead_lettered_count` (audit records that exhausted `swarm.audit.outbox.max_attempts` during this drain and moved to dead-letter status). Status values: `dispatched` (at least one entry dispatched or audit record replayed, no transient failures at exit); `skipped` (only permanently invalid entries processed, none dispatched); `none_found` (both outboxes were empty); `transient_failure` (one or more entries could not be dispatched due to a transient queue error — `failed_count` is > 0, entries remain in the outbox for reclaim); `error` (an unhandled exception escaped the drain loop — includes `exception_class`). Note: `exception_class` is present only on `status: "error"` events. Individual `run_id`s of permanently deleted rows (counted in `skipped_count`) are not in the audit payload — they are in the application error tracker via `report()`, where the exception message includes the outbox entry ID. Cross-reference by entry ID for post-incident reconstruction. |
 | `command.prune`   | `swarm:prune` completed. Includes `dry_run`, `prevent_prune`, `status`, and `counts` (row counts per table). |
 
 All command categories carry actor identity under `metadata.actor` as an
@@ -393,7 +462,7 @@ Additional frozen fields by category:
 | `command.resume`  | `run_id` (string). `exception_class` (string) when `status: "failed"`.                                            |
 | `command.cancel`  | `run_id` (string). `exception_class` (string) when `status: "failed"`.                                            |
 | `command.recover` | `target_run_id` (string&#124;null), `target_swarm_class` (string&#124;null). On success: `recovered_count` (int), `recovered_run_ids` (array&lt;string&gt;). On failure: `exception_class` (string). |
-| `command.relay`   | `types` (array&lt;string&gt;), `limit` (int), `drain_until_empty` (bool), `max_attempts` (int&#124;null), `attempts` (int), `dispatched_count` (int), `skipped_count` (int), `failed_count` (int), `claimed_count` (int), `reclaimed_count` (int). |
+| `command.relay`   | `types` (array&lt;string&gt;), `limit` (int), `drain_until_empty` (bool), `max_attempts` (int&#124;null), `attempts` (int), `dispatched_count` (int), `skipped_count` (int), `failed_count` (int), `claimed_count` (int), `reclaimed_count` (int), `audit_replayed_count` (int, v0.5.0+), `audit_dead_lettered_count` (int, v0.5.0+). |
 | `command.prune`   | `dry_run` (bool), `prevent_prune` (bool), `counts` (array&lt;string, int&gt;).                                    |
 
 #### Webhook Idempotency
