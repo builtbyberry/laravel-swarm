@@ -494,6 +494,22 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 - Avoid secrets in metadata. Capture redaction does not sanitize arbitrary developer-supplied metadata. Set `SWARM_MAX_METADATA_BYTES` to enforce a hard size cap.
 - Build run inspection around `run_id`, lifecycle events, `SwarmHistory`, and durable runtime state.
 
+### Audit Extension Points
+
+Regulated deployments can replace four audit contracts in the container:
+
+- `ActorResolver` — resolves the human or system actor recorded on each evidence envelope.
+- `CapturePolicy` — decides which run fields are captured, redacted, or omitted before evidence is emitted.
+- `SinkFailureHandler` — handles `SwarmAuditSink` write failures (log, retry, halt, or escalate).
+- `SwarmAuditSigner` — produces the cryptographic signature attached to each envelope for tamper-evident export.
+
+Two environment knobs control strict-mode behavior:
+
+- `SWARM_AUDIT_ACTOR_REQUIRED=true` — fail closed when no actor can be resolved for a run.
+- `SWARM_AUDIT_FAILURE_POLICY=halt` — halt run progression when the audit sink rejects an envelope.
+
+See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full reference.
+
 ## Documentation
 
 The full documentation site is at **[swarm.builtbyberry.com](https://swarm.builtbyberry.com)** — searchable, versioned, and the recommended starting point.
