@@ -25,6 +25,35 @@ This example covers:
 - `swarm:recover` scheduled in Laravel's scheduler
 - `swarm:prune` scheduled for retention cleanup
 
+## Strict Audit Mode
+
+Regulated callers should treat unattributed runs and silently-dropped audit
+evidence as compliance violations. v0.4 adds two configuration flags and a
+new failure policy that together turn both conditions into hard failures
+visible to the dispatching caller.
+
+```bash
+SWARM_AUDIT_ACTOR_REQUIRED=true
+SWARM_AUDIT_FAILURE_POLICY=halt
+```
+
+With `actor.required=true`, runs entering the runner without a resolvable
+`Actor` throw `MissingActorException` at dispatch entry. Bind one via
+`$context->withActor(...)`, `Context::add('swarm:actor', $actor)` inside the
+request, or a custom `ActorResolver` in the container.
+
+With `failure_policy=halt`, audit sink and signer exceptions raise
+`AuditSinkHaltedException` (which carries `HaltsSwarmExecution`) and surface
+to the caller instead of being swallowed or logged. The `halt` policy is new
+in v0.4, alongside the existing `swallow` and `log` policies.
+
+Compose the two: bind a `SwarmAuditSigner` and keep `failure_policy=halt` so
+any signing failure halts the run. Regulated callers cannot accidentally
+emit unsigned evidence or complete a run whose audit trail was discarded.
+
+See `docs/audit-evidence-contract.md` (Sink Failure Handler) for the full
+contract and custom `SinkFailureHandler` patterns.
+
 ## What Durable Changes
 
 `queue()` runs one queued job for the whole swarm. `dispatchDurable()` runs one
