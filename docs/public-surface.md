@@ -108,3 +108,19 @@ adding a new public API.
 | `SwarmAuditSink` | Export append-only audit evidence payloads. | [Audit Evidence Contract](audit-evidence-contract.md) |
 | `SwarmWebhooks::routes()` | Register authenticated durable webhook ingress. | [Durable Webhooks](durable-webhooks.md) |
 | `LaravelSwarm::ignoreMigrations()` | Disable automatic package migration loading. | [README: Installation](../README.md#installation) |
+
+## Audit Extension Points
+
+| Surface | Purpose | Primary documentation |
+| --- | --- | --- |
+| `ActorResolver` | Resolve the acting principal recorded on audit evidence. | [Audit Evidence Contract](audit-evidence-contract.md#actor-binding) |
+| `Actor` | Value object describing the resolved actor identity. | [Audit Evidence Contract](audit-evidence-contract.md#actor-binding) |
+| `RunContext::withActor()` | Bind an explicit actor to a run before dispatch. | [Audit Evidence Contract](audit-evidence-contract.md#actor-binding) |
+| `MissingActorException` | Thrown when actor resolution is required but unavailable. | [Audit Evidence Contract](audit-evidence-contract.md#actor-binding) |
+| `CapturePolicy` | Decide whether each evidence payload is captured, redacted, or skipped. | [Audit Evidence Contract](audit-evidence-contract.md#capture-policy) |
+| `CaptureDecision` | Enum of capture outcomes (`Full`, `Redact`, `Skip`). | [Audit Evidence Contract](audit-evidence-contract.md#capture-policy) |
+| `SwarmAuditSigner` | Sign audit envelopes for tamper-evident chains. | [Audit Evidence Contract](audit-evidence-contract.md#audit-signing) |
+| `SinkFailureHandler` | Decide how to react when an audit sink throws. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
+| `SinkFailureDecision` | Enum of sink failure outcomes (`Swallow`, `RetryInline`, `Halt`). | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
+| `HaltsSwarmExecution` | Marker interface for sink failure exceptions that must halt the run. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
+| `AuditSinkHaltedException` | Raised when a sink failure handler halts execution. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
