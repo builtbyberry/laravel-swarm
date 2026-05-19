@@ -331,6 +331,17 @@ treat any dead-letter transition as a compliance signal — it means an
 audit event was supposed to land in the sink but never will without
 operator intervention. Wire your log aggregator to alert on this message.
 
+**Dead-letter retention:** `swarm.audit.outbox.dead_letter_retention_days`
+(env `SWARM_AUDIT_OUTBOX_DEAD_LETTER_RETENTION_DAYS`) governs how long
+dead-lettered records persist. The default is `null` — preserve
+indefinitely — because deleting unreconciled audit evidence before the
+operator reviews it is destruction of compliance signal. Set to a
+positive integer N to opt into automatic pruning via `swarm:prune` (deletes
+dead-letter rows where `last_attempted_at < now - N days`). Pending and
+reserved rows are never pruned by this policy; staleness and retry are the
+relay's responsibility. `swarm.retention.prevent_prune=true` overrides as
+with all other prune behavior.
+
 #### `SinkFailureDecision` gains `Queue` and `DeadLetter` cases
 
 Custom `SinkFailureHandler` implementations may now return:

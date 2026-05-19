@@ -60,6 +60,7 @@ class SwarmPruneCommand extends Command
             'durable_child_runs' => (string) $config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs'),
             'durable_webhook_idempotency' => (string) $config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'),
             'durable_outbox' => (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox'),
+            'audit_outbox' => (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox'),
         ];
 
         $counts = [];
@@ -143,6 +144,11 @@ class SwarmPruneCommand extends Command
             $verb,
             $counts['durable_outbox'],
         ));
+        $this->components->info(sprintf(
+            '%s %d audit outbox dead-letter record(s).',
+            $verb,
+            $counts['audit_outbox'],
+        ));
 
         return self::SUCCESS;
     }
@@ -185,6 +191,25 @@ class SwarmPruneCommand extends Command
                     ->where('expires_at', '<', now())
                     ->whereIn('status', ['completed', 'failed', 'cancelled']);
             });
+        } elseif ($role === 'audit_outbox') {
+            // Audit outbox rows are NOT tied to a run cascade; they are independent
+            // failure-retry records. Only dead-letter rows are eligible for pruning,
+            // and only when the operator has explicitly opted in via
+            // swarm.audit.outbox.dead_letter_retention_days. Pending and reserved
+            // rows are never pruned here — staleness/retry is the relay's job.
+            //
+            // Default null preserves all dead-letter records indefinitely so regulated
+            // callers (Part 11, etc.) do not silently lose evidence before reconciliation.
+            $retentionDays = $config->get('swarm.audit.outbox.dead_letter_retention_days');
+
+            if (! is_int($retentionDays) || $retentionDays < 1) {
+                // No retention configured — return a query that matches no rows so
+                // countPrunableRows reports 0 and pruneTable deletes nothing.
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->where('status', 'dead_letter')
+                    ->where('last_attempted_at', '<', now()->subDays($retentionDays));
+            }
         } elseif ($role === 'durable_webhook_idempotency') {
             $staleCutoff = now()->subSeconds((int) $config->get('swarm.durable.webhooks.idempotency_ttl', 3600));
 

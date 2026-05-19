@@ -120,6 +120,17 @@ return [
         ))),
         'outbox' => [
             'max_attempts' => (int) env('SWARM_AUDIT_OUTBOX_MAX_ATTEMPTS', 5),
+            /*
+             * Retention window for dead-lettered audit records, in days. Default
+             * null preserves dead-letter rows indefinitely so regulated callers
+             * (FDA 21 CFR Part 11, SOC 2, etc.) do not silently erase compliance
+             * evidence before reconciliation. Set to a positive integer to opt
+             * into automatic pruning via `swarm:prune`. Pending and reserved
+             * rows are never pruned by this policy.
+             */
+            'dead_letter_retention_days' => env('SWARM_AUDIT_OUTBOX_DEAD_LETTER_RETENTION_DAYS') !== null
+                ? (int) env('SWARM_AUDIT_OUTBOX_DEAD_LETTER_RETENTION_DAYS')
+                : null,
         ],
     ],
 

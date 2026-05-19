@@ -22,8 +22,15 @@ use Illuminate\Support\Facades\Schema;
  *      moves to 'dead_letter' and stops being re-claimed.
  *
  * Unlike the durable outbox, audit records have no parent run cascade — they
- * may outlive the run that produced them. Rows expire when explicitly pruned
- * by an operator or by swarm:prune retention policy.
+ * may outlive the run that produced them.
+ *
+ * Retention: dead-letter rows are preserved indefinitely by default so that
+ * regulated callers do not silently erase compliance evidence before
+ * reconciliation. Operators can opt into automatic pruning by setting
+ * swarm.audit.outbox.dead_letter_retention_days to a positive integer; when
+ * set, swarm:prune deletes dead-letter rows whose last_attempted_at is older
+ * than the configured window. Pending and reserved rows are never pruned by
+ * this policy — staleness and retry are the relay's responsibility.
  */
 return new class extends Migration
 {
