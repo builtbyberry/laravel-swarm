@@ -244,6 +244,67 @@ Set `SWARM_DURABLE_PARALLEL_QUEUE=swarm-branches`. Without this separation, bran
 
 When to use: parallel or hierarchical durable swarms in production.
 
+## Audit outbox
+
+Since v0.5.0, `SWARM_AUDIT_FAILURE_POLICY` defaults to `queue` and audit
+sink failures are persisted to a new `swarm_audit_outbox` table for retry
+through the same `swarm:relay` schedule that handles durable dispatches.
+
+### Migration and scheduling
+
+On database persistence, run `php artisan migrate` to create the
+`swarm_audit_outbox` table. The existing relay schedule covers both lanes:
+
+```php
+Schedule::command('swarm:relay')->everyMinute();
+```
+
+To drain a single lane during focused recovery:
+
+```bash
+php artisan swarm:relay --type=audit    # audit only
+php artisan swarm:relay --type=step --type=branch    # durable only
+```
+
+On cache persistence the audit outbox is unavailable and the dispatcher
+falls back to log-and-swallow automatically; no migration required.
+
+### Health checks
+
+`swarm:health` runs two audit-outbox checks on every invocation by default:
+
+- **Staleness** — pending rows whose `reserved_at` aged past 2× the relay
+  reservation timeout. A warning here means `swarm:relay` is not running.
+- **Dead-letter count** — any non-zero count of `status='dead_letter'`
+  rows. For Part 11 / regulated callers, every dead-letter row is a
+  compliance signal: an audit event that was supposed to land in the sink
+  but never will without operator reconciliation. The dispatcher also
+  emits `Log::error` at the moment of transition so log aggregators can
+  alert on it.
+
+Use `swarm:health --audit` to run only the audit checks during incident
+investigation. Both checks skip silently on the cache persistence driver.
+
+### Retention
+
+Dead-letter records persist indefinitely by default
+(`swarm.audit.outbox.dead_letter_retention_days = null`). This is the
+audit-safe default — deleting unreconciled audit evidence before the
+operator reviews it erases compliance signal. High-volume installs can
+opt in to a retention window:
+
+```bash
+SWARM_AUDIT_OUTBOX_DEAD_LETTER_RETENTION_DAYS=90
+```
+
+With retention set, `swarm:prune` deletes dead-letter rows whose
+`last_attempted_at` is older than the configured window. Pending and
+reserved rows are never pruned by this lane (the relay owns their
+lifecycle). `swarm.retention.prevent_prune=true` overrides as usual.
+
+See [Audit Evidence Contract](audit-evidence-contract.md) for the full
+retry, encryption-at-rest, and signer-rotation behavior.
+
 ## High-volume dashboards
 
 Swarm database tables are sized for operational throughput. List and aggregation

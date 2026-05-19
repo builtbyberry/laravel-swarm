@@ -384,17 +384,17 @@ The bump signals a **shape break on `command.*` evidence only.** Run-level
 (`run.*`), step-level (`step.*`), and durable runtime (`durable.*`, `wait.*`,
 `signal.*`) evidence shapes are unchanged from v0.4.
 
-#### Evidence `schema_version` bumps to `"2"`
-
-Every payload emitted through `SwarmAuditDispatcher` and
-`SwarmTelemetryDispatcher` carries `schema_version: "2"`. Sinks that branch on
-`schema_version` (for example, to validate a payload against a known shape)
-must be taught to recognize `"2"`. Sinks that ignore `schema_version` need no
-changes.
-
-The bump signals a **shape break on `command.*` evidence only.** Run-level
-(`run.*`), step-level (`step.*`), and durable runtime (`durable.*`, `wait.*`,
-`signal.*`) evidence shapes are unchanged from v0.4.
+**Rolling deploy window.** During a rolling v0.4 → v0.5 deploy, workers
+on the old version continue to emit `schema_version: "1"` while workers
+on the new version emit `"2"`. Both will land in your sink simultaneously
+until the rollout completes. Sinks that pin strictly to a single
+`schema_version` value will reject one cohort or the other for the
+duration of the window — particularly painful for callers running
+`SWARM_AUDIT_FAILURE_POLICY=halt`, where rejections fail runs. Use
+tolerant validation (accept both `"1"` and `"2"`) until every worker is
+on v0.5, then optionally tighten back to `"2"` only. The
+`command.*`-only shape break is the sole behavioral difference within
+the envelope schema; every other category is unchanged.
 
 #### `command.*` actor moves to `metadata.actor`
 

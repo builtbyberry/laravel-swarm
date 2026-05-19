@@ -485,7 +485,8 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 - Use database persistence for durable execution, long-lived history, active-run pruning protection, or operational dashboards.
 - Set `SWARM_CAPTURE_ACTIVE_CONTEXT=true` for queued and durable swarms.
 - Size queue worker timeouts and queue `retry_after` above the longest expected provider call.
-- Schedule `swarm:relay` every minute for durable execution. The relay drains the transactional outbox after each checkpoint — without it, durable runs stall after the first step. See [Durable Execution](docs/durable-execution.md) for the full relay reference.
+- Schedule `swarm:relay` every minute for durable execution AND for the v0.5 audit outbox. The relay drains the durable outbox after each checkpoint and replays failed audit records through the bound sink — a single schedule covers both lanes. Without it, durable runs stall after the first step and queued audit failures accumulate without retry. Use `swarm:relay --type=audit` to drain only the audit lane during focused recovery. See [Durable Execution](docs/durable-execution.md) and [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full relay reference.
+- Run `php artisan migrate` on database persistence to create `swarm_audit_outbox` — required for the v0.5 default `SWARM_AUDIT_FAILURE_POLICY=queue` (sink failures persist for retry instead of being silently dropped). Cache persistence detects the missing outbox and falls back to log-and-swallow automatically.
 - Schedule `swarm:recover` every five minutes for durable execution and coordinated multi-worker hierarchical queueing. Recovery redispatches runs whose workers died between checkpoint and dispatch. See [Maintenance](docs/maintenance.md).
 - Schedule `swarm:prune` daily for database retention cleanup, or set `SWARM_PREVENT_PRUNE=true` when retention is managed outside the package.
 - Treat operational swarm tables as TTL-based runtime storage, not immutable compliance archives.
@@ -507,6 +508,8 @@ Two environment knobs control strict-mode behavior:
 
 - `SWARM_AUDIT_ACTOR_REQUIRED=true` — fail closed when no actor can be resolved for a run.
 - `SWARM_AUDIT_FAILURE_POLICY=halt` — halt run progression when the audit sink rejects an envelope.
+
+The full `SWARM_AUDIT_FAILURE_POLICY` matrix (since v0.5): `swallow` (drop silently — v0.4 default), `log` (log and continue), `queue` (persist to `swarm_audit_outbox` for retry — v0.5 default), `dead_letter` (persist directly to dead-letter status, no retry), `halt` (fail the run). The audit outbox is monitored by default via `swarm:health` (or `swarm:health --audit` for focused investigation).
 
 See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full reference.
 
