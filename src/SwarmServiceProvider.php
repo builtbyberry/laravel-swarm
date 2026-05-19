@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Audit\BooleanCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Audit\ConfiguredSinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Audit\DefaultActorResolver;
 use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Audit\RunAuditEmitter;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
@@ -46,6 +47,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmSteps;
+use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBoundaryCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchAdvancer;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchCoordinator;
@@ -68,6 +70,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\QueuedHierarchicalDurableCoordinat
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
+use BuiltByBerry\LaravelSwarm\Runners\LeaseManager;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
@@ -128,6 +131,9 @@ class SwarmServiceProvider extends ServiceProvider
 
         $this->app->singleton(SwarmGuardrailRunner::class);
 
+        $this->app->singleton(RunAuditEmitter::class);
+        $this->app->singleton(DispatchValidator::class);
+        $this->app->singleton(LeaseManager::class);
         $this->app->singleton(SwarmRunner::class);
         $this->app->singleton(SwarmHistory::class);
         $this->app->singleton(SwarmEventRecorder::class);

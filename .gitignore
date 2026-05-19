@@ -6,6 +6,7 @@
 
 # Internal package-review notes (not part of the distributed package)
 /docs/reviews/
+/.0.5-work/
 
 /.phpunit.cache
 /.phpunit.result.cache
