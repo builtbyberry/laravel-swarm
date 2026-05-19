@@ -369,3 +369,103 @@ describe('queue routing check', function (): void {
             ->toContain('unknown queue_connection');
     });
 });
+
+// ---------------------------------------------------------------------------
+// swarm:health audit outbox checks (review F4)
+// ---------------------------------------------------------------------------
+
+describe('audit outbox checks', function (): void {
+    beforeEach(function (): void {
+        config()->set('swarm.persistence.driver', 'database');
+    });
+
+    test('audit outbox checks run on bare swarm:health (default-on)', function (): void {
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())->toContain('Audit outbox');
+    });
+
+    test('--audit flag runs only audit checks, skips persistence and durable', function (): void {
+        $exitCode = Artisan::call('swarm:health', ['--audit' => true]);
+
+        expect($exitCode)->toBe(0);
+        $output = Artisan::output();
+        expect($output)->toContain('Audit outbox');
+        expect($output)->not->toContain('Context');
+        expect($output)->not->toContain('Stream replay');
+    });
+
+    test('audit checks skip silently on the cache driver', function (): void {
+        config()->set('swarm.persistence.driver', 'cache');
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())->not->toContain('Audit outbox');
+    });
+
+    test('missing audit outbox table returns failed status', function (): void {
+        config()->set('swarm.tables.audit_outbox', 'nonexistent_audit_outbox_xyz');
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(1);
+        expect(Artisan::output())->toContain('Audit outbox')->toContain('does not exist');
+    });
+
+    test('stale pending audit rows produce a warning status', function (): void {
+        DB::table('swarm_audit_outbox')->insert([
+            'category' => 'run.failed',
+            'run_id' => 'r-stale',
+            'payload' => '{}',
+            'attempts' => 1,
+            'status' => 'pending',
+            'last_error' => null,
+            'last_attempted_at' => now()->subMinutes(5),
+            'reserved_at' => now()->subMinutes(5),
+            'created_at' => now()->subMinutes(5),
+            'updated_at' => now()->subMinutes(5),
+        ]);
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())->toContain('staleness')->toContain('warning');
+    });
+
+    test('dead-letter audit rows produce a warning status (Part 11 compliance signal)', function (): void {
+        DB::table('swarm_audit_outbox')->insert([
+            'category' => 'run.failed',
+            'run_id' => 'r-dead',
+            'payload' => '{}',
+            'attempts' => 5,
+            'status' => 'dead_letter',
+            'last_error' => 'permanent failure',
+            'last_attempted_at' => now()->subMinutes(1),
+            'reserved_at' => null,
+            'created_at' => now()->subMinutes(1),
+            'updated_at' => now()->subMinutes(1),
+        ]);
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('dead-letter')
+            ->toContain('warning')
+            ->toContain('1 dead-letter row');
+    });
+
+    test('healthy audit outbox returns ok statuses', function (): void {
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        $output = Artisan::output();
+        expect($output)
+            ->toContain('Audit outbox staleness')
+            ->toContain('no pending rows')
+            ->toContain('Audit outbox dead-letter')
+            ->toContain('no dead-letter rows');
+    });
+});

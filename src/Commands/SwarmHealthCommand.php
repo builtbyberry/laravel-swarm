@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use Carbon\CarbonInterface;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
@@ -19,39 +20,54 @@ use Throwable;
 #[AsCommand(name: 'swarm:health')]
 class SwarmHealthCommand extends Command
 {
-    protected $signature = 'swarm:health {--durable : Also verify durable database runtime tables} {--json : Output machine-readable health results}';
+    protected $signature = 'swarm:health
+                            {--durable : Also verify durable database runtime tables}
+                            {--audit : Run only the audit outbox checks (skips persistence and durable)}
+                            {--json : Output machine-readable health results}';
 
     protected $description = 'Verify Laravel Swarm persistence readiness';
 
     public function handle(Application $app, ConfigRepository $config, Connection $connection): int
     {
-        $checks = [
-            ['component' => 'Context', 'abstract' => ContextStore::class, 'config_key' => 'context'],
-            ['component' => 'Artifacts', 'abstract' => ArtifactRepository::class, 'config_key' => 'artifacts'],
-            ['component' => 'History', 'abstract' => RunHistoryStore::class, 'config_key' => 'history'],
-            ['component' => 'Stream replay', 'abstract' => StreamEventStore::class, 'config_key' => 'streaming.replay'],
-        ];
+        $auditOnly = $this->option('audit') === true;
 
-        if ($this->option('durable') === true) {
-            $checks[] = ['component' => 'Durable runtime', 'abstract' => DurableRunStore::class, 'config_key' => null];
+        $results = [];
+
+        if (! $auditOnly) {
+            $checks = [
+                ['component' => 'Context', 'abstract' => ContextStore::class, 'config_key' => 'context'],
+                ['component' => 'Artifacts', 'abstract' => ArtifactRepository::class, 'config_key' => 'artifacts'],
+                ['component' => 'History', 'abstract' => RunHistoryStore::class, 'config_key' => 'history'],
+                ['component' => 'Stream replay', 'abstract' => StreamEventStore::class, 'config_key' => 'streaming.replay'],
+            ];
+
+            if ($this->option('durable') === true) {
+                $checks[] = ['component' => 'Durable runtime', 'abstract' => DurableRunStore::class, 'config_key' => null];
+            }
+
+            $results = array_map(
+                fn (array $check): array => $this->runCheck($app, $config, $check),
+                $checks,
+            );
+
+            if ($this->option('durable') === true) {
+                $results[] = $this->runActiveContextCaptureCheck($config);
+                $results[] = [
+                    'component' => 'Relay scheduling',
+                    'driver' => 'n/a',
+                    'store' => 'n/a',
+                    'status' => 'note',
+                    'details' => "swarm:relay must run every minute for durable execution to advance — Schedule::command('swarm:relay')->everyMinute()",
+                ];
+                $results[] = $this->runOutboxStalenessCheck($config, $connection);
+                $results[] = $this->runQueueRoutingCheck($config, $connection);
+            }
         }
 
-        $results = array_map(
-            fn (array $check): array => $this->runCheck($app, $config, $check),
-            $checks,
-        );
-
-        if ($this->option('durable') === true) {
-            $results[] = $this->runActiveContextCaptureCheck($config);
-            $results[] = [
-                'component' => 'Relay scheduling',
-                'driver' => 'n/a',
-                'store' => 'n/a',
-                'status' => 'note',
-                'details' => "swarm:relay must run every minute for durable execution to advance — Schedule::command('swarm:relay')->everyMinute()",
-            ];
-            $results[] = $this->runOutboxStalenessCheck($config, $connection);
-            $results[] = $this->runQueueRoutingCheck($config, $connection);
+        // Audit outbox checks run by default (the audit lane is on by default in v0.5)
+        // and are the only checks when --audit is set.
+        foreach ($this->runAuditOutboxChecks($config, $connection) as $result) {
+            $results[] = $result;
         }
 
         if ($this->option('json') === true) {
@@ -227,6 +243,137 @@ class SwarmHealthCommand extends Command
         } catch (Throwable $exception) {
             return [
                 'component' => 'Outbox queue routing',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Audit outbox health checks. Always run by default (audit failure policy
+     * defaults to queue in v0.5, so every database-backed install has the
+     * outbox in scope). Skip silently on the cache driver — the outbox isn't
+     * available there and the dispatcher degrades to log-and-swallow.
+     *
+     * @return array<int, array{component: string, driver: string, store: string, status: string, details: string}>
+     */
+    protected function runAuditOutboxChecks(ConfigRepository $config, Connection $connection): array
+    {
+        if ($config->get('swarm.persistence.driver') !== 'database') {
+            return [];
+        }
+
+        $outboxTable = (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox');
+        $reservationTimeoutSeconds = (int) $config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
+        $staleThreshold = now()->subSeconds($reservationTimeoutSeconds * 2);
+
+        try {
+            if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
+                return [[
+                    'component' => 'Audit outbox',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'failed',
+                    'details' => "Audit outbox table [{$outboxTable}] does not exist. Run migrations.",
+                ]];
+            }
+        } catch (Throwable $exception) {
+            return [[
+                'component' => 'Audit outbox',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ]];
+        }
+
+        return [
+            $this->runAuditOutboxStalenessCheck($connection, $outboxTable, $staleThreshold),
+            $this->runAuditOutboxDeadLetterCheck($connection, $outboxTable),
+        ];
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runAuditOutboxStalenessCheck(Connection $connection, string $outboxTable, CarbonInterface $staleThreshold): array
+    {
+        try {
+            $stalePending = $connection->table($outboxTable)
+                ->where('status', 'pending')
+                ->whereNotNull('reserved_at')
+                ->where('reserved_at', '<', $staleThreshold)
+                ->count();
+
+            if ($stalePending > 0) {
+                return [
+                    'component' => 'Audit outbox staleness',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'warning',
+                    'details' => "{$stalePending} pending row(s) with stale reservations — is swarm:relay scheduled?",
+                ];
+            }
+
+            $totalPending = $connection->table($outboxTable)->where('status', 'pending')->count();
+
+            return [
+                'component' => 'Audit outbox staleness',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'ok',
+                'details' => $totalPending === 0
+                    ? 'no pending rows'
+                    : "{$totalPending} pending row(s), relay appears active",
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Audit outbox staleness',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Dead-letter rows are a compliance signal for Part 11 / regulated callers:
+     * each one represents an audit event that was supposed to land in the sink
+     * but never will without operator intervention. Any non-zero count warrants
+     * a warning so the operator sees it in routine health checks.
+     *
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runAuditOutboxDeadLetterCheck(Connection $connection, string $outboxTable): array
+    {
+        try {
+            $deadLetterCount = $connection->table($outboxTable)
+                ->where('status', 'dead_letter')
+                ->count();
+
+            if ($deadLetterCount > 0) {
+                return [
+                    'component' => 'Audit outbox dead-letter',
+                    'driver' => 'database',
+                    'store' => 'n/a',
+                    'status' => 'warning',
+                    'details' => "{$deadLetterCount} dead-letter row(s) — undelivered audit evidence requires operator reconciliation",
+                ];
+            }
+
+            return [
+                'component' => 'Audit outbox dead-letter',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'ok',
+                'details' => 'no dead-letter rows',
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Audit outbox dead-letter',
                 'driver' => 'database',
                 'store' => 'n/a',
                 'status' => 'failed',

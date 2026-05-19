@@ -331,6 +331,14 @@ treat any dead-letter transition as a compliance signal — it means an
 audit event was supposed to land in the sink but never will without
 operator intervention. Wire your log aggregator to alert on this message.
 
+**Health visibility:** `swarm:health` (no flag) now runs two audit-outbox
+checks by default — staleness (pending rows whose `reserved_at` aged past
+2× the relay reservation timeout) and dead-letter count (any
+`status='dead_letter'` row triggers a `warning`). For focused incident
+investigation, `swarm:health --audit` runs only the audit checks and
+skips persistence and durable. Both flags can be combined with `--json`
+for machine-readable output to a monitoring stack.
+
 **Dead-letter retention:** `swarm.audit.outbox.dead_letter_retention_days`
 (env `SWARM_AUDIT_OUTBOX_DEAD_LETTER_RETENTION_DAYS`) governs how long
 dead-lettered records persist. The default is `null` — preserve
