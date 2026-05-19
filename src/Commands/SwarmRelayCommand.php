@@ -20,12 +20,12 @@ use Throwable;
 class SwarmRelayCommand extends Command
 {
     protected $signature = 'swarm:relay
-                            {--type=* : Dispatch types to relay (step, branch, queued_resume). Defaults to all.}
+                            {--type=* : Dispatch types to relay (step, branch, queued_resume, audit). Defaults to all.}
                             {--limit= : Maximum number of outbox entries to drain per invocation (overrides config; capped at 10,000).}
                             {--drain-until-empty : Keep draining in a loop until no entries remain.}
                             {--max-attempts= : Maximum drain iterations when using --drain-until-empty. Includes retrying transient failures. Must be >= 1.}';
 
-    protected $description = 'Drain the durable swarm outbox and dispatch pending jobs';
+    protected $description = 'Drain the durable and audit swarm outboxes (durable dispatches queue jobs; audit re-emits failed evidence records through the bound sink)';
 
     protected $help = <<<'HELP'
         This command drains the swarm_durable_outbox table and dispatches the
@@ -64,6 +64,7 @@ class SwarmRelayCommand extends Command
         Examples:
           php artisan swarm:relay
           php artisan swarm:relay --type=step --type=branch
+          php artisan swarm:relay --type=audit
           php artisan swarm:relay --limit=500 --drain-until-empty
           php artisan swarm:relay --drain-until-empty --max-attempts=10
         HELP;

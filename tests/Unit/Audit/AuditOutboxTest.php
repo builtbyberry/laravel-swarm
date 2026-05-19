@@ -219,6 +219,75 @@ test('DatabaseAuditOutbox emits Log::error at the moment of dead_letter transiti
         ->once();
 });
 
+test('DatabaseAuditOutbox drain reclaims stale reservations after the reservation timeout', function (): void {
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(AuditOutbox::class);
+    $outbox = app(AuditOutbox::class);
+
+    $outbox->enqueue('run.failed', ['run_id' => 'r-stale']);
+
+    // Simulate a relay worker that claimed the row then crashed before
+    // completing the drain. The next drain should reclaim and re-emit.
+    DB::table('swarm_audit_outbox')
+        ->where('run_id', 'r-stale')
+        ->update(['reserved_at' => now()->subMinutes(5)]);
+
+    $result = $outbox->drain();
+
+    expect($result->replayed)->toBe(1);
+    expect($result->reclaimed)->toBe(1);
+    expect($result->claimed)->toBe(1);
+    expect(DB::table('swarm_audit_outbox')->where('run_id', 'r-stale')->count())->toBe(0);
+});
+
+test('DatabaseAuditOutbox drain leaves fresh reservations alone (does not reclaim within the reservation timeout)', function (): void {
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(AuditOutbox::class);
+    $outbox = app(AuditOutbox::class);
+
+    $outbox->enqueue('run.failed', ['run_id' => 'r-fresh']);
+
+    // Fresh reservation, well within the default 60s reservation timeout.
+    DB::table('swarm_audit_outbox')
+        ->where('run_id', 'r-fresh')
+        ->update(['reserved_at' => now()->subSeconds(5)]);
+
+    $result = $outbox->drain();
+
+    expect($result->replayed)->toBe(0);
+    expect($result->claimed)->toBe(0);
+    expect(DB::table('swarm_audit_outbox')->where('run_id', 'r-fresh')->where('status', 'pending')->count())->toBe(1);
+});
+
+test('DatabaseAuditOutbox drain claims a bounded batch and leaves the rest pending for a second worker', function (): void {
+    // SQLite does not honor FOR UPDATE SKIP LOCKED (the production locking
+    // mechanism that lets concurrent relay workers each claim a disjoint
+    // batch). This test exercises the bounded-claim path: with limit=2 and
+    // three pending rows, a single drain reserves exactly 2 and leaves the
+    // third for the next worker — proving the claim region honors the limit.
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(AuditOutbox::class);
+    $outbox = app(AuditOutbox::class);
+
+    $outbox->enqueue('run.failed', ['run_id' => 'r-a']);
+    $outbox->enqueue('run.failed', ['run_id' => 'r-b']);
+    $outbox->enqueue('run.failed', ['run_id' => 'r-c']);
+
+    $first = $outbox->drain(2);
+
+    expect($first->claimed)->toBe(2);
+    expect($first->replayed)->toBe(2);
+    expect(DB::table('swarm_audit_outbox')->where('status', 'pending')->count())->toBe(1);
+
+    $second = $outbox->drain(2);
+    expect($second->claimed)->toBe(1);
+    expect($second->replayed)->toBe(1);
+    expect(DB::table('swarm_audit_outbox')->count())->toBe(0);
+});
+
 test('DatabaseAuditOutbox preserves the original signer key across replay (signer rotation guard)', function (): void {
     // Signer that stamps payloads with whichever key is currently bound. If the
     // outbox re-signed on replay, the recorded sink would receive a payload
