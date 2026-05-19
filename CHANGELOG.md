@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.2 - 2026-05-19
+
+### Fixed
+
+- Durable retry handler and branch advancer now log caught exceptions instead of swallowing them silently (#1). Previously, any exception thrown inside an agent's `prompt()` call (or any tool side-effect, broadcast dispatch, etc.) was caught and either rescheduled for retry or marked as a terminally failed branch with no entry in the application log, `failed_jobs`, or anywhere else — producing symptoms identical to transient LLM API failures and making the root cause invisible without reading the package source.
+  - `DurableRetryHandler::scheduleRunRetryIfAllowed` and `scheduleBranchRetryIfAllowed` now emit `Log::warning('Durable swarm {step,branch} failed — scheduling retry.', [...])` before scheduling, with `run_id`, `retry_attempt`, `max_attempts`, `next_retry_at`, `exception` class, and `message` (plus `branch_id` / `agent_class` on the branch path).
+  - `DurableBranchAdvancer` now emits `Log::error('Durable swarm branch failed — retries exhausted or non-retryable.', [...])` before calling `markBranchFailed`, with the same fields. The run-level terminal failure path already rethrows via `DurableStepAdvancer`, so failed-jobs / Laravel exception handler observability is already present there; the branch path was the silent one because its catch block returns normally after the failure.
+- Both `DurableRetryHandler` and `DurableBranchAdvancer` now accept a constructor-injected `Psr\Log\LoggerInterface`. Container auto-resolution handles existing wiring; no service-provider changes required for application code.
+
 ## v0.4.1 - 2026-05-19
 
 ### Fixed

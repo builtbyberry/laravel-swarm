@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
+use Psr\Log\LoggerInterface;
 use ReflectionClass;
 use Throwable;
 
@@ -33,6 +34,7 @@ class DurableRetryHandler
         protected SwarmCapture $capture,
         protected DurableRunContext $runs,
         protected DurableOutbox $outbox,
+        protected LoggerInterface $logger,
     ) {}
 
     /**
@@ -55,6 +57,16 @@ class DurableRetryHandler
 
         $nextRetryAt = Carbon::now('UTC')->addSeconds($policy->delayForAttempt($attempt));
         $isZeroDelay = $policy->delayForAttempt($attempt) === 0;
+
+        $this->logger->warning('Durable swarm step failed — scheduling retry.', [
+            'run_id' => (string) $run['run_id'],
+            'step_index' => $stepIndex,
+            'retry_attempt' => $attempt,
+            'max_attempts' => $policy->maxAttempts,
+            'next_retry_at' => $nextRetryAt->toJSON(),
+            'exception' => $exception::class,
+            'message' => $exception->getMessage(),
+        ]);
 
         try {
             $this->connection->transaction(function () use ($run, $token, $policy, $attempt, $nextRetryAt, $context, $stepLeaseSeconds, $isZeroDelay): void {
@@ -101,6 +113,17 @@ class DurableRetryHandler
 
         $nextRetryAt = Carbon::now('UTC')->addSeconds($policy->delayForAttempt($attempt));
         $isZeroDelay = $policy->delayForAttempt($attempt) === 0;
+
+        $this->logger->warning('Durable swarm branch failed — scheduling retry.', [
+            'run_id' => (string) $run['run_id'],
+            'branch_id' => (string) $branch['branch_id'],
+            'agent_class' => (string) $branch['agent_class'],
+            'retry_attempt' => $attempt,
+            'max_attempts' => $policy->maxAttempts,
+            'next_retry_at' => $nextRetryAt->toJSON(),
+            'exception' => $exception::class,
+            'message' => $exception->getMessage(),
+        ]);
 
         try {
             $this->connection->transaction(function () use ($run, $branch, $token, $policy, $attempt, $nextRetryAt, $isZeroDelay): void {

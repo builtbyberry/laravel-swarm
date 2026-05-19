@@ -29,6 +29,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 use Laravel\Ai\Contracts\Agent;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -53,6 +54,7 @@ class DurableBranchAdvancer
         protected SwarmGuardrailRunner $guardrails,
         protected DurableOutbox $outbox,
         protected DurableRunTerminalHandler $terminal,
+        protected LoggerInterface $logger,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId): void
@@ -165,6 +167,19 @@ class DurableBranchAdvancer
             if ($retry['scheduled']) {
                 return;
             }
+
+            // Branch is terminally failing — log before marking failed so the
+            // exception is visible in application logs even though this code
+            // path never rethrows (silent failure was the v0.3 / v0.4.0
+            // behavior; see issue #1).
+            $this->logger->error('Durable swarm branch failed — retries exhausted or non-retryable.', [
+                'run_id' => $runId,
+                'branch_id' => $branchId,
+                'agent_class' => (string) $branch['agent_class'],
+                'retry_attempt' => (int) ($branch['retry_attempt'] ?? 0),
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ]);
 
             try {
                 $this->durableRuns->markBranchFailed($runId, $branchId, $token, [
