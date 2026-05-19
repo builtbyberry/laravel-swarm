@@ -21,14 +21,24 @@ namespace BuiltByBerry\LaravelSwarm\Audit;
  *               and surfaces it as a run-level failure. Use this when
  *               regulated workloads must hard-fail rather than emit
  *               unattributed or unsigned evidence.
- *
- * The Queue and DeadLetter cases land in v0.5 alongside the audit outbox
- * table and swarm:relay --type=audit lane. Adding enum cases later is
- * non-breaking.
+ * Queue       — persist the failed record to the audit outbox for later
+ *               re-emission. The swarm:relay --type=audit lane drains the
+ *               outbox by replaying records through the bound sink, deleting
+ *               on success and incrementing the attempt count on transient
+ *               failure. After swarm.audit.outbox.max_attempts (default 5)
+ *               the record moves to the dead-letter status. When the audit
+ *               outbox is unavailable (cache persistence driver, missing
+ *               migration), the dispatcher degrades to log-and-swallow.
+ * DeadLetter  — persist the failed record directly to the dead-letter
+ *               status with no retry. Useful for categories that should
+ *               never be re-emitted (e.g. a sink that explicitly rejected
+ *               the payload as malformed).
  */
 enum SinkFailureDecision
 {
     case Swallow;
     case RetryInline;
     case Halt;
+    case Queue;
+    case DeadLetter;
 }

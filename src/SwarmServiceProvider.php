@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm;
 use BuiltByBerry\LaravelSwarm\Audit\BooleanCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Audit\ConfiguredSinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Audit\DefaultActorResolver;
+use BuiltByBerry\LaravelSwarm\Audit\NoOpAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\RunAuditEmitter;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
@@ -25,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmSignalCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
@@ -32,6 +34,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
@@ -39,6 +42,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
@@ -93,6 +97,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Pulse\Pulse;
 use Livewire\LivewireManager;
+use Psr\Log\LoggerInterface;
 
 class SwarmServiceProvider extends ServiceProvider
 {
@@ -107,10 +112,26 @@ class SwarmServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(SwarmAuditSink::class, NoOpSwarmAuditSink::class);
-        $this->app->singleton(SwarmAuditDispatcher::class);
         $this->app->singleton(ActorResolver::class, DefaultActorResolver::class);
         $this->app->singleton(CapturePolicy::class, BooleanCapturePolicy::class);
         $this->app->singleton(SinkFailureHandler::class, ConfiguredSinkFailureHandler::class);
+        $this->app->singleton(AuditOutbox::class, function (Application $app): AuditOutbox {
+            $driver = $app->make(ConfigRepository::class)->get('swarm.persistence.driver');
+
+            return $driver === 'database'
+                ? $app->make(DatabaseAuditOutbox::class)
+                : $app->make(NoOpAuditOutbox::class);
+        });
+        $this->app->singleton(SwarmAuditDispatcher::class, function (Application $app): SwarmAuditDispatcher {
+            return new SwarmAuditDispatcher(
+                sink: $app->make(SwarmAuditSink::class),
+                config: $app->make(ConfigRepository::class),
+                failureHandler: $app->make(SinkFailureHandler::class),
+                signer: $app->bound(SwarmAuditSigner::class) ? $app->make(SwarmAuditSigner::class) : null,
+                outbox: $app->make(AuditOutbox::class),
+                logger: $app->make(LoggerInterface::class),
+            );
+        });
 
         $this->app->singleton(SwarmTelemetrySink::class, NoOpSwarmTelemetrySink::class);
         $this->app->singleton(SwarmTelemetryDispatcher::class);

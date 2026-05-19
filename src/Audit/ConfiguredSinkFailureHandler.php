@@ -15,11 +15,16 @@ use Throwable;
  * value to a SinkFailureDecision.
  *
  * Recognized policies:
- *   'swallow' (default) — return SinkFailureDecision::Swallow, no logging.
- *   'log'               — log via the application logger, then Swallow.
- *   'halt'              — log via the application logger, then Halt.
- *                         The dispatcher will throw AuditSinkHaltedException,
- *                         which carries the HaltsSwarmExecution marker.
+ *   'swallow'     — return SinkFailureDecision::Swallow, no logging.
+ *   'log'         — log via the application logger, then Swallow.
+ *   'queue'       — log, then return Queue. The dispatcher persists the failed
+ *                   record to the audit outbox for later replay via
+ *                   swarm:relay --type=audit. Default since v0.5.
+ *   'dead_letter' — log, then return DeadLetter. The dispatcher persists the
+ *                   failed record directly to the dead-letter status (no retry).
+ *   'halt'        — log, then return Halt. The dispatcher throws
+ *                   AuditSinkHaltedException, which carries the
+ *                   HaltsSwarmExecution marker.
  *
  * Unknown policy values fall back to Swallow with a one-time warning logged,
  * matching the conservative posture of the v0.3 dispatcher.
@@ -42,11 +47,13 @@ class ConfiguredSinkFailureHandler implements SinkFailureHandler
         array $payload,
         Throwable $exception,
     ): SinkFailureDecision {
-        $policy = (string) $this->config->get('swarm.audit.failure_policy', 'swallow');
+        $policy = (string) $this->config->get('swarm.audit.failure_policy', 'queue');
 
         return match ($policy) {
             'swallow' => SinkFailureDecision::Swallow,
             'log' => $this->logAndSwallow($category, $exception),
+            'queue' => $this->logAndQueue($category, $exception),
+            'dead_letter' => $this->logAndDeadLetter($category, $exception),
             'halt' => $this->logAndHalt($category, $exception),
             default => $this->logUnknownPolicyAndSwallow($policy, $category, $exception),
         };
@@ -72,6 +79,28 @@ class ConfiguredSinkFailureHandler implements SinkFailureHandler
         ]);
 
         return SinkFailureDecision::Halt;
+    }
+
+    protected function logAndQueue(string $category, Throwable $exception): SinkFailureDecision
+    {
+        $this->logger->warning('Swarm audit sink failed; queuing for retry via swarm:relay --type=audit.', [
+            'category' => $category,
+            'exception' => $exception->getMessage(),
+            'class' => $exception::class,
+        ]);
+
+        return SinkFailureDecision::Queue;
+    }
+
+    protected function logAndDeadLetter(string $category, Throwable $exception): SinkFailureDecision
+    {
+        $this->logger->error('Swarm audit sink failed; routing to dead-letter per swarm.audit.failure_policy=dead_letter.', [
+            'category' => $category,
+            'exception' => $exception->getMessage(),
+            'class' => $exception::class,
+        ]);
+
+        return SinkFailureDecision::DeadLetter;
     }
 
     protected function logUnknownPolicyAndSwallow(string $policy, string $category, Throwable $exception): SinkFailureDecision

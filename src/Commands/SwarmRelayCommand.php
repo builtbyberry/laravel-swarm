@@ -6,8 +6,11 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
+use BuiltByBerry\LaravelSwarm\Responses\AuditDrainResult;
+use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -65,7 +68,7 @@ class SwarmRelayCommand extends Command
           php artisan swarm:relay --drain-until-empty --max-attempts=10
         HELP;
 
-    public function handle(DurableOutbox $outbox, SwarmAuditDispatcher $audit, ConfigRepository $config): int
+    public function handle(DurableOutbox $outbox, AuditOutbox $auditOutbox, SwarmAuditDispatcher $audit, ConfigRepository $config): int
     {
         $types = $this->resolveTypes();
 
@@ -81,29 +84,63 @@ class SwarmRelayCommand extends Command
             $this->components->warn('--max-attempts has no effect without --drain-until-empty.');
         }
 
+        // Partition selected types into the durable lane and the audit lane.
+        // Empty $types means drain both lanes.
+        $durableTypes = array_values(array_filter(
+            $types,
+            static fn (OutboxDispatchType $t): bool => ! $t->isAudit(),
+        ));
+        $shouldDrainDurable = $types === [] || $durableTypes !== [];
+        $shouldDrainAudit = $types === [] || array_filter($types, static fn (OutboxDispatchType $t): bool => $t->isAudit()) !== [];
+
         $totalDispatched = 0;
         $totalSkipped = 0;
         $totalFailed = 0;
         $totalClaimed = 0;
         $totalReclaimed = 0;
+        $totalAuditReplayed = 0;
+        $totalAuditDeadLettered = 0;
         $attempts = 0;
-        $result = null;
+        $durableResult = new DrainResult(0, 0, 0, 0, 0);
+        $auditResult = new AuditDrainResult(0, 0, 0, 0, 0);
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
         try {
             do {
                 $attempts++;
-                $result = $outbox->drain($types, $limit);
-                $totalDispatched += $result->dispatched;
-                $totalSkipped += $result->skipped;
-                $totalFailed += $result->failed;
-                $totalClaimed += $result->claimed;
-                $totalReclaimed += $result->reclaimed;
+                $lastDurableProgress = 0;
+                $lastDurableTransient = 0;
+                $lastAuditProgress = 0;
+                $lastAuditTransient = 0;
 
-                $madeProgress = $result->total() > 0;
+                if ($shouldDrainDurable) {
+                    $durableResult = $outbox->drain($durableTypes, $limit);
+                    $totalDispatched += $durableResult->dispatched;
+                    $totalSkipped += $durableResult->skipped;
+                    $totalFailed += $durableResult->failed;
+                    $totalClaimed += $durableResult->claimed;
+                    $totalReclaimed += $durableResult->reclaimed;
+                    $lastDurableProgress = $durableResult->total();
+                    $lastDurableTransient = $durableResult->failed;
+                }
+
+                if ($shouldDrainAudit) {
+                    $auditResult = $auditOutbox->drain($limit);
+                    $totalAuditReplayed += $auditResult->replayed;
+                    $totalAuditDeadLettered += $auditResult->deadLettered;
+                    $totalFailed += $auditResult->failed;
+                    $totalClaimed += $auditResult->claimed;
+                    $totalReclaimed += $auditResult->reclaimed;
+                    $lastAuditProgress = $auditResult->total();
+                    $lastAuditTransient = $auditResult->failed;
+                }
+
+                $madeProgress = ($lastDurableProgress + $lastAuditProgress) > 0;
+                $hasTransient = ($lastDurableTransient + $lastAuditTransient) > 0;
+
                 // Only retry transient failures when --max-attempts gives a finite budget.
                 // Without it the loop would spin forever during a sustained queue outage.
-                $shouldRetryTransient = $result->failed > 0 && $maxAttempts !== null && $attempts < $maxAttempts;
+                $shouldRetryTransient = $hasTransient && $maxAttempts !== null && $attempts < $maxAttempts;
 
             } while ($drainUntilEmpty && ($madeProgress || $shouldRetryTransient));
 
@@ -119,6 +156,8 @@ class SwarmRelayCommand extends Command
                 'failed_count' => $totalFailed,
                 'claimed_count' => $totalClaimed,
                 'reclaimed_count' => $totalReclaimed,
+                'audit_replayed_count' => $totalAuditReplayed,
+                'audit_dead_lettered_count' => $totalAuditDeadLettered,
                 'status' => 'error',
                 'exception_class' => $exception::class,
                 ...$audit->metadata($actorMetadata),
@@ -127,7 +166,9 @@ class SwarmRelayCommand extends Command
             throw $exception;
         }
 
-        $hasUnresolvedTransient = $result->failed > 0;
+        $lastDurableFailed = $durableResult->failed;
+        $lastAuditFailed = $auditResult->failed;
+        $hasUnresolvedTransient = ($lastDurableFailed + $lastAuditFailed) > 0;
 
         $audit->emit('command.relay', [
             'types' => array_map(static fn (OutboxDispatchType $t): string => $t->value, $types),
@@ -140,11 +181,15 @@ class SwarmRelayCommand extends Command
             'failed_count' => $totalFailed,
             'claimed_count' => $totalClaimed,
             'reclaimed_count' => $totalReclaimed,
-            'status' => $this->auditStatus($totalDispatched, $totalSkipped, $hasUnresolvedTransient),
+            'audit_replayed_count' => $totalAuditReplayed,
+            'audit_dead_lettered_count' => $totalAuditDeadLettered,
+            'status' => $this->auditStatus($totalDispatched + $totalAuditReplayed, $totalSkipped + $totalAuditDeadLettered, $hasUnresolvedTransient),
             ...$audit->metadata($actorMetadata),
         ]);
 
-        if ($totalDispatched === 0 && $totalSkipped === 0 && $totalFailed === 0) {
+        $totalRemoved = $totalDispatched + $totalSkipped + $totalAuditReplayed + $totalAuditDeadLettered;
+
+        if ($totalRemoved === 0 && $totalFailed === 0) {
             $this->components->info('No pending outbox entries were found.');
 
             return self::SUCCESS;
@@ -154,12 +199,20 @@ class SwarmRelayCommand extends Command
             $this->components->info('Dispatched '.$totalDispatched.' outbox entr'.($totalDispatched === 1 ? 'y' : 'ies').'.');
         }
 
+        if ($totalAuditReplayed > 0) {
+            $this->components->info('Replayed '.$totalAuditReplayed.' audit record'.($totalAuditReplayed === 1 ? '' : 's').'.');
+        }
+
+        if ($totalAuditDeadLettered > 0) {
+            $this->components->warn('Dead-lettered '.$totalAuditDeadLettered.' audit record'.($totalAuditDeadLettered === 1 ? '' : 's').' that exceeded swarm.audit.outbox.max_attempts.');
+        }
+
         if ($totalSkipped > 0) {
             $this->components->warn('Skipped '.$totalSkipped.' invalid outbox entr'.($totalSkipped === 1 ? 'y' : 'ies').'. Check your error tracker for details.');
         }
 
         if ($hasUnresolvedTransient) {
-            $stuck = $result->failed;
+            $stuck = $lastDurableFailed + $lastAuditFailed;
             $this->components->warn(
                 $stuck.' outbox entr'.($stuck === 1 ? 'y' : 'ies').' could not be dispatched due to a transient error'
                 .($maxAttempts !== null ? ' after '.$attempts.' attempt'.($attempts === 1 ? '' : 's') : '')

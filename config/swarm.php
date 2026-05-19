@@ -86,10 +86,18 @@ return [
      * The default binding (NoOpSwarmAuditSink) discards all evidence.
      *
      * failure_policy controls what happens when the sink throws an exception:
-     *   swallow — silently discard (default, safest for production).
-     *   log     — record via application logger, then continue.
+     *   swallow     — silently discard.
+     *   log         — record via application logger, then continue.
+     *   queue       — persist the failed record to the audit outbox for retry
+     *                 via swarm:relay --type=audit (default since v0.5; requires
+     *                 the database persistence driver and the swarm_audit_outbox
+     *                 migration — on cache driver the dispatcher degrades to
+     *                 log-and-swallow).
+     *   dead_letter — persist directly to the dead-letter status (no retry).
+     *   halt        — throw AuditSinkHaltedException; the run fails.
      *
-     * Sink failures never propagate into swarm execution regardless of policy.
+     * Sink failures never propagate into swarm execution under swallow, log,
+     * queue, and dead_letter. Only halt is allowed to fail a run.
      *
      * actor.required: when true, runs entering the runner without a resolvable
      * Actor throw MissingActorException. Bind an Actor via $context->withActor()
@@ -97,9 +105,12 @@ return [
      * supply a custom ActorResolver in the container. Default false — set to
      * true for regulated deployments that treat unattributed runs as a
      * compliance violation.
+     *
+     * outbox.max_attempts: maximum re-emission attempts before a record moves
+     * to the dead-letter status. Default 5.
      */
     'audit' => [
-        'failure_policy' => env('SWARM_AUDIT_FAILURE_POLICY', 'swallow'),
+        'failure_policy' => env('SWARM_AUDIT_FAILURE_POLICY', 'queue'),
         'actor' => [
             'required' => filter_var(env('SWARM_AUDIT_ACTOR_REQUIRED', false), FILTER_VALIDATE_BOOLEAN),
         ],
@@ -107,6 +118,9 @@ return [
             'trim',
             explode(',', (string) env('SWARM_AUDIT_METADATA_ALLOWLIST', '')),
         ))),
+        'outbox' => [
+            'max_attempts' => (int) env('SWARM_AUDIT_OUTBOX_MAX_ATTEMPTS', 5),
+        ],
     ],
 
     /*
@@ -325,5 +339,6 @@ return [
         'durable_child_runs' => env('SWARM_DURABLE_CHILD_RUNS_TABLE', 'swarm_durable_child_runs'),
         'durable_webhook_idempotency' => env('SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE', 'swarm_durable_webhook_idempotency'),
         'durable_outbox' => env('SWARM_DURABLE_OUTBOX_TABLE', 'swarm_durable_outbox'),
+        'audit_outbox' => env('SWARM_AUDIT_OUTBOX_TABLE', 'swarm_audit_outbox'),
     ],
 ];

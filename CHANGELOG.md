@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- **Audit outbox + queue/dead-letter failure policies (#20).** Sink failures can now be persisted to the new `swarm_audit_outbox` table and retried via `swarm:relay --type=audit`. The relay command drains both the durable lane and the audit lane in a single pass (or each independently with `--type=step` / `--type=audit`). `SinkFailureDecision` gains `Queue` and `DeadLetter` cases. `ConfiguredSinkFailureHandler` recognizes `queue` and `dead_letter` failure-policy values in addition to the v0.4 `swallow` / `log` / `halt`. `swarm.audit.outbox.max_attempts` (default 5) controls how many retry passes a record gets before moving to the dead-letter status. `command.relay` evidence gains `audit_replayed_count` and `audit_dead_lettered_count` fields.
+
 ### Changed
 
+- **BREAKING (audit defaults):** `swarm.audit.failure_policy` defaults to `queue` (was `swallow` in v0.4) (#20). When a bound `SwarmAuditSink` throws, failed evidence is now persisted to the audit outbox for retry instead of silently dropped. On database persistence, run `php artisan migrate` to create `swarm_audit_outbox` and schedule `swarm:relay` (the existing schedule drains both lanes). On cache persistence the dispatcher detects the unavailable outbox and falls back to log-and-swallow automatically. Set `SWARM_AUDIT_FAILURE_POLICY=swallow` to restore v0.4 behavior.
 - **BREAKING (audit envelope):** `EvidenceEnvelope::SCHEMA_VERSION` bumps from `"1"` to `"2"` (#30). The bump signals a shape change on `command.*` evidence: the legacy top-level `actor` literal (`'actor' => 'artisan'`) is removed from `command.pause`, `command.resume`, `command.cancel`, `command.recover`, and `command.relay` payloads. Actor identity now flows through the standard `metadata.actor` slot as an `Actor` value object array, matching how every other category (`run.*`, `step.*`, `durable.*`) already exposes it. `swarm:prune` evidence, which previously carried no actor at all, now also emits `metadata.actor`. See `UPGRADING.md` v0.5.0 block for the migration walk-through.
 - **REFACTOR (internal):** `SwarmRunner` (930 lines) decomposed into three focused collaborators (#21): `RunAuditEmitter` (centralizes run-level audit payload composition), `DispatchValidator` (dispatch-time validation), and `LeaseManager` (queue lease-seconds policy + durable coordination lease helpers). The class is `@internal` and the public API (`run`, `runQueued`, `stream`, `broadcast`, `queue`, `broadcastOnQueue`, `dispatchDurable`, `resumeQueuedHierarchicalAfterJoin`) is unchanged.
 

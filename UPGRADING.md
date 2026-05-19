@@ -270,12 +270,79 @@ stability settings while Laravel AI remains pre-stable.
 
 ## Upgrading to v0.5.0
 
-v0.5.0 settles the audit evidence envelope. The shared `schema_version`
-bumps from `"1"` to `"2"` and the legacy top-level `actor` field on
-`command.*` evidence moves into the standard `metadata.actor` slot used by
-the rest of the evidence taxonomy.
+v0.5.0 settles the audit evidence envelope and lands the durability layer
+underneath it. The shared `schema_version` bumps from `"1"` to `"2"`, the
+legacy top-level `actor` field on `command.*` evidence moves into the
+standard `metadata.actor` slot, sink failures are now **queued** by default
+(via a new audit outbox) instead of silently swallowed, and `SwarmRunner`
+splits into focused collaborators. The `Swarm\Contracts\Agent` and
+`Swarm\Contracts\HasStructuredOutput` marker interfaces give swarm its own
+stability story over laravel/ai.
 
 ### High Impact Changes
+
+#### Audit sink failures are queued by default
+
+`swarm.audit.failure_policy` defaults to `queue` in v0.5 (was `swallow` in
+v0.4). When a bound `SwarmAuditSink` throws, the failed evidence record is
+now persisted to the new `swarm_audit_outbox` table for retry via
+`swarm:relay --type=audit`, rather than discarded. This is the
+regulated-safe-by-default posture: a transient sink outage no longer drops
+evidence on the floor.
+
+**Required if you're on database persistence and want the new behavior:**
+
+```bash
+php artisan migrate
+```
+
+The new migration creates `swarm_audit_outbox`. Schedule the relay if you
+have not already (the same relay drains both durable and audit lanes):
+
+```php
+Schedule::command('swarm:relay')->everyMinute();
+```
+
+You can also drain audit only:
+
+```bash
+php artisan swarm:relay --type=audit
+```
+
+**Opting out:** set `SWARM_AUDIT_FAILURE_POLICY=swallow` (v0.4 behavior),
+`=log` (write the failure to the application log, then swallow), or
+`=halt` (rethrow as `AuditSinkHaltedException`, which fails the run). Use
+`=dead_letter` to persist failures to the outbox without retry.
+
+**On cache persistence:** the outbox is not available with the cache
+driver. The dispatcher detects this and falls back to log-and-swallow
+automatically, emitting a warning log. No code change is required.
+
+#### `SinkFailureDecision` gains `Queue` and `DeadLetter` cases
+
+Custom `SinkFailureHandler` implementations may now return:
+
+- `SinkFailureDecision::Queue` — the dispatcher persists the failed record
+  to the audit outbox for retry via `swarm:relay --type=audit`.
+- `SinkFailureDecision::DeadLetter` — the dispatcher persists the record
+  directly to the dead-letter status (no retry).
+
+If your custom handler uses a `match` or `switch` over
+`SinkFailureDecision`, add cases for these two new values. PHP throws a
+`UnhandledMatchError` if your match expression is exhaustive and these
+fall through.
+
+#### Evidence `schema_version` bumps to `"2"`
+
+Every payload emitted through `SwarmAuditDispatcher` and
+`SwarmTelemetryDispatcher` carries `schema_version: "2"`. Sinks that branch on
+`schema_version` (for example, to validate a payload against a known shape)
+must be taught to recognize `"2"`. Sinks that ignore `schema_version` need no
+changes.
+
+The bump signals a **shape break on `command.*` evidence only.** Run-level
+(`run.*`), step-level (`step.*`), and durable runtime (`durable.*`, `wait.*`,
+`signal.*`) evidence shapes are unchanged from v0.4.
 
 #### Evidence `schema_version` bumps to `"2"`
 

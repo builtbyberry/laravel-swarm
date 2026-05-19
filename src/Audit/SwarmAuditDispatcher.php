@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Audit;
 
+use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
@@ -11,6 +12,8 @@ use BuiltByBerry\LaravelSwarm\Exceptions\AuditSinkHaltedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Throwable;
 
 /**
@@ -47,7 +50,11 @@ class SwarmAuditDispatcher
         protected ConfigRepository $config,
         protected SinkFailureHandler $failureHandler,
         protected ?SwarmAuditSigner $signer = null,
-    ) {}
+        protected ?AuditOutbox $outbox = null,
+        protected ?LoggerInterface $logger = null,
+    ) {
+        $this->logger ??= new NullLogger;
+    }
 
     /**
      * Emit a single evidence record to the bound sink.
@@ -71,6 +78,12 @@ class SwarmAuditDispatcher
 
                 if ($decision === SinkFailureDecision::Halt) {
                     throw new AuditSinkHaltedException($category, $exception);
+                }
+
+                if ($decision === SinkFailureDecision::Queue || $decision === SinkFailureDecision::DeadLetter) {
+                    $this->routeToOutbox($category, $enriched, $decision === SinkFailureDecision::DeadLetter, $exception);
+
+                    return;
                 }
 
                 // Swallow and RetryInline both stop the emit here — we cannot
@@ -112,8 +125,54 @@ class SwarmAuditDispatcher
                         continue 2;
                     case SinkFailureDecision::Halt:
                         throw new AuditSinkHaltedException($category, $exception);
+                    case SinkFailureDecision::Queue:
+                        $this->routeToOutbox($category, $enriched, false, $exception);
+
+                        return;
+                    case SinkFailureDecision::DeadLetter:
+                        $this->routeToOutbox($category, $enriched, true, $exception);
+
+                        return;
                 }
             }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function routeToOutbox(string $category, array $payload, bool $deadLetter, Throwable $cause): void
+    {
+        if ($this->outbox === null || ! $this->outbox->isAvailable()) {
+            $this->logger->warning(
+                'Swarm audit sink failed and outbox is unavailable; swallowing.',
+                [
+                    'category' => $category,
+                    'decision' => $deadLetter ? 'dead_letter' : 'queue',
+                    'exception' => $cause->getMessage(),
+                    'class' => $cause::class,
+                ],
+            );
+
+            return;
+        }
+
+        try {
+            $this->outbox->enqueue($category, $payload, $deadLetter);
+        } catch (Throwable $outboxException) {
+            // Persisting to the outbox failed (DB outage, etc.). Swallow with
+            // a log so the original sink failure is not masked by an outbox failure.
+            $this->logger->error(
+                'Swarm audit outbox enqueue failed; swallowing original sink failure.',
+                [
+                    'category' => $category,
+                    'decision' => $deadLetter ? 'dead_letter' : 'queue',
+                    'original_exception' => $cause->getMessage(),
+                    'original_class' => $cause::class,
+                    'outbox_exception' => $outboxException->getMessage(),
+                    'outbox_class' => $outboxException::class,
+                ],
+            );
         }
     }
 

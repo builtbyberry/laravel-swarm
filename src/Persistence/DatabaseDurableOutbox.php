@@ -218,6 +218,10 @@ class DatabaseDurableOutbox implements DurableOutbox
                 $connection,
                 $queue,
             ),
+            OutboxDispatchType::Audit => throw new UnexpectedValueException(
+                "Audit dispatch type [{$entry->dispatch_type}] for entry [{$entry->id}] was routed to the durable outbox; "
+                .'audit records belong in the swarm_audit_outbox table and are drained by AuditOutbox.'
+            ),
         };
     }
 
