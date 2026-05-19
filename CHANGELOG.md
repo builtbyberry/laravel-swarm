@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.4.3 - 2026-05-19
+
+### Added
+
+- `SwarmFake` gains three new actor assertions (#34): `assertDispatchedWithActor(Actor|string|callable)`, `assertDispatchedWithAnyActor()`, and `assertNeverDispatchedWithActor()`. Helpers inspect every dispatch bucket (run, queue, durable, stream) for a `RunContext` whose `metadata.actor` matches. Bare-string and structured-array tasks never carry an actor — pass an explicit `RunContext::fromTask($task)->withActor(...)` when you want the binding to be visible to `SwarmFake`.
+- New `## Testing Audit Extension Points` section in `docs/testing.md` documents the three patterns for testing the four v0.4 audit-extension contracts (`CapturePolicy`, `SinkFailureHandler`, `SwarmAuditSigner`, `ActorResolver`): unit-test the contract directly, bind a recording `SwarmAuditSink` for end-to-end audit checks, or use `'halt'` failure policy to assert run-level halt behavior. Worked examples reference the package's own `tests/Unit/Audit/` suite.
+- New `## Asserting Actor Binding` section in `docs/testing.md` walks through the three new SwarmFake assertions with code samples, including the `Context::add('swarm:actor', ...)` + explicit `withActor()` pattern for tests that bridge the Laravel Context facade and SwarmFake.
+
+### Changed
+
+- Reframed the original #34 issue scope. The issue asked for assertions on all four v0.4 audit extension contracts, but only `Actor` has a dispatch-time signal SwarmFake can observe — the other three are runtime concerns inside the audit dispatcher, a path SwarmFake intentionally skips. The new docs section captures the three contracts' actual test patterns instead of pretending SwarmFake covers them.
+
 ## v0.4.2 - 2026-05-19
 
 ### Fixed

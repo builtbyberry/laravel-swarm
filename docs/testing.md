@@ -89,6 +89,140 @@ ArticlePipeline::assertNeverStreamed();
 ArticlePipeline::assertNeverDispatchedDurably();
 ```
 
+## Asserting Actor Binding
+
+`SwarmFake` can assert that a dispatch carried an `Actor` bound via
+`RunContext::withActor()`. Bare-string tasks and structured-array tasks
+carry no actor — the assertion only sees actors on `RunContext` instances.
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+ArticlePipeline::fake();
+
+$context = RunContext::fromTask('draft the post')
+    ->withActor(new Actor(id: 'u-42', type: 'user'));
+
+ArticlePipeline::make()->run($context);
+
+ArticlePipeline::assertDispatchedWithActor(new Actor(id: 'u-42', type: 'user'));
+ArticlePipeline::assertDispatchedWithActor('user:u-42');
+ArticlePipeline::assertDispatchedWithActor(
+    fn (Actor $actor): bool => $actor->type === 'user',
+);
+```
+
+Use `assertDispatchedWithAnyActor()` when you only need to confirm that an
+actor was bound, and `assertNeverDispatchedWithActor()` to assert the
+opposite. All three helpers inspect every dispatch bucket (run, queue,
+durable, stream).
+
+If your application code uses `Context::add('swarm:actor', $actor)` instead
+of an explicit `withActor()`, pass an explicit `RunContext` to the swarm
+dispatch under test so the actor is visible to `SwarmFake`:
+
+```php
+Context::add('swarm:actor', $user);
+
+ArticlePipeline::make()->run(
+    RunContext::fromTask($task)->withActor($user),
+);
+```
+
+The `Context` facade binding still flows to the real runner via
+`DefaultActorResolver`; the explicit `withActor()` call is just the
+SwarmFake-visible mirror.
+
+## Testing Audit Extension Points
+
+The four v0.4 audit extension contracts — `CapturePolicy`,
+`SinkFailureHandler`, `SwarmAuditSigner`, and `ActorResolver` — are
+invoked inside `SwarmRunner` and the audit dispatcher, code paths that
+`SwarmFake` intentionally skips. Three testing patterns cover them:
+
+### Unit-test the contract directly
+
+Custom implementations are plain PHP classes. Construct one with the
+inputs you want to exercise and assert on the decision or output:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+test('redacts outputs for unauthenticated runs', function () {
+    $policy = new MyCapturePolicy;
+    $context = RunContext::fromTask('task');
+
+    expect($policy->outputs($context, actor: null))
+        ->toBe(CaptureDecision::Redact);
+
+    expect($policy->outputs($context, actor: new Actor(id: 'u-1', type: 'user')))
+        ->toBe(CaptureDecision::Full);
+});
+```
+
+This pattern works for all four contracts. Worked examples live in
+`tests/Unit/Audit/` (`CapturePolicyTest`, `SinkFailureHandlerTest`,
+`SwarmAuditSignerTest`, `DefaultActorResolverTest`).
+
+### Bind a recording sink for end-to-end audit checks
+
+When you need to verify what an actual run emitted — including the
+signed-and-actor-bound envelope — bind a recording sink in your test
+setup and inspect the emitted payloads:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+
+$sink = new class implements SwarmAuditSink {
+    /** @var array<int, array{category: string, payload: array<string, mixed>}> */
+    public array $records = [];
+
+    public function emit(string $category, array $payload): void
+    {
+        $this->records[] = compact('category', 'payload');
+    }
+};
+
+app()->instance(SwarmAuditSink::class, $sink);
+
+ArticlePipeline::make()->run(
+    RunContext::fromTask('task')->withActor('user:42'),
+);
+
+expect($sink->records[0]['payload']['metadata']['actor']['id'])->toBe('42');
+```
+
+The package ships an internal `RecordingSwarmAuditSink` fixture used by
+its own feature tests; copy that shape into your application test
+suite if you want a richer recording sink.
+
+### Use `'halt'` failure policy to assert run-level halt behavior
+
+When you want to verify that a signing or sink failure halts the run,
+bind a sink that throws, set `swarm.audit.failure_policy=halt`, and
+catch the `AuditSinkHaltedException`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Exceptions\AuditSinkHaltedException;
+
+config()->set('swarm.audit.failure_policy', 'halt');
+app()->instance(SwarmAuditSink::class, new class implements SwarmAuditSink {
+    public function emit(string $category, array $payload): void
+    {
+        throw new RuntimeException('sink down');
+    }
+});
+
+expect(fn () => ArticlePipeline::make()->run('task'))
+    ->toThrow(AuditSinkHaltedException::class);
+```
+
+See [Audit Evidence Contract](audit-evidence-contract.md) for the full
+extension-point reference.
+
 ## Asserting Structured Input
 
 Array assertions use subset matching, so you only need to assert on the keys

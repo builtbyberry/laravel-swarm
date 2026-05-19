@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Concerns;
 
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
@@ -392,6 +393,59 @@ trait Runnable
 
         /** @var SwarmFakeInstance $resolved */
         $resolved->assertNeverStreamed();
+    }
+
+    /**
+     * Assert at least one recorded dispatch carried a RunContext with the
+     * expected actor bound via RunContext::withActor().
+     */
+    public static function assertDispatchedWithActor(Actor|string|callable $actor): void
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            'The expected swarm was not faked before calling assertDispatchedWithActor().',
+        );
+
+        /** @var SwarmFakeInstance $resolved */
+        $resolved->assertDispatchedWithActor($actor);
+    }
+
+    /**
+     * Assert at least one recorded dispatch carried a RunContext with any
+     * non-null actor in metadata.
+     */
+    public static function assertDispatchedWithAnyActor(): void
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            'The expected swarm was not faked before calling assertDispatchedWithAnyActor().',
+        );
+
+        /** @var SwarmFakeInstance $resolved */
+        $resolved->assertDispatchedWithAnyActor();
+    }
+
+    /**
+     * Assert no recorded dispatch carried an actor in metadata.
+     */
+    public static function assertNeverDispatchedWithActor(): void
+    {
+        $resolved = Container::getInstance()->make(static::class);
+
+        PHPUnit::assertInstanceOf(
+            SwarmFakeInstance::class,
+            $resolved,
+            'The expected swarm was not faked before calling assertNeverDispatchedWithActor().',
+        );
+
+        /** @var SwarmFakeInstance $resolved */
+        $resolved->assertNeverDispatchedWithActor();
     }
 
     /**

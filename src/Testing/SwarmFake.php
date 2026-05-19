@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Testing;
 
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
@@ -569,6 +570,53 @@ class SwarmFake implements Swarm
     }
 
     /**
+     * Assert at least one recorded dispatch carried a RunContext whose
+     * metadata.actor matches the expected actor.
+     *
+     * Accepts an Actor value object (exact match on id+type), a "type:id"
+     * shorthand string, or a callable that receives the resolved Actor and
+     * returns a boolean.
+     *
+     * Bare-string and structured-array tasks (no RunContext) never match —
+     * the actor only flows through RunContext::withActor(). Callers using
+     * Context::add('swarm:actor', ...) should pass an explicit
+     * $context->withActor($actor) before dispatch to make the binding visible
+     * to SwarmFake.
+     */
+    public function assertDispatchedWithActor(Actor|string|callable $actor): void
+    {
+        PHPUnit::assertTrue(
+            $this->recordedDispatchesMatchingActor($actor) !== [],
+            "The swarm [{$this->swarmClass}] was not dispatched with the expected actor.",
+        );
+    }
+
+    /**
+     * Assert at least one recorded dispatch carried a RunContext with any
+     * non-null actor in metadata.
+     */
+    public function assertDispatchedWithAnyActor(): void
+    {
+        PHPUnit::assertTrue(
+            $this->collectRecordedActors() !== [],
+            "The swarm [{$this->swarmClass}] was not dispatched with any actor.",
+        );
+    }
+
+    /**
+     * Assert no recorded dispatch carried an actor in metadata.
+     */
+    public function assertNeverDispatchedWithActor(): void
+    {
+        $actors = $this->collectRecordedActors();
+
+        PHPUnit::assertEmpty(
+            $actors,
+            "The swarm [{$this->swarmClass}] was dispatched with an actor unexpectedly.",
+        );
+    }
+
+    /**
      * Resolve the fake response for the given task.
      *
      * @param  SwarmTaskInput  $task
@@ -694,5 +742,82 @@ class SwarmFake implements Swarm
             || array_key_exists('data', $task)
             || array_key_exists('metadata', $task)
             || array_key_exists('artifacts', $task);
+    }
+
+    /**
+     * Collect Actor instances from every recorded dispatch that carried a
+     * RunContext with a metadata.actor entry.
+     *
+     * @return array<int, Actor>
+     */
+    protected function collectRecordedActors(): array
+    {
+        $actors = [];
+
+        foreach ($this->allRecordedDispatches() as $task) {
+            $actor = $this->actorFromTask($task);
+
+            if ($actor !== null) {
+                $actors[] = $actor;
+            }
+        }
+
+        return $actors;
+    }
+
+    /**
+     * @return array<int, Actor>
+     */
+    protected function recordedDispatchesMatchingActor(Actor|string|callable $expected): array
+    {
+        $matches = [];
+
+        foreach ($this->collectRecordedActors() as $actor) {
+            if ($this->actorMatches($actor, $expected)) {
+                $matches[] = $actor;
+            }
+        }
+
+        return $matches;
+    }
+
+    /**
+     * @param  string|array<string, mixed>|RunContext  $task
+     */
+    protected function actorFromTask(string|array|RunContext $task): ?Actor
+    {
+        if ($task instanceof RunContext) {
+            return $task->actor();
+        }
+
+        return null;
+    }
+
+    protected function actorMatches(Actor $actor, Actor|string|callable $expected): bool
+    {
+        if (is_callable($expected)) {
+            return (bool) $expected($actor);
+        }
+
+        if ($expected instanceof Actor) {
+            return $actor->id === $expected->id && $actor->type === $expected->type;
+        }
+
+        $reference = Actor::fromAny($expected);
+
+        return $actor->id === $reference->id && $actor->type === $reference->type;
+    }
+
+    /**
+     * @return array<int, string|array<string, mixed>|RunContext>
+     */
+    protected function allRecordedDispatches(): array
+    {
+        return array_merge(
+            $this->recorded,
+            $this->recordedQueued,
+            $this->recordedDurable,
+            $this->recordedStreamed,
+        );
     }
 }

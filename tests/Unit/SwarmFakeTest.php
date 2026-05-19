@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
@@ -356,4 +357,121 @@ test('assert never streamed fails after a stream call', function () {
     iterator_to_array(EmptyRunnableSwarm::make()->stream('x'));
 
     expect(fn () => EmptyRunnableSwarm::assertNeverStreamed())->toThrow(AssertionFailedError::class);
+});
+
+// ---------------------------------------------------------------------------
+// Actor assertion helpers (#34, v0.4.3)
+// ---------------------------------------------------------------------------
+
+test('assertDispatchedWithActor matches an Actor instance bound via withActor', function () {
+    EmptyRunnableSwarm::fake();
+
+    $context = RunContext::fromTask('task')->withActor(
+        new Actor(id: 'u-42', type: 'user'),
+    );
+
+    EmptyRunnableSwarm::make()->run($context);
+
+    EmptyRunnableSwarm::assertDispatchedWithActor(
+        new Actor(id: 'u-42', type: 'user'),
+    );
+});
+
+test('assertDispatchedWithActor matches a "type:id" string shorthand', function () {
+    EmptyRunnableSwarm::fake();
+
+    $context = RunContext::fromTask('task')->withActor('api_token:abc-123');
+
+    EmptyRunnableSwarm::make()->queue($context);
+
+    EmptyRunnableSwarm::assertDispatchedWithActor('api_token:abc-123');
+});
+
+test('assertDispatchedWithActor accepts a callable predicate', function () {
+    EmptyRunnableSwarm::fake();
+
+    $context = RunContext::fromTask('task')->withActor(
+        new Actor(id: 'cron:nightly', type: 'system'),
+    );
+
+    EmptyRunnableSwarm::make()->dispatchDurable($context);
+
+    EmptyRunnableSwarm::assertDispatchedWithActor(
+        fn (Actor $actor): bool => $actor->type === 'system',
+    );
+});
+
+test('assertDispatchedWithActor fails when no actor was bound', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::make()->run('bare-string-task');
+
+    expect(fn () => EmptyRunnableSwarm::assertDispatchedWithActor('user:42'))
+        ->toThrow(AssertionFailedError::class);
+});
+
+test('assertDispatchedWithActor inspects every dispatch bucket', function () {
+    EmptyRunnableSwarm::fake();
+
+    $promptCtx = RunContext::fromTask('p')->withActor('user:1');
+    $queueCtx = RunContext::fromTask('q')->withActor('user:2');
+    $durableCtx = RunContext::fromTask('d')->withActor('user:3');
+
+    $fake = EmptyRunnableSwarm::make();
+    $fake->run($promptCtx);
+    $fake->queue($queueCtx);
+    $fake->dispatchDurable($durableCtx);
+
+    EmptyRunnableSwarm::assertDispatchedWithActor('user:1');
+    EmptyRunnableSwarm::assertDispatchedWithActor('user:2');
+    EmptyRunnableSwarm::assertDispatchedWithActor('user:3');
+});
+
+test('assertDispatchedWithAnyActor passes when at least one dispatch carried an actor', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::make()->run('bare-task');
+    EmptyRunnableSwarm::make()->run(RunContext::fromTask('with-actor')->withActor('system:cron'));
+
+    EmptyRunnableSwarm::assertDispatchedWithAnyActor();
+});
+
+test('assertDispatchedWithAnyActor fails when no dispatch carried an actor', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::make()->run('bare-task');
+    EmptyRunnableSwarm::make()->queue('also-bare');
+
+    expect(fn () => EmptyRunnableSwarm::assertDispatchedWithAnyActor())
+        ->toThrow(AssertionFailedError::class);
+});
+
+test('assertNeverDispatchedWithActor passes when no dispatch carried an actor', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::make()->run('bare-task');
+    EmptyRunnableSwarm::make()->queue('also-bare');
+
+    EmptyRunnableSwarm::assertNeverDispatchedWithActor();
+});
+
+test('assertNeverDispatchedWithActor fails when a dispatch carried an actor', function () {
+    EmptyRunnableSwarm::fake();
+
+    EmptyRunnableSwarm::make()->run(RunContext::fromTask('task')->withActor('user:42'));
+
+    expect(fn () => EmptyRunnableSwarm::assertNeverDispatchedWithActor())
+        ->toThrow(AssertionFailedError::class);
+});
+
+test('actor assertions ignore bare-string and structured-array tasks', function () {
+    EmptyRunnableSwarm::fake();
+
+    // Bare strings and plain structured arrays carry no actor — even if a
+    // metadata.actor entry is set on a structured task array, SwarmFake only
+    // inspects RunContext instances per the v0.4.3 design.
+    EmptyRunnableSwarm::make()->run(['input' => 'x', 'metadata' => ['actor' => ['id' => 'u-1', 'type' => 'user']]]);
+
+    expect(fn () => EmptyRunnableSwarm::assertDispatchedWithActor('user:u-1'))
+        ->toThrow(AssertionFailedError::class);
 });
