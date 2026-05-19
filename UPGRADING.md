@@ -337,6 +337,103 @@ There is no compatibility shim — the field is removed, not aliased — because
 keeping it would mean carrying duplicate-emit code through a minor we already
 need to delete before 0.6.
 
+#### `Swarm\Contracts\Agent` and `Swarm\Contracts\HasStructuredOutput` marker contracts
+
+v0.5.0 introduces swarm-owned marker interfaces that wrap the corresponding
+contracts from `laravel/ai`:
+
+- `BuiltByBerry\LaravelSwarm\Contracts\Agent` — extends
+  `Laravel\Ai\Contracts\Agent`.
+- `BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput` — extends
+  `Laravel\Ai\Contracts\HasStructuredOutput`.
+
+The runtime contract is unchanged: every method already declared by the
+vendor interfaces continues to exist. The markers exist so the Swarm public
+surface (the `Swarm` contract, hierarchical/parallel runners, route planner,
+`SwarmFake`, and the streaming event base class) can advertise types it
+controls. This shields applications from churn in `laravel/ai`'s pre-1.0
+contracts.
+
+**Migration required for custom agent classes.** Application code that
+defines an agent and feeds it into Swarm must implement the new marker
+interface:
+
+```php
+// v0.4 — vendor contract directly
+use Laravel\Ai\Contracts\Agent;
+
+class MyAgent implements Agent { /* ... */ }
+```
+
+```php
+// v0.5 — swarm-owned marker
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+
+class MyAgent implements Agent { /* ... */ }
+```
+
+Because the swarm marker extends the vendor interface, a class that
+implements `BuiltByBerry\LaravelSwarm\Contracts\Agent` continues to satisfy
+every place that accepts a `Laravel\Ai\Contracts\Agent` (the vendor APIs and
+ecosystem code keep working). The reverse is not true, so agents that only
+implement the vendor interface will no longer pass Swarm's hierarchical and
+parallel runner type-checks.
+
+Agents that produce structured output (hierarchical coordinators with
+`schema()`) should also switch to the swarm-owned
+`BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput`:
+
+```php
+// v0.5
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput;
+
+class MyCoordinator implements Agent, HasStructuredOutput { /* ... */ }
+```
+
+#### `Swarm\Streaming\StreamEvent` base class
+
+Every `SwarmStream*` event now extends
+`BuiltByBerry\LaravelSwarm\Streaming\StreamEvent` instead of
+`Laravel\Ai\Streaming\Events\StreamEvent` directly. The swarm-owned base
+class still extends the vendor `StreamEvent` so the invocation-id tracking,
+`type()` method, and `toArray()` contract behave identically — only the
+declared ancestor in the type tree changes. Consumers that type-hint against
+`BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent` need no changes.
+
+If you wrote custom listener code that type-hinted against the vendor
+`Laravel\Ai\Streaming\Events\StreamEvent` to receive swarm events, that
+hint still matches because `Swarm\Streaming\StreamEvent` is-a vendor
+`StreamEvent`. New code should depend on the swarm-owned base instead.
+
+#### Vendor data types intentionally remain passthrough
+
+Some Laravel AI types still flow through Swarm unchanged because wrapping
+them would advertise a portability story Swarm cannot deliver. These types
+are documented as **passthrough** and may evolve with `laravel/ai`:
+
+- `Laravel\Ai\Responses\Data\ToolCall` — embedded on
+  `BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall::$toolCall` and
+  handled by the internal `captureToolCall` paths in the sequential and
+  static-hierarchical stream runners.
+- `Laravel\Ai\Responses\Data\ToolResult` — embedded on
+  `BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult::$toolResult`
+  and handled by the matching `captureToolResult` paths.
+- `Laravel\Ai\Responses\AgentResponse` — read inside the
+  `MergesAgentUsage` trait when extracting usage from the value returned
+  by `Agent::prompt()`.
+- `Laravel\Ai\Streaming\Events\TextDelta`, `TextEnd`, `ReasoningDelta`,
+  `ReasoningEnd`, `ToolCall`, `ToolResult`, `StreamEnd`, and `Error` —
+  yielded as-is from the provider stream into the runner's translation
+  layer.
+- `Laravel\Ai\FakePendingDispatch` — referenced by
+  `BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse::syncQueueRouting()`
+  to bypass queue-routing reads under `Bus::fake()`.
+
+Treat these as read-only snapshots of the vendor data. Their shapes are not
+covered by Swarm's semver guarantees; if `laravel/ai` changes them, Swarm
+will surface those changes with the corresponding vendor upgrade.
+
 ### Medium Impact Changes
 
 None.

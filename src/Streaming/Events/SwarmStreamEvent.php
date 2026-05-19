@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEvent;
 use Illuminate\Http\StreamedEvent;
 use Illuminate\Support\Str;
-use Laravel\Ai\Streaming\Events\StreamEvent;
 
 abstract class SwarmStreamEvent extends StreamEvent
 {

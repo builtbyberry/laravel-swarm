@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 
-use Laravel\Ai\Contracts\Agent;
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use Laravel\Ai\Promptable;
 
 class UnresolvableParallelAgent implements Agent

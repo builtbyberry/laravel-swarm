@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use Illuminate\Broadcasting\Channel;
-use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;

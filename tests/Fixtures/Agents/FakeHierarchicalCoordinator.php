@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Laravel\Ai\Contracts\Agent;
-use Laravel\Ai\Contracts\HasStructuredOutput;
 use Laravel\Ai\Promptable;
 
 class FakeHierarchicalCoordinator implements Agent, HasStructuredOutput

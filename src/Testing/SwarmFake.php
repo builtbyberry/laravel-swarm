@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Testing;
 
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
@@ -23,7 +24,6 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Testing\Assert as PHPUnit;
-use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\FakePendingDispatch;
 
 /**
