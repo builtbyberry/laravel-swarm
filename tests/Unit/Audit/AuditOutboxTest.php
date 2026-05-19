@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Audit\NoOpAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
@@ -215,6 +217,58 @@ test('DatabaseAuditOutbox emits Log::error at the moment of dead_letter transiti
                 && ($context['attempts'] ?? null) === 1;
         })
         ->once();
+});
+
+test('DatabaseAuditOutbox preserves the original signer key across replay (signer rotation guard)', function (): void {
+    // Signer that stamps payloads with whichever key is currently bound. If the
+    // outbox re-signed on replay, the recorded sink would receive a payload
+    // stamped with the rotated key. The contract (UPGRADING + audit-evidence-
+    // contract.md) guarantees this does NOT happen: outbox stores the signed
+    // bytes from the original emit attempt, and re-emit ships those bytes as-is.
+    $keyHolder = new class
+    {
+        public string $currentKey = 'K1';
+    };
+    $signer = new class($keyHolder) implements SwarmAuditSigner
+    {
+        public function __construct(private readonly object $keyHolder) {}
+
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature_key'] = $this->keyHolder->currentKey;
+
+            return $payload;
+        }
+    };
+
+    // First emit: signed under K1, but the bound sink rejects it so the
+    // dispatcher routes the K1-signed envelope to the outbox.
+    app()->instance(SwarmAuditSigner::class, $signer);
+    app()->instance(SwarmAuditSink::class, new class implements SwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void
+        {
+            throw new RuntimeException('sink rejects fresh emits');
+        }
+    });
+    config()->set('swarm.audit.failure_policy', 'queue');
+    app()->forgetInstance(AuditOutbox::class);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.failed', ['run_id' => 'r-rotate']);
+
+    // Rotate the signer key and swap to a recording sink so replay results
+    // are observable.
+    $keyHolder->currentKey = 'K2';
+    $recordingSink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $recordingSink);
+    app()->forgetInstance(AuditOutbox::class);
+
+    app(AuditOutbox::class)->drain();
+
+    $replayed = $recordingSink->recordsForCategory('run.failed');
+    expect($replayed)->toHaveCount(1);
+    expect($replayed[0]['signature_key'])->toBe('K1');
 });
 
 test('DatabaseAuditOutbox drain skips dead_letter rows', function (): void {

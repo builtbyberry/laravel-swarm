@@ -331,6 +331,14 @@ treat any dead-letter transition as a compliance signal — it means an
 audit event was supposed to land in the sink but never will without
 operator intervention. Wire your log aggregator to alert on this message.
 
+**Signer rotation:** records that fail and land in the outbox carry the
+signature produced by `SwarmAuditSigner` at the moment of the original
+emit attempt. The outbox re-emits the **original signed payload** on
+replay — it does not re-sign under a rotated key. Sinks that verify
+signatures across a key-rotation window must accept old keys for at least
+the duration of the longest expected outbox backlog. See
+`docs/audit-evidence-contract.md` "Signer rotation" for details.
+
 **Health visibility:** `swarm:health` (no flag) now runs two audit-outbox
 checks by default — staleness (pending rows whose `reserved_at` aged past
 2× the relay reservation timeout) and dead-letter count (any
