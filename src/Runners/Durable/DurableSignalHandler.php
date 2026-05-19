@@ -94,6 +94,7 @@ class DurableSignalHandler
             accepted: $accepted,
             duplicate: (bool) ($signal['duplicate'] ?? false),
             signal: $signal,
+            swarmClass: (string) $run['swarm_class'],
         );
     }
 

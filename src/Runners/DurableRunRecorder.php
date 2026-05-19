@@ -49,8 +49,8 @@ class DurableRunRecorder
         $this->audit->emit('durable.failed', [
             'run_id' => $runId,
             'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-            'swarm_class' => $context->metadata['swarm_class'] ?? null,
-            'topology' => $context->metadata['topology'] ?? null,
+            'swarm_class' => $this->runs->swarmClassFor($runId),
+            'topology' => $this->runs->topologyFor($runId),
             'execution_mode' => 'durable',
             'status' => 'failed',
             'exception_class' => $exception::class,
@@ -70,10 +70,11 @@ class DurableRunRecorder
         $this->audit->emit('durable.cancelled', [
             'run_id' => $runId,
             'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-            'swarm_class' => $context->metadata['swarm_class'] ?? null,
-            'topology' => $context->metadata['topology'] ?? null,
+            'swarm_class' => $this->runs->swarmClassFor($runId),
+            'topology' => $this->runs->topologyFor($runId),
             'execution_mode' => 'durable',
             'status' => 'cancelled',
+            'duration_ms' => $this->runs->durationMillisecondsFor($runId),
         ]);
     }
 
@@ -86,8 +87,8 @@ class DurableRunRecorder
         $this->audit->emit('durable.paused', [
             'run_id' => $runId,
             'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-            'swarm_class' => $context->metadata['swarm_class'] ?? null,
-            'topology' => $context->metadata['topology'] ?? null,
+            'swarm_class' => $this->runs->swarmClassFor($runId),
+            'topology' => $this->runs->topologyFor($runId),
             'execution_mode' => 'durable',
             'status' => 'paused',
         ]);
@@ -104,8 +105,8 @@ class DurableRunRecorder
         $this->audit->emit('durable.completed', [
             'run_id' => $runId,
             'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-            'swarm_class' => $context->metadata['swarm_class'] ?? null,
-            'topology' => $context->metadata['topology'] ?? null,
+            'swarm_class' => $this->runs->swarmClassFor($runId),
+            'topology' => $this->runs->topologyFor($runId),
             'execution_mode' => 'durable',
             'status' => 'completed',
             'duration_ms' => $this->runs->durationMillisecondsFor($runId),
@@ -143,8 +144,8 @@ class DurableRunRecorder
         $this->audit->emit('durable.checkpointed_hierarchical', [
             'run_id' => $runId,
             'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-            'swarm_class' => $context->metadata['swarm_class'] ?? null,
-            'topology' => $context->metadata['topology'] ?? null,
+            'swarm_class' => $this->runs->swarmClassFor($runId),
+            'topology' => $this->runs->topologyFor($runId),
             'execution_mode' => 'durable',
             'status' => 'checkpointed',
             'next_step_index' => $nextStepIndex,
@@ -163,8 +164,8 @@ class DurableRunRecorder
         $this->audit->emit('durable.checkpointed', [
             'run_id' => $runId,
             'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-            'swarm_class' => $context->metadata['swarm_class'] ?? null,
-            'topology' => $context->metadata['topology'] ?? null,
+            'swarm_class' => $this->runs->swarmClassFor($runId),
+            'topology' => $this->runs->topologyFor($runId),
             'execution_mode' => 'durable',
             'status' => 'checkpointed',
             'next_step_index' => $nextStepIndex,

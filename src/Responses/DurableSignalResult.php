@@ -16,5 +16,6 @@ class DurableSignalResult
         public readonly bool $accepted,
         public readonly bool $duplicate = false,
         public readonly ?array $signal = null,
+        public readonly ?string $swarmClass = null,
     ) {}
 }

@@ -119,6 +119,7 @@ class SwarmRelayCommand extends Command
                 'claimed_count' => $totalClaimed,
                 'reclaimed_count' => $totalReclaimed,
                 'status' => 'error',
+                'exception_class' => $exception::class,
             ]);
 
             throw $exception;

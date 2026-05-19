@@ -47,6 +47,7 @@ class SwarmWebhooks
 
             app(SwarmAuditDispatcher::class)->emit('webhook.signal_received', [
                 'run_id' => $runId,
+                'swarm_class' => $result->swarmClass,
                 'signal_name' => $signal,
                 'accepted' => $result->accepted,
                 'duplicate' => $result->duplicate,

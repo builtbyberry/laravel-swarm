@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.1 - 2026-05-19
+
+### Fixed
+
+- `durable.*` audit categories now source `swarm_class` and `topology` from the durable run row instead of optional `RunContext::metadata` mirrors (#28). Previously these fields were typed `string|null` and would emit `null` whenever metadata was absent; they are now guaranteed non-null on all six `durable.*` categories (`durable.completed`, `durable.failed`, `durable.cancelled`, `durable.paused`, `durable.checkpointed`, `durable.checkpointed_hierarchical`). The change is implemented via two new helpers on `DurableRunContext` (`swarmClassFor()`, `topologyFor()`) that delegate to the existing `requireRun()` row lookup. Sinks that previously branched on null no longer need that branch.
+- `command.relay` audit events with `status: "error"` now include `exception_class` (#32). The frozen schema in `docs/audit-evidence-contract.md` has documented this field since v0.4.0 but the emit in `SwarmRelayCommand` was missing it — the doc and the code now match.
+- `durable.cancelled` audit events now include `duration_ms` (#33), bringing the cancelled category into parity with `durable.completed` and `durable.failed`. Computed via the existing `DurableRunContext::durationMillisecondsFor()` helper.
+- `webhook.signal_received` audit events now include `swarm_class` (#29), bringing the category into parity with the sibling `webhook.start_*` categories. The field is plumbed through the new optional `swarmClass` property on `DurableSignalResult` — the property is nullable for backward compatibility with the public `FakeDurableSwarmManager` test fake, but is always populated in the production webhook path.
+
+### Changed
+
+- `docs/audit-evidence-contract.md` frozen schema updated: dropped `string|null` annotations on `durable.*` `swarm_class` and `topology`, added `duration_ms` to `durable.cancelled`, added `swarm_class` to the `webhook.signal_received` envelope. All marked with `(since v0.4.1)` so sinks know when the new shape became reliable.
+
 ## v0.4.0 - 2026-05-18
 
 ### Added

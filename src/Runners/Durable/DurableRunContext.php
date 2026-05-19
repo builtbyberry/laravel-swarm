@@ -118,4 +118,28 @@ class DurableRunContext
 
         return max((int) $startedAt->diffInMilliseconds(Carbon::now('UTC')), 1);
     }
+
+    /**
+     * Resolve swarm_class from the durable run row.
+     *
+     * Used by DurableRunRecorder to source non-null swarm_class on every
+     * durable.* audit emit rather than relying on the optional
+     * RunContext::metadata['swarm_class'] mirror.
+     */
+    public function swarmClassFor(string $runId): string
+    {
+        return (string) $this->requireRun($runId)['swarm_class'];
+    }
+
+    /**
+     * Resolve topology from the durable run row.
+     *
+     * Used by DurableRunRecorder to source non-null topology on every
+     * durable.* audit emit rather than relying on the optional
+     * RunContext::metadata['topology'] mirror.
+     */
+    public function topologyFor(string $runId): string
+    {
+        return (string) $this->requireRun($runId)['topology'];
+    }
 }

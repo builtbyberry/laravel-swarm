@@ -323,8 +323,8 @@ Correlation fields on every `durable.*` event:
 |------------------|------------------|----------------------------------------------------------------|
 | `run_id`         | string           |                                                                |
 | `parent_run_id`  | string&#124;null |                                                                |
-| `swarm_class`    | string&#124;null | Sourced from run metadata; null when metadata was absent.      |
-| `topology`       | string&#124;null | Sourced from run metadata; null when metadata was absent.      |
+| `swarm_class`    | string           | Sourced from the durable run row (non-null since v0.4.1).      |
+| `topology`       | string           | Sourced from the durable run row (non-null since v0.4.1).      |
 | `execution_mode` | string           | Always `durable` for these categories.                         |
 | `status`         | string           | Category-specific status value.                                |
 
@@ -336,6 +336,7 @@ Additional frozen fields by category:
 | `durable.checkpointed_hierarchical`   | `next_step_index` (int)                                                             |
 | `durable.pause_requested`             | `immediately_paused` (bool)                                                         |
 | `durable.cancel_requested`            | `immediately_cancelled` (bool)                                                      |
+| `durable.cancelled`                   | `duration_ms` (int) (since v0.4.1)                                                  |
 | `durable.completed`                   | `duration_ms` (int)                                                                 |
 | `durable.failed`                      | `exception_class` (string), `timed_out` (bool), `duration_ms` (int)                 |
 
@@ -420,8 +421,9 @@ Additional frozen fields by category:
 | `webhook.start_failed`    | `exception_class` (string)                                                |
 
 The `webhook.signal_received` envelope is frozen with the following fields:
-`run_id` (string), `signal_name` (string), `accepted` (bool), `duplicate`
-(bool), `has_idempotency_key` (bool), and `status` (string).
+`run_id` (string), `swarm_class` (string, since v0.4.1), `signal_name` (string),
+`accepted` (bool), `duplicate` (bool), `has_idempotency_key` (bool), and
+`status` (string).
 
 ### What is Not Frozen
 
