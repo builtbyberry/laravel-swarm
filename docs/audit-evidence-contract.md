@@ -58,7 +58,7 @@ Every payload is an array with the following invariant fields:
 
 | Field            | Type   | Notes                                    |
 |------------------|--------|------------------------------------------|
-| `schema_version` | string | Currently `"1"`. Increments on breaking changes to the stable payload shape. |
+| `schema_version` | string | Currently `"2"`. Increments on breaking changes to the stable payload shape. |
 | `category`       | string | Event category (see below).              |
 | `occurred_at`    | string | ISO-8601 timestamp of the emission.      |
 
@@ -133,10 +133,14 @@ advance execution.
 | `command.resume`  | `swarm:resume` was invoked for a run.                          |
 | `command.cancel`  | `swarm:cancel` was invoked for a run.                          |
 | `command.recover` | `swarm:recover` was invoked. Includes `recovered_count` and `recovered_run_ids`. |
-| `command.relay`   | `swarm:relay` completed or failed. Always includes `dispatched_count`, `skipped_count`, `failed_count`, `claimed_count` (rows reserved in phase 1), `reclaimed_count` (of those, rows with a stale prior reservation), `types`, `limit`, `drain_until_empty`, `max_attempts` (null when not set), `attempts` (number of drain iterations executed), and `actor`. Status values: `dispatched` (at least one entry dispatched, no transient failures at exit); `skipped` (only permanently invalid entries processed, none dispatched); `none_found` (outbox was empty); `transient_failure` (one or more entries could not be dispatched due to a transient queue error — `failed_count` is > 0, entries remain in the outbox for reclaim); `error` (an unhandled exception escaped the drain loop — includes `exception_class`). Note: `exception_class` is present only on `status: "error"` events. Individual `run_id`s of permanently deleted rows (counted in `skipped_count`) are not in the audit payload — they are in the application error tracker via `report()`, where the exception message includes the outbox entry ID. Cross-reference by entry ID for post-incident reconstruction. |
+| `command.relay`   | `swarm:relay` completed or failed. Always includes `dispatched_count`, `skipped_count`, `failed_count`, `claimed_count` (rows reserved in phase 1), `reclaimed_count` (of those, rows with a stale prior reservation), `types`, `limit`, `drain_until_empty`, `max_attempts` (null when not set), and `attempts` (number of drain iterations executed). Status values: `dispatched` (at least one entry dispatched, no transient failures at exit); `skipped` (only permanently invalid entries processed, none dispatched); `none_found` (outbox was empty); `transient_failure` (one or more entries could not be dispatched due to a transient queue error — `failed_count` is > 0, entries remain in the outbox for reclaim); `error` (an unhandled exception escaped the drain loop — includes `exception_class`). Note: `exception_class` is present only on `status: "error"` events. Individual `run_id`s of permanently deleted rows (counted in `skipped_count`) are not in the audit payload — they are in the application error tracker via `report()`, where the exception message includes the outbox entry ID. Cross-reference by entry ID for post-incident reconstruction. |
 | `command.prune`   | `swarm:prune` completed. Includes `dry_run`, `prevent_prune`, `status`, and `counts` (row counts per table). |
 
-All command categories include `actor: "artisan"`.
+All command categories carry actor identity under `metadata.actor` as an
+`Actor` value object array — typically `{id: "artisan", type: "system"}`.
+Prior to v0.5.0 this was emitted as a top-level `actor: "artisan"` literal;
+that field is no longer set. See `UPGRADING.md` v0.5.0 for the migration.
+
 Failed pause, resume, cancel, and recover attempts emit the same command
 category with `status: "failed"` and `exception_class`, then rethrow so console
 behavior remains unchanged.
@@ -175,9 +179,11 @@ For example:
 
 ## Versioning
 
-The `schema_version` field is `"1"` for all initial evidence categories. When
-any stable payload field is removed or its type changes, `schema_version` will
-increment and the change will be documented in the changelog.
+The `schema_version` field began at `"1"` for the v0.4 line and bumped to
+`"2"` in v0.5.0 alongside the `command.*` actor-envelope unification (see
+`UPGRADING.md`). When any stable payload field is removed or its type
+changes, `schema_version` will increment and the change will be documented
+in the changelog.
 
 Adding new optional fields does not increment `schema_version`. Applications
 should handle unknown keys gracefully.
@@ -215,7 +221,7 @@ Every payload, in every category, carries the following top-level fields:
 
 | Field            | Type   | Notes                                                                 |
 |------------------|--------|-----------------------------------------------------------------------|
-| `schema_version` | string | `"1"` for the v0.x line. Bumps signal a breaking envelope change.     |
+| `schema_version` | string | `"2"` as of v0.5.0 (was `"1"` in v0.4). Bumps signal a breaking envelope change. |
 | `category`       | string | One of the frozen category names below.                               |
 | `occurred_at`    | string | ISO-8601 timestamp of the emission.                                   |
 
@@ -234,16 +240,13 @@ regardless of the configured allowlist. The reserved set is published as
 `actor`. New reserved keys may be added additively; the constant is the
 authoritative list.
 
-`actor` is delivered in one of two slots depending on which emit site
-produced the record:
-
-| Source                                         | Slot                |
-|------------------------------------------------|---------------------|
-| Run, step, durable runtime, and webhook events | `metadata.actor`    |
-| Operator commands (`command.*`)                | Top-level `actor`   |
-
-Both slots are frozen for `0.x`. Sinks that need a single read path should
-fall back from `metadata.actor` to top-level `actor`.
+`actor` is delivered in a single slot: `metadata.actor`. This is the same
+across every category — run, step, durable runtime, webhook, and the
+operator-command (`command.*`) events. The legacy top-level `actor` field
+on `command.*` evidence (v0.4) was removed in v0.5.0 alongside the
+`schema_version` bump from `"1"` to `"2"`. Sinks that previously read
+`$payload['actor']` on `command.*` evidence must switch to
+`$payload['metadata']['actor']`.
 
 ### Frozen Categories
 
@@ -377,10 +380,10 @@ Additional frozen fields by category:
 
 Every `command.*` event carries:
 
-| Field    | Type   | Notes                                                          |
-|----------|--------|----------------------------------------------------------------|
-| `actor`  | string | Always `"artisan"` for emits from the bundled commands.        |
-| `status` | string | Category-specific status value.                                |
+| Field             | Type   | Notes                                                                                  |
+|-------------------|--------|----------------------------------------------------------------------------------------|
+| `status`          | string | Category-specific status value.                                                        |
+| `metadata.actor`  | array  | `Actor` value object array — for emits from the bundled commands, `{id: "artisan", type: "system", name: null, metadata: []}`. Prior to v0.5.0 this was a top-level `actor: "artisan"` string; that field is no longer set. |
 
 Additional frozen fields by category:
 

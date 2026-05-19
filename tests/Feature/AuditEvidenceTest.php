@@ -355,7 +355,8 @@ test('swarm:recover command emits command.recover evidence with none_found statu
     $record = $sink->recordsForCategory('command.recover')[0];
     expect($record['status'])->toBe('none_found');
     expect($record['recovered_count'])->toBe(0);
-    expect($record['actor'])->toBe('artisan');
+    expect($record['metadata']['actor'])->toMatchArray(['id' => 'artisan', 'type' => 'system']);
+    expect($record)->not->toHaveKey('actor');
 });
 
 test('swarm:recover with targeted run-id emits evidence with target_run_id', function (): void {
@@ -378,7 +379,8 @@ test('operator commands emit failed evidence when manager operations throw', fun
 
     expect($sink->hasCategory($category))->toBeTrue();
     $record = $sink->recordsForCategory($category)[0];
-    expect($record['actor'])->toBe('artisan');
+    expect($record['metadata']['actor'])->toMatchArray(['id' => 'artisan', 'type' => 'system']);
+    expect($record)->not->toHaveKey('actor');
     expect($record['status'])->toBe('failed');
     expect($record['exception_class'])->toBe(RuntimeException::class);
 })->with([

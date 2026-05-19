@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
@@ -23,15 +24,16 @@ class SwarmCancelCommand extends Command
     public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit): int
     {
         $runId = $this->argumentString('runId');
+        $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
         try {
             $manager->cancel($runId);
         } catch (Throwable $exception) {
             $audit->emit('command.cancel', [
                 'run_id' => $runId,
-                'actor' => 'artisan',
                 'status' => 'failed',
                 'exception_class' => $exception::class,
+                ...$audit->metadata($actorMetadata),
             ]);
 
             throw $exception;
@@ -39,8 +41,8 @@ class SwarmCancelCommand extends Command
 
         $audit->emit('command.cancel', [
             'run_id' => $runId,
-            'actor' => 'artisan',
             'status' => 'requested',
+            ...$audit->metadata($actorMetadata),
         ]);
 
         $this->components->info('Durable swarm cancelled or cancellation requested.');

@@ -13,7 +13,7 @@ namespace BuiltByBerry\LaravelSwarm\Telemetry;
  */
 final class EvidenceEnvelope
 {
-    public const SCHEMA_VERSION = '1';
+    public const SCHEMA_VERSION = '2';
 
     /**
      * Top-level metadata keys that are always emitted on audit and telemetry

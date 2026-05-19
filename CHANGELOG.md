@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **BREAKING (audit envelope):** `EvidenceEnvelope::SCHEMA_VERSION` bumps from `"1"` to `"2"` (#30). The bump signals a shape change on `command.*` evidence: the legacy top-level `actor` literal (`'actor' => 'artisan'`) is removed from `command.pause`, `command.resume`, `command.cancel`, `command.recover`, and `command.relay` payloads. Actor identity now flows through the standard `metadata.actor` slot as an `Actor` value object array, matching how every other category (`run.*`, `step.*`, `durable.*`) already exposes it. `swarm:prune` evidence, which previously carried no actor at all, now also emits `metadata.actor`. See `UPGRADING.md` v0.5.0 block for the migration walk-through.
+- **REFACTOR (internal):** `SwarmRunner` (930 lines) decomposed into three focused collaborators (#21): `RunAuditEmitter` (centralizes run-level audit payload composition), `DispatchValidator` (dispatch-time validation), and `LeaseManager` (queue lease-seconds policy + durable coordination lease helpers). The class is `@internal` and the public API (`run`, `runQueued`, `stream`, `broadcast`, `queue`, `broadcastOnQueue`, `dispatchDurable`, `resumeQueuedHierarchicalAfterJoin`) is unchanged.
+
 ## v0.4.3 - 2026-05-19
 
 ### Added

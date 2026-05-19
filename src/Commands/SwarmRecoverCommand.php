@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
@@ -28,6 +29,7 @@ class SwarmRecoverCommand extends Command
         $swarmOption = $this->option('swarm');
         $targetRunId = is_string($runIdOption) && $runIdOption !== '' ? $runIdOption : null;
         $targetSwarmClass = is_string($swarmOption) && $swarmOption !== '' ? $swarmOption : null;
+        $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
         try {
             $runIds = $manager->recover(
@@ -39,9 +41,9 @@ class SwarmRecoverCommand extends Command
             $audit->emit('command.recover', [
                 'target_run_id' => $targetRunId,
                 'target_swarm_class' => $targetSwarmClass,
-                'actor' => 'artisan',
                 'status' => 'failed',
                 'exception_class' => $exception::class,
+                ...$audit->metadata($actorMetadata),
             ]);
 
             throw $exception;
@@ -50,10 +52,10 @@ class SwarmRecoverCommand extends Command
         $audit->emit('command.recover', [
             'target_run_id' => $targetRunId,
             'target_swarm_class' => $targetSwarmClass,
-            'actor' => 'artisan',
             'recovered_count' => count($runIds),
             'recovered_run_ids' => $runIds,
             'status' => count($runIds) > 0 ? 'recovered' : 'none_found',
+            ...$audit->metadata($actorMetadata),
         ]);
 
         if ($runIds === []) {

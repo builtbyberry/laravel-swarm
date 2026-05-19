@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
@@ -87,6 +88,7 @@ class SwarmRelayCommand extends Command
         $totalReclaimed = 0;
         $attempts = 0;
         $result = null;
+        $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
         try {
             do {
@@ -112,7 +114,6 @@ class SwarmRelayCommand extends Command
                 'drain_until_empty' => $drainUntilEmpty,
                 'max_attempts' => $maxAttempts,
                 'attempts' => $attempts,
-                'actor' => 'artisan',
                 'dispatched_count' => $totalDispatched,
                 'skipped_count' => $totalSkipped,
                 'failed_count' => $totalFailed,
@@ -120,6 +121,7 @@ class SwarmRelayCommand extends Command
                 'reclaimed_count' => $totalReclaimed,
                 'status' => 'error',
                 'exception_class' => $exception::class,
+                ...$audit->metadata($actorMetadata),
             ]);
 
             throw $exception;
@@ -133,13 +135,13 @@ class SwarmRelayCommand extends Command
             'drain_until_empty' => $drainUntilEmpty,
             'max_attempts' => $maxAttempts,
             'attempts' => $attempts,
-            'actor' => 'artisan',
             'dispatched_count' => $totalDispatched,
             'skipped_count' => $totalSkipped,
             'failed_count' => $totalFailed,
             'claimed_count' => $totalClaimed,
             'reclaimed_count' => $totalReclaimed,
             'status' => $this->auditStatus($totalDispatched, $totalSkipped, $hasUnresolvedTransient),
+            ...$audit->metadata($actorMetadata),
         ]);
 
         if ($totalDispatched === 0 && $totalSkipped === 0 && $totalFailed === 0) {

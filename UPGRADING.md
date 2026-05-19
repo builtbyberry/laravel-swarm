@@ -268,6 +268,83 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.5.0
+
+v0.5.0 settles the audit evidence envelope. The shared `schema_version`
+bumps from `"1"` to `"2"` and the legacy top-level `actor` field on
+`command.*` evidence moves into the standard `metadata.actor` slot used by
+the rest of the evidence taxonomy.
+
+### High Impact Changes
+
+#### Evidence `schema_version` bumps to `"2"`
+
+Every payload emitted through `SwarmAuditDispatcher` and
+`SwarmTelemetryDispatcher` carries `schema_version: "2"`. Sinks that branch on
+`schema_version` (for example, to validate a payload against a known shape)
+must be taught to recognize `"2"`. Sinks that ignore `schema_version` need no
+changes.
+
+The bump signals a **shape break on `command.*` evidence only.** Run-level
+(`run.*`), step-level (`step.*`), and durable runtime (`durable.*`, `wait.*`,
+`signal.*`) evidence shapes are unchanged from v0.4.
+
+#### `command.*` actor moves to `metadata.actor`
+
+In v0.4, evidence emitted by `swarm:pause`, `swarm:resume`, `swarm:cancel`,
+`swarm:recover`, and `swarm:relay` carried a literal top-level field
+`'actor' => 'artisan'`. v0.5 removes that field. The actor identity is now
+emitted on `metadata.actor` as an `Actor` value object array, consistent with
+how every other evidence category exposes actor identity:
+
+```php
+// v0.4 command.pause payload (legacy)
+[
+    'schema_version' => '1',
+    'category'       => 'command.pause',
+    'run_id'         => '...',
+    'actor'          => 'artisan',     // ← top-level literal
+    'status'         => 'requested',
+    ...
+]
+
+// v0.5 command.pause payload
+[
+    'schema_version' => '2',
+    'category'       => 'command.pause',
+    'run_id'         => '...',
+    'status'         => 'requested',
+    'metadata_keys'  => ['actor'],
+    'metadata'       => [
+        'actor' => [
+            'id'       => 'artisan',
+            'type'     => 'system',
+            'name'     => null,
+            'metadata' => [],
+        ],
+    ],
+    ...
+]
+```
+
+`swarm:prune` evidence, which previously carried no actor identity at all,
+now also emits `metadata.actor`. Sinks that explicitly read
+`$payload['actor']` on `command.*` evidence must switch to
+`$payload['metadata']['actor']['id']` (or `['type']`, `['name']`) and
+should treat the legacy top-level field as absent on v0.5.
+
+There is no compatibility shim — the field is removed, not aliased — because
+keeping it would mean carrying duplicate-emit code through a minor we already
+need to delete before 0.6.
+
+### Medium Impact Changes
+
+None.
+
+### Low Impact Changes
+
+None.
+
 ## Upgrading to v0.4.0
 
 v0.4.0 ships four new contracts that extend the audit and identity surface:

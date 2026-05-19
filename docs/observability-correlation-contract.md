@@ -49,7 +49,7 @@ Every record includes:
 
 | Field | Notes |
 | --- | --- |
-| `schema_version` | `"1"` for the initial telemetry schema. |
+| `schema_version` | `"2"` as of v0.5.0 (was `"1"` in v0.4). Audit and telemetry share the same envelope and bump in lockstep. |
 | `category` | Telemetry category (see below). |
 | `occurred_at` | ISO-8601 timestamp. |
 

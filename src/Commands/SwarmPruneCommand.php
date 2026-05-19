@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -22,6 +23,7 @@ class SwarmPruneCommand extends Command
 
     public function handle(Connection $connection, ConfigRepository $config, SwarmAuditDispatcher $audit): int
     {
+        $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
         $preventPrune = $config->get('swarm.retention.prevent_prune', false) === true;
 
         if ($preventPrune && ! $this->option('dry-run')) {
@@ -31,6 +33,7 @@ class SwarmPruneCommand extends Command
                 'prevent_prune' => true,
                 'status' => 'skipped',
                 'counts' => [],
+                ...$audit->metadata($actorMetadata),
             ]);
 
             return self::SUCCESS;
@@ -89,6 +92,7 @@ class SwarmPruneCommand extends Command
             'prevent_prune' => false,
             'status' => $dryRun ? 'dry_run' : 'pruned',
             'counts' => $counts,
+            ...$audit->metadata($actorMetadata),
         ]);
 
         $verb = $dryRun ? 'Would prune' : 'Pruned';
