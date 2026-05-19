@@ -12,6 +12,8 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Throwable;
 
 /**
@@ -32,7 +34,11 @@ class DatabaseAuditOutbox implements AuditOutbox
         protected Connection $connection,
         protected ConfigRepository $config,
         protected SwarmAuditSink $sink,
-    ) {}
+        protected SwarmPersistenceCipher $cipher,
+        protected ?LoggerInterface $logger = null,
+    ) {
+        $this->logger ??= new NullLogger;
+    }
 
     public function enqueue(string $category, array $payload, bool $deadLetter = false): void
     {
@@ -51,7 +57,7 @@ class DatabaseAuditOutbox implements AuditOutbox
         $this->table()->insert([
             'category' => $category,
             'run_id' => is_string($payload['run_id'] ?? null) ? $payload['run_id'] : null,
-            'payload' => $encoded,
+            'payload' => $this->cipher->seal($encoded),
             'attempts' => 0,
             'status' => $deadLetter ? 'dead_letter' : 'pending',
             'last_error' => null,
@@ -112,63 +118,44 @@ class DatabaseAuditOutbox implements AuditOutbox
 
         foreach ($entries as $entry) {
             $attempts = (int) $entry->attempts + 1;
+            $rawPayload = is_string($entry->payload) ? $this->cipher->open($entry->payload) : null;
 
             try {
-                $payload = is_string($entry->payload)
-                    ? json_decode($entry->payload, true, 512, JSON_THROW_ON_ERROR)
+                $payload = is_string($rawPayload)
+                    ? json_decode($rawPayload, true, 512, JSON_THROW_ON_ERROR)
                     : (array) $entry->payload;
             } catch (\JsonException $exception) {
                 // Permanently invalid stored payload; route to dead-letter and
                 // surface via the error handler so it's investigable.
                 report($exception);
-                $this->table()->where('id', $entry->id)->update([
-                    'status' => 'dead_letter',
-                    'attempts' => $attempts,
-                    'last_error' => 'invalid_json',
-                    'last_attempted_at' => Carbon::now('UTC'),
-                    'reserved_at' => null,
-                    'updated_at' => Carbon::now('UTC'),
-                ]);
+                $this->markDeadLetter((int) $entry->id, (string) $entry->category, $entry->run_id, $attempts, 'invalid_json');
                 $deadLettered++;
 
                 continue;
             }
 
             if (! is_array($payload)) {
-                $this->table()->where('id', $entry->id)->update([
-                    'status' => 'dead_letter',
-                    'attempts' => $attempts,
-                    'last_error' => 'payload_not_array',
-                    'last_attempted_at' => Carbon::now('UTC'),
-                    'reserved_at' => null,
-                    'updated_at' => Carbon::now('UTC'),
-                ]);
+                $this->markDeadLetter((int) $entry->id, (string) $entry->category, $entry->run_id, $attempts, 'payload_not_array');
                 $deadLettered++;
 
                 continue;
             }
 
             try {
-                $this->sink->emit($entry->category, $payload);
-                $replayedIds[] = $entry->id;
+                $this->sink->emit((string) $entry->category, $payload);
+                $replayedIds[] = (int) $entry->id;
                 $replayed++;
             } catch (Throwable $exception) {
                 report($exception);
+                $error = mb_substr($exception->getMessage(), 0, 1000);
 
                 if ($attempts >= $maxAttempts) {
-                    $this->table()->where('id', $entry->id)->update([
-                        'status' => 'dead_letter',
-                        'attempts' => $attempts,
-                        'last_error' => mb_substr($exception->getMessage(), 0, 1000),
-                        'last_attempted_at' => Carbon::now('UTC'),
-                        'reserved_at' => null,
-                        'updated_at' => Carbon::now('UTC'),
-                    ]);
+                    $this->markDeadLetter((int) $entry->id, (string) $entry->category, $entry->run_id, $attempts, $error);
                     $deadLettered++;
                 } else {
                     $this->table()->where('id', $entry->id)->update([
                         'attempts' => $attempts,
-                        'last_error' => mb_substr($exception->getMessage(), 0, 1000),
+                        'last_error' => $this->cipher->seal($error),
                         'last_attempted_at' => Carbon::now('UTC'),
                         'reserved_at' => null,
                         'updated_at' => Carbon::now('UTC'),
@@ -183,6 +170,30 @@ class DatabaseAuditOutbox implements AuditOutbox
         }
 
         return new AuditDrainResult($replayed, $deadLettered, $failed, $claimed, $reclaimed);
+    }
+
+    /**
+     * Mark a single entry as dead-lettered, persist the sealed last_error, and
+     * emit a Log::error at the moment of transition so monitoring stacks can
+     * alert on undelivered audit evidence.
+     */
+    protected function markDeadLetter(int $id, string $category, ?string $runId, int $attempts, string $reason): void
+    {
+        $this->table()->where('id', $id)->update([
+            'status' => 'dead_letter',
+            'attempts' => $attempts,
+            'last_error' => $this->cipher->seal($reason),
+            'last_attempted_at' => Carbon::now('UTC'),
+            'reserved_at' => null,
+            'updated_at' => Carbon::now('UTC'),
+        ]);
+
+        $this->logger->error('Swarm audit record reached dead_letter status.', [
+            'category' => $category,
+            'run_id' => $runId,
+            'attempts' => $attempts,
+            'last_error' => $reason,
+        ]);
     }
 
     public function isAvailable(): bool

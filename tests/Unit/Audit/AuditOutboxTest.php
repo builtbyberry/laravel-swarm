@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 beforeEach(function (): void {
     config()->set('swarm.persistence.driver', 'database');
@@ -137,6 +138,83 @@ test('DatabaseAuditOutbox drain moves rows past max_attempts to dead_letter', fu
     $row = DB::table('swarm_audit_outbox')->first();
     expect($row->status)->toBe('dead_letter');
     expect($row->attempts)->toBe(2);
+});
+
+test('DatabaseAuditOutbox seals payload column at rest when encrypt_at_rest is enabled', function (): void {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(AuditOutbox::class);
+    $outbox = app(AuditOutbox::class);
+
+    $outbox->enqueue('run.failed', ['run_id' => 'r-sealed', 'secret' => 'top-secret-payload']);
+
+    $row = DB::table('swarm_audit_outbox')->first();
+    expect($row->payload)->toStartWith('sw0:');
+    expect($row->payload)->not->toContain('top-secret-payload');
+});
+
+test('DatabaseAuditOutbox drain unseals payload before re-emitting through the bound sink', function (): void {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(AuditOutbox::class);
+    $outbox = app(AuditOutbox::class);
+
+    $outbox->enqueue('run.failed', ['run_id' => 'r-roundtrip', 'category' => 'run.failed', 'secret' => 'value-x']);
+
+    $outbox->drain();
+
+    $records = $sink->recordsForCategory('run.failed');
+    expect($records)->toHaveCount(1);
+    expect($records[0]['secret'])->toBe('value-x');
+});
+
+test('DatabaseAuditOutbox seals last_error column on transient failure when encrypt_at_rest is enabled', function (): void {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $failingSink = new class implements SwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void
+        {
+            throw new RuntimeException('sensitive-error-detail');
+        }
+    };
+    app()->instance(SwarmAuditSink::class, $failingSink);
+    app()->forgetInstance(AuditOutbox::class);
+    $outbox = app(AuditOutbox::class);
+
+    $outbox->enqueue('run.failed', ['run_id' => 'r-1']);
+    $outbox->drain();
+
+    $row = DB::table('swarm_audit_outbox')->first();
+    expect($row->last_error)->toStartWith('sw0:');
+    expect($row->last_error)->not->toContain('sensitive-error-detail');
+});
+
+test('DatabaseAuditOutbox emits Log::error at the moment of dead_letter transition', function (): void {
+    config()->set('swarm.audit.outbox.max_attempts', 1);
+    Log::spy();
+
+    $failingSink = new class implements SwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void
+        {
+            throw new RuntimeException('permanent sink rejection');
+        }
+    };
+    app()->instance(SwarmAuditSink::class, $failingSink);
+    app()->forgetInstance(AuditOutbox::class);
+    $outbox = app(AuditOutbox::class);
+
+    $outbox->enqueue('run.failed', ['run_id' => 'r-dead']);
+    $outbox->drain();
+
+    Log::shouldHaveReceived('error')
+        ->withArgs(function (string $message, array $context): bool {
+            return str_contains($message, 'dead_letter')
+                && ($context['run_id'] ?? null) === 'r-dead'
+                && ($context['category'] ?? null) === 'run.failed'
+                && ($context['attempts'] ?? null) === 1;
+        })
+        ->once();
 });
 
 test('DatabaseAuditOutbox drain skips dead_letter rows', function (): void {

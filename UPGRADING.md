@@ -318,6 +318,19 @@ php artisan swarm:relay --type=audit
 driver. The dispatcher detects this and falls back to log-and-swallow
 automatically, emitting a warning log. No code change is required.
 
+**Encryption at rest:** when `swarm.persistence.encrypt_at_rest` is enabled
+(the default for database persistence), the audit outbox seals the
+`payload` and `last_error` columns using the same
+`SwarmPersistenceCipher` flow as other persistence stores. No
+configuration change is required.
+
+**Dead-letter monitoring:** every time a record transitions to the
+`dead_letter` status, the package emits `Log::error` with the category,
+run_id, attempt count, and final error. For Part 11 / regulated workloads,
+treat any dead-letter transition as a compliance signal — it means an
+audit event was supposed to land in the sink but never will without
+operator intervention. Wire your log aggregator to alert on this message.
+
 #### `SinkFailureDecision` gains `Queue` and `DeadLetter` cases
 
 Custom `SinkFailureHandler` implementations may now return:
