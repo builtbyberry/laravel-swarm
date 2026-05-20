@@ -323,3 +323,87 @@ test('withActor survives queue payload serialization roundtrip', function () {
     expect($rehydrated->metadata['actor']['id'])->toBe('u-9');
     expect($rehydrated->metadata['actor']['type'])->toBe('user');
 });
+
+test('fake returns a deterministic context with sensible defaults', function () {
+    $context = RunContext::fake();
+
+    expect($context->runId)->toBe('fake-run-id');
+    expect($context->input)->toBe('');
+    expect($context->data)->toBe([]);
+    expect($context->metadata)->toBe([]);
+    expect($context->artifacts)->toBe([]);
+    expect($context->actor())->toBeNull();
+});
+
+test('fake applies run_id, input, data, metadata and artifact overrides', function () {
+    $artifact = new SwarmArtifact('manual', 'draft body');
+
+    $context = RunContext::fake([
+        'run_id' => 'test-run-1',
+        'input' => 'Draft outline',
+        'data' => ['draft_id' => 42],
+        'metadata' => ['campaign' => 'content-calendar'],
+        'artifacts' => [$artifact],
+    ]);
+
+    expect($context->runId)->toBe('test-run-1');
+    expect($context->input)->toBe('Draft outline');
+    expect($context->data)->toBe(['draft_id' => 42]);
+    expect($context->metadata)->toBe(['campaign' => 'content-calendar']);
+    expect($context->artifacts)->toBe([$artifact]);
+});
+
+test('fake actor override accepts an Actor value object', function () {
+    $context = RunContext::fake([
+        'actor' => new Actor(id: 'u-1', type: 'user', name: 'Ada'),
+    ]);
+
+    expect($context->actor()?->id)->toBe('u-1');
+    expect($context->actor()?->type)->toBe('user');
+    expect($context->actor()?->name)->toBe('Ada');
+});
+
+test('fake actor override accepts string shorthand', function () {
+    $context = RunContext::fake(['actor' => 'system:cron']);
+
+    expect($context->metadata['actor']['type'])->toBe('system');
+    expect($context->metadata['actor']['id'])->toBe('cron');
+});
+
+test('fake actor override null does not bind any actor', function () {
+    $context = RunContext::fake(['actor' => null]);
+
+    expect($context->actor())->toBeNull();
+    expect($context->metadata)->not->toHaveKey('actor');
+});
+
+test('fake composes cleanly with the existing fluent builders', function () {
+    $context = RunContext::fake(['input' => 'Draft outline'])
+        ->withActor('user:42')
+        ->withLabels(['tenant' => 'acme'])
+        ->mergeData(['draft_id' => 7])
+        ->mergeMetadata(['campaign' => 'content-calendar']);
+
+    expect($context->runId)->toBe('fake-run-id');
+    expect($context->input)->toBe('Draft outline');
+    expect($context->data)->toBe(['draft_id' => 7]);
+    expect($context->actor()?->id)->toBe('42');
+    expect($context->labels())->toBe(['tenant' => 'acme']);
+    expect($context->metadata['campaign'])->toBe('content-calendar');
+});
+
+test('fake context serializes through the queue payload roundtrip', function () {
+    $context = RunContext::fake([
+        'input' => 'Draft outline',
+        'data' => ['draft_id' => 42],
+        'actor' => 'user:7',
+    ]);
+
+    $rehydrated = RunContext::fromPayload($context->toQueuePayload());
+
+    expect($rehydrated->runId)->toBe('fake-run-id');
+    expect($rehydrated->input)->toBe('Draft outline');
+    expect($rehydrated->data)->toBe(['draft_id' => 42]);
+    expect($rehydrated->metadata['actor']['id'])->toBe('7');
+    expect($rehydrated->metadata['actor']['type'])->toBe('user');
+});
