@@ -11,10 +11,14 @@ use BuiltByBerry\LaravelSwarm\Contracts\ReadableSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use Error;
+use Exception;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Database\Connection;
+use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\ConnectionResolverInterface;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
@@ -26,7 +30,8 @@ class SwarmTraceCommand extends Command
     protected $signature = 'swarm:trace
                             {run_id : The run identifier to reconstruct the audit chain for.}
                             {--json : Emit a machine-readable timeline (mirrors swarm:audit:status / swarm:audit:reconcile JSON shape).}
-                            {--include-payloads : Include the full evidence envelope per record (off by default — payloads can be large).}';
+                            {--include-payloads : Include the full evidence envelope per record (off by default — payloads can be large).}
+                            {--limit=1000 : Maximum number of sink-side records to consume from ReadableSwarmAuditSink::forRun(); guards against unbounded reads on long-lived runs. Outbox and history rows are bounded by the run itself and are not subject to this limit.}';
 
     protected $description = 'Read-only audit-chain reconstruction for a single run — merges history, outbox, and sink-side records into a chronological timeline.';
 
@@ -45,15 +50,22 @@ class SwarmTraceCommand extends Command
         If the bound sink is NoOpSwarmAuditSink, the same note explains that the
         default discarding sink cannot supply sink-side records.
 
+        SECURITY: this command UNSEALS encrypted-at-rest audit-outbox data on
+        output (last_error always; full payload under --include-payloads). In
+        regulated environments do not redirect the output to durable storage
+        outside your sealed audit store. See docs/audit-evidence-contract.md
+        "Security and retention".
+
         Examples:
           php artisan swarm:trace r-abc123
           php artisan swarm:trace r-abc123 --json
           php artisan swarm:trace r-abc123 --include-payloads
+          php artisan swarm:trace r-abc123 --limit=5000
         HELP;
 
     public function handle(
         ConfigRepository $config,
-        Connection $connection,
+        ConnectionResolverInterface $connectionResolver,
         SwarmPersistenceCipher $cipher,
         RunHistoryStore $history,
         AuditOutbox $outbox,
@@ -66,11 +78,17 @@ class SwarmTraceCommand extends Command
         }
 
         $includePayloads = $this->option('include-payloads') === true;
+        $limit = $this->resolveSinkLimit();
+
+        if ($limit === null) {
+            return $this->failWith('--limit must be a positive integer.');
+        }
 
         $sinkReadability = $this->classifySink($sink);
 
         $sinkRecords = [];
         $sinkError = null;
+        $sinkTruncated = false;
 
         if ($sinkReadability['readable'] && $sink instanceof ReadableSwarmAuditSink) {
             try {
@@ -79,16 +97,37 @@ class SwarmTraceCommand extends Command
                         continue;
                     }
 
+                    if (count($sinkRecords) >= $limit) {
+                        $sinkTruncated = true;
+
+                        break;
+                    }
+
                     $sinkRecords[] = $this->normalizeSinkRecord($record);
                 }
-            } catch (Throwable $exception) {
+            } catch (Exception $exception) {
+                // Expected sink-degradation path (RuntimeException, IO/network,
+                // sink-specific runtime errors). Surface in the trace notes
+                // and continue with a partial result.
                 $sinkError = $exception->getMessage();
+            } catch (Error $error) {
+                // Programmer error (TypeError, ArgumentCountError, autoload
+                // failure, etc.) in the bound sink. Surface in the trace AND
+                // log loudly so operators don't miss a broken sink behind a
+                // benign-looking "degraded" note.
+                $sinkError = $error->getMessage();
+                Log::error('swarm:trace: ReadableSwarmAuditSink::forRun() threw a programmer error', [
+                    'run_id' => $runId,
+                    'sink_class' => $sinkReadability['sink_class'],
+                    'error_class' => $error::class,
+                    'error' => $error->getMessage(),
+                ]);
             }
         }
 
         $outboxAvailable = $outbox->isAvailable();
         $outboxRecords = $outboxAvailable
-            ? $this->collectOutboxRecords($config, $connection, $cipher, $runId)
+            ? $this->collectOutboxRecords($config, $connectionResolver->connection(), $cipher, $runId)
             : [];
 
         $historyRecord = $history->find($runId);
@@ -137,6 +176,13 @@ class SwarmTraceCommand extends Command
             $notes[] = "ReadableSwarmAuditSink::forRun() threw — sink-side records are partial or empty. Error: {$sinkError}";
         }
 
+        if ($sinkTruncated) {
+            $notes[] = sprintf(
+                'Sink returned more than --limit=%d records; sink-side records were truncated. Pass a higher --limit if needed.',
+                $limit,
+            );
+        }
+
         if ($historyRecord === null) {
             $notes[] = "No run history record found for run_id={$runId}. The run may have been pruned, never started, or the history store is on a different driver than expected.";
         }
@@ -151,6 +197,8 @@ class SwarmTraceCommand extends Command
                     'reason' => $sinkReadability['reason'],
                     'sink_class' => $sinkReadability['sink_class'],
                     'record_count' => count($sinkRecords),
+                    'limit' => $limit,
+                    'truncated' => $sinkTruncated,
                 ],
                 'outbox' => [
                     'available' => $outboxAvailable,
@@ -176,6 +224,23 @@ class SwarmTraceCommand extends Command
         $this->renderHuman($summary);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Resolve --limit to a positive int. Returns null on invalid input
+     * (so handle() can fail fast with a clear error).
+     */
+    protected function resolveSinkLimit(): ?int
+    {
+        $raw = $this->option('limit');
+
+        if (! is_numeric($raw)) {
+            return null;
+        }
+
+        $limit = (int) $raw;
+
+        return $limit > 0 ? $limit : null;
     }
 
     /**
@@ -217,9 +282,16 @@ class SwarmTraceCommand extends Command
         $category = isset($record['category']) ? (string) $record['category'] : 'unknown';
         $rawPayload = $record['payload'] ?? null;
 
-        // Sinks may flatten the envelope at the top level. Treat the whole
-        // record as the payload in that case.
-        $payload = is_array($rawPayload) ? $rawPayload : $record;
+        if (is_array($rawPayload)) {
+            $payload = $rawPayload;
+        } else {
+            // Sinks may flatten the envelope at the top level. Treat the whole
+            // record as the payload in that case, but strip the meta fields we
+            // already surface at the timeline level — otherwise category /
+            // occurred_at / run_id appear duplicated under --include-payloads.
+            $payload = $record;
+            unset($payload['category'], $payload['occurred_at'], $payload['run_id']);
+        }
 
         $occurredAt = $record['occurred_at'] ?? ($payload['occurred_at'] ?? null);
 
@@ -236,7 +308,7 @@ class SwarmTraceCommand extends Command
     /**
      * @return array<int, array<string, mixed>>
      */
-    protected function collectOutboxRecords(ConfigRepository $config, Connection $connection, SwarmPersistenceCipher $cipher, string $runId): array
+    protected function collectOutboxRecords(ConfigRepository $config, ConnectionInterface $connection, SwarmPersistenceCipher $cipher, string $runId): array
     {
         $table = (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox');
 

@@ -8,9 +8,12 @@ use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\ConnectionResolverInterface;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\Console\Exception\RuntimeException;
 
 beforeEach(function (): void {
@@ -415,4 +418,186 @@ test('default human output renders a timeline table', function (): void {
     expect($output)->toContain('Timeline');
     expect($output)->toContain('history.started');
     expect($output)->toContain('Occurred at');
+});
+
+// -----------------------------------------------------------------------------
+// --limit guards unbounded sink reads (review F6)
+// -----------------------------------------------------------------------------
+
+test('--limit truncates sink-side records and surfaces a clear note', function (): void {
+    $runId = 'r-truncated';
+    seedTraceHistoryRow($runId);
+
+    // Seed 5 sink records; --limit=3 should consume only the first three and
+    // mark the result as truncated. Outbox + history rows are unaffected.
+    $records = [];
+    for ($i = 0; $i < 5; $i++) {
+        $records[] = [
+            'run_id' => $runId,
+            'category' => 'run.started',
+            'occurred_at' => Carbon::now('UTC')->addSeconds($i)->toIso8601String(),
+            'payload' => ['run_id' => $runId, 'category' => 'run.started', 'seq' => $i],
+        ];
+    }
+    bindReadableSinkRecords($records);
+
+    $exit = Artisan::call('swarm:trace', [
+        'run_id' => $runId,
+        '--json' => true,
+        '--limit' => 3,
+    ]);
+
+    expect($exit)->toBe(0);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($payload['sources']['sink']['record_count'])->toBe(3);
+    expect($payload['sources']['sink']['limit'])->toBe(3);
+    expect($payload['sources']['sink']['truncated'])->toBeTrue();
+    expect($payload['notes'])->toContain(
+        'Sink returned more than --limit=3 records; sink-side records were truncated. Pass a higher --limit if needed.'
+    );
+});
+
+test('--limit not exceeded leaves truncated=false and no note', function (): void {
+    $runId = 'r-within-limit';
+    seedTraceHistoryRow($runId);
+
+    bindReadableSinkRecords([
+        [
+            'run_id' => $runId,
+            'category' => 'run.started',
+            'occurred_at' => Carbon::now('UTC')->toIso8601String(),
+            'payload' => ['run_id' => $runId, 'category' => 'run.started'],
+        ],
+    ]);
+
+    $exit = Artisan::call('swarm:trace', [
+        'run_id' => $runId,
+        '--json' => true,
+        '--limit' => 10,
+    ]);
+
+    expect($exit)->toBe(0);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($payload['sources']['sink']['truncated'])->toBeFalse();
+    expect($payload['sources']['sink']['limit'])->toBe(10);
+    foreach ($payload['notes'] as $note) {
+        expect($note)->not->toContain('sink-side records were truncated');
+    }
+});
+
+test('--limit=0 is rejected as invalid', function (): void {
+    $exit = Artisan::call('swarm:trace', [
+        'run_id' => 'r-bad-limit',
+        '--limit' => 0,
+    ]);
+
+    expect($exit)->toBe(1);
+});
+
+// -----------------------------------------------------------------------------
+// Sink-throw error differentiation (review F2)
+// -----------------------------------------------------------------------------
+
+test('sink throwing a RuntimeException surfaces in notes without crashing', function (): void {
+    $runId = 'r-sink-runtime-error';
+    seedTraceHistoryRow($runId);
+
+    $sink = new class implements ReadableSwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void {}
+
+        public function forRun(string $runId): iterable
+        {
+            throw new \RuntimeException('downstream sink unavailable');
+        }
+    };
+    app()->instance(SwarmAuditSink::class, $sink);
+
+    $exit = Artisan::call('swarm:trace', ['run_id' => $runId, '--json' => true]);
+
+    expect($exit)->toBe(0);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($payload['sources']['sink']['record_count'])->toBe(0);
+    expect(implode("\n", $payload['notes']))->toContain('downstream sink unavailable');
+});
+
+// -----------------------------------------------------------------------------
+// Lazy DB Connection resolution on cache driver (review F5)
+// -----------------------------------------------------------------------------
+
+test('swarm:trace does not resolve a database Connection on cache driver', function (): void {
+    config()->set('swarm.persistence.driver', 'cache');
+    app()->forgetInstance(AuditOutbox::class);
+    bindReadableSinkRecords([]);
+
+    // Replace the bound ConnectionResolver with a strict spy that fails the
+    // test if the command resolves a connection in cache-driver mode. The
+    // outbox is unavailable on cache driver, so collectOutboxRecords()
+    // should never run.
+    $strictResolver = new class implements ConnectionResolverInterface
+    {
+        public bool $connectionCalled = false;
+
+        public function connection($name = null): ConnectionInterface
+        {
+            $this->connectionCalled = true;
+            throw new \RuntimeException('Connection was resolved despite cache-driver setup.');
+        }
+
+        public function getDefaultConnection()
+        {
+            return 'testing';
+        }
+
+        public function setDefaultConnection($name): void {}
+    };
+    app()->instance(ConnectionResolverInterface::class, $strictResolver);
+
+    $exit = Artisan::call('swarm:trace', ['run_id' => 'r-cache-lazy', '--json' => true]);
+
+    expect($exit)->toBe(0);
+    expect($strictResolver->connectionCalled)->toBeFalse();
+});
+
+test('sink throwing a TypeError surfaces in notes AND is logged via Log::error', function (): void {
+    Log::spy();
+
+    $runId = 'r-sink-programmer-error';
+    seedTraceHistoryRow($runId);
+
+    $sink = new class implements ReadableSwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void {}
+
+        public function forRun(string $runId): iterable
+        {
+            throw new TypeError('sink implementation bug: wrong return type');
+        }
+    };
+    app()->instance(SwarmAuditSink::class, $sink);
+
+    $exit = Artisan::call('swarm:trace', ['run_id' => $runId, '--json' => true]);
+
+    expect($exit)->toBe(0);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+    // The trace continues with degraded sink data...
+    expect($payload['sources']['sink']['record_count'])->toBe(0);
+    expect(implode("\n", $payload['notes']))->toContain('wrong return type');
+
+    // ...AND the programmer error is logged loudly so it can't hide behind
+    // a benign-looking "degraded" note.
+    Log::shouldHaveReceived('error')
+        ->withArgs(function (string $message, array $context) {
+            return str_contains($message, 'ReadableSwarmAuditSink::forRun() threw a programmer error')
+                && ($context['error_class'] ?? '') === 'TypeError';
+        })
+        ->once();
 });
