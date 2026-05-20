@@ -248,6 +248,10 @@ class SwarmAuditReconcileCommand extends Command
 
     protected function runRequeue(ConfigRepository $config, Connection $connection, SwarmAuditDispatcher $audit, int $id): int
     {
+        if (($forceFailure = $this->requireForceForJsonMutation()) !== null) {
+            return $forceFailure;
+        }
+
         $row = $this->findRow($config, $connection, $id);
 
         if ($row === null) {
@@ -301,6 +305,10 @@ class SwarmAuditReconcileCommand extends Command
 
     protected function runDismiss(ConfigRepository $config, Connection $connection, SwarmAuditDispatcher $audit, int $id): int
     {
+        if (($forceFailure = $this->requireForceForJsonMutation()) !== null) {
+            return $forceFailure;
+        }
+
         $reason = $this->optionalOptionString('reason');
 
         if ($reason === null || trim($reason) === '') {
@@ -393,15 +401,23 @@ class SwarmAuditReconcileCommand extends Command
             return true;
         }
 
-        if ($this->option('json') === true) {
-            return false;
-        }
-
-        if (! $this->input->isInteractive()) {
+        if (! $this->input->isInteractive() || $this->option('json') === true) {
             return false;
         }
 
         return $this->confirm($prompt, false);
+    }
+
+    protected function requireForceForJsonMutation(): ?int
+    {
+        if ($this->option('json') !== true || $this->option('force') === true) {
+            return null;
+        }
+
+        $message = 'Non-interactive automation requires --force to confirm requeue/dismiss.';
+        $this->writeJson(['ok' => false, 'error' => 'force_required', 'message' => $message]);
+
+        return self::FAILURE;
     }
 
     protected function findRow(ConfigRepository $config, Connection $connection, int $id): ?object

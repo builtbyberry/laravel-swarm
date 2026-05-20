@@ -116,8 +116,10 @@ Action:
 
    For more than a handful of rows, script the loop using
    `swarm:audit:reconcile --status=dead_letter --json --limit=200` and
-   feed the IDs into `--requeue=<id>` calls. Use `--force` to skip the
-   interactive confirm.
+   feed the IDs into `--requeue=<id>` calls. Pass `--force` on each
+   call to confirm requeue/dismiss; without it `--json` mutations exit
+   with a `force_required` error envelope rather than silently
+   aborting.
 
 #### Branch C — Evidence is legitimately undeliverable and not worth retrying
 

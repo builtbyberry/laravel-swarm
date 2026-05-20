@@ -338,7 +338,10 @@ php artisan swarm:audit:reconcile --dismiss=42 --reason="duplicate of r-7"
 Pending rows can be listed and shown but cannot be requeued or
 dismissed; the relay owns their lifecycle. Both `--requeue` and
 `--dismiss` prompt for confirmation; use `--force` for scripted
-recovery. Every sub-mode accepts `--json` for automation.
+recovery. Every sub-mode accepts `--json` for automation. When
+scripting a loop with `--json`, also pass `--force` to confirm
+requeue/dismiss; without it the command exits with a `force_required`
+error envelope rather than silently aborting.
 
 Every requeue or dismiss emits a `command.audit_reconcile` audit record
 carrying `action`, `target_id`, `target_category`, `target_run_id`,
