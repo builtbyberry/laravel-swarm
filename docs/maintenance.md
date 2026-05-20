@@ -246,6 +246,10 @@ When to use: parallel or hierarchical durable swarms in production.
 
 ## Audit outbox
 
+If you are responding to a page, see the
+[Operator Runbook: Audit Outbox Triage](operator-runbook-audit-outbox.md).
+This section is the reference; the runbook is the decision tree.
+
 Since v0.5.0, `SWARM_AUDIT_FAILURE_POLICY` defaults to `queue` and audit
 sink failures are persisted to a new `swarm_audit_outbox` table for retry
 through the same `swarm:relay` schedule that handles durable dispatches.

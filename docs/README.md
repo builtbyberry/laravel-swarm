@@ -68,6 +68,7 @@ The recommended reading path for new users.
 - [Logging & Tracing](observability-logging-tracing.md) — telemetry sink, structured logs, OTEL
 - [Correlation Contract](observability-correlation-contract.md)
 - [Audit Evidence](audit-evidence-contract.md)
+- [Operator Runbook: Audit Outbox Triage](operator-runbook-audit-outbox.md) — 3 a.m. decision trees for dead-letter and stale-pending pages
 - [Metadata Allowlist Governance](metadata-allowlist-governance.md) — what belongs in metadata, named anti-patterns, and the allowlist review pattern
 - [Pulse](pulse.md) — Laravel Pulse cards for run counts and step latencies
 
