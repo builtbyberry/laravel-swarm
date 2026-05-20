@@ -138,8 +138,82 @@ SwarmFake-visible mirror.
 
 The four v0.4 audit extension contracts — `CapturePolicy`,
 `SinkFailureHandler`, `SwarmAuditSigner`, and `ActorResolver` — are
-invoked inside `SwarmRunner` and the audit dispatcher, code paths that
-`SwarmFake` intentionally skips. Three testing patterns cover them:
+invoked inside `SwarmRunner` and the audit dispatcher. `SwarmFake`
+intentionally skips that code path for `prompt()` / `run()` / `queue()` /
+`stream()` / `dispatchDurable()`, so the three patterns below cover what
+the fake cannot observe directly.
+
+### Use `SwarmFake` intercepts for the three audit contracts (v0.7+)
+
+`SwarmFake` ships three intercept helpers for `CapturePolicy`,
+`SinkFailureHandler`, and `SwarmAuditSigner`. Each helper swaps the
+container binding for the corresponding contract to a recording
+decorator and returns a recorder you can assert against. The decorators
+wrap an optional delegate, so existing policy / handler / signer logic
+still drives behavior — the recorder only captures inputs, the routed
+decision, and the resulting payload.
+
+Intercepts work during real (non-faked) swarm runs, since the
+recording happens when the real audit dispatcher resolves the contract
+from the container. `SwarmFake` itself never constructs or invokes the
+dispatcher — installing an intercept only mutates the container
+binding and flushes the `SwarmAuditDispatcher` singleton so the next
+resolution picks up the recorder.
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Audit\SinkFailureDecision;
+use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
+
+test('article pipeline captures inputs and signs run.started', function () {
+    $capturePolicy = SwarmFake::interceptCapturePolicy();
+    $signer = SwarmFake::interceptSwarmAuditSigner(new MyEcdsaSigner);
+
+    ArticlePipeline::make()->run('draft a launch post');
+
+    $capturePolicy->assertCapturedDecision('inputs', CaptureDecision::Full);
+    $signer->assertSigned('run.started');
+});
+
+test('article pipeline routes a flaky sink to the outbox', function () {
+    // Bind a sink that fails the first emit.
+    app()->instance(SwarmAuditSink::class, new FlakySink);
+
+    $handler = SwarmFake::interceptSinkFailureHandler();
+
+    ArticlePipeline::make()->run('task');
+
+    $handler->assertSinkFailureRouted();
+    $handler->assertSinkFailureRoutedAs(SinkFailureDecision::Swallow);
+});
+```
+
+Each recorder exposes:
+
+- `assertCaptured(string $category, ?callable $matcher = null)`,
+  `assertCapturedDecision(string $category, CaptureDecision $decision)`,
+  `assertCapturedWith(callable $matcher)`,
+  `assertNeverCaptured(?string $category = null)` on
+  `RecordingCapturePolicy`.
+- `assertSinkFailureRouted(?callable $matcher = null)`,
+  `assertSinkFailureRoutedAs(SinkFailureDecision $decision, ?string $category = null)`,
+  `assertNeverSinkFailure(?string $category = null)` on
+  `RecordingSinkFailureHandler`.
+- `assertSigned(?string $category = null, ?callable $matcher = null)`,
+  `assertNeverSigned(?string $category = null)` on
+  `RecordingSwarmAuditSigner`.
+
+All three recorders also expose `records()` and `recordsFor(string $category)`
+for raw inspection when you need shape assertions richer than what the
+helpers cover.
+
+The intercepts cover the dispatch-time signal: was the contract invoked,
+with what category, and what did it decide. They do not replace the two
+patterns below, which remain the right tool for unit-testing the contract
+in isolation or for asserting on the fully enriched envelope a sink sees.
+`ActorResolver` still has no dispatch-time intercept; cover it with the
+patterns below or with `SwarmFake::assertDispatchedWithActor()` (see
+[Asserting Actor Binding](#asserting-actor-binding)).
 
 ### Unit-test the contract directly
 
