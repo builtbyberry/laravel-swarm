@@ -131,7 +131,7 @@ class SwarmAuditReconcileCommand extends Command
         $rows = $rows->take($limit);
 
         $now = Carbon::now('UTC');
-        $records = $rows->map(fn (object $row): array => [
+        $records = $rows->map(fn (\stdClass $row): array => [
             'id' => (int) $row->id,
             'status' => (string) $row->status,
             'category' => (string) $row->category,
@@ -357,7 +357,7 @@ class SwarmAuditReconcileCommand extends Command
         return self::SUCCESS;
     }
 
-    protected function emitReconcileAudit(SwarmAuditDispatcher $audit, string $action, object $row, int $priorAttempts, ?string $reason): bool
+    protected function emitReconcileAudit(SwarmAuditDispatcher $audit, string $action, \stdClass $row, int $priorAttempts, ?string $reason): bool
     {
         $this->reconcileAuditError = null;
 
@@ -420,17 +420,17 @@ class SwarmAuditReconcileCommand extends Command
         return self::FAILURE;
     }
 
-    protected function findRow(ConfigRepository $config, Connection $connection, int $id): ?object
+    protected function findRow(ConfigRepository $config, Connection $connection, int $id): ?\stdClass
     {
         $row = $connection->table($this->tableName($config))->where('id', $id)->first();
 
-        return is_object($row) ? $row : null;
+        return $row instanceof \stdClass ? $row : null;
     }
 
     /**
      * @return array<string, mixed>|string|null
      */
-    protected function decodePayload(SwarmPersistenceCipher $cipher, object $row): array|string|null
+    protected function decodePayload(SwarmPersistenceCipher $cipher, \stdClass $row): array|string|null
     {
         $raw = is_string($row->payload) ? $cipher->open($row->payload) : null;
 
@@ -447,7 +447,7 @@ class SwarmAuditReconcileCommand extends Command
         return is_array($decoded) ? $decoded : $raw;
     }
 
-    protected function decodeLastError(SwarmPersistenceCipher $cipher, object $row): ?string
+    protected function decodeLastError(SwarmPersistenceCipher $cipher, \stdClass $row): ?string
     {
         if (! is_string($row->last_error) || $row->last_error === '') {
             return null;
