@@ -181,6 +181,55 @@ test('--show with an unknown id returns a clear error', function (): void {
     expect(Artisan::output())->toContain('not found');
 });
 
+test('--show emits a command.audit_reconcile evidence record with action=show and no payload contents', function (): void {
+    $sink = reconcileRecordingSink();
+    $id = seedReconcileRow('dead_letter', [
+        'attempts' => 4,
+        'run_id' => 'r-show',
+        'payload' => ['run_id' => 'r-show', 'category' => 'run.failed', 'secret' => 'should-not-leak'],
+    ]);
+
+    $exit = Artisan::call('swarm:audit:reconcile', ['--show' => (string) $id]);
+
+    expect($exit)->toBe(0);
+
+    $records = $sink->recordsForCategory('command.audit_reconcile');
+    expect($records)->toHaveCount(1);
+    expect($records[0]['action'])->toBe('show');
+    expect($records[0]['target_id'])->toBe($id);
+    expect($records[0]['target_category'])->toBe('run.failed');
+    expect($records[0]['target_run_id'])->toBe('r-show');
+    expect($records[0]['prior_attempts'])->toBe(4);
+    expect($records[0])->toHaveKey('target_created_at');
+    expect($records[0])->toHaveKey('target_age_seconds');
+    expect(array_keys($records[0]))->not->toContain('payload');
+    expect(array_keys($records[0]))->not->toContain('reason');
+    expect(array_keys($records[0]))->not->toContain('target_payload_digest');
+});
+
+test('--show --json includes audit_emitted=true on the successful read path', function (): void {
+    reconcileRecordingSink();
+    $id = seedReconcileRow('dead_letter');
+
+    Artisan::call('swarm:audit:reconcile', ['--show' => (string) $id, '--json' => true]);
+    $decoded = json_decode(Artisan::output(), true);
+
+    expect($decoded['ok'])->toBeTrue();
+    expect($decoded['audit_emitted'])->toBeTrue();
+});
+
+test('--show exits non-zero with a clear warning when the audit emit fails, but still prints the row', function (): void {
+    $id = seedReconcileRow('dead_letter', ['payload' => ['secret' => 'visible-x']]);
+    bindFailingDispatcher();
+
+    $exit = Artisan::call('swarm:audit:reconcile', ['--show' => (string) $id]);
+
+    expect($exit)->toBe(1);
+    $output = Artisan::output();
+    expect($output)->toContain('visible-x');
+    expect($output)->toContain('Read audit chain is broken');
+});
+
 // -----------------------------------------------------------------------------
 // Requeue
 // -----------------------------------------------------------------------------
@@ -293,6 +342,29 @@ test('--dismiss deletes a dead_letter row and emits the audit record with reason
     expect($records[0]['target_category'])->toBe('run.failed');
     expect($records[0]['prior_attempts'])->toBe(7);
     expect($records[0]['reason'])->toBe('duplicate of run.failed for r-7');
+});
+
+test('--dismiss emits target_payload_digest as sha256 of the stored (sealed) payload bytes', function (): void {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $sink = reconcileRecordingSink();
+    $id = seedReconcileRow('dead_letter', [
+        'payload' => ['run_id' => 'r-digest', 'category' => 'run.failed', 'secret' => 'forensic-digest-x'],
+    ]);
+
+    $storedPayload = (string) DB::table('swarm_audit_outbox')->where('id', $id)->value('payload');
+    $expectedDigest = hash('sha256', $storedPayload);
+
+    Artisan::call('swarm:audit:reconcile', [
+        '--dismiss' => (string) $id,
+        '--reason' => 'forensic digest test',
+        '--force' => true,
+    ]);
+
+    $records = $sink->recordsForCategory('command.audit_reconcile');
+    expect($records)->toHaveCount(1);
+    expect($records[0])->toHaveKey('target_payload_digest');
+    expect($records[0]['target_payload_digest'])->toMatch('/^[0-9a-f]{64}$/');
+    expect($records[0]['target_payload_digest'])->toBe($expectedDigest);
 });
 
 test('--dismiss requires --reason and refuses without it', function (): void {

@@ -21,6 +21,8 @@ class SwarmAuditReconcileCommand extends Command
 {
     use ResolvesStringConsoleInput;
 
+    protected ?string $reconcileAuditError = null;
+
     protected $signature = 'swarm:audit:reconcile
                             {--show= : Print full metadata and unsealed payload for the given outbox id.}
                             {--requeue= : Reset a dead_letter row to pending so the relay re-attempts emission.}
@@ -97,7 +99,7 @@ class SwarmAuditReconcileCommand extends Command
         }
 
         return match ($mode) {
-            'show' => $this->runShow($config, $connection, $cipher, $id),
+            'show' => $this->runShow($config, $connection, $cipher, $audit, $id),
             'requeue' => $this->runRequeue($config, $connection, $audit, $id),
             'dismiss' => $this->runDismiss($config, $connection, $audit, $id),
             default => self::FAILURE,
@@ -178,7 +180,7 @@ class SwarmAuditReconcileCommand extends Command
         return self::SUCCESS;
     }
 
-    protected function runShow(ConfigRepository $config, Connection $connection, SwarmPersistenceCipher $cipher, int $id): int
+    protected function runShow(ConfigRepository $config, Connection $connection, SwarmPersistenceCipher $cipher, SwarmAuditDispatcher $audit, int $id): int
     {
         $row = $this->findRow($config, $connection, $id);
 
@@ -203,10 +205,16 @@ class SwarmAuditReconcileCommand extends Command
             'payload' => $payload,
         ];
 
-        if ($this->option('json') === true) {
-            $this->writeJson(['ok' => true, 'row' => $detail]);
+        $auditEmitted = $this->emitReconcileAudit($audit, 'show', $row, (int) $row->attempts, null);
 
-            return self::SUCCESS;
+        if ($this->option('json') === true) {
+            $this->writeJson([
+                'ok' => $auditEmitted,
+                'row' => $detail,
+                'audit_emitted' => $auditEmitted,
+            ]);
+
+            return $auditEmitted ? self::SUCCESS : self::FAILURE;
         }
 
         $this->table(['Field', 'Value'], [
@@ -228,6 +236,12 @@ class SwarmAuditReconcileCommand extends Command
         $this->line('');
         $this->components->info('Payload');
         $this->line($this->prettyJson($payload));
+
+        if (! $auditEmitted) {
+            $this->components->warn('Read audit chain is broken: command.audit_reconcile emit failed. The row above was already in memory; rerun once the audit sink is healthy.');
+
+            return self::FAILURE;
+        }
 
         return self::SUCCESS;
     }
@@ -253,7 +267,10 @@ class SwarmAuditReconcileCommand extends Command
         $priorAttempts = (int) $row->attempts;
 
         if (! $this->emitReconcileAudit($audit, 'requeue', $row, $priorAttempts, $reason)) {
-            return self::FAILURE;
+            return $this->failWith(
+                "Failed to emit command.audit_reconcile evidence: {$this->reconcileAuditError}. "
+                .'The outbox row was NOT modified.',
+            );
         }
 
         $connection->table($this->tableName($config))
@@ -307,7 +324,10 @@ class SwarmAuditReconcileCommand extends Command
         $priorAttempts = (int) $row->attempts;
 
         if (! $this->emitReconcileAudit($audit, 'dismiss', $row, $priorAttempts, $reason)) {
-            return self::FAILURE;
+            return $this->failWith(
+                "Failed to emit command.audit_reconcile evidence: {$this->reconcileAuditError}. "
+                .'The outbox row was NOT modified.',
+            );
         }
 
         $connection->table($this->tableName($config))->where('id', $id)->delete();
@@ -331,6 +351,8 @@ class SwarmAuditReconcileCommand extends Command
 
     protected function emitReconcileAudit(SwarmAuditDispatcher $audit, string $action, object $row, int $priorAttempts, ?string $reason): bool
     {
+        $this->reconcileAuditError = null;
+
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
         $now = Carbon::now('UTC');
 
@@ -340,21 +362,26 @@ class SwarmAuditReconcileCommand extends Command
             'target_category' => (string) $row->category,
             'target_run_id' => $row->run_id !== null ? (string) $row->run_id : null,
             'prior_attempts' => $priorAttempts,
-            'reason' => $reason,
             'target_created_at' => $this->formatTimestamp($row->created_at),
             'target_age_seconds' => $this->ageSeconds($row->created_at, $now),
-            ...$audit->metadata($actorMetadata),
         ];
+
+        if ($action !== 'show') {
+            $payload['reason'] = $reason;
+        }
+
+        if ($action === 'dismiss') {
+            $payload['target_payload_digest'] = hash('sha256', is_string($row->payload) ? $row->payload : '');
+        }
+
+        $payload = [...$payload, ...$audit->metadata($actorMetadata)];
 
         try {
             $audit->emit('command.audit_reconcile', $payload);
 
             return true;
         } catch (Throwable $exception) {
-            $this->failWith(
-                "Failed to emit command.audit_reconcile evidence: {$exception->getMessage()}. "
-                .'The outbox row was NOT modified.',
-            );
+            $this->reconcileAuditError = $exception->getMessage();
 
             return false;
         }
