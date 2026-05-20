@@ -1,16 +1,20 @@
 # Changelog
 
-## v0.6.0 - unreleased
+## v0.6.0 - 2026-05-20
 
 Operator UX, developer experience, and test coverage on top of the v0.5 audit outbox foundation. No new public-surface contracts. No migration changes. No breaking changes.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **`swarm:audit:status` summary command (#37).** New read-only Artisan command that surfaces the audit outbox at a glance for operators triaging from the CLI; reports counts (pending / reserved / stale_reserved / dead_letter), an age-distribution histogram, the top-5 dead-letter categories, the oldest pending and dead-letter rows, and the configured retention window alongside the next-prune count. `--json` mirrors the `SwarmHealthCommand` shape so the same monitoring scrapers consume both. Degrades cleanly on cache persistence by skipping with an informational note instead of querying a table that does not exist.
+- **`swarm:audit:reconcile` forensic CLI (#36).** New operator-driven Artisan command for dead-letter triage; defaults to `list` mode and gains `--show=<id>` (display a single row with its sealed payload unsealed for human review), `--requeue=<id>` (re-enqueue a dead-letter record for one more relay pass), and `--dismiss=<id> --reason="..."` (permanently dismiss a record with a mandatory operator-supplied reason). Supports `--json`, `--force` (required for mutations under `--json`), `--limit`, and `--status` flags. Pending rows can be listed or shown but the relay owns their lifecycle — mutations are dead-letter-only.
+- **`command.audit_reconcile` audit category.** Emitted on every `swarm:audit:reconcile` requeue, dismiss, and show action so triage is itself chain-of-custody evidence; payload carries `action`, `target_id`, `target_category`, `target_run_id`, `prior_attempts`, `reason` (required on dismiss, optional on requeue, omitted on show), `target_created_at`, `target_age_seconds`, and `target_payload_digest` (sha256 hex over the stored payload bytes, present on dismiss only so a dismissal can be cross-checked against a forensic backup without unsealing). Enumerated in `docs/audit-evidence-contract.md` as a frozen category. Custom `SwarmAuditSink` implementations that allowlist categories or schema-validate payloads must add `command.audit_reconcile` to their allowlist — without it, operator triage actions are silently dropped, exactly the records that exist to survive scrutiny.
+- **`swarm.audit-outbox` Pulse Livewire card (#38).** New operator-facing dashboard card showing dead-letter count (red alarm if > 0), pending count, stale-pending count (amber alarm if > 0), oldest pending and dead-letter ages, and the configured retention setting; mirrors the `SwarmRuns` / `SwarmSteps` card layout already shipped by the package. Renders a neutral state with zero DB queries on cache persistence so dashboards do not error out under the unsupported driver. Documented in `docs/pulse.md` alongside the existing cards.
+- **Operator runbook at `docs/operator-runbook-audit-outbox.md` (#45).** Scenario-driven 3am-triage walkthrough across five sections: dead-letter triage decision tree, stale-pending decision tree, sink-permanently-broken procedure, retention decision tree per regulatory regime (21 CFR Part 11, SOC 2, HIPAA — deliberately defers regime-specific retention guidance to compliance officers rather than asserting it), and forensic reconstruction (forward marker for `swarm:trace` in v0.7). Cross-linked from the README Production Checklist, `docs/maintenance.md`, and the `docs/README.md` index so operators discovering the package from any entry point find the runbook.
+- **v0.5 audit-chain walkthroughs in `examples/durable-compliance-review/` and `examples/privacy-capture/` (#46).** `durable-compliance-review` gains a full simulated-outage scenario with baseline config, a `RecoveringSinkDemo` fixture that fails then heals, `swarm:audit:status` and `swarm:health --audit` output samples, recovery via `swarm:relay --type=audit`, and dead-letter triage via `swarm:audit:reconcile --show/--requeue/--dismiss`. `privacy-capture` gains a smaller "v0.5 Audit Chain For Redacted Evidence" section covering what `failure_policy=queue` means for redacted payloads and the privacy implications of `--show` on sealed outbox rows.
+- **Integration test coverage for the v0.5 audit outbox flow (#39).** New `tests/Feature/AuditOutboxIntegrationTest.php` covering three end-to-end scenarios: DB-backed failing-sink → outbox → replay → dead_letter; cache-backed log-and-swallow fallback; and cross-lane `swarm:relay` draining both durable and audit lanes in a single pass. Extracted the existing `CountingThrowingSink` fixture from `tests/Unit/Audit/SinkFailureHandlerTest.php` into `tests/Fixtures/CountingThrowingSink.php` for reuse across the suite.
 
-### Changed
-
-_To be filled in during release wrap-up._
+## v0.5.0 - 2026-05-19
 
 ## v0.5.0 - 2026-05-19
 

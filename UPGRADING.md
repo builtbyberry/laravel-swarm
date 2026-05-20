@@ -268,6 +268,88 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.6.0
+
+v0.6.0 is purely additive on top of v0.5.0 — no migrations, no env-var
+changes, no breaking surface. Existing v0.5 deployments can adopt v0.6
+surfaces incrementally.
+
+### High Impact Changes
+
+#### Custom `SwarmAuditSink` allowlists must add `command.audit_reconcile`
+
+v0.6.0 introduces a new audit category, `command.audit_reconcile`,
+emitted by the new `swarm:audit:reconcile` Artisan command on every
+operator triage action against the audit outbox (requeue, dismiss, and
+show). The category is enumerated in
+`docs/audit-evidence-contract.md` and behaves like every other
+`command.*` category — it carries `schema_version: "2"` and the
+standard `metadata.actor` envelope slot.
+
+**Required if you implement a custom `SwarmAuditSink` that allowlists
+categories or schema-validates payloads:** add `command.audit_reconcile`
+to your allowlist. Without this, operator triage actions are silently
+dropped — exactly the records that exist to survive scrutiny. A sink
+that rejects unknown categories will also reject these records, so
+either accept the new category or extend the strict-validation switch
+to cover it.
+
+The frozen payload fields, in order:
+
+- `action` (string, one of `requeue`, `dismiss`, `show`)
+- `target_id` (int) — the `swarm_audit_outbox` row id
+- `target_category` (string) — the category of the original failed emit
+- `target_run_id` (string&#124;null) — the run id from the original payload, if present
+- `prior_attempts` (int) — the outbox row's attempt count at the time of the action
+- `reason` (string) — required on `dismiss`, optional on `requeue`, omitted on `show`
+- `target_created_at` (ISO 8601 string) — when the outbox row was first written
+- `target_age_seconds` (int) — age at the time of the action
+- `target_payload_digest` (sha256 hex string) — **present on `dismiss` only**; a sha256 over the stored payload bytes so an auditor can verify the deletion against a forensic backup without unsealing
+
+Sinks that ignore unknown categories (or fall through to a generic
+`emit($category, $payload)` path) need no changes.
+
+### Medium Impact Changes
+
+#### Operator adoption — optional v0.6 surfaces
+
+The new dashboard card and the two new Artisan commands are
+opt-in operator surfaces. Adopt them where they fit; nothing about
+v0.5 stops working if you defer.
+
+- **Pulse card.** Register the new card by adding
+  `\BuiltByBerry\LaravelSwarm\Pulse\Livewire\AuditOutbox::class` to
+  your `pulse.cards` config, or place the `<livewire:swarm.audit-outbox />`
+  Blade tag directly in a custom dashboard view. The card renders a
+  neutral state with zero DB queries on cache persistence; no further
+  configuration is required.
+- **`swarm:audit:status`.** Read-only outbox summary; safe to run from
+  the CLI or wire into a monitoring scraper via `--json`.
+- **`swarm:audit:reconcile`.** Operator-on-demand forensic CLI. Treat
+  it like `swarm:recover` — invoke from the CLI when triaging, do not
+  schedule it. **Do not** add either of the new commands to the
+  scheduler. `swarm:relay` (already scheduled in v0.5) continues to
+  drain the audit lane on its existing cadence.
+
+### Low Impact Changes
+
+#### Compliance posture: dismissals are now digest-bound and reads are counted
+
+v0.6 strengthens the chain of custody on operator dismissals via the
+new `target_payload_digest` field — a sha256 over the stored payload
+bytes that lets an auditor verify a `--dismiss` action against a
+forensic backup of the outbox without unsealing. Payload **reads** are
+also now counted: `swarm:audit:reconcile --show` emits a
+`command.audit_reconcile` record with `action=show` (no payload
+contents in the audit record), so operator inspection of a dead-letter
+row is itself a tracked event.
+
+Operators with shell access to `swarm:audit:reconcile --show` should
+be treated the same as operators with direct database read access —
+the audit emit accounts for individual reads but does not authorize
+them. Gate shell access accordingly. The `docs/operator-runbook-audit-outbox.md`
+"Audit trail of reads" subsection covers the operational expectations.
+
 ## Upgrading to v0.5.0
 
 v0.5.0 settles the audit evidence envelope and lands the durability layer
