@@ -19,3 +19,4 @@ parameters:
                 - src/Persistence/DatabaseRunHistoryStore.php
                 - src/Persistence/DatabaseContextStore.php
                 - src/Pulse/Livewire/SwarmSteps.php
+                - src/Commands/SwarmAuditReconcileCommand.php

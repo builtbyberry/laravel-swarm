@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\RunAuditEmitter;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditReconcileCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditStatusCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
@@ -282,6 +283,7 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmRecoverCommand::class,
                 SwarmRelayCommand::class,
                 SwarmAuditStatusCommand::class,
+                SwarmAuditReconcileCommand::class,
                 SwarmSignalCommand::class,
                 SwarmInspectCommand::class,
                 SwarmProgressCommand::class,

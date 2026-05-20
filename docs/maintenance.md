@@ -305,6 +305,43 @@ lifecycle). `swarm.retention.prevent_prune=true` overrides as usual.
 See [Audit Evidence Contract](audit-evidence-contract.md) for the full
 retry, encryption-at-rest, and signer-rotation behavior.
 
+### Forensic triage: `swarm:audit:reconcile`
+
+`swarm:audit:reconcile` is the operator command for inspecting and
+reconciling rows that the relay has either failed or dead-lettered. It
+requires the database persistence driver; on cache the command exits
+non-zero with a clear error.
+
+Four sub-modes (mutually exclusive):
+
+```bash
+# List pending and dead_letter rows (capped at --limit, default 50)
+php artisan swarm:audit:reconcile
+php artisan swarm:audit:reconcile --status=dead_letter --limit=200
+
+# Inspect a single row, including unsealed payload and last_error
+php artisan swarm:audit:reconcile --show=42
+
+# Reset a dead_letter row to pending so the relay re-attempts emission.
+# attempts is zeroed; last_error is preserved as forensic evidence.
+php artisan swarm:audit:reconcile --requeue=42 --reason="sink restored"
+
+# Permanently delete a dead_letter row. --reason is REQUIRED — audit
+# evidence cannot be discarded without a chain-of-custody justification.
+php artisan swarm:audit:reconcile --dismiss=42 --reason="duplicate of r-7"
+```
+
+Pending rows can be listed and shown but cannot be requeued or
+dismissed; the relay owns their lifecycle. Both `--requeue` and
+`--dismiss` prompt for confirmation; use `--force` for scripted
+recovery. Every sub-mode accepts `--json` for automation.
+
+Every requeue or dismiss emits a `command.audit_reconcile` audit record
+carrying `action`, `target_id`, `target_category`, `target_run_id`,
+`prior_attempts`, and `reason` **before** mutating the row. If the
+audit emit fails the row is left untouched, so reconciliation cannot
+silently erase evidence.
+
 ## High-volume dashboards
 
 Swarm database tables are sized for operational throughput. List and aggregation
