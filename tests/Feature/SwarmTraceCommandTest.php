@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\Console\Exception\RuntimeException;
 
 beforeEach(function (): void {
@@ -493,4 +494,70 @@ test('--limit=0 is rejected as invalid', function (): void {
     ]);
 
     expect($exit)->toBe(1);
+});
+
+// -----------------------------------------------------------------------------
+// Sink-throw error differentiation (review F2)
+// -----------------------------------------------------------------------------
+
+test('sink throwing a RuntimeException surfaces in notes without crashing', function (): void {
+    $runId = 'r-sink-runtime-error';
+    seedTraceHistoryRow($runId);
+
+    $sink = new class implements ReadableSwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void {}
+
+        public function forRun(string $runId): iterable
+        {
+            throw new \RuntimeException('downstream sink unavailable');
+        }
+    };
+    app()->instance(SwarmAuditSink::class, $sink);
+
+    $exit = Artisan::call('swarm:trace', ['run_id' => $runId, '--json' => true]);
+
+    expect($exit)->toBe(0);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($payload['sources']['sink']['record_count'])->toBe(0);
+    expect(implode("\n", $payload['notes']))->toContain('downstream sink unavailable');
+});
+
+test('sink throwing a TypeError surfaces in notes AND is logged via Log::error', function (): void {
+    Log::spy();
+
+    $runId = 'r-sink-programmer-error';
+    seedTraceHistoryRow($runId);
+
+    $sink = new class implements ReadableSwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void {}
+
+        public function forRun(string $runId): iterable
+        {
+            throw new TypeError('sink implementation bug: wrong return type');
+        }
+    };
+    app()->instance(SwarmAuditSink::class, $sink);
+
+    $exit = Artisan::call('swarm:trace', ['run_id' => $runId, '--json' => true]);
+
+    expect($exit)->toBe(0);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+    // The trace continues with degraded sink data...
+    expect($payload['sources']['sink']['record_count'])->toBe(0);
+    expect(implode("\n", $payload['notes']))->toContain('wrong return type');
+
+    // ...AND the programmer error is logged loudly so it can't hide behind
+    // a benign-looking "degraded" note.
+    Log::shouldHaveReceived('error')
+        ->withArgs(function (string $message, array $context) {
+            return str_contains($message, 'ReadableSwarmAuditSink::forRun() threw a programmer error')
+                && ($context['error_class'] ?? '') === 'TypeError';
+        })
+        ->once();
 });

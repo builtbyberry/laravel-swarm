@@ -11,10 +11,13 @@ use BuiltByBerry\LaravelSwarm\Contracts\ReadableSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use Error;
+use Exception;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
@@ -95,8 +98,23 @@ class SwarmTraceCommand extends Command
 
                     $sinkRecords[] = $this->normalizeSinkRecord($record);
                 }
-            } catch (Throwable $exception) {
+            } catch (Exception $exception) {
+                // Expected sink-degradation path (RuntimeException, IO/network,
+                // sink-specific runtime errors). Surface in the trace notes
+                // and continue with a partial result.
                 $sinkError = $exception->getMessage();
+            } catch (Error $error) {
+                // Programmer error (TypeError, ArgumentCountError, autoload
+                // failure, etc.) in the bound sink. Surface in the trace AND
+                // log loudly so operators don't miss a broken sink behind a
+                // benign-looking "degraded" note.
+                $sinkError = $error->getMessage();
+                Log::error('swarm:trace: ReadableSwarmAuditSink::forRun() threw a programmer error', [
+                    'run_id' => $runId,
+                    'sink_class' => $sinkReadability['sink_class'],
+                    'error_class' => $error::class,
+                    'error' => $error->getMessage(),
+                ]);
             }
         }
 
