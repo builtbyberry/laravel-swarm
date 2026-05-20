@@ -59,9 +59,10 @@ Then add the swarm cards to `resources/views/vendor/pulse/dashboard.blade.php`:
 ```blade
 <livewire:swarm.runs cols="6" />
 <livewire:swarm.steps cols="6" />
+<livewire:swarm.audit-outbox cols="6" />
 ```
 
-`<livewire:swarm.runs />` shows per-swarm totals, failures, failure rate, average run duration, and topology mix. `<livewire:swarm.steps />` shows the slowest average swarm steps by agent.
+`<livewire:swarm.runs />` shows per-swarm totals, failures, failure rate, average run duration, and topology mix. `<livewire:swarm.steps />` shows the slowest average swarm steps by agent. `<livewire:swarm.audit-outbox />` surfaces the live operational state of the audit outbox.
 
 ## What Pulse Aggregates
 
@@ -102,9 +103,25 @@ The card shows up to 25 entries sorted by average duration descending — the sl
 
 The `SwarmStepDurations` recorder fires on `SwarmStepCompleted`.
 
+### swarm.audit-outbox card
+
+The `swarm.audit-outbox` card surfaces the live operational state of the v0.5 audit outbox — the same signal an operator would see by running `php artisan swarm:audit:status`. Unlike `swarm.runs` and `swarm.steps`, this card does not depend on a Pulse recorder; the outbox is low-volume operational state, so the card queries the `swarm_audit_outbox` table directly (via the `AuditOutbox` contract / configured table name).
+
+The card surfaces:
+
+- **Dead-letter count** — number of rows in `dead_letter` status. The card renders this prominently in red whenever the count is greater than zero.
+- **Pending count** — total rows in `pending` status, claimed or not.
+- **Stale-pending count** — pending rows with a `reserved_at` older than `2 × swarm.durable.relay.reservation_timeout_seconds`, matching the same heuristic that `swarm:audit:status` and `swarm:health` use to flag a relay that may not be running.
+- **Oldest pending age** and **oldest dead-letter age** — short, human-readable ages for the longest-waiting row in each status.
+- **Dead-letter retention** — the configured `swarm.audit.outbox.dead_letter_retention_days`, or `indefinite` when no retention is configured.
+
+When `swarm.persistence.driver` is not `database`, the `AuditOutbox` contract resolves to `NoOpAuditOutbox::isAvailable() === false` and the card renders a neutral "Audit outbox unavailable on cache persistence driver." state without touching the database.
+
+When the card raises an alarm signal, follow the in-card hint: run `php artisan swarm:audit:status` for the full breakdown (age distribution, top dead-letter categories, oldest IDs), and `php artisan swarm:audit:reconcile` to triage. See [Maintenance](maintenance.md) and [Audit Evidence Contract](audit-evidence-contract.md) for the full operator workflow.
+
 ### Period selectors
 
-Both cards inherit Pulse's standard period controls (1h, 24h, 7d). The period applies to all aggregates on the card simultaneously. Pulse stores bucketed time-series data, so switching periods reloads pre-aggregated buckets rather than scanning raw events.
+The `swarm.runs` and `swarm.steps` cards inherit Pulse's standard period controls (1h, 24h, 7d). The period applies to all aggregates on the card simultaneously. Pulse stores bucketed time-series data, so switching periods reloads pre-aggregated buckets rather than scanning raw events. The `swarm.audit-outbox` card reflects live operational state — period selectors do not apply because the underlying counts are point-in-time queries against the outbox table.
 
 ## Relationship to Telemetry
 
