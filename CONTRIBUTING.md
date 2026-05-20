@@ -96,6 +96,51 @@ persisted payloads without coupling every test to the conservative production
 defaults. If your change depends on either default, set it explicitly inside
 the test rather than relying on the `TestCase` value.
 
+### Writing `tests/ProcessConcurrency/*` worker closures
+
+Tests in this lane that pass anonymous closures to
+`$concurrency->driver('process')->run([...])` ship those closures to a child
+PHP process via `php artisan invoke-serialized-closure`. The child runs
+testbench's bare Laravel — **it does not boot Pest, and it does not know
+about the package being tested**. Two traps follow:
+
+1. **Closure scope class.** A closure defined inline inside a Pest
+   `test('...', function () { ... })` body inherits the Pest auto-generated
+   `P\Tests\...` class as its scope. The child can't resolve that class and
+   unserialize fails with `Class "P\Tests\..." not found`. **`static function`
+   alone does NOT fix this** — it strips `$this` but keeps the scope class.
+   The fix is to define the worker closure inside a **free function** in the
+   test file (or any non-Pest class) so its scope class is `null`. See
+   `auditOutboxConcurrencyWorker()` in
+   `tests/ProcessConcurrency/AuditOutboxConcurrencyTest.php` for the canonical
+   pattern.
+2. **Package container is not bootstrapped in the child.** testbench discovers
+   packages only from its own `vendor/orchestra/testbench-core/laravel/bootstrap/cache/packages.php`,
+   which does not list the package under test. So
+   `app(SomeContract::class)` in the worker closure throws
+   `BindingResolutionException` for any interface bound by
+   `SwarmServiceProvider`. If your worker needs the swarm container, register
+   the provider explicitly **inside the closure** and set the minimum config
+   the binding chain requires:
+
+   ```php
+   config()->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
+   config()->set('swarm.persistence.driver', 'database');
+   config()->set('swarm.persistence.encrypt_at_rest', false);
+   if (! app()->providerIsLoaded(SwarmServiceProvider::class)) {
+       app()->register(SwarmServiceProvider::class);
+   }
+   ```
+
+   Resolving **concrete** classes (e.g. an agent class) does not need this —
+   the child container can reflection-instantiate concrete classes without
+   any provider. This is why `RealProcessConcurrencyTest.php` works without
+   the bootstrap dance: its worker closures (defined inside `ParallelRunner`,
+   an autoloadable internal class) only resolve concrete agent classes.
+
+DB connections do flow naturally — the spawned child inherits parent
+environment variables, and testbench reads `DB_*` at boot.
+
 ## Issues
 
 Good bug reports make the failing path reproducible. Include:
