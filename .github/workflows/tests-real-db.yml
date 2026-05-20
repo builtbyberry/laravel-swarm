@@ -20,6 +20,13 @@ on:
       - '*.x'
   pull_request:
 
+# Scope the GITHUB_TOKEN to least privilege. Both jobs only checkout the repo
+# and run tests against ephemeral service containers — no PR comments, no
+# release writes, no artifact uploads — so contents:read is sufficient.
+# Matches the pattern set by .github/workflows/branch-naming.yml.
+permissions:
+  contents: read
+
 jobs:
   tests-real-db-mysql:
     name: PHP 8.5 - real DB (mysql-8)
