@@ -27,6 +27,7 @@ adding a new public API.
 | `DurableSwarmResponse` | Durable dispatch handle with operator helper methods. | [Durable Execution](durable-execution.md), [Durable Waits And Signals](durable-waits-and-signals.md) |
 | `RunContext` | Explicit run input, run ID, data, metadata, artifacts, labels, and details. | [Structured Input](structured-input.md), [Persistence And History](persistence-and-history.md) |
 | `SwarmHistory` | Query persisted history and replay stored stream events. | [Persistence And History](persistence-and-history.md), [Run Inspector](../examples/run-inspector/README.md) |
+| `AuditDrainResult` | Result of an `AuditOutbox::drain()` invocation — `replayed`, `dead_lettered`, `failed`, `claimed`, `reclaimed`. (v0.5.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
 
 ## Attributes
 
@@ -77,7 +78,7 @@ adding a new public API.
 | Command | Purpose | Primary documentation |
 | --- | --- | --- |
 | `make:swarm` | Generate a swarm class. | [README: Your First Swarm](../README.md#your-first-swarm) |
-| `swarm:health` | Verify configured stores and durable tables. | [README: Installation](../README.md#installation), [Maintenance](maintenance.md) |
+| `swarm:health` | Verify configured stores, durable tables, and audit-outbox state. Options: `--durable` (durable infrastructure only), `--audit` (audit-outbox checks only; v0.5.0+). | [README: Installation](../README.md#installation), [Maintenance](maintenance.md) |
 | `swarm:status` | Inspect a run status from persisted history. | [Persistence And History](persistence-and-history.md#inspecting-run-history-in-the-console) |
 | `swarm:history` | List persisted run history. | [Persistence And History](persistence-and-history.md#inspecting-run-history-in-the-console) |
 | `swarm:inspect` | Inspect durable runtime detail. | [Durable Execution](durable-execution.md#durable-operator-surfaces) |
@@ -86,9 +87,11 @@ adding a new public API.
 | `swarm:pause` | Pause a durable run at the next safe boundary. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover) |
 | `swarm:resume` | Resume a paused durable run. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover) |
 | `swarm:cancel` | Cancel a durable run. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover) |
-| `swarm:relay` | Drain the durable outbox and dispatch queued step/branch jobs. Must be scheduled (`everyMinute()`). Options: `--type=step\|branch`, `--limit=N`, `--drain-until-empty`, `--max-attempts=N`. | [Maintenance](maintenance.md#scheduling) |
+| `swarm:relay` | Drain the durable outbox and audit outbox in a single pass, dispatching queued step/branch jobs and replaying failed audit evidence. Must be scheduled (`everyMinute()`). Options: `--type=step\|branch\|audit` (v0.5.0 adds the `audit` lane), `--limit=N`, `--drain-until-empty`, `--max-attempts=N`. | [Maintenance](maintenance.md#scheduling) |
 | `swarm:recover` | Redispatch recoverable durable work. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover), [Maintenance](maintenance.md#scheduling) |
 | `swarm:prune` | Remove expired database persistence rows. | [Maintenance](maintenance.md#pruning-expired-records) |
+| `swarm:audit:status` | Summarize the audit outbox — counts, age distribution, top dead-letter categories, oldest rows, and retention. Option: `--json`. (v0.6.0+) | [Audit Outbox Operator Runbook](operator-runbook-audit-outbox.md) |
+| `swarm:audit:reconcile` | Forensic CLI for audit-outbox triage. Defaults to `list`; gains `--show=<id>`, `--requeue=<id>`, and `--dismiss=<id> --reason="..."` for dead-letter rows. Options: `--status`, `--limit`, `--json`, `--force`. (v0.6.0+) | [Audit Outbox Operator Runbook](operator-runbook-audit-outbox.md) |
 
 ## Extension Points
 
@@ -121,6 +124,7 @@ adding a new public API.
 | `CaptureDecision` | Enum of capture outcomes (`Full`, `Redact`, `Skip`). | [Audit Evidence Contract](audit-evidence-contract.md#capture-policy) |
 | `SwarmAuditSigner` | Sign audit envelopes for tamper-evident chains. | [Audit Evidence Contract](audit-evidence-contract.md#audit-signing) |
 | `SinkFailureHandler` | Decide how to react when an audit sink throws. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
-| `SinkFailureDecision` | Enum of sink failure outcomes (`Swallow`, `RetryInline`, `Halt`). | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
+| `SinkFailureDecision` | Enum of sink failure outcomes (`Swallow`, `RetryInline`, `Halt`, `Queue`, `DeadLetter`). `Queue` and `DeadLetter` added in v0.5.0 alongside the audit outbox. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
+| `AuditOutbox` | Persisted retry surface for audit evidence that failed to emit. Drained by `swarm:relay --type=audit`. (v0.5.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
 | `HaltsSwarmExecution` | Marker interface for sink failure exceptions that must halt the run. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `AuditSinkHaltedException` | Raised when a sink failure handler halts execution. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
