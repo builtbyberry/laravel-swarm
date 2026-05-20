@@ -49,6 +49,12 @@ class SwarmTraceCommand extends Command
         If the bound sink is NoOpSwarmAuditSink, the same note explains that the
         default discarding sink cannot supply sink-side records.
 
+        SECURITY: this command UNSEALS encrypted-at-rest audit-outbox data on
+        output (last_error always; full payload under --include-payloads). In
+        regulated environments do not redirect the output to durable storage
+        outside your sealed audit store. See docs/audit-evidence-contract.md
+        "Security and retention".
+
         Examples:
           php artisan swarm:trace r-abc123
           php artisan swarm:trace r-abc123 --json

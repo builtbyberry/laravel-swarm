@@ -1037,7 +1037,42 @@ Default output is a human-readable table with one row per evidence record
 `--json` mirrors the `swarm:audit:status` and `swarm:audit:reconcile` shape
 for scrapers. `--include-payloads` attaches the full envelope per record
 (off by default — payloads can be large and the default summary is meant to
-fit on a screen). The command is read-only and never mutates the chain.
+fit on a screen). `--limit=N` (default 1000) bounds sink-side reads so a
+long-running run cannot exhaust memory; outbox and history rows are
+bounded by the run itself and are not subject to this limit. The command
+is read-only and never mutates the chain.
+
+### Security and retention
+
+`swarm:trace` is a **forensic tool** that **unseals** encrypted-at-rest
+audit-outbox data on output:
+
+- `last_error` is unsealed for the timeline regardless of flags. The
+  truncated form (60 chars) appears in the human table; the full form
+  appears under `--json`.
+- The full sealed payload is unsealed and emitted only under
+  `--include-payloads`. Off by default for exactly this reason.
+
+In regulated environments (21 CFR Part 11, SOC 2, HIPAA) the unsealed
+output should be treated like any other audit evidence export:
+
+- **Do not redirect the output to durable storage** that lives outside
+  your sealed audit store. Piping `--json` to a file, log aggregator, or
+  monitoring scraper persists cleartext (including `last_error` and, with
+  `--include-payloads`, full payloads) in a system that may not carry
+  the same retention, access, or seal guarantees as your bound sink.
+- **Operator access to `swarm:trace` should be gated** by the same
+  controls that gate access to your audit sink itself. Running the
+  command is read-only against audit state but produces an unsealed view
+  of that state on stdout.
+- **Treat triage output as transient.** Use the command interactively
+  during incident response; do not embed it in automation pipelines that
+  retain the output. The `command.audit_reconcile` audit category exists
+  precisely so that mutating triage actions land as new sealed evidence;
+  read-only forensics intentionally does not emit evidence of itself.
+
+The command does **not** mutate the audit chain. No emit, no signature
+re-issue, no outbox state change.
 
 ## Metadata Governance
 
