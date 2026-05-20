@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.0 - unreleased
+
+DX + test rigor.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.6.0 - 2026-05-20
 
 Operator UX, developer experience, and test coverage on top of the v0.5 audit outbox foundation. No new public-surface contracts. No migration changes. No breaking changes.
