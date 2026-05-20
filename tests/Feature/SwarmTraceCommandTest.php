@@ -8,6 +8,8 @@ use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\ConnectionResolverInterface;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -523,6 +525,44 @@ test('sink throwing a RuntimeException surfaces in notes without crashing', func
 
     expect($payload['sources']['sink']['record_count'])->toBe(0);
     expect(implode("\n", $payload['notes']))->toContain('downstream sink unavailable');
+});
+
+// -----------------------------------------------------------------------------
+// Lazy DB Connection resolution on cache driver (review F5)
+// -----------------------------------------------------------------------------
+
+test('swarm:trace does not resolve a database Connection on cache driver', function (): void {
+    config()->set('swarm.persistence.driver', 'cache');
+    app()->forgetInstance(AuditOutbox::class);
+    bindReadableSinkRecords([]);
+
+    // Replace the bound ConnectionResolver with a strict spy that fails the
+    // test if the command resolves a connection in cache-driver mode. The
+    // outbox is unavailable on cache driver, so collectOutboxRecords()
+    // should never run.
+    $strictResolver = new class implements ConnectionResolverInterface
+    {
+        public bool $connectionCalled = false;
+
+        public function connection($name = null): ConnectionInterface
+        {
+            $this->connectionCalled = true;
+            throw new \RuntimeException('Connection was resolved despite cache-driver setup.');
+        }
+
+        public function getDefaultConnection()
+        {
+            return 'testing';
+        }
+
+        public function setDefaultConnection($name): void {}
+    };
+    app()->instance(ConnectionResolverInterface::class, $strictResolver);
+
+    $exit = Artisan::call('swarm:trace', ['run_id' => 'r-cache-lazy', '--json' => true]);
+
+    expect($exit)->toBe(0);
+    expect($strictResolver->connectionCalled)->toBeFalse();
 });
 
 test('sink throwing a TypeError surfaces in notes AND is logged via Log::error', function (): void {

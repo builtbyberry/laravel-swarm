@@ -15,7 +15,8 @@ use Error;
 use Exception;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Database\Connection;
+use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\ConnectionResolverInterface;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -64,7 +65,7 @@ class SwarmTraceCommand extends Command
 
     public function handle(
         ConfigRepository $config,
-        Connection $connection,
+        ConnectionResolverInterface $connectionResolver,
         SwarmPersistenceCipher $cipher,
         RunHistoryStore $history,
         AuditOutbox $outbox,
@@ -126,7 +127,7 @@ class SwarmTraceCommand extends Command
 
         $outboxAvailable = $outbox->isAvailable();
         $outboxRecords = $outboxAvailable
-            ? $this->collectOutboxRecords($config, $connection, $cipher, $runId)
+            ? $this->collectOutboxRecords($config, $connectionResolver->connection(), $cipher, $runId)
             : [];
 
         $historyRecord = $history->find($runId);
@@ -281,9 +282,16 @@ class SwarmTraceCommand extends Command
         $category = isset($record['category']) ? (string) $record['category'] : 'unknown';
         $rawPayload = $record['payload'] ?? null;
 
-        // Sinks may flatten the envelope at the top level. Treat the whole
-        // record as the payload in that case.
-        $payload = is_array($rawPayload) ? $rawPayload : $record;
+        if (is_array($rawPayload)) {
+            $payload = $rawPayload;
+        } else {
+            // Sinks may flatten the envelope at the top level. Treat the whole
+            // record as the payload in that case, but strip the meta fields we
+            // already surface at the timeline level — otherwise category /
+            // occurred_at / run_id appear duplicated under --include-payloads.
+            $payload = $record;
+            unset($payload['category'], $payload['occurred_at'], $payload['run_id']);
+        }
 
         $occurredAt = $record['occurred_at'] ?? ($payload['occurred_at'] ?? null);
 
@@ -300,7 +308,7 @@ class SwarmTraceCommand extends Command
     /**
      * @return array<int, array<string, mixed>>
      */
-    protected function collectOutboxRecords(ConfigRepository $config, Connection $connection, SwarmPersistenceCipher $cipher, string $runId): array
+    protected function collectOutboxRecords(ConfigRepository $config, ConnectionInterface $connection, SwarmPersistenceCipher $cipher, string $runId): array
     {
         $table = (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox');
 

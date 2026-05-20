@@ -120,7 +120,11 @@ class RunContext
         );
 
         if (array_key_exists('actor', $overrides)) {
-            $context->withActor($overrides['actor']);
+            // Reassign the return even though withActor() mutates $this->metadata
+            // in place today and returns $this. A future refactor toward true
+            // immutability would silently break the fake helper otherwise; the
+            // reassignment costs nothing and futureproofs the call.
+            $context = $context->withActor($overrides['actor']);
         }
 
         return $context;
