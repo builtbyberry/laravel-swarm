@@ -11,25 +11,10 @@ use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\AuditSinkHaltedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\CountingThrowingSink;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Support\Facades\Log;
 use Psr\Log\NullLogger;
-
-class CountingThrowingSink implements SwarmAuditSink
-{
-    public int $attempts = 0;
-
-    public function __construct(private readonly int $failFirstN = PHP_INT_MAX) {}
-
-    public function emit(string $category, array $payload): void
-    {
-        $this->attempts++;
-
-        if ($this->attempts <= $this->failFirstN) {
-            throw new RuntimeException("sink failure #{$this->attempts}");
-        }
-    }
-}
 
 class StubFailureHandler implements SinkFailureHandler
 {

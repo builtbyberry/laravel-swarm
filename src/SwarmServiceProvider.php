@@ -12,6 +12,8 @@ use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\RunAuditEmitter;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditReconcileCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditStatusCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
@@ -49,6 +51,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use BuiltByBerry\LaravelSwarm\Pulse\Livewire\AuditOutbox as AuditOutboxCard;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmSteps;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
@@ -253,6 +256,7 @@ class SwarmServiceProvider extends ServiceProvider
             $this->callAfterResolving('livewire', function (LivewireManager $livewire): void {
                 $livewire->component('swarm.runs', SwarmRuns::class);
                 $livewire->component('swarm.steps', SwarmSteps::class);
+                $livewire->component('swarm.audit-outbox', AuditOutboxCard::class);
             });
         }
 
@@ -280,6 +284,8 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmCancelCommand::class,
                 SwarmRecoverCommand::class,
                 SwarmRelayCommand::class,
+                SwarmAuditStatusCommand::class,
+                SwarmAuditReconcileCommand::class,
                 SwarmSignalCommand::class,
                 SwarmInspectCommand::class,
                 SwarmProgressCommand::class,

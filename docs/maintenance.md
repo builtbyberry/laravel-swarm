@@ -246,6 +246,10 @@ When to use: parallel or hierarchical durable swarms in production.
 
 ## Audit outbox
 
+If you are responding to a page, see the
+[Operator Runbook: Audit Outbox Triage](operator-runbook-audit-outbox.md).
+This section is the reference; the runbook is the decision tree.
+
 Since v0.5.0, `SWARM_AUDIT_FAILURE_POLICY` defaults to `queue` and audit
 sink failures are persisted to a new `swarm_audit_outbox` table for retry
 through the same `swarm:relay` schedule that handles durable dispatches.
@@ -304,6 +308,52 @@ lifecycle). `swarm.retention.prevent_prune=true` overrides as usual.
 
 See [Audit Evidence Contract](audit-evidence-contract.md) for the full
 retry, encryption-at-rest, and signer-rotation behavior.
+
+### Forensic triage: `swarm:audit:reconcile`
+
+`swarm:audit:reconcile` is the operator command for inspecting and
+reconciling rows that the relay has either failed or dead-lettered. It
+requires the database persistence driver; on cache the command exits
+non-zero with a clear error.
+
+Four sub-modes (mutually exclusive):
+
+```bash
+# List pending and dead_letter rows (capped at --limit, default 50)
+php artisan swarm:audit:reconcile
+php artisan swarm:audit:reconcile --status=dead_letter --limit=200
+
+# Inspect a single row, including unsealed payload and last_error
+php artisan swarm:audit:reconcile --show=42
+
+# Reset a dead_letter row to pending so the relay re-attempts emission.
+# attempts is zeroed; last_error is preserved as forensic evidence.
+php artisan swarm:audit:reconcile --requeue=42 --reason="sink restored"
+
+# Permanently delete a dead_letter row. --reason is REQUIRED — audit
+# evidence cannot be discarded without a chain-of-custody justification.
+php artisan swarm:audit:reconcile --dismiss=42 --reason="duplicate of r-7"
+```
+
+Pending rows can be listed and shown but cannot be requeued or
+dismissed; the relay owns their lifecycle. Both `--requeue` and
+`--dismiss` prompt for confirmation; use `--force` for scripted
+recovery. Every sub-mode accepts `--json` for automation. When
+scripting a loop with `--json`, also pass `--force` to confirm
+requeue/dismiss; without it the command exits with a `force_required`
+error envelope rather than silently aborting.
+
+Every requeue or dismiss emits a `command.audit_reconcile` audit record
+carrying `action`, `target_id`, `target_category`, `target_run_id`,
+`prior_attempts`, and `reason` **before** mutating the row. `--show`
+emits the same category with `action=show` and no payload contents so
+reads are counted in the audit chain. Dismiss emits also include a
+`target_payload_digest` (sha256 hex of the stored payload bytes) so the
+deleted row can be tied back to a forensic backup of the table without
+unsealing. If the audit emit fails outright (for example under
+`failure_policy=halt`), the row is left untouched. Under the default
+`queue` policy, the reconcile record is itself enqueued for retry —
+evidence is preserved in the outbox even when the sink is unavailable.
 
 ## High-volume dashboards
 
