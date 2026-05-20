@@ -21,6 +21,8 @@ class SwarmAuditReconcileCommand extends Command
 {
     use ResolvesStringConsoleInput;
 
+    protected ?string $reconcileAuditError = null;
+
     protected $signature = 'swarm:audit:reconcile
                             {--show= : Print full metadata and unsealed payload for the given outbox id.}
                             {--requeue= : Reset a dead_letter row to pending so the relay re-attempts emission.}
@@ -97,7 +99,7 @@ class SwarmAuditReconcileCommand extends Command
         }
 
         return match ($mode) {
-            'show' => $this->runShow($config, $connection, $cipher, $id),
+            'show' => $this->runShow($config, $connection, $cipher, $audit, $id),
             'requeue' => $this->runRequeue($config, $connection, $audit, $id),
             'dismiss' => $this->runDismiss($config, $connection, $audit, $id),
             default => self::FAILURE,
@@ -129,7 +131,7 @@ class SwarmAuditReconcileCommand extends Command
         $rows = $rows->take($limit);
 
         $now = Carbon::now('UTC');
-        $records = $rows->map(fn (object $row): array => [
+        $records = $rows->map(fn (\stdClass $row): array => [
             'id' => (int) $row->id,
             'status' => (string) $row->status,
             'category' => (string) $row->category,
@@ -178,7 +180,7 @@ class SwarmAuditReconcileCommand extends Command
         return self::SUCCESS;
     }
 
-    protected function runShow(ConfigRepository $config, Connection $connection, SwarmPersistenceCipher $cipher, int $id): int
+    protected function runShow(ConfigRepository $config, Connection $connection, SwarmPersistenceCipher $cipher, SwarmAuditDispatcher $audit, int $id): int
     {
         $row = $this->findRow($config, $connection, $id);
 
@@ -203,10 +205,16 @@ class SwarmAuditReconcileCommand extends Command
             'payload' => $payload,
         ];
 
-        if ($this->option('json') === true) {
-            $this->writeJson(['ok' => true, 'row' => $detail]);
+        $auditEmitted = $this->emitReconcileAudit($audit, 'show', $row, (int) $row->attempts, null);
 
-            return self::SUCCESS;
+        if ($this->option('json') === true) {
+            $this->writeJson([
+                'ok' => $auditEmitted,
+                'row' => $detail,
+                'audit_emitted' => $auditEmitted,
+            ]);
+
+            return $auditEmitted ? self::SUCCESS : self::FAILURE;
         }
 
         $this->table(['Field', 'Value'], [
@@ -229,11 +237,21 @@ class SwarmAuditReconcileCommand extends Command
         $this->components->info('Payload');
         $this->line($this->prettyJson($payload));
 
+        if (! $auditEmitted) {
+            $this->components->warn('Read audit chain is broken: command.audit_reconcile emit failed. The row above was already in memory; rerun once the audit sink is healthy.');
+
+            return self::FAILURE;
+        }
+
         return self::SUCCESS;
     }
 
     protected function runRequeue(ConfigRepository $config, Connection $connection, SwarmAuditDispatcher $audit, int $id): int
     {
+        if (($forceFailure = $this->requireForceForJsonMutation()) !== null) {
+            return $forceFailure;
+        }
+
         $row = $this->findRow($config, $connection, $id);
 
         if ($row === null) {
@@ -253,7 +271,10 @@ class SwarmAuditReconcileCommand extends Command
         $priorAttempts = (int) $row->attempts;
 
         if (! $this->emitReconcileAudit($audit, 'requeue', $row, $priorAttempts, $reason)) {
-            return self::FAILURE;
+            return $this->failWith(
+                "Failed to emit command.audit_reconcile evidence: {$this->reconcileAuditError}. "
+                .'The outbox row was NOT modified.',
+            );
         }
 
         $connection->table($this->tableName($config))
@@ -284,6 +305,10 @@ class SwarmAuditReconcileCommand extends Command
 
     protected function runDismiss(ConfigRepository $config, Connection $connection, SwarmAuditDispatcher $audit, int $id): int
     {
+        if (($forceFailure = $this->requireForceForJsonMutation()) !== null) {
+            return $forceFailure;
+        }
+
         $reason = $this->optionalOptionString('reason');
 
         if ($reason === null || trim($reason) === '') {
@@ -307,7 +332,10 @@ class SwarmAuditReconcileCommand extends Command
         $priorAttempts = (int) $row->attempts;
 
         if (! $this->emitReconcileAudit($audit, 'dismiss', $row, $priorAttempts, $reason)) {
-            return self::FAILURE;
+            return $this->failWith(
+                "Failed to emit command.audit_reconcile evidence: {$this->reconcileAuditError}. "
+                .'The outbox row was NOT modified.',
+            );
         }
 
         $connection->table($this->tableName($config))->where('id', $id)->delete();
@@ -329,8 +357,10 @@ class SwarmAuditReconcileCommand extends Command
         return self::SUCCESS;
     }
 
-    protected function emitReconcileAudit(SwarmAuditDispatcher $audit, string $action, object $row, int $priorAttempts, ?string $reason): bool
+    protected function emitReconcileAudit(SwarmAuditDispatcher $audit, string $action, \stdClass $row, int $priorAttempts, ?string $reason): bool
     {
+        $this->reconcileAuditError = null;
+
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
         $now = Carbon::now('UTC');
 
@@ -340,21 +370,26 @@ class SwarmAuditReconcileCommand extends Command
             'target_category' => (string) $row->category,
             'target_run_id' => $row->run_id !== null ? (string) $row->run_id : null,
             'prior_attempts' => $priorAttempts,
-            'reason' => $reason,
             'target_created_at' => $this->formatTimestamp($row->created_at),
             'target_age_seconds' => $this->ageSeconds($row->created_at, $now),
-            ...$audit->metadata($actorMetadata),
         ];
+
+        if ($action !== 'show') {
+            $payload['reason'] = $reason;
+        }
+
+        if ($action === 'dismiss') {
+            $payload['target_payload_digest'] = hash('sha256', is_string($row->payload) ? $row->payload : '');
+        }
+
+        $payload = [...$payload, ...$audit->metadata($actorMetadata)];
 
         try {
             $audit->emit('command.audit_reconcile', $payload);
 
             return true;
         } catch (Throwable $exception) {
-            $this->failWith(
-                "Failed to emit command.audit_reconcile evidence: {$exception->getMessage()}. "
-                .'The outbox row was NOT modified.',
-            );
+            $this->reconcileAuditError = $exception->getMessage();
 
             return false;
         }
@@ -366,28 +401,36 @@ class SwarmAuditReconcileCommand extends Command
             return true;
         }
 
-        if ($this->option('json') === true) {
-            return false;
-        }
-
-        if (! $this->input->isInteractive()) {
+        if (! $this->input->isInteractive() || $this->option('json') === true) {
             return false;
         }
 
         return $this->confirm($prompt, false);
     }
 
-    protected function findRow(ConfigRepository $config, Connection $connection, int $id): ?object
+    protected function requireForceForJsonMutation(): ?int
+    {
+        if ($this->option('json') !== true || $this->option('force') === true) {
+            return null;
+        }
+
+        $message = 'Non-interactive automation requires --force to confirm requeue/dismiss.';
+        $this->writeJson(['ok' => false, 'error' => 'force_required', 'message' => $message]);
+
+        return self::FAILURE;
+    }
+
+    protected function findRow(ConfigRepository $config, Connection $connection, int $id): ?\stdClass
     {
         $row = $connection->table($this->tableName($config))->where('id', $id)->first();
 
-        return is_object($row) ? $row : null;
+        return $row instanceof \stdClass ? $row : null;
     }
 
     /**
      * @return array<string, mixed>|string|null
      */
-    protected function decodePayload(SwarmPersistenceCipher $cipher, object $row): array|string|null
+    protected function decodePayload(SwarmPersistenceCipher $cipher, \stdClass $row): array|string|null
     {
         $raw = is_string($row->payload) ? $cipher->open($row->payload) : null;
 
@@ -404,7 +447,7 @@ class SwarmAuditReconcileCommand extends Command
         return is_array($decoded) ? $decoded : $raw;
     }
 
-    protected function decodeLastError(SwarmPersistenceCipher $cipher, object $row): ?string
+    protected function decodeLastError(SwarmPersistenceCipher $cipher, \stdClass $row): ?string
     {
         if (! is_string($row->last_error) || $row->last_error === '') {
             return null;

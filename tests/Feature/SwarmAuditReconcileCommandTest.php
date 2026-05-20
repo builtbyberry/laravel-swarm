@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\CountingThrowingSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -181,6 +182,55 @@ test('--show with an unknown id returns a clear error', function (): void {
     expect(Artisan::output())->toContain('not found');
 });
 
+test('--show emits a command.audit_reconcile evidence record with action=show and no payload contents', function (): void {
+    $sink = reconcileRecordingSink();
+    $id = seedReconcileRow('dead_letter', [
+        'attempts' => 4,
+        'run_id' => 'r-show',
+        'payload' => ['run_id' => 'r-show', 'category' => 'run.failed', 'secret' => 'should-not-leak'],
+    ]);
+
+    $exit = Artisan::call('swarm:audit:reconcile', ['--show' => (string) $id]);
+
+    expect($exit)->toBe(0);
+
+    $records = $sink->recordsForCategory('command.audit_reconcile');
+    expect($records)->toHaveCount(1);
+    expect($records[0]['action'])->toBe('show');
+    expect($records[0]['target_id'])->toBe($id);
+    expect($records[0]['target_category'])->toBe('run.failed');
+    expect($records[0]['target_run_id'])->toBe('r-show');
+    expect($records[0]['prior_attempts'])->toBe(4);
+    expect($records[0])->toHaveKey('target_created_at');
+    expect($records[0])->toHaveKey('target_age_seconds');
+    expect(array_keys($records[0]))->not->toContain('payload');
+    expect(array_keys($records[0]))->not->toContain('reason');
+    expect(array_keys($records[0]))->not->toContain('target_payload_digest');
+});
+
+test('--show --json includes audit_emitted=true on the successful read path', function (): void {
+    reconcileRecordingSink();
+    $id = seedReconcileRow('dead_letter');
+
+    Artisan::call('swarm:audit:reconcile', ['--show' => (string) $id, '--json' => true]);
+    $decoded = json_decode(Artisan::output(), true);
+
+    expect($decoded['ok'])->toBeTrue();
+    expect($decoded['audit_emitted'])->toBeTrue();
+});
+
+test('--show exits non-zero with a clear warning when the audit emit fails, but still prints the row', function (): void {
+    $id = seedReconcileRow('dead_letter', ['payload' => ['secret' => 'visible-x']]);
+    bindFailingDispatcher();
+
+    $exit = Artisan::call('swarm:audit:reconcile', ['--show' => (string) $id]);
+
+    expect($exit)->toBe(1);
+    $output = Artisan::output();
+    expect($output)->toContain('visible-x');
+    expect($output)->toContain('Read audit chain is broken');
+});
+
 // -----------------------------------------------------------------------------
 // Requeue
 // -----------------------------------------------------------------------------
@@ -256,6 +306,48 @@ test('--requeue without --force aborts when no operator confirms (non-interactiv
     expect($sink->recordsForCategory('command.audit_reconcile'))->toHaveCount(0);
 });
 
+test('--requeue --json without --force exits with a force_required error envelope', function (): void {
+    $sink = reconcileRecordingSink();
+    $id = seedReconcileRow('dead_letter');
+
+    $exit = Artisan::call('swarm:audit:reconcile', [
+        '--requeue' => (string) $id,
+        '--json' => true,
+    ]);
+
+    expect($exit)->toBe(1);
+
+    $decoded = json_decode(Artisan::output(), true);
+    expect($decoded['ok'])->toBeFalse();
+    expect($decoded['error'])->toBe('force_required');
+    expect($decoded['message'])->toContain('Non-interactive automation requires --force');
+
+    $row = DB::table('swarm_audit_outbox')->where('id', $id)->first();
+    expect($row->status)->toBe('dead_letter');
+    expect($sink->recordsForCategory('command.audit_reconcile'))->toHaveCount(0);
+});
+
+test('--dismiss --json without --force exits with a force_required error envelope', function (): void {
+    $sink = reconcileRecordingSink();
+    $id = seedReconcileRow('dead_letter');
+
+    $exit = Artisan::call('swarm:audit:reconcile', [
+        '--dismiss' => (string) $id,
+        '--reason' => 'scripted',
+        '--json' => true,
+    ]);
+
+    expect($exit)->toBe(1);
+
+    $decoded = json_decode(Artisan::output(), true);
+    expect($decoded['ok'])->toBeFalse();
+    expect($decoded['error'])->toBe('force_required');
+    expect($decoded['message'])->toContain('Non-interactive automation requires --force');
+
+    expect(DB::table('swarm_audit_outbox')->where('id', $id)->exists())->toBeTrue();
+    expect($sink->recordsForCategory('command.audit_reconcile'))->toHaveCount(0);
+});
+
 test('--requeue proceeds when confirmation is given interactively', function (): void {
     $sink = reconcileRecordingSink();
     $id = seedReconcileRow('dead_letter');
@@ -293,6 +385,29 @@ test('--dismiss deletes a dead_letter row and emits the audit record with reason
     expect($records[0]['target_category'])->toBe('run.failed');
     expect($records[0]['prior_attempts'])->toBe(7);
     expect($records[0]['reason'])->toBe('duplicate of run.failed for r-7');
+});
+
+test('--dismiss emits target_payload_digest as sha256 of the stored (sealed) payload bytes', function (): void {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $sink = reconcileRecordingSink();
+    $id = seedReconcileRow('dead_letter', [
+        'payload' => ['run_id' => 'r-digest', 'category' => 'run.failed', 'secret' => 'forensic-digest-x'],
+    ]);
+
+    $storedPayload = (string) DB::table('swarm_audit_outbox')->where('id', $id)->value('payload');
+    $expectedDigest = hash('sha256', $storedPayload);
+
+    Artisan::call('swarm:audit:reconcile', [
+        '--dismiss' => (string) $id,
+        '--reason' => 'forensic digest test',
+        '--force' => true,
+    ]);
+
+    $records = $sink->recordsForCategory('command.audit_reconcile');
+    expect($records)->toHaveCount(1);
+    expect($records[0])->toHaveKey('target_payload_digest');
+    expect($records[0]['target_payload_digest'])->toMatch('/^[0-9a-f]{64}$/');
+    expect($records[0]['target_payload_digest'])->toBe($expectedDigest);
 });
 
 test('--dismiss requires --reason and refuses without it', function (): void {
@@ -416,4 +531,48 @@ test('combining --show with --requeue is rejected', function (): void {
 
     expect($exit)->toBe(1);
     expect(Artisan::output())->toContain('Use only one of');
+});
+
+// -----------------------------------------------------------------------------
+// F6: evidence survives a failing sink under the default queue policy
+// -----------------------------------------------------------------------------
+
+test('--dismiss survives a failing sink under the default queue failure policy and preserves evidence in the outbox', function (): void {
+    config()->set('swarm.audit.failure_policy', 'queue');
+
+    $failingSink = new CountingThrowingSink;
+    app()->instance(SwarmAuditSink::class, $failingSink);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    $id = seedReconcileRow('dead_letter', [
+        'run_id' => 'r-forensic',
+        'attempts' => 5,
+    ]);
+
+    $exit = Artisan::call('swarm:audit:reconcile', [
+        '--dismiss' => (string) $id,
+        '--reason' => 'forensic test',
+        '--force' => true,
+    ]);
+
+    expect($exit)->toBe(0);
+    expect(DB::table('swarm_audit_outbox')->where('id', $id)->exists())->toBeFalse();
+
+    $reconcileRow = DB::table('swarm_audit_outbox')
+        ->where('category', 'command.audit_reconcile')
+        ->first();
+
+    expect($reconcileRow)->not->toBeNull();
+    expect($reconcileRow->status)->toBe('pending');
+
+    $unsealed = app(SwarmPersistenceCipher::class)->open((string) $reconcileRow->payload);
+    expect($unsealed)->not->toBeNull();
+    $decoded = json_decode((string) $unsealed, true);
+
+    expect($decoded['action'])->toBe('dismiss');
+    expect($decoded['target_id'])->toBe($id);
+    expect($decoded['target_run_id'])->toBe('r-forensic');
+    expect($decoded['prior_attempts'])->toBe(5);
+    expect($decoded['reason'])->toBe('forensic test');
+    expect($decoded)->toHaveKey('target_payload_digest');
 });

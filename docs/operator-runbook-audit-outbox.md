@@ -52,6 +52,26 @@ php artisan swarm:audit:reconcile --show=<id>
 This unseals the payload and prints `last_error`. Read both. The error
 string is the sink's verbatim rejection.
 
+#### Audit trail of reads
+
+Every `--show` invocation emits a `command.audit_reconcile` evidence
+record with `action=show` so reads are counted in the audit chain. The
+emit carries `target_id`, `target_category`, `target_run_id`,
+`prior_attempts`, `target_created_at`, and `target_age_seconds` — but no
+payload contents and no `reason` (reads do not require justification,
+only accounting).
+
+Shell access to `swarm:audit:reconcile --show` is operator-trusted.
+Treat the command's reach the same way you treat database read access.
+The audit emit accounts for individual reads but does not authorize
+them — host-access controls are still where you gate who can run this
+in the first place.
+
+If the audit sink itself is unavailable when you run `--show`, the
+command still prints the row (read-only, already in memory) but exits
+non-zero with a clear warning so the broken audit chain is visible.
+Rerun once the sink recovers.
+
 ### Step 3 — Decide
 
 Match `last_error` (and, if needed, the sink's own logs) against the
@@ -96,8 +116,10 @@ Action:
 
    For more than a handful of rows, script the loop using
    `swarm:audit:reconcile --status=dead_letter --json --limit=200` and
-   feed the IDs into `--requeue=<id>` calls. Use `--force` to skip the
-   interactive confirm.
+   feed the IDs into `--requeue=<id>` calls. Pass `--force` on each
+   call to confirm requeue/dismiss; without it `--json` mutations exit
+   with a `force_required` error envelope rather than silently
+   aborting.
 
 #### Branch C — Evidence is legitimately undeliverable and not worth retrying
 
@@ -114,9 +136,12 @@ php artisan swarm:audit:reconcile --dismiss=<id> --reason="dev-env test run; sin
 
 `--reason` is required. The dismissal emits a `command.audit_reconcile`
 audit record (with `action`, `target_id`, `target_category`,
-`target_run_id`, `prior_attempts`, and `reason`) **before** deleting the
-row. If that audit emit fails, the row is left untouched — dismissal cannot
-silently erase evidence.
+`target_run_id`, `prior_attempts`, `reason`, and `target_payload_digest`)
+**before** deleting the row. If the audit emit fails outright (for example
+under `failure_policy=halt`), the row is left untouched. Under the default
+`queue` policy, the reconcile record is itself enqueued for retry —
+evidence is preserved in the outbox even when the sink is unavailable, so
+dismissal never silently erases evidence.
 
 For regulated workloads, document the dismissal in your operations log
 alongside the audit chain-of-custody record. "Consult your compliance
