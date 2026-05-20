@@ -1,0 +1,169 @@
+name: tests (real DB)
+
+# Enforces the `skip-locked-real-db` group from `composer test:process-concurrency:real-db`
+# against actual MySQL and Postgres service containers. The default `tests` workflow runs
+# the process-concurrency suite against in-memory SQLite, which honors neither cross-process
+# state nor `FOR UPDATE SKIP LOCKED` — so the audit outbox concurrency contract can only
+# be enforced here.
+#
+# Two jobs instead of a single `services:` matrix because GitHub Actions does not let you
+# disable a service per matrix leg: every service block in a job is started for every leg.
+# Splitting keeps each leg's container set minimal and the failure surface clear.
+#
+# If you add another `skip-locked-real-db` test, no workflow change is required; this lane
+# already runs the whole group via the `--group=skip-locked-real-db` composer script.
+
+on:
+  push:
+    branches:
+      - main
+      - '*.x'
+  pull_request:
+
+jobs:
+  tests-real-db-mysql:
+    name: PHP 8.5 - real DB (mysql-8)
+    runs-on: ubuntu-24.04
+
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: laravel_swarm_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_DATABASE: laravel_swarm_test
+      DB_USERNAME: root
+      DB_PASSWORD: root
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          extensions: pdo, pdo_mysql
+          coverage: none
+          ini-values: memory_limit=512M
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      # testbench-core no longer auto-creates this symlink in some versions; the
+      # process-concurrency tests spawn a real artisan subprocess that needs it.
+      - name: Prepare testbench vendor symlink
+        run: |
+          if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
+            ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
+          fi
+
+      # Belt-and-suspenders: the service container health checks should make this
+      # unnecessary, but a deterministic probe gives a clearer failure message if
+      # the container never becomes ready.
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h "${DB_HOST}" -P "${DB_PORT}" -uroot -p"${DB_PASSWORD}" --silent >/dev/null 2>&1; then
+              echo "MySQL is up after ${i}s."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MySQL did not become ready in time." >&2
+          exit 1
+
+      # `--fail-on-skipped` is intentional inside the composer script: if the env
+      # vars above don't route the testbench `testing` connection to a real backend,
+      # AuditOutboxConcurrencyTest will skip with the "requires a shared database
+      # engine" message and this step will fail loudly — exactly what we want,
+      # because a silent skip would let the SKIP LOCKED contract regress unnoticed.
+      - name: Execute real-DB process concurrency suite
+        run: composer test:process-concurrency:real-db
+
+  tests-real-db-postgres:
+    name: PHP 8.5 - real DB (postgres-16)
+    runs-on: ubuntu-24.04
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: laravel_swarm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_DATABASE: laravel_swarm_test
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          extensions: pdo, pdo_pgsql
+          coverage: none
+          ini-values: memory_limit=512M
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      # testbench-core no longer auto-creates this symlink in some versions; the
+      # process-concurrency tests spawn a real artisan subprocess that needs it.
+      - name: Prepare testbench vendor symlink
+        run: |
+          if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
+            ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
+          fi
+
+      # Belt-and-suspenders: the service container health checks should make this
+      # unnecessary, but a deterministic probe gives a clearer failure message if
+      # the container never becomes ready.
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 30); do
+            if PGPASSWORD="${DB_PASSWORD}" pg_isready -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USERNAME}" >/dev/null 2>&1; then
+              echo "Postgres is up after ${i}s."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres did not become ready in time." >&2
+          exit 1
+
+      # `--fail-on-skipped` is intentional inside the composer script: if the env
+      # vars above don't route the testbench `testing` connection to a real backend,
+      # AuditOutboxConcurrencyTest will skip with the "requires a shared database
+      # engine" message and this step will fail loudly — exactly what we want,
+      # because a silent skip would let the SKIP LOCKED contract regress unnoticed.
+      - name: Execute real-DB process concurrency suite
+        run: composer test:process-concurrency:real-db
