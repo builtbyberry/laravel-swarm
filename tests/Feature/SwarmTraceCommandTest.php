@@ -416,3 +416,81 @@ test('default human output renders a timeline table', function (): void {
     expect($output)->toContain('history.started');
     expect($output)->toContain('Occurred at');
 });
+
+// -----------------------------------------------------------------------------
+// --limit guards unbounded sink reads (review F6)
+// -----------------------------------------------------------------------------
+
+test('--limit truncates sink-side records and surfaces a clear note', function (): void {
+    $runId = 'r-truncated';
+    seedTraceHistoryRow($runId);
+
+    // Seed 5 sink records; --limit=3 should consume only the first three and
+    // mark the result as truncated. Outbox + history rows are unaffected.
+    $records = [];
+    for ($i = 0; $i < 5; $i++) {
+        $records[] = [
+            'run_id' => $runId,
+            'category' => 'run.started',
+            'occurred_at' => Carbon::now('UTC')->addSeconds($i)->toIso8601String(),
+            'payload' => ['run_id' => $runId, 'category' => 'run.started', 'seq' => $i],
+        ];
+    }
+    bindReadableSinkRecords($records);
+
+    $exit = Artisan::call('swarm:trace', [
+        'run_id' => $runId,
+        '--json' => true,
+        '--limit' => 3,
+    ]);
+
+    expect($exit)->toBe(0);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($payload['sources']['sink']['record_count'])->toBe(3);
+    expect($payload['sources']['sink']['limit'])->toBe(3);
+    expect($payload['sources']['sink']['truncated'])->toBeTrue();
+    expect($payload['notes'])->toContain(
+        'Sink returned more than --limit=3 records; sink-side records were truncated. Pass a higher --limit if needed.'
+    );
+});
+
+test('--limit not exceeded leaves truncated=false and no note', function (): void {
+    $runId = 'r-within-limit';
+    seedTraceHistoryRow($runId);
+
+    bindReadableSinkRecords([
+        [
+            'run_id' => $runId,
+            'category' => 'run.started',
+            'occurred_at' => Carbon::now('UTC')->toIso8601String(),
+            'payload' => ['run_id' => $runId, 'category' => 'run.started'],
+        ],
+    ]);
+
+    $exit = Artisan::call('swarm:trace', [
+        'run_id' => $runId,
+        '--json' => true,
+        '--limit' => 10,
+    ]);
+
+    expect($exit)->toBe(0);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+
+    expect($payload['sources']['sink']['truncated'])->toBeFalse();
+    expect($payload['sources']['sink']['limit'])->toBe(10);
+    foreach ($payload['notes'] as $note) {
+        expect($note)->not->toContain('sink-side records were truncated');
+    }
+});
+
+test('--limit=0 is rejected as invalid', function (): void {
+    $exit = Artisan::call('swarm:trace', [
+        'run_id' => 'r-bad-limit',
+        '--limit' => 0,
+    ]);
+
+    expect($exit)->toBe(1);
+});

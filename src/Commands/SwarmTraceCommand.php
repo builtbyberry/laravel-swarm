@@ -26,7 +26,8 @@ class SwarmTraceCommand extends Command
     protected $signature = 'swarm:trace
                             {run_id : The run identifier to reconstruct the audit chain for.}
                             {--json : Emit a machine-readable timeline (mirrors swarm:audit:status / swarm:audit:reconcile JSON shape).}
-                            {--include-payloads : Include the full evidence envelope per record (off by default — payloads can be large).}';
+                            {--include-payloads : Include the full evidence envelope per record (off by default — payloads can be large).}
+                            {--limit=1000 : Maximum number of sink-side records to consume from ReadableSwarmAuditSink::forRun(); guards against unbounded reads on long-lived runs. Outbox and history rows are bounded by the run itself and are not subject to this limit.}';
 
     protected $description = 'Read-only audit-chain reconstruction for a single run — merges history, outbox, and sink-side records into a chronological timeline.';
 
@@ -49,6 +50,7 @@ class SwarmTraceCommand extends Command
           php artisan swarm:trace r-abc123
           php artisan swarm:trace r-abc123 --json
           php artisan swarm:trace r-abc123 --include-payloads
+          php artisan swarm:trace r-abc123 --limit=5000
         HELP;
 
     public function handle(
@@ -66,17 +68,29 @@ class SwarmTraceCommand extends Command
         }
 
         $includePayloads = $this->option('include-payloads') === true;
+        $limit = $this->resolveSinkLimit();
+
+        if ($limit === null) {
+            return $this->failWith('--limit must be a positive integer.');
+        }
 
         $sinkReadability = $this->classifySink($sink);
 
         $sinkRecords = [];
         $sinkError = null;
+        $sinkTruncated = false;
 
         if ($sinkReadability['readable'] && $sink instanceof ReadableSwarmAuditSink) {
             try {
                 foreach ($sink->forRun($runId) as $record) {
                     if (! is_array($record)) {
                         continue;
+                    }
+
+                    if (count($sinkRecords) >= $limit) {
+                        $sinkTruncated = true;
+
+                        break;
                     }
 
                     $sinkRecords[] = $this->normalizeSinkRecord($record);
@@ -137,6 +151,13 @@ class SwarmTraceCommand extends Command
             $notes[] = "ReadableSwarmAuditSink::forRun() threw — sink-side records are partial or empty. Error: {$sinkError}";
         }
 
+        if ($sinkTruncated) {
+            $notes[] = sprintf(
+                'Sink returned more than --limit=%d records; sink-side records were truncated. Pass a higher --limit if needed.',
+                $limit,
+            );
+        }
+
         if ($historyRecord === null) {
             $notes[] = "No run history record found for run_id={$runId}. The run may have been pruned, never started, or the history store is on a different driver than expected.";
         }
@@ -151,6 +172,8 @@ class SwarmTraceCommand extends Command
                     'reason' => $sinkReadability['reason'],
                     'sink_class' => $sinkReadability['sink_class'],
                     'record_count' => count($sinkRecords),
+                    'limit' => $limit,
+                    'truncated' => $sinkTruncated,
                 ],
                 'outbox' => [
                     'available' => $outboxAvailable,
@@ -176,6 +199,23 @@ class SwarmTraceCommand extends Command
         $this->renderHuman($summary);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Resolve --limit to a positive int. Returns null on invalid input
+     * (so handle() can fail fast with a clear error).
+     */
+    protected function resolveSinkLimit(): ?int
+    {
+        $raw = $this->option('limit');
+
+        if (! is_numeric($raw)) {
+            return null;
+        }
+
+        $limit = (int) $raw;
+
+        return $limit > 0 ? $limit : null;
     }
 
     /**
