@@ -928,6 +928,117 @@ table and the `swarm:relay --type=audit` lane. Adding enum cases later is
 non-breaking; handlers that return `Swallow`, `RetryInline`, or `Halt` today
 remain valid.
 
+## Reading the Audit Chain
+
+Reconstructing a run's audit chain post hoc requires reading three stores:
+the `RunHistoryStore` for the lifecycle record, the `swarm_audit_outbox` for
+records that hit the failure path (pending and dead-letter), and the bound
+`SwarmAuditSink` for records that were emitted successfully. `php artisan
+swarm:trace <run_id>` walks all three and prints a chronological timeline,
+annotated with the source (sink / outbox / history), status, and the attempt
+count where one applies.
+
+### `ReadableSwarmAuditSink` contract
+
+The dispatcher writes through `SwarmAuditSink::emit()`, which is a one-way
+fire-and-forget surface. Many production sinks (database tables, SIEM exports,
+object-storage archives) already keep a queryable record of what was emitted;
+opting in to `ReadableSwarmAuditSink` lets `swarm:trace` pull that record back
+out:
+
+```php
+namespace BuiltByBerry\LaravelSwarm\Contracts;
+
+interface ReadableSwarmAuditSink extends SwarmAuditSink
+{
+    /**
+     * @return iterable<array<string, mixed>>
+     */
+    public function forRun(string $runId): iterable;
+}
+```
+
+`forRun()` returns the sink-side portion of the run's audit chain. The shape
+is intentionally loose so a custom sink can adapt without contortions — see
+`src/Contracts/ReadableSwarmAuditSink.php` for the documented expectations
+each returned record SHOULD carry (`category`, `occurred_at`, optional
+`run_id` and `payload`).
+
+Example for a sink writing to a `swarm_audit_records` database table:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableSwarmAuditSink;
+use Illuminate\Support\Facades\DB;
+
+final class DatabaseAuditSink implements ReadableSwarmAuditSink
+{
+    public function emit(string $category, array $payload): void
+    {
+        DB::table('swarm_audit_records')->insert([
+            'category' => $category,
+            'run_id' => $payload['run_id'] ?? null,
+            'occurred_at' => $payload['occurred_at'],
+            'payload' => json_encode($payload),
+        ]);
+    }
+
+    public function forRun(string $runId): iterable
+    {
+        foreach (DB::table('swarm_audit_records')->where('run_id', $runId)->orderBy('occurred_at')->cursor() as $row) {
+            yield [
+                'category' => $row->category,
+                'occurred_at' => $row->occurred_at,
+                'run_id' => $row->run_id,
+                'payload' => json_decode($row->payload, true),
+            ];
+        }
+    }
+}
+```
+
+Implementations should:
+
+- **Stay read-only.** `swarm:trace` is a forensic tool; the contract must
+  never mutate audit state.
+- **Filter by `run_id`.** Returned records must belong to the requested run.
+- **Prefer empty over throws.** Returning an empty iterable for an unknown
+  run keeps the trace clean. Throwing is permitted for genuinely degraded
+  conditions (sink unavailable, network failure) and surfaces as a
+  per-source note in the timeline output, not a command failure.
+- **Stream when convenient.** Generators are fine; the command iterates the
+  result once and sorts in memory.
+
+The contract is **opt-in**. The default `NoOpSwarmAuditSink` does not
+implement it, and existing custom sinks that only implement `SwarmAuditSink`
+remain valid. `swarm:trace` detects opt-out and degrades gracefully:
+
+- **Default `NoOpSwarmAuditSink`** — the timeline includes history and
+  outbox rows only, with a note explaining that the discarding sink cannot
+  supply records.
+- **Custom sink without `ReadableSwarmAuditSink`** — same degradation, with
+  a note naming the sink class and pointing at the contract to opt in.
+- **Outbox unavailable (cache driver)** — sink + history only, with a note
+  recommending `swarm.persistence.driver=database` for full forensic
+  reconstruction.
+
+The `degraded: true` flag in the JSON output surfaces any of these states
+so monitoring scrapers can flag incomplete traces.
+
+### `swarm:trace` Output
+
+```text
+php artisan swarm:trace r-abc123
+php artisan swarm:trace r-abc123 --json
+php artisan swarm:trace r-abc123 --include-payloads
+```
+
+Default output is a human-readable table with one row per evidence record
+(occurred-at timestamp, source, category, status, attempts, detail).
+`--json` mirrors the `swarm:audit:status` and `swarm:audit:reconcile` shape
+for scrapers. `--include-payloads` attaches the full envelope per record
+(off by default — payloads can be large and the default summary is meant to
+fit on a screen). The command is read-only and never mutates the chain.
+
 ## Metadata Governance
 
 Run metadata is developer-supplied and is not validated or sanitized by the package. By default, metadata values are excluded from audit and telemetry payloads — only key names are included. Use the controls below to decide exactly what reaches your sinks.
