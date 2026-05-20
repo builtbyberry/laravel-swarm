@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.0 - unreleased
+
+Operator UX, developer experience, and test coverage on top of the v0.5 audit outbox foundation. No new public-surface contracts. No migration changes. No breaking changes.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.5.0 - 2026-05-19
 
 ### Added
