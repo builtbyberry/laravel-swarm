@@ -495,6 +495,7 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 - Avoid secrets in metadata. Capture redaction does not sanitize arbitrary developer-supplied metadata. Set `SWARM_MAX_METADATA_BYTES` to enforce a hard size cap.
 - Build run inspection around `run_id`, lifecycle events, `SwarmHistory`, and durable runtime state.
 - Bookmark the [Operator Runbook: Audit Outbox Triage](docs/operator-runbook-audit-outbox.md) before going live. It is the 3 a.m. decision tree for dead-letter rows, stale pending rows, and sink outages — and it assumes the reader has not just re-read the reference docs.
+- Use `php artisan swarm:trace <run_id>` (v0.7+) to reconstruct a single run's audit chain across run history, the audit outbox, and the bound sink. Read-only, on-demand, with `--json` for monitoring and `--include-payloads` for full envelopes. See [Audit Evidence Contract](docs/audit-evidence-contract.md#reading-the-audit-chain), including the **Security and retention** subsection covering how the command unseals encrypted-at-rest data on output.
 
 ### Audit Extension Points
 
@@ -504,6 +505,10 @@ Regulated deployments can replace four audit contracts in the container:
 - `CapturePolicy` — decides which run fields are captured, redacted, or omitted before evidence is emitted.
 - `SinkFailureHandler` — handles `SwarmAuditSink` write failures (log, retry, halt, or escalate).
 - `SwarmAuditSigner` — produces the cryptographic signature attached to each envelope for tamper-evident export.
+
+One optional extension contract (v0.7+):
+
+- `ReadableSwarmAuditSink` — extends `SwarmAuditSink` with `forRun(string $runId): iterable<array>` so the sink can participate in `swarm:trace`. Opt-in; the shipped `NoOpSwarmAuditSink` does not implement it and existing custom sinks remain valid.
 
 Two environment knobs control strict-mode behavior:
 
