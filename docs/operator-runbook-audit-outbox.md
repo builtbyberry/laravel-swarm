@@ -134,9 +134,12 @@ php artisan swarm:audit:reconcile --dismiss=<id> --reason="dev-env test run; sin
 
 `--reason` is required. The dismissal emits a `command.audit_reconcile`
 audit record (with `action`, `target_id`, `target_category`,
-`target_run_id`, `prior_attempts`, and `reason`) **before** deleting the
-row. If that audit emit fails, the row is left untouched — dismissal cannot
-silently erase evidence.
+`target_run_id`, `prior_attempts`, `reason`, and `target_payload_digest`)
+**before** deleting the row. If the audit emit fails outright (for example
+under `failure_policy=halt`), the row is left untouched. Under the default
+`queue` policy, the reconcile record is itself enqueued for retry —
+evidence is preserved in the outbox even when the sink is unavailable, so
+dismissal never silently erases evidence.
 
 For regulated workloads, document the dismissal in your operations log
 alongside the audit chain-of-custody record. "Consult your compliance

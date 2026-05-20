@@ -342,9 +342,15 @@ recovery. Every sub-mode accepts `--json` for automation.
 
 Every requeue or dismiss emits a `command.audit_reconcile` audit record
 carrying `action`, `target_id`, `target_category`, `target_run_id`,
-`prior_attempts`, and `reason` **before** mutating the row. If the
-audit emit fails the row is left untouched, so reconciliation cannot
-silently erase evidence.
+`prior_attempts`, and `reason` **before** mutating the row. `--show`
+emits the same category with `action=show` and no payload contents so
+reads are counted in the audit chain. Dismiss emits also include a
+`target_payload_digest` (sha256 hex of the stored payload bytes) so the
+deleted row can be tied back to a forensic backup of the table without
+unsealing. If the audit emit fails outright (for example under
+`failure_policy=halt`), the row is left untouched. Under the default
+`queue` policy, the reconcile record is itself enqueued for retry —
+evidence is preserved in the outbox even when the sink is unavailable.
 
 ## High-volume dashboards
 
