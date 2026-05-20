@@ -268,6 +268,61 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.7.0
+
+v0.7.0 is purely additive on top of v0.6.0 — **no required action**. No
+migrations, no env-var changes, no breaking surface, no public-method
+signature changes. Existing v0.6 deployments can pull v0.7 in and ship
+without code or config edits.
+
+The new surfaces are all opt-in:
+
+### Optional adoption
+
+#### `swarm:trace <run_id>` (#44)
+
+New read-only forensic CLI that reconstructs a single run's audit chain
+across history, outbox, and the bound sink. **Nothing to do at upgrade
+time** — the command works against any existing v0.6 deployment, with
+graceful degradation when the bound sink doesn't expose a read API or
+the outbox is unavailable (cache persistence). See
+`docs/audit-evidence-contract.md` "Reading the Audit Chain" for the
+operator walkthrough and the **Security and retention** subsection
+covering how the command unseals encrypted-at-rest data on output.
+
+#### `ReadableSwarmAuditSink` contract (#44)
+
+Optional extension of `SwarmAuditSink` that adds `forRun(string $runId):
+iterable<array>` so the sink can participate in `swarm:trace`. **You
+only need to implement this if** you want your custom sink's records to
+appear in trace timelines. The shipped `NoOpSwarmAuditSink` does not
+implement it and existing custom sinks remain valid — `swarm:trace`
+degrades to outbox + history only when the bound sink doesn't
+implement the contract. See `src/Contracts/ReadableSwarmAuditSink.php`
+for the documented return shape (`category`, `occurred_at`, optional
+`run_id`, optional `payload`) and `docs/audit-evidence-contract.md`
+"Reading the Audit Chain" for a worked database-sink example.
+
+#### `RunContext::fake()` and `SwarmFake` audit intercepts (#42, #43)
+
+New test-time additions to the testing surface. `RunContext::fake()` is
+a named constructor that returns a context with sensible test defaults;
+`SwarmFake::interceptCapturePolicy()` / `interceptSinkFailureHandler()`
+/ `interceptSwarmAuditSigner()` install recording decorators around the
+v0.4 audit-extension contracts so tests can assert against capture
+decisions, failure routing, and signing without manually wiring the
+dispatcher chain. **No action needed at upgrade time**; see
+`docs/testing.md` for the new sections.
+
+### What did not change
+
+- The audit evidence envelope contract (`schema_version` stays at
+  `"2"`; the new regression coverage in #76 locks the contract in
+  place without modifying any production emit path).
+- Every existing public-surface contract, method signature, attribute,
+  config key, and Artisan command.
+- Persistence migrations and durable-runtime wiring.
+
 ## Upgrading to v0.6.0
 
 v0.6.0 is purely additive on top of v0.5.0 — no migrations, no env-var
