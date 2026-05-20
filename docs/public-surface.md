@@ -92,6 +92,7 @@ adding a new public API.
 | `swarm:prune` | Remove expired database persistence rows. | [Maintenance](maintenance.md#pruning-expired-records) |
 | `swarm:audit:status` | Summarize the audit outbox — counts, age distribution, top dead-letter categories, oldest rows, and retention. Option: `--json`. (v0.6.0+) | [Audit Outbox Operator Runbook](operator-runbook-audit-outbox.md) |
 | `swarm:audit:reconcile` | Forensic CLI for audit-outbox triage. Defaults to `list`; gains `--show=<id>`, `--requeue=<id>`, and `--dismiss=<id> --reason="..."` for dead-letter rows. Options: `--status`, `--limit`, `--json`, `--force`. (v0.6.0+) | [Audit Outbox Operator Runbook](operator-runbook-audit-outbox.md) |
+| `swarm:trace` | Read-only audit-chain reconstruction for a single run — merges history, outbox, and sink-side records (via `ReadableSwarmAuditSink`) into a chronological timeline. Options: `--json`, `--include-payloads`. Degrades cleanly when the sink does not implement `ReadableSwarmAuditSink` or the outbox is unavailable. (v0.7.0+) | [Audit Evidence Contract](audit-evidence-contract.md#reading-the-audit-chain) |
 
 ## Extension Points
 
@@ -126,5 +127,6 @@ adding a new public API.
 | `SinkFailureHandler` | Decide how to react when an audit sink throws. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `SinkFailureDecision` | Enum of sink failure outcomes (`Swallow`, `RetryInline`, `Halt`, `Queue`, `DeadLetter`). `Queue` and `DeadLetter` added in v0.5.0 alongside the audit outbox. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `AuditOutbox` | Persisted retry surface for audit evidence that failed to emit. Drained by `swarm:relay --type=audit`. (v0.5.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `ReadableSwarmAuditSink` | Optional extension of `SwarmAuditSink` that adds `forRun(string $runId): iterable` so the sink can participate in `swarm:trace`. Opt-in; the default `NoOpSwarmAuditSink` does not implement it and existing custom sinks remain valid. (v0.7.0+) | [Audit Evidence Contract](audit-evidence-contract.md#reading-the-audit-chain) |
 | `HaltsSwarmExecution` | Marker interface for sink failure exceptions that must halt the run. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `AuditSinkHaltedException` | Raised when a sink failure handler halts execution. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
