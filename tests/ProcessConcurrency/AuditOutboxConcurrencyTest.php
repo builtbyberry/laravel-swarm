@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Support\Facades\DB;
@@ -58,6 +59,70 @@ function auditOutboxConcurrencyDriverSupported(): bool
     );
 }
 
+/**
+ * Build the worker closure that two parallel drain() calls execute in
+ * child PHP processes.
+ *
+ * Two things must be true for the closure to survive the trip:
+ *
+ *   1. Closure scope class must be resolvable in the child. The child
+ *      runs `php artisan invoke-serialized-closure` against testbench's
+ *      bare Laravel, which does NOT boot Pest. A closure defined inside
+ *      a Pest `test(...)` body would have scope class
+ *      `P\Tests\ProcessConcurrency\AuditOutboxConcurrencyTest` — a Pest
+ *      runtime class that doesn't exist in the child. Defining the
+ *      closure inside this free function gives it a null scope class,
+ *      which serializes cleanly. `static` alone does NOT fix this — it
+ *      strips $this but keeps the scope class (verified locally).
+ *
+ *   2. The swarm package must be bootstrapped in the child container.
+ *      testbench discovers packages only from
+ *      vendor/orchestra/testbench-core/laravel/bootstrap/cache/packages.php,
+ *      which does not include the package currently being tested. So
+ *      the child knows nothing about BuiltByBerry\LaravelSwarm. We
+ *      register the provider explicitly and set the minimum config the
+ *      AuditOutbox binding needs to resolve to DatabaseAuditOutbox.
+ *      The DB connection itself flows via inherited env vars (testbench
+ *      reads DB_* env at boot).
+ *
+ * Each worker swaps in its own in-process RecordingSwarmAuditSink so
+ * the parent can compare which run_ids each child observed, then calls
+ * drain() and returns a uniform result shape covering both scenarios.
+ */
+function auditOutboxConcurrencyWorker(?int $perWorker = null): Closure
+{
+    return static function () use ($perWorker): array {
+        // Bootstrap the swarm package in the child container. Mirror the
+        // minimum subset of TestCase::defineEnvironment() needed for the
+        // AuditOutbox binding to resolve and for sealed-payload writes to
+        // round-trip cleanly under the test fixture.
+        config()->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
+        config()->set('swarm.persistence.driver', 'database');
+        config()->set('swarm.persistence.encrypt_at_rest', false);
+        if (! app()->providerIsLoaded(SwarmServiceProvider::class)) {
+            app()->register(SwarmServiceProvider::class);
+        }
+
+        $sink = new RecordingSwarmAuditSink;
+        app()->instance(SwarmAuditSink::class, $sink);
+        app()->forgetInstance(AuditOutbox::class);
+
+        $result = $perWorker === null
+            ? app(AuditOutbox::class)->drain()
+            : app(AuditOutbox::class)->drain($perWorker);
+
+        return [
+            'claimed' => $result->claimed,
+            'replayed' => $result->replayed,
+            'reclaimed' => $result->reclaimed,
+            'run_ids' => array_values(array_map(
+                static fn (array $r): ?string => isset($r['run_id']) && is_string($r['run_id']) ? $r['run_id'] : null,
+                $sink->allRecords(),
+            )),
+        ];
+    };
+}
+
 beforeEach(function (): void {
     if (! auditOutboxConcurrencyDriverSupported()) {
         $this->markTestSkipped(
@@ -92,33 +157,11 @@ test('two parallel drain() calls claim disjoint subsets of pending rows', functi
     expect(DB::table('swarm_audit_outbox')->where('status', 'pending')->count())
         ->toBe($totalRows);
 
-    // Each worker boots a fresh Laravel app via `artisan invoke-serialized-closure`,
-    // resolves DatabaseAuditOutbox against the (shared) DB, calls drain(), and
-    // returns the run_ids it observed via its own in-process RecordingSwarmAuditSink.
-    //
-    // `static` is load-bearing: Pest wraps this test body as a method on the
-    // auto-generated `P\Tests\...` class, so a non-static closure here would
-    // carry an implicit `$this` binding to that class. The process driver
-    // serializes the closure for the child PHP process, which runs via
-    // `artisan invoke-serialized-closure` and does NOT boot Pest's test
-    // runtime — so the `P\` class doesn't exist there, and unserialize fails
-    // with "Class P\Tests\... not found". `static` strips the binding.
-    $workerClosure = static function () use ($perWorker): array {
-        $sink = new RecordingSwarmAuditSink;
-        app()->instance(SwarmAuditSink::class, $sink);
-        app()->forgetInstance(AuditOutbox::class);
-
-        $result = app(AuditOutbox::class)->drain($perWorker);
-
-        return [
-            'claimed' => $result->claimed,
-            'replayed' => $result->replayed,
-            'run_ids' => array_values(array_map(
-                fn (array $r): ?string => isset($r['run_id']) && is_string($r['run_id']) ? $r['run_id'] : null,
-                $sink->allRecords(),
-            )),
-        ];
-    };
+    // Worker closure is built by a free function (see auditOutboxConcurrencyWorker)
+    // so its scope class is null. A closure defined inline here would be scoped to
+    // the Pest auto-generated `P\Tests\...AuditOutboxConcurrencyTest` class, which
+    // the child PHP process can't resolve — see the helper's docblock.
+    $workerClosure = auditOutboxConcurrencyWorker($perWorker);
 
     $results = $concurrency->driver('process')->run([
         $workerClosure,
@@ -165,22 +208,8 @@ test('two parallel drain() calls reclaim a single stale reservation exactly once
 
     expect(DB::table('swarm_audit_outbox')->where('status', 'pending')->count())->toBe(1);
 
-    // `static`: same reason as scenario 1 — keep the closure free of the Pest
-    // test-class `$this` binding so the process driver's child PHP process
-    // can unserialize it without needing the `P\Tests\...` class.
-    $workerClosure = static function (): array {
-        $sink = new RecordingSwarmAuditSink;
-        app()->instance(SwarmAuditSink::class, $sink);
-        app()->forgetInstance(AuditOutbox::class);
-
-        $result = app(AuditOutbox::class)->drain();
-
-        return [
-            'claimed' => $result->claimed,
-            'replayed' => $result->replayed,
-            'reclaimed' => $result->reclaimed,
-        ];
-    };
+    // Same free-function pattern as scenario 1; see auditOutboxConcurrencyWorker.
+    $workerClosure = auditOutboxConcurrencyWorker();
 
     $results = $concurrency->driver('process')->run([
         $workerClosure,
