@@ -494,6 +494,7 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 - Bind `SwarmTelemetrySink` for logs, metrics, or tracing correlation.
 - Avoid secrets in metadata. Capture redaction does not sanitize arbitrary developer-supplied metadata. Set `SWARM_MAX_METADATA_BYTES` to enforce a hard size cap.
 - Build run inspection around `run_id`, lifecycle events, `SwarmHistory`, and durable runtime state.
+- Bookmark the [Operator Runbook: Audit Outbox Triage](docs/operator-runbook-audit-outbox.md) before going live. It is the 3 a.m. decision tree for dead-letter rows, stale pending rows, and sink outages — and it assumes the reader has not just re-read the reference docs.
 
 ### Audit Extension Points
 
@@ -511,7 +512,7 @@ Two environment knobs control strict-mode behavior:
 
 The full `SWARM_AUDIT_FAILURE_POLICY` matrix (since v0.5): `swallow` (drop silently — v0.4 default), `log` (log and continue), `queue` (persist to `swarm_audit_outbox` for retry — v0.5 default), `dead_letter` (persist directly to dead-letter status, no retry), `halt` (fail the run). The audit outbox is monitored by default via `swarm:health` (or `swarm:health --audit` for focused investigation).
 
-See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full reference.
+See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full reference. When responding to an audit-outbox page, see the [Operator Runbook: Audit Outbox Triage](docs/operator-runbook-audit-outbox.md).
 
 ## Documentation
 
