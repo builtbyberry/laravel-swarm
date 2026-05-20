@@ -21,6 +21,41 @@ ArticlePipeline::fake(['first', 'second']);
 expect((string) ArticlePipeline::make()->prompt('Draft a blog outline about Laravel queues.'))->toBe('first');
 ```
 
+## Building A `RunContext` For Tests
+
+`RunContext::fake()` is a named constructor for ad-hoc test setup. It returns a
+context with a deterministic run id (`fake-run-id`), empty input, no actor, no
+data, no metadata, and no artifacts. Pass an array of overrides for the slots
+you want to populate, and compose with the existing fluent builders
+(`withActor()`, `mergeData()`, `mergeMetadata()`, `withLabels()`,
+`withDetails()`, `addArtifact()`) for everything else:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+$context = RunContext::fake([
+    'input' => 'Draft a blog outline about Laravel queues.',
+    'actor' => 'user:42',
+])
+    ->mergeData(['draft_id' => 7])
+    ->withLabels(['tenant' => 'acme']);
+
+ArticlePipeline::fake();
+ArticlePipeline::make()->run($context);
+
+ArticlePipeline::assertDispatchedWithActor(new Actor(id: '42', type: 'user'));
+ArticlePipeline::assertPrompted(['draft_id' => 7]);
+```
+
+The `actor` override accepts anything `RunContext::withActor()` accepts (an
+`Actor`, an `Authenticatable`, a `"type:id"` or bare-id string, or `null`).
+Pass it through `RunContext::fake()` when actor binding is the only thing you
+need, and reach for `withActor()` directly when chaining with other builders.
+
+`RunContext::fake()` is a test helper. Production code should construct
+contexts with `RunContext::from()`, `::fromTask()`, or `::fromPayload()`.
+
 ## Asserting Basic Interaction
 
 You can assert against synchronous, queued, durable, and streamed execution:
