@@ -95,7 +95,15 @@ test('two parallel drain() calls claim disjoint subsets of pending rows', functi
     // Each worker boots a fresh Laravel app via `artisan invoke-serialized-closure`,
     // resolves DatabaseAuditOutbox against the (shared) DB, calls drain(), and
     // returns the run_ids it observed via its own in-process RecordingSwarmAuditSink.
-    $workerClosure = function () use ($perWorker): array {
+    //
+    // `static` is load-bearing: Pest wraps this test body as a method on the
+    // auto-generated `P\Tests\...` class, so a non-static closure here would
+    // carry an implicit `$this` binding to that class. The process driver
+    // serializes the closure for the child PHP process, which runs via
+    // `artisan invoke-serialized-closure` and does NOT boot Pest's test
+    // runtime — so the `P\` class doesn't exist there, and unserialize fails
+    // with "Class P\Tests\... not found". `static` strips the binding.
+    $workerClosure = static function () use ($perWorker): array {
         $sink = new RecordingSwarmAuditSink;
         app()->instance(SwarmAuditSink::class, $sink);
         app()->forgetInstance(AuditOutbox::class);
@@ -157,7 +165,10 @@ test('two parallel drain() calls reclaim a single stale reservation exactly once
 
     expect(DB::table('swarm_audit_outbox')->where('status', 'pending')->count())->toBe(1);
 
-    $workerClosure = function (): array {
+    // `static`: same reason as scenario 1 — keep the closure free of the Pest
+    // test-class `$this` binding so the process driver's child PHP process
+    // can unserialize it without needing the `P\Tests\...` class.
+    $workerClosure = static function (): array {
         $sink = new RecordingSwarmAuditSink;
         app()->instance(SwarmAuditSink::class, $sink);
         app()->forgetInstance(AuditOutbox::class);
