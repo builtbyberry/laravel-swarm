@@ -184,6 +184,45 @@ When making an intentional tradeoff (for example replay provenance or redaction
 shape), record the chosen option, rejected option, rationale, and test/doc
 updates in the PR notes or changelog entry.
 
+## Release Workflow
+
+Releases are session-shaped: a thematic group of work ships as one tagged release, not one issue per patch. The branching and PR layout below reflects what the v0.5.x and v0.6.x lines actually used; follow it for every release unless the maintainer says otherwise.
+
+**Long-lived release branch**
+
+- Cut `release/v<X.Y.Z>` from `main` when a release session opens.
+- Topic branches target the release branch, not `main`. The release branch is the only branch that ever merges back into `main`.
+- Open the release with a `chore(release): scaffold v<X.Y.Z> changelog entry` commit so the changelog has a stub from day one.
+
+**Topic branches**
+
+- `feat/<version>-<topic>` — features.
+- `fix/<version>-<topic>` — bug fixes that ride a release session.
+- `docs/<version>-<topic>` — docs-only work.
+- `test/<version>-<topic>` — test-only work.
+- `chore/<version>-<topic>` — scoped chores.
+- One topic per PR. PR titles end with the originating issue `(#NN)` when there is one.
+
+**Commits — Conventional Commits with a scope**
+
+- Use `feat(scope):`, `fix(scope):`, `docs(scope):`, `test(scope):`, `refactor(scope):`, `chore(scope):`, `build(scope):`, `ci:`.
+- Scope tracks the area, not the version: `audit`, `runner`, `pulse`, `release`, etc.
+
+**Three-phase wrap (in order)**
+
+1. `chore/<v>-review-followups` — addresses the multi-expert review findings. Commits are suffixed with the stable finding ID, e.g. `(review F1)`, `(review F2, F3)`. Finding numbers are assigned by the review and do not get renumbered.
+2. `chore/<v>-release-wrap` — fills in `CHANGELOG.md` and `UPGRADING.md` for the version. No behavior changes here.
+3. `chore/<v>-readiness-followups` — final readiness-gate fixes only. Commits suffixed `(readiness F1)`, `(readiness F2)`. If readiness surfaces anything larger than a small fix, send it back through `review-followups` instead.
+
+**Cutting the release**
+
+- After the wrap phases land on the release branch, open the `release/v<X.Y.Z> → main` PR. Its title is `release: v<X.Y.Z> — <one-line theme>`.
+- Tag `v<X.Y.Z>` on `main` after that PR merges. Do not tag on the release branch.
+
+**Deferrals**
+
+- A deferred finding must be recorded as a GitHub issue with an owner and a target version. Do not drop it into a TODO comment or a plan doc.
+
 ## Current State
 
 The package supports sequential, parallel, and hierarchical topologies; synchronous, queued, streamed, and durable execution; cache and database persistence; run history and artifacts; lifecycle events; optional Pulse observability; config, migration, and stub publishing; and a full fake/assertion system.

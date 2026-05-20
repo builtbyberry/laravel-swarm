@@ -76,7 +76,8 @@
         "test:process-concurrency:ci": "vendor/bin/pest tests/ProcessConcurrency --fail-on-skipped",
         "test:coverage": "vendor/bin/pest tests/Feature tests/Unit --coverage",
         "test:coverage:ci": "vendor/bin/pest tests/Feature tests/Unit --coverage --min=80",
-        "test:mutation": "vendor/bin/pest --mutate --coverage --parallel --covered-only"
+        "test:mutation": "vendor/bin/pest --mutate --coverage --parallel --covered-only",
+        "hooks:install": "ln -sfv ../../tools/git-hooks/commit-msg .git/hooks/commit-msg"
     },
     "config": {
         "sort-packages": true,

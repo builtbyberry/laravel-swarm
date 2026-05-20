@@ -1,0 +1,50 @@
+name: branch naming
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: enforce release-branch + topic-branch naming
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check branch names
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+
+          echo "PR base: $BASE"
+          echo "PR head: $HEAD"
+
+          fail() {
+            echo
+            echo "::error::$1"
+            echo
+            echo "See AGENTS.md → Release Workflow for the branch naming convention."
+            exit 1
+          }
+
+          if [[ "$BASE" == "main" ]]; then
+            if [[ ! "$HEAD" =~ ^release/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              fail "PRs into main must come from a release branch named release/vX.Y.Z. Got head '$HEAD'."
+            fi
+            echo "OK: release branch '$HEAD' targeting main."
+            exit 0
+          fi
+
+          if [[ "$BASE" =~ ^release/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+            if [[ ! "$HEAD" =~ ^(feat|fix|docs|test|chore)/${VERSION}-[a-z0-9][a-z0-9-]*$ ]]; then
+              fail "Topic branches into release/v${VERSION} must be named <type>/${VERSION}-<topic> where type is one of feat|fix|docs|test|chore. Got head '$HEAD'."
+            fi
+            echo "OK: topic branch '$HEAD' targeting release/v${VERSION}."
+            exit 0
+          fi
+
+          echo "Skipping branch-naming check (PR base is '$BASE', not main or release/v*)."

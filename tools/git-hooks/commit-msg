@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# commit-msg hook — validates Conventional Commits format with optional scope.
+#
+# Install with: composer hooks:install
+# (or symlink manually: ln -s ../../tools/git-hooks/commit-msg .git/hooks/commit-msg)
+#
+# This is a local-only check; it does not run on CI. The repo also enforces
+# branch naming on the server via .github/workflows/branch-naming.yml.
+
+set -euo pipefail
+
+msg_file="$1"
+# First non-comment, non-blank line is the subject.
+subject="$(grep -v -E '^(#|$)' "$msg_file" | head -n 1 || true)"
+
+if [[ -z "$subject" ]]; then
+    echo "commit-msg: empty commit message" >&2
+    exit 1
+fi
+
+# Allow merge commits, reverts, and fixups — git produces these automatically.
+if [[ "$subject" =~ ^Merge\ (branch|pull\ request|remote-tracking|tag)\  ]]; then exit 0; fi
+if [[ "$subject" =~ ^Revert\  ]]; then exit 0; fi
+if [[ "$subject" =~ ^(fixup|squash)!\  ]]; then exit 0; fi
+
+# Conventional Commits: <type>(<optional scope>)<optional !>: <subject>
+# Types match the project's actual usage; scope is optional but encouraged.
+pattern='^(feat|fix|docs|test|chore|refactor|ci|build|style|perf)(\([a-z0-9.-]+\))?!?: .+'
+
+if [[ ! "$subject" =~ $pattern ]]; then
+    cat >&2 <<EOF
+commit-msg: subject does not match Conventional Commits format.
+
+  Got:      $subject
+  Expected: <type>(<scope>): <message>
+            <type>: <message>
+
+  Types:    feat | fix | docs | test | chore | refactor | ci | build | style | perf
+  Scope:    optional but encouraged — area name, e.g. audit, runner, pulse, release.
+
+  Examples:
+    feat(audit): swarm:audit:reconcile forensic CLI (#36)
+    docs(changelog): drop duplicate v0.5.0 header (readiness F1)
+    chore(release): scaffold v0.7.0 changelog entry
+    ci: nightly laravel/ai dev-main job
+
+See AGENTS.md → Release Workflow for full conventions.
+EOF
+    exit 1
+fi
+
+# Length guard — soft limit on the subject line.
+if (( ${#subject} > 100 )); then
+    echo "commit-msg: subject is ${#subject} chars (soft limit 100). Tighten if you can." >&2
+fi
+
+exit 0

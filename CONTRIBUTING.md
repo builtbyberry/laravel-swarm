@@ -142,6 +142,12 @@ Laravel and `laravel/ai` bumps are integration-test events. This package's
 changelog documents Swarm-owned changes, not every upstream framework behavior
 shift.
 
+The branching, commit, and three-phase wrap mechanics that releases follow
+(`release/v<X.Y.Z>` long-lived branch, topic branches, `review-followups` →
+`release-wrap` → `readiness-followups`) are recorded in
+[AGENTS.md](AGENTS.md#release-workflow). Maintainers driving a release should
+read that section before opening the release branch.
+
 ## Maintainer and Ownership
 
 Laravel Swarm is currently maintained by Daniel Berry. That solo-maintainer
