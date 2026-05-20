@@ -52,6 +52,26 @@ php artisan swarm:audit:reconcile --show=<id>
 This unseals the payload and prints `last_error`. Read both. The error
 string is the sink's verbatim rejection.
 
+#### Audit trail of reads
+
+Every `--show` invocation emits a `command.audit_reconcile` evidence
+record with `action=show` so reads are counted in the audit chain. The
+emit carries `target_id`, `target_category`, `target_run_id`,
+`prior_attempts`, `target_created_at`, and `target_age_seconds` — but no
+payload contents and no `reason` (reads do not require justification,
+only accounting).
+
+Shell access to `swarm:audit:reconcile --show` is operator-trusted.
+Treat the command's reach the same way you treat database read access.
+The audit emit accounts for individual reads but does not authorize
+them — host-access controls are still where you gate who can run this
+in the first place.
+
+If the audit sink itself is unavailable when you run `--show`, the
+command still prints the row (read-only, already in memory) but exits
+non-zero with a clear warning so the broken audit chain is visible.
+Rerun once the sink recovers.
+
 ### Step 3 — Decide
 
 Match `last_error` (and, if needed, the sink's own logs) against the
