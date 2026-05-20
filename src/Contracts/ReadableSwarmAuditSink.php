@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmTraceCommand;
+
 /**
  * Optional extension of {@see SwarmAuditSink} for sinks that can list previously
  * emitted evidence records for a given run.
@@ -15,7 +18,7 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
  * (the command renders outbox + run-history rows only and surfaces a clear note
  * about the limitation).
  *
- * The contract is intentionally opt-in. The shipped {@see \BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink}
+ * The contract is intentionally opt-in. The shipped {@see NoOpSwarmAuditSink}
  * does not implement it. Application sinks that already write to a queryable
  * store (database, SIEM with a read API, object storage with a manifest) can
  * adopt the interface without any other behavior change.
@@ -56,7 +59,7 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
  *   sorts in memory, so implementations are free to stream via a generator
  *   if the underlying store can paginate.
  *
- * @see \BuiltByBerry\LaravelSwarm\Commands\SwarmTraceCommand
+ * @see SwarmTraceCommand
  */
 interface ReadableSwarmAuditSink extends SwarmAuditSink
 {

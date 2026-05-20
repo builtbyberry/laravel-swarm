@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmRelayCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmSignalCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmTraceCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
@@ -289,6 +290,7 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmSignalCommand::class,
                 SwarmInspectCommand::class,
                 SwarmProgressCommand::class,
+                SwarmTraceCommand::class,
             ]);
         }
 
