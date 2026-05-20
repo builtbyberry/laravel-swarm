@@ -6,7 +6,7 @@ DX + test rigor.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **`SwarmFake` intercepts for the v0.4 audit-extension contracts (#42).** Three new static helpers — `SwarmFake::interceptCapturePolicy()`, `interceptSinkFailureHandler()`, and `interceptSwarmAuditSigner()` — swap the container binding for the corresponding contract to a recording decorator and return a recorder with first-class assertion methods (`assertCaptured`, `assertCapturedDecision`, `assertCapturedWith`, `assertSinkFailureRouted`, `assertSinkFailureRoutedAs`, `assertSigned`, plus `Never*` variants). Each decorator wraps an optional delegate so existing policy / handler / signer logic still drives behavior; the recorder only captures inputs, the routed decision, and the resulting payload. Replaces the v0.4.3 workaround-pattern documentation; `docs/testing.md` "Testing Audit Extension Points" gains a new leading section covering the intercepts and how they preserve `SwarmFake`'s "doesn't touch the dispatcher" design property — recording happens when the real dispatcher resolves the contract from the container during a non-faked run, so `SwarmFake` itself never constructs or invokes the dispatcher.
 
 ### Changed
 

@@ -6,8 +6,13 @@ namespace BuiltByBerry\LaravelSwarm\Testing;
 
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
@@ -22,7 +27,11 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSinkFailureHandler;
+use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSigner;
 use Illuminate\Broadcasting\Channel;
+use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\FakePendingDispatch;
 
@@ -614,6 +623,77 @@ class SwarmFake implements Swarm
             $actors,
             "The swarm [{$this->swarmClass}] was dispatched with an actor unexpectedly.",
         );
+    }
+
+    /**
+     * Install a {@see RecordingCapturePolicy} as the bound {@see CapturePolicy}
+     * for the duration of the test.
+     *
+     * The returned recorder exposes assertion helpers covering every
+     * dispatcher invocation of the policy (inputs, outputs, artifacts,
+     * activeContext). The optional delegate is forwarded to behind the
+     * recording layer so existing policy logic still drives decisions;
+     * pass null to record-and-return {@see CaptureDecision::Full}
+     * for every category.
+     *
+     * Recording happens when the real audit dispatcher resolves the
+     * contract from the container during a non-faked run. SwarmFake itself
+     * never constructs or invokes the dispatcher — this helper only swaps
+     * the container binding and flushes the dispatcher singleton so the
+     * next resolution picks up the recorder.
+     */
+    public static function interceptCapturePolicy(?CapturePolicy $delegate = null): RecordingCapturePolicy
+    {
+        $recorder = new RecordingCapturePolicy($delegate);
+
+        self::bindAuditIntercept(CapturePolicy::class, $recorder);
+
+        return $recorder;
+    }
+
+    /**
+     * Install a {@see RecordingSinkFailureHandler} as the bound
+     * {@see SinkFailureHandler} for the duration of the test.
+     *
+     * See {@see interceptCapturePolicy()} for the design contract.
+     */
+    public static function interceptSinkFailureHandler(?SinkFailureHandler $delegate = null): RecordingSinkFailureHandler
+    {
+        $recorder = new RecordingSinkFailureHandler($delegate);
+
+        self::bindAuditIntercept(SinkFailureHandler::class, $recorder);
+
+        return $recorder;
+    }
+
+    /**
+     * Install a {@see RecordingSwarmAuditSigner} as the bound
+     * {@see SwarmAuditSigner} for the duration of the test.
+     *
+     * See {@see interceptCapturePolicy()} for the design contract. Unlike
+     * the other two contracts, no default binding exists for the signer —
+     * installing the recorder is what enables signing in the dispatcher
+     * during the run.
+     */
+    public static function interceptSwarmAuditSigner(?SwarmAuditSigner $delegate = null): RecordingSwarmAuditSigner
+    {
+        $recorder = new RecordingSwarmAuditSigner($delegate);
+
+        self::bindAuditIntercept(SwarmAuditSigner::class, $recorder);
+
+        return $recorder;
+    }
+
+    /**
+     * Swap the bound contract to the recording decorator and flush the
+     * dispatcher singleton so it picks up the new contract on next resolve.
+     */
+    protected static function bindAuditIntercept(string $abstract, object $recorder): void
+    {
+        $container = Container::getInstance();
+
+        $container->instance($abstract, $recorder);
+        $container->forgetInstance(SwarmAuditDispatcher::class);
     }
 
     /**
