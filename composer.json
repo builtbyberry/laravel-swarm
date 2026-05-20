@@ -55,7 +55,7 @@
     },
     "extra": {
         "branch-alias": {
-            "dev-main": "0.6.x-dev"
+            "dev-main": "0.7.x-dev"
         },
         "laravel": {
             "providers": [
@@ -73,7 +73,8 @@
         "lint": "vendor/bin/pint --test",
         "test": "vendor/bin/pest tests/Feature tests/Unit",
         "test:process-concurrency": "vendor/bin/pest tests/ProcessConcurrency",
-        "test:process-concurrency:ci": "vendor/bin/pest tests/ProcessConcurrency --fail-on-skipped",
+        "test:process-concurrency:ci": "vendor/bin/pest tests/ProcessConcurrency --fail-on-skipped --exclude-group=skip-locked-real-db",
+        "test:process-concurrency:real-db": "vendor/bin/pest tests/ProcessConcurrency --group=skip-locked-real-db --fail-on-skipped",
         "test:coverage": "vendor/bin/pest tests/Feature tests/Unit --coverage",
         "test:coverage:ci": "vendor/bin/pest tests/Feature tests/Unit --coverage --min=80",
         "test:mutation": "vendor/bin/pest --mutate --coverage --parallel --covered-only",

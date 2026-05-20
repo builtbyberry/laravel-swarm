@@ -87,6 +87,49 @@ class RunContext
         return (string) str()->uuid();
     }
 
+    /**
+     * Build a RunContext suitable for ad-hoc test setup.
+     *
+     * Defaults to a deterministic run id ("fake-run-id"), empty input, no
+     * data, no metadata, no artifacts, and no actor. Any of those slots can be
+     * overridden via the $overrides array using the keys: run_id, input, data,
+     * metadata, artifacts, actor. The actor override accepts anything
+     * RunContext::withActor() accepts (Actor, Authenticatable, "type:id" or
+     * bare-id string, or null) and is applied via that existing builder so the
+     * actor is stored under the reserved metadata.actor slot.
+     *
+     * Compose with the existing fluent builders for richer setups:
+     *
+     *   RunContext::fake(['input' => 'draft outline'])
+     *       ->withActor('user:42')
+     *       ->withLabels(['tenant' => 'acme'])
+     *       ->mergeData(['draft_id' => 7]);
+     *
+     * This is a test helper. Do not use it in production code paths.
+     *
+     * @param  array{run_id?: string, input?: string, data?: array<string, mixed>, metadata?: array<string, mixed>, artifacts?: array<int, SwarmArtifact>, actor?: Actor|Authenticatable|string|null}  $overrides
+     */
+    public static function fake(array $overrides = []): self
+    {
+        $context = new self(
+            runId: $overrides['run_id'] ?? 'fake-run-id',
+            input: $overrides['input'] ?? '',
+            data: $overrides['data'] ?? [],
+            metadata: $overrides['metadata'] ?? [],
+            artifacts: $overrides['artifacts'] ?? [],
+        );
+
+        if (array_key_exists('actor', $overrides)) {
+            // Reassign the return even though withActor() mutates $this->metadata
+            // in place today and returns $this. A future refactor toward true
+            // immutability would silently break the fake helper otherwise; the
+            // reassignment costs nothing and futureproofs the call.
+            $context = $context->withActor($overrides['actor']);
+        }
+
+        return $context;
+    }
+
     public function prompt(): string
     {
         return (string) ($this->data['last_output'] ?? $this->input);

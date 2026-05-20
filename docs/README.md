@@ -110,6 +110,13 @@ The examples are copy-paste starting points for Laravel applications. They are n
 
 ---
 
+## Contributing
+
+- [Contributing Guide](../CONTRIBUTING.md) — local setup, required checks, test tiers, audit-pipeline contribution patterns, and the stability surface
+- [Agent Context](../AGENTS.md) — canonical package conventions, release workflow, and review method
+
+---
+
 ## For Production Teams
 
 Laravel Swarm is designed for production-grade AI workflows with operator controls, auditability, and durable execution. A recommended reading path for architects and engineering leads:
