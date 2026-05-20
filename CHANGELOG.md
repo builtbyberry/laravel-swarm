@@ -16,8 +16,6 @@ Operator UX, developer experience, and test coverage on top of the v0.5 audit ou
 
 ## v0.5.0 - 2026-05-19
 
-## v0.5.0 - 2026-05-19
-
 ### Added
 
 - **Audit outbox + queue/dead-letter failure policies (#20).** Sink failures can now be persisted to the new `swarm_audit_outbox` table and retried via `swarm:relay --type=audit`. The relay command drains both the durable lane and the audit lane in a single pass (or each independently with `--type=step` / `--type=audit`). `SinkFailureDecision` gains `Queue` and `DeadLetter` cases. `ConfiguredSinkFailureHandler` recognizes `queue` and `dead_letter` failure-policy values in addition to the v0.4 `swallow` / `log` / `halt`. `swarm.audit.outbox.max_attempts` (default 5) controls how many retry passes a record gets before moving to the dead-letter status. `command.relay` evidence gains `audit_replayed_count` and `audit_dead_lettered_count` fields. Dead-letter transitions emit `Log::error` so monitoring stacks can alert on undelivered audit evidence. The `payload` and `last_error` columns are sealed when `swarm.persistence.encrypt_at_rest` is enabled.
