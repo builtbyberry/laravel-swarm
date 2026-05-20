@@ -166,3 +166,96 @@ class HmacAuditSigner implements SwarmAuditSigner
 Implementations must not mutate or remove existing keys. See
 `docs/audit-evidence-contract.md` for the full envelope contract, signing
 scope guidance, and chain-signing patterns.
+
+## v0.5 Audit Chain For Redacted Evidence
+
+Privacy-sensitive workflows lean harder on the v0.5 audit chain than
+non-regulated callers do. With redaction enabled, the audit evidence emitted
+for each run is the **only** durable record of what happened — there is no raw
+prompt or output to fall back on. So the behavior of the bound `SwarmAuditSink`
+under failure becomes a privacy and compliance question, not just an operations
+one.
+
+In v0.5, `SWARM_AUDIT_FAILURE_POLICY` **defaults to `queue`**. That means:
+
+- A sink that throws no longer silently drops the redacted evidence record.
+- Instead, the failed record is persisted to the `swarm_audit_outbox` table
+  for retry via `swarm:relay --type=audit`.
+- When `swarm.persistence.encrypt_at_rest=true` (also the default on database
+  persistence), the persisted `payload` and `last_error` columns are sealed
+  with `SwarmPersistenceCipher` — the same encrypter-backed sealing used
+  elsewhere in the package, scoped to `APP_KEY`.
+
+For a privacy-capture deployment the recommended baseline is:
+
+```bash
+SWARM_PERSISTENCE_DRIVER=database
+SWARM_CAPTURE_INPUTS=false
+SWARM_CAPTURE_OUTPUTS=false
+
+# v0.5 defaults — listed explicitly for the audit chain
+SWARM_AUDIT_FAILURE_POLICY=queue
+SWARM_ENCRYPT_AT_REST=true
+SWARM_AUDIT_OUTBOX_DEAD_LETTER_RETENTION_DAYS=90
+```
+
+### Inspecting Redacted Payloads In The Outbox
+
+When a sink failure persists a record, the redacted shape is preserved. Input
+and output values are still `[redacted]`; the categories, run identifiers, and
+metadata stay queryable for triage:
+
+```bash
+php artisan swarm:audit:status
+```
+
+```
+  INFO  Audit outbox summary.
+
+  ----------------------- -------
+   Status                  Count
+  ----------------------- -------
+   pending (unclaimed)     2
+   reserved                0
+     stale (> 120s)        0
+   dead_letter             0
+  ----------------------- -------
+
+  INFO  Top dead-letter categories.
+
+  • no dead-letter rows
+```
+
+The summary tells operators **how much** redacted evidence is queued and
+**where it is in the lifecycle**, without exposing the payloads themselves —
+which is exactly the layer of indirection privacy-sensitive workloads want
+between routine monitoring and forensic inspection.
+
+### A Privacy Note On `swarm:audit:reconcile --show`
+
+`swarm:audit:reconcile --show=<id>` **unseals** the encrypted-at-rest payload
+and prints it to the terminal for human review:
+
+```bash
+php artisan swarm:audit:reconcile --show=42
+```
+
+In a privacy-capture deployment this command performs a **privileged
+re-disclosure**. The payload itself is already redacted at the field level, so
+input and output values remain `[redacted]`, but metadata, actor identity, and
+correlation IDs become visible. Treat access to `swarm:audit:reconcile --show`
+the same way you treat access to your application's audit-log viewer — log
+the operator who ran it, restrict it to the on-call audit reviewer role, and
+gate it behind your standard privileged-command controls.
+
+`swarm:audit:reconcile --requeue` and `--dismiss` are themselves audited: each
+sub-mode emits a `command.audit_reconcile` evidence record **before** the
+outbox row is mutated. If the audit emit fails the row is left untouched, so
+reconciliation can never silently erase redacted evidence.
+
+For the full forensic loop — including the simulated sink-outage walkthrough,
+recovery via the relay, and dead-letter triage — see
+[`durable-compliance-review/README.md`](../durable-compliance-review/README.md#v05-audit-chain-walkthrough).
+The operator decision tree for audit-outbox triage lives in
+[`docs/operator-runbook-audit-outbox.md`](../../docs/operator-runbook-audit-outbox.md)
+(GitHub issue #45).
