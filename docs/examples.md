@@ -16,6 +16,49 @@ The starter pack is meant to get a new user from `composer require` to a
 working swarm in under a minute. The reference examples are meant to
 answer "how do I do X?" once the user has the basic mental model.
 
+## Install the starter pack
+
+The recommended path is the dedicated sub-installer:
+
+```bash
+# Pick one, several, or all in an interactive multiselect.
+php artisan swarm:install:examples
+
+# Headless / CI: pick by name or take everything.
+php artisan swarm:install:examples --example=sequential-blog-pipeline
+php artisan swarm:install:examples --all --no-interaction
+
+# Overwrite previously-installed copies.
+php artisan swarm:install:examples --all --force
+```
+
+The installer copies the full example tree as it ships under
+`stubs/examples/<name>/`, preserving the `app/Ai/Swarms/<Name>/`,
+`app/Ai/Agents/<Name>/`, and `app/Console/Commands/SwarmExample<Name>Command.php`
+layout. The `{{ rootNamespace }}` placeholder in every PHP file is rewritten
+to the host app's PSR-4 root (read from `composer.json`; defaults to `App\`).
+
+Laravel 11+ Artisan auto-discovery picks the new runner commands up on the
+next boot — there is no `routes/console.php` mutation. The installer prints
+the exact `php artisan swarm:example:<name>` command for each installed
+example.
+
+Behavior contract:
+
+- **Idempotent by default.** A second `swarm:install:examples` run is a
+  byte-level no-op on every file in the host app.
+- **Refuses to clobber.** If a destination file already exists, the
+  installer skips that example with an actionable warning and continues with
+  the rest of the selection. Re-run with `--force` to overwrite.
+- **`--all` and `--example` are mutually exclusive.** Pass one or the other.
+- **Non-interactive mode requires explicit selection.** `--no-interaction`
+  on its own errors loudly with the list of available examples — the
+  installer never installs everything by accident.
+
+`swarm:install:examples` is also dispatchable from the higher-level
+`swarm:install` orchestrator when the operator opts in to examples during a
+fresh install.
+
 ## What the starter pack ships
 
 ### 1. `sequential-blog-pipeline`
