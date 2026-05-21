@@ -12,7 +12,8 @@ use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
-use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Schema;
+use Psr\Log\LoggerInterface;
 
 /**
  * Default {@see SnapshotsMemory} implementation backed by the
@@ -36,24 +37,38 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
 {
     use InteractsWithJsonColumns;
 
+    /**
+     * Cached result of the one-time `swarm_memories` table precheck. `null`
+     * means "not yet probed"; the first {@see snapshot()} call resolves it
+     * via {@see Schema::hasTable()} and reuses the answer for the lifetime
+     * of the instance so we don't pay a `SHOW TABLES` round-trip on every
+     * agent invocation.
+     */
+    protected ?bool $memoryTableExists = null;
+
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
         protected SwarmMemory $memory,
+        protected LoggerInterface $logger,
     ) {}
 
     public function snapshot(string $runId, int $stepIndex): MemorySnapshot
     {
-        // The companion `swarm_memories` table (issue #109) may not be
-        // migrated yet — for example during the 0.9.0 staged rollout where
-        // the entries-schema and snapshots-schema migrations land in
-        // separate PRs. Treat a missing memory table as "no Run-scoped
-        // entries" rather than failing every agent invocation; the snapshot
-        // row itself still persists so replay sees the empty view.
-        try {
-            $entries = $this->memory->all(MemoryScope::Run, $runId);
-        } catch (QueryException) {
+        // The companion `swarm_memories` table (issue #109) is required for
+        // the Run-scoped read below. We probe its existence exactly once per
+        // recorder instance via `Schema::hasTable()` and cache the result on
+        // `$memoryTableExists`. When the precheck fails we log and persist
+        // an empty entries list so the snapshot row itself still lands for
+        // replay. When the precheck succeeds we delegate straight to the
+        // memory facade and let any genuine `QueryException` (connection
+        // drop, permission revocation, schema corruption, deadlock, …)
+        // propagate — silently swallowing those would corrupt the audit
+        // trail without surfacing the failure to the operator.
+        if (! $this->ensureMemoryTableExists()) {
             $entries = [];
+        } else {
+            $entries = $this->memory->all(MemoryScope::Run, $runId);
         }
 
         $snapshot = MemorySnapshot::fromEntries($runId, $stepIndex, $entries, []);
@@ -124,5 +139,33 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         return $this->connection->table(
             (string) $this->config->get('swarm.tables.memory_snapshots', 'swarm_memory_snapshots'),
         );
+    }
+
+    /**
+     * Probe the `swarm_memories` table once per recorder instance.
+     *
+     * Returns `true` when the table is present and the recorder can safely
+     * read Run-scoped entries from the memory facade. Returns `false` when
+     * the table is absent, in which case the snapshot persists with an
+     * empty entries list and an info-level log line is emitted so operators
+     * can spot misconfigured environments.
+     */
+    protected function ensureMemoryTableExists(): bool
+    {
+        if ($this->memoryTableExists !== null) {
+            return $this->memoryTableExists;
+        }
+
+        $table = (string) $this->config->get('swarm.tables.memories', 'swarm_memories');
+        $exists = Schema::connection($this->connection->getName())->hasTable($table);
+
+        if (! $exists) {
+            $this->logger->info(
+                'laravel-swarm: memory table missing; snapshot will persist with empty entries',
+                ['table' => $table, 'connection' => $this->connection->getName()],
+            );
+        }
+
+        return $this->memoryTableExists = $exists;
     }
 }
