@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Tests\Installer\Fixtures\AlwaysAppendsInstallerCommand;
 use BuiltByBerry\LaravelSwarm\Tests\Installer\Fixtures\NoOpInstallerCommand;
 use BuiltByBerry\LaravelSwarm\Tests\Installer\InstallerTestCase;
 use PHPUnit\Framework\AssertionFailedError;
@@ -10,6 +11,7 @@ uses(InstallerTestCase::class);
 
 beforeEach(function () {
     $this->registerInstallerCommand(NoOpInstallerCommand::class);
+    $this->registerInstallerCommand(AlwaysAppendsInstallerCommand::class);
 });
 
 test('assertFileContains fails with a clear message when the file is missing', function () {
@@ -105,22 +107,18 @@ test('assertProviderBinding fails when the binding is absent', function () {
 });
 
 test('twice()->assertSecondRunIsNoOp fails loudly when the installer is NOT idempotent', function () {
-    // --force makes every run rewrite the same files, which changes file
-    // mtimes but not contents — so it would still be a no-op.
-    // Add a second mutation that actually changes contents: append a marker
-    // line to .env on every run via runInstaller calls and manual writes.
-    $this->runInstaller('swarm-fixture:install')->assertSucceeded();
-
-    // Now manually mutate one file between snapshots so the double-run
-    // diff has something to find. We do this by calling runInstaller a
-    // second time with a different mutation in between.
-    $result = $this->runInstaller('swarm-fixture:install');
-
-    // Inject a difference: append a fresh line to .env post-snapshot.
-    file_put_contents($this->skeletonPath('.env'), "FRESH_CHANGE=1\n", FILE_APPEND);
-
-    expect(fn () => $result->twice()->assertSecondRunIsNoOp())
-        ->toThrow(AssertionFailedError::class);
+    // The AlwaysAppends fixture is intentionally non-idempotent: every run
+    // appends a fresh unique line to .env. The harness should catch that
+    // drift end-to-end, without any test-side file mutation.
+    expect(
+        fn () => $this->runInstaller('swarm-fixture:always-appends')
+            ->assertSucceeded()
+            ->twice()
+            ->assertSecondRunIsNoOp()
+    )->toThrow(
+        AssertionFailedError::class,
+        '.env',
+    );
 });
 
 test('snapshotSkeleton hashes every file and is stable across calls', function () {

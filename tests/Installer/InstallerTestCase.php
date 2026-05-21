@@ -9,6 +9,7 @@ use Illuminate\Bus\BusServiceProvider;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Application;
+use Illuminate\Foundation\Console\Kernel as FoundationKernel;
 use Laravel\Ai\AiServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 use PHPUnit\Framework\Assert;
@@ -124,10 +125,19 @@ abstract class InstallerTestCase extends Orchestra
      */
     public function registerInstallerCommand(string $commandClass): void
     {
-        /** @var ConsoleKernel $kernel */
+        // Resolve via the contract (which is the bound singleton) and assert
+        // the concrete type so the `registerCommand()` call below is sound —
+        // `registerCommand()` lives on FoundationKernel, not the contract.
+        // Resolving FoundationKernel::class directly would auto-instantiate
+        // a fresh, unbound kernel and the command would never reach the one
+        // that handles call().
         $kernel = $this->app->make(ConsoleKernel::class);
+        assert($kernel instanceof FoundationKernel);
 
-        // Force the kernel to bootstrap before adding so getArtisan() exists.
+        // Force the kernel to initialize its Artisan instance before adding
+        // so the command attaches to the live application — bootstrap() alone
+        // does not initialize getArtisan(), and getArtisan() is protected so
+        // we cannot call it directly. A no-op command invocation triggers it.
         $kernel->call('list', [], new BufferedOutput);
 
         $kernel->registerCommand($this->app->make($commandClass));

@@ -159,6 +159,14 @@ opt in to `InstallerTestCase` per-file via `uses()`. This keeps the
 installer harness lean and avoids forcing every installer test to pay for
 the runtime-test setup.
 
+**Database note.** The harness configures `:memory:` sqlite in
+`defineEnvironment()`. That's enough for installers that only assert on disk
+state. If your installer needs to verify migrations ran against a connection
+that survives across PDO instances — queue-worker fakes, subprocess
+assertions, anything that opens a second connection — override
+`defineEnvironment()` in your test file and point at a file-backed sqlite or
+a real connection.
+
 ## See also
 
 - `tests/Installer/NoOpInstallerSmokeTest.php` — end-to-end smoke test against
