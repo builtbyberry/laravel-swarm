@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
 use BuiltByBerry\LaravelSwarm\LaravelSwarm;
+use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\ServiceProvider;
+use InvalidArgumentException;
 use Laravel\Pulse\Pulse;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
@@ -48,6 +51,7 @@ class InstallCommand extends Command
     /** @var string */
     protected $signature = 'swarm:install
         {--force : Overwrite existing config/swarm.php when re-publishing}
+        {--force-env : Overwrite an existing SWARM_PERSISTENCE_DRIVER value in .env when --persistence disagrees with it}
         {--persistence= : Persistence driver to seed (database|cache). Defaults to database interactively, no change otherwise.}
         {--migrate : Run migrations without prompting (database persistence)}
         {--skip-migrate : Skip running migrations even if pending (database persistence)}
@@ -125,7 +129,40 @@ class InstallCommand extends Command
         $envDefaults = self::ENV_DEFAULTS;
         $envDefaults['SWARM_PERSISTENCE_DRIVER'] = $persistence;
 
-        $envAddedCount = $this->seedEnvFile($files, $app->basePath('.env'), $envDefaults);
+        $envPath = $app->basePath('.env');
+
+        // 3a. Persistence-mode mismatch detection. If .env already declares a
+        // SWARM_PERSISTENCE_DRIVER that disagrees with the resolved
+        // $persistence, the operator's existing .env value would win the
+        // runtime contest but the installer's branch selection (migrate vs
+        // scaffold ignoreMigrations()) would silently follow the flag. That
+        // divergence is a silent footgun — refuse and ask the operator to
+        // either fix .env or opt in via --force-env.
+        $existingEnvPersistence = $files->exists($envPath)
+            ? $this->readEnvKey((string) $files->get($envPath), 'SWARM_PERSISTENCE_DRIVER')
+            : null;
+
+        if ($existingEnvPersistence !== null && $existingEnvPersistence !== $persistence) {
+            if (! (bool) $this->option('force-env')) {
+                $this->components->error(
+                    "Mismatch: --persistence={$persistence} but .env declares "
+                    ."SWARM_PERSISTENCE_DRIVER={$existingEnvPersistence}. "
+                    .'Update .env to match (or pass --force-env to overwrite the existing value).'
+                );
+
+                return self::FAILURE;
+            }
+
+            // --force-env: overwrite the existing .env key in place before
+            // the additive seed pass runs (which would otherwise leave the
+            // operator's value untouched).
+            $envContents = (string) $files->get($envPath);
+            $envContents = $this->rewriteEnvKey($envContents, 'SWARM_PERSISTENCE_DRIVER', $persistence);
+            $files->put($envPath, $envContents);
+            $summary[] = "Overwrote SWARM_PERSISTENCE_DRIVER in .env (--force-env): {$existingEnvPersistence} → {$persistence}";
+        }
+
+        $envAddedCount = $this->seedEnvFile($files, $envPath, $envDefaults);
         $exampleAddedCount = 0;
         $examplePath = $app->basePath('.env.example');
         if ($files->exists($examplePath)) {
@@ -155,7 +192,13 @@ class InstallCommand extends Command
         $this->warnIfSyncQueue($config);
 
         // 6. Offer sub-installers.
-        $subResults = $this->dispatchSubInstallers($persistence);
+        try {
+            $subResults = $this->dispatchSubInstallers($persistence);
+        } catch (InvalidArgumentException) {
+            // shouldDispatch() already wrote the conflict-error message to
+            // the console; halt here so the closing panel never renders.
+            return self::FAILURE;
+        }
         foreach ($subResults as $line) {
             $summary[] = $line;
         }
@@ -167,38 +210,70 @@ class InstallCommand extends Command
     }
 
     /**
-     * Publish `config/swarm.php` into the host app's `config/` directory.
+     * Publish every file under the `swarm-config` publish tag into the host
+     * app's config directory.
      *
-     * We copy the package-shipped `config/swarm.php` directly rather than
-     * dispatching `vendor:publish --tag=swarm-config` because the publish
-     * map's destination is computed via `config_path()` at provider-boot
-     * time. Testbench-backed installer harnesses (#92) reset the application
-     * base path *after* boot, so the publish destination would point at the
-     * test runner's stock config directory instead of the host app. A direct
-     * copy resolves the destination at call time and works everywhere.
+     * We resolve sources via `ServiceProvider::pathsToPublish()` (the standard
+     * publish registry the package already declares) rather than hand-coding a
+     * source path — so future config publishables under the same tag are
+     * picked up automatically.
+     *
+     * We re-resolve each destination against the *current* `$app->basePath()`
+     * instead of trusting the captured destination from the publish map,
+     * because Testbench-backed installer harnesses (#92) reset the
+     * application base path *after* provider boot — the captured destination
+     * would point at the test runner's stock config directory. The
+     * recomputed destination works in both Testbench and a real Laravel app.
      *
      * Returns one of:
-     *   'published' — fresh write
-     *   'already'   — file already exists and `--force` was not passed
-     *   'rewritten' — file existed and `--force` overwrote it
+     *   'published' — at least one file was a fresh write, none existed
+     *   'already'   — every file already exists and `--force` was not passed
+     *   'rewritten' — at least one file was overwritten via `--force`
      */
     private function publishConfig(Application $app, Filesystem $files): string
     {
-        $configPath = $app->basePath('config/swarm.php');
         $force = (bool) $this->option('force');
 
-        if ($files->exists($configPath) && ! $force) {
+        /** @var array<string, string> $paths */
+        $paths = ServiceProvider::pathsToPublish(SwarmServiceProvider::class, 'swarm-config');
+
+        if ($paths === []) {
             return 'already';
         }
 
-        $existedBefore = $files->exists($configPath);
+        $configBase = $app->basePath('config');
+        $anyWritten = false;
+        $anyExisted = false;
 
-        $source = dirname(__DIR__, 3).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'swarm.php';
+        foreach ($paths as $source => $capturedDestination) {
+            // Re-resolve the destination against the current base path —
+            // the captured destination was computed at provider-boot time
+            // and is stale under Testbench.
+            $filename = basename($capturedDestination);
+            $destination = $configBase.DIRECTORY_SEPARATOR.$filename;
 
-        $files->ensureDirectoryExists(dirname($configPath));
-        $files->copy($source, $configPath);
+            $existedBefore = $files->exists($destination);
 
-        return $existedBefore ? 'rewritten' : 'published';
+            if ($existedBefore && ! $force) {
+                $anyExisted = true;
+
+                continue;
+            }
+
+            if ($existedBefore) {
+                $anyExisted = true;
+            }
+
+            $files->ensureDirectoryExists(dirname($destination));
+            $files->copy($source, $destination);
+            $anyWritten = true;
+        }
+
+        if (! $anyWritten) {
+            return 'already';
+        }
+
+        return $anyExisted ? 'rewritten' : 'published';
     }
 
     /**
@@ -245,9 +320,22 @@ class InstallCommand extends Command
     }
 
     /**
-     * Append missing Swarm env keys + safe defaults to the given .env-shaped
-     * file. Existing keys are left untouched (no clobbering of operator
-     * overrides). Returns the number of keys newly appended.
+     * Sentinel pair for the managed env block. seedEnvFile() inserts new
+     * keys inside this fence on first run and extends within the fence on
+     * subsequent runs — so a future package version adding defaults, or an
+     * operator deleting a key, doesn't accumulate duplicate `# Laravel
+     * Swarm` headers in .env.
+     */
+    private const ENV_BLOCK_OPEN = '# swarm:install — managed env keys (do not edit between markers)';
+
+    private const ENV_BLOCK_CLOSE = '# end swarm:install env keys';
+
+    /**
+     * Add missing Swarm env keys + safe defaults to the given .env-shaped
+     * file, fenced inside a sentinel-marked managed block. Existing keys
+     * (whether inside the block or elsewhere in the file) are left
+     * untouched — no clobbering of operator overrides. Returns the number of
+     * keys newly written.
      *
      * @param  array<string, string>  $defaults
      */
@@ -262,16 +350,41 @@ class InstallCommand extends Command
             return 0;
         }
 
-        if ($contents !== '' && ! str_ends_with($contents, "\n")) {
-            $contents .= "\n";
-        }
+        if (str_contains($contents, self::ENV_BLOCK_OPEN)) {
+            // Extend the existing managed block in place. The lazy `(.*?)`
+            // captures up to (but not including) the final newline before
+            // the CLOSE sentinel, so the extension needs to lead with a
+            // newline to keep KEY=value lines on separate lines.
+            $pattern = '/('.preg_quote(self::ENV_BLOCK_OPEN, '/').'\R)(.*?)(\R'.preg_quote(self::ENV_BLOCK_CLOSE, '/').')/s';
 
-        $block = "\n# Laravel Swarm — added by swarm:install\n";
-        foreach ($missing as $key => $value) {
-            $block .= "{$key}={$value}\n";
-        }
+            $extension = "\n";
+            foreach ($missing as $key => $value) {
+                $extension .= "{$key}={$value}\n";
+            }
+            $extension = rtrim($extension, "\n");
 
-        $files->put($path, $contents.$block);
+            $rewritten = (string) preg_replace_callback(
+                $pattern,
+                static fn (array $m): string => $m[1].$m[2].$extension.$m[3],
+                $contents,
+                1,
+            );
+
+            $files->put($path, $rewritten);
+        } else {
+            // Append a fresh sentinel-fenced block at the end of the file.
+            if ($contents !== '' && ! str_ends_with($contents, "\n")) {
+                $contents .= "\n";
+            }
+
+            $block = "\n".self::ENV_BLOCK_OPEN."\n";
+            foreach ($missing as $key => $value) {
+                $block .= "{$key}={$value}\n";
+            }
+            $block .= self::ENV_BLOCK_CLOSE."\n";
+
+            $files->put($path, $contents.$block);
+        }
 
         return count($missing);
     }
@@ -300,6 +413,48 @@ class InstallCommand extends Command
         }
 
         return array_values(array_unique($keys));
+    }
+
+    /**
+     * Read a single env key's value from .env-shaped contents. Returns null
+     * when the key is not present. Strips surrounding single/double quotes
+     * for the value (matches Laravel's own .env semantics).
+     */
+    private function readEnvKey(string $contents, string $key): ?string
+    {
+        $pattern = '/^\s*'.preg_quote($key, '/').'\s*=\s*(.*)$/m';
+
+        if (preg_match($pattern, $contents, $m) !== 1) {
+            return null;
+        }
+
+        $value = trim($m[1]);
+
+        if (
+            strlen($value) >= 2
+            && (
+                ($value[0] === '"' && substr($value, -1) === '"')
+                || ($value[0] === "'" && substr($value, -1) === "'")
+            )
+        ) {
+            $value = substr($value, 1, -1);
+        }
+
+        return $value;
+    }
+
+    /**
+     * Rewrite a single env key's value in place. Used by the --force-env
+     * branch of the persistence-mismatch detector to overwrite an existing
+     * SWARM_PERSISTENCE_DRIVER value before the additive seeding pass runs.
+     */
+    private function rewriteEnvKey(string $contents, string $key, string $value): string
+    {
+        $pattern = '/^(\s*'.preg_quote($key, '/').'\s*=).*$/m';
+
+        $rewritten = preg_replace($pattern, '$1'.$value, $contents, 1);
+
+        return is_string($rewritten) ? $rewritten : $contents;
     }
 
     /**
@@ -519,17 +674,34 @@ class InstallCommand extends Command
     /**
      * Decide whether to dispatch a given sub-installer.
      *
-     * Honors --with-<name> / --without-<name>. In interactive mode without an
-     * override, prompts. In non-interactive mode without an override, returns
-     * the supplied default.
+     * Honors --with-<name> / --without-<name>. Refuses if both are passed
+     * (matches the conflicting-flag pattern used by InstallExamplesCommand).
+     * In interactive mode without an override, prompts. In non-interactive
+     * mode without an override, returns the supplied default.
+     *
+     * @throws InvalidArgumentException When both --with-<name> and
+     *                                  --without-<name> flags are passed.
      */
     private function shouldDispatch(string $name, bool $defaultYes, ?string $helpHint = null): bool
     {
-        if ((bool) $this->option('with-'.$name) === true) {
+        $with = (bool) $this->option('with-'.$name);
+        $without = (bool) $this->option('without-'.$name);
+
+        if ($with && $without) {
+            $this->components->error(
+                "Pass either --with-{$name} or --without-{$name}, not both."
+            );
+
+            throw new InvalidArgumentException(
+                "Conflicting flags: --with-{$name} and --without-{$name}."
+            );
+        }
+
+        if ($with) {
             return true;
         }
 
-        if ((bool) $this->option('without-'.$name) === true) {
+        if ($without) {
             return false;
         }
 
@@ -585,8 +757,8 @@ class InstallCommand extends Command
         $this->newLine();
         $this->components->info('Laravel Swarm is installed.');
 
-        foreach ($summary as $line) {
-            $this->components->bulletList([$line]);
+        if ($summary !== []) {
+            $this->components->bulletList($summary);
         }
 
         $this->newLine();
