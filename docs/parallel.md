@@ -13,7 +13,7 @@ That is exactly what `TopologyEnum::Parallel` does. The `agents()` array defines
 Generate a parallel swarm with:
 
 ```bash
-php artisan make:swarm ResearchSwarm --topology=parallel
+php artisan make:swarm:swarm ResearchSwarm --topology=parallel
 ```
 
 The generated class uses the `#[Topology(TopologyEnum::Parallel)]` attribute and the `Runnable` trait:

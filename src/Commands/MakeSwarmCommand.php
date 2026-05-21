@@ -4,16 +4,29 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
-use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
-use Illuminate\Console\GeneratorCommand;
 use Symfony\Component\Console\Attribute\AsCommand;
-use Symfony\Component\Console\Input\InputOption;
 
+/**
+ * Backwards-compatibility alias for the new dedicated generator commands.
+ *
+ * `make:swarm` was the only generator the package shipped through v0.7.x;
+ * it scaffolded a swarm class. v0.8.0 splits the generator surface in two:
+ *
+ *  - `make:swarm:swarm <Name>` — scaffold a swarm class (this command's
+ *    historical behavior, polished and unchanged by default)
+ *  - `make:swarm:agent <Name>` — scaffold an agent class (new in v0.8.0)
+ *
+ * `make:swarm` continues to work and delegates to `make:swarm:swarm` with
+ * the same arguments so existing scripts and docs keep functioning. A
+ * deprecation notice prints to stderr (so it never contaminates piped JSON
+ * or stdout) to nudge callers toward the new commands.
+ *
+ * Slated for removal in a future major release; track #91 for the
+ * deprecation window.
+ */
 #[AsCommand(name: 'make:swarm')]
-class MakeSwarmCommand extends GeneratorCommand
+class MakeSwarmCommand extends MakeSwarmSwarmCommand
 {
-    use ResolvesStringConsoleInput;
-
     /**
      * The console command name.
      *
@@ -26,94 +39,17 @@ class MakeSwarmCommand extends GeneratorCommand
      *
      * @var string
      */
-    protected $description = 'Create a new swarm class';
+    protected $description = '[Deprecated] Alias for make:swarm:swarm. Use make:swarm:swarm or make:swarm:agent instead.';
 
     /**
-     * The type of class being generated.
-     *
-     * @var string
-     */
-    protected $type = 'Swarm';
-
-    /**
-     * The resolved topology, set during handle() before stub resolution.
-     */
-    protected string $resolvedTopology = 'sequential';
-
-    /**
-     * Validate the --topology option before generating.
+     * Print a deprecation notice, then delegate to the new command's logic.
      */
     public function handle(): ?bool
     {
-        $topology = $this->optionalOptionString('topology');
-        $valid = ['sequential', 'parallel', 'hierarchical', 'static-hierarchical'];
-
-        if ($topology === null) {
-            if ($this->input->isInteractive()) {
-                $chosen = $this->choice('Which topology?', ['sequential', 'parallel', 'hierarchical', 'static-hierarchical'], 'sequential');
-                $topology = is_string($chosen) ? $chosen : 'sequential';
-            } else {
-                $topology = 'sequential';
-            }
-        }
-
-        if (! in_array($topology, $valid, true)) {
-            $this->error(
-                'Invalid topology ['.$topology.']. Valid options are: '.implode(', ', $valid).'.'
-            );
-
-            return true;
-        }
-
-        $this->resolvedTopology = $topology;
+        $this->components->warn(
+            'make:swarm is deprecated. Use `make:swarm:swarm` to scaffold a swarm class or `make:swarm:agent` to scaffold an agent class. See docs/generators.md.'
+        );
 
         return parent::handle();
-    }
-
-    /**
-     * Get the stub file for the generator.
-     */
-    protected function getStub(): string
-    {
-        return $this->resolveStubPath();
-    }
-
-    /**
-     * Resolve the fully-qualified path to the stub.
-     */
-    protected function resolveStubPath(): string
-    {
-        $stubFile = match ($this->resolvedTopology) {
-            'parallel' => 'swarm.parallel.stub',
-            'hierarchical' => 'swarm.hierarchical.stub',
-            'static-hierarchical' => 'swarm.static-hierarchical.stub',
-            default => 'swarm.stub',
-        };
-
-        return file_exists($customPath = $this->laravel->basePath("stubs/{$stubFile}"))
-            ? $customPath
-            : __DIR__."/../../stubs/{$stubFile}";
-    }
-
-    /**
-     * Get the default namespace for the class.
-     *
-     * @param  string  $rootNamespace
-     */
-    protected function getDefaultNamespace($rootNamespace): string
-    {
-        return $rootNamespace.'\Ai\Swarms';
-    }
-
-    /**
-     * Get the console command options.
-     *
-     * @return array<int, array<int, mixed>>
-     */
-    protected function getOptions(): array
-    {
-        return [
-            ['topology', 't', InputOption::VALUE_OPTIONAL, 'The topology for the swarm (sequential, parallel, hierarchical, static-hierarchical)', null],
-        ];
     }
 }

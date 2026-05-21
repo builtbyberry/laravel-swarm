@@ -30,7 +30,7 @@ Define a swarm once, return the Laravel AI agents that participate in it, and ru
 ```bash
 composer require builtbyberry/laravel-swarm
 php artisan migrate
-php artisan make:swarm ContentPipeline
+php artisan make:swarm:swarm ContentPipeline
 ```
 
 ```php
@@ -98,7 +98,7 @@ Publish the configuration when you want to change defaults:
 php artisan vendor:publish --tag=swarm-config
 ```
 
-Publish the stubs when you want to customize the `make:swarm` template:
+Publish the stubs when you want to customize the `make:swarm:swarm` or `make:swarm:agent` templates:
 
 ```bash
 php artisan vendor:publish --tag=swarm-stubs
@@ -118,8 +118,10 @@ php artisan swarm:health --durable
 Generate a swarm class:
 
 ```bash
-php artisan make:swarm ContentPipeline
+php artisan make:swarm:swarm ContentPipeline
 ```
+
+See [Generators](docs/generators.md) for the full generator surface, including `make:swarm:agent` and the `--topology` flag.
 
 Swarms live in `App\Ai\Swarms`, implement `BuiltByBerry\LaravelSwarm\Contracts\Swarm`, use the `Runnable` trait, and return their participating Laravel AI agents from `agents()`:
 
