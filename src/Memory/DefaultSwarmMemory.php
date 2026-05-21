@@ -7,6 +7,9 @@ namespace BuiltByBerry\LaravelSwarm\Memory;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryForgotten;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRead;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
 
 /**
  * Default {@see SwarmMemory} facade implementation.
@@ -14,10 +17,19 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
  * Thin coordinator over a {@see MemoryStore} driver. The facade trades the
  * driver's entry-shaped surface for a value-shaped one so callers don't have
  * to construct or unpack `MemoryEntry` objects unless they need metadata or
- * timestamps. Cross-cutting concerns layered on top of memory (capture-policy
- * redaction in v0.10, lifecycle events from #115) live alongside this class
- * rather than inside drivers, so every driver — Cache, Database, vector
- * companion, third-party — gets them for free.
+ * timestamps.
+ *
+ * Dispatch-layer decision for memory lifecycle events ({@see MemoryWritten},
+ * {@see MemoryRead},
+ * {@see MemoryForgotten}): events are
+ * dispatched at the {@see MemoryStore} layer, not from this facade. That way
+ * callers who resolve a store directly (or use a custom driver outside the
+ * facade) still get the lifecycle event stream. The trade-off is that custom
+ * {@see MemoryStore} drivers must dispatch the events themselves to be
+ * uniform with the bundled Cache + Database stores — there is no automatic
+ * wrapping. Capture-policy redaction (v0.10) is the cross-cutting concern
+ * that will live here at the facade layer, since redaction needs the
+ * pre-store value shape.
  *
  * @internal
  */

@@ -6,9 +6,13 @@ namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryForgotten;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRead;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 
@@ -33,6 +37,7 @@ final class DatabaseMemoryStore implements MemoryStore
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
+        protected Dispatcher $events,
     ) {}
 
     public function put(MemoryEntry $entry): MemoryEntry
@@ -62,7 +67,16 @@ final class DatabaseMemoryStore implements MemoryStore
             ['value', 'metadata', 'updated_at'],
         );
 
-        return $entry->withTimestamps($createdAt, $now);
+        $persisted = $entry->withTimestamps($createdAt, $now);
+
+        $this->events->dispatch(new MemoryWritten(
+            scope: $persisted->scope,
+            scopeId: $persisted->scopeId,
+            key: $persisted->key,
+            metadata: $persisted->metadata,
+        ));
+
+        return $persisted;
     }
 
     public function get(MemoryScope $scope, string $scopeId, string $key): ?MemoryEntry
@@ -74,6 +88,12 @@ final class DatabaseMemoryStore implements MemoryStore
             ->where('key', $key)
             ->first();
 
+        $this->events->dispatch(new MemoryRead(
+            scope: $scope,
+            scopeId: $scopeId,
+            key: $key,
+        ));
+
         return $record === null ? null : $this->hydrate($record);
     }
 
@@ -84,6 +104,12 @@ final class DatabaseMemoryStore implements MemoryStore
             ->where('scope_id', $scopeId)
             ->where('key', $key)
             ->delete();
+
+        $this->events->dispatch(new MemoryForgotten(
+            scope: $scope,
+            scopeId: $scopeId,
+            key: $key,
+        ));
 
         return $deleted > 0;
     }

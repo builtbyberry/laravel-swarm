@@ -6,11 +6,15 @@ namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryForgotten;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRead;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ResolvesSwarmCacheStore;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 
 /**
  * Cache-backed {@see MemoryStore} implementation.
@@ -34,6 +38,7 @@ final class CacheMemoryStore implements MemoryStore
     public function __construct(
         protected CacheFactory $cacheFactory,
         protected ConfigRepository $config,
+        protected Dispatcher $events,
     ) {}
 
     public function put(MemoryEntry $entry): MemoryEntry
@@ -50,6 +55,13 @@ final class CacheMemoryStore implements MemoryStore
 
         $this->appendToIndex($entry->scope, $entry->scopeId, $entry->key);
 
+        $this->events->dispatch(new MemoryWritten(
+            scope: $persisted->scope,
+            scopeId: $persisted->scopeId,
+            key: $persisted->key,
+            metadata: $persisted->metadata,
+        ));
+
         return $persisted;
     }
 
@@ -57,6 +69,12 @@ final class CacheMemoryStore implements MemoryStore
     {
         /** @var array<string, mixed>|null $payload */
         $payload = $this->store()->get($this->entryKey($scope, $scopeId, $key));
+
+        $this->events->dispatch(new MemoryRead(
+            scope: $scope,
+            scopeId: $scopeId,
+            key: $key,
+        ));
 
         return $payload === null ? null : $this->decode($payload);
     }
@@ -68,6 +86,12 @@ final class CacheMemoryStore implements MemoryStore
         $this->store()->forget($this->entryKey($scope, $scopeId, $key));
         $this->removeFromIndex($scope, $scopeId, $key);
 
+        $this->events->dispatch(new MemoryForgotten(
+            scope: $scope,
+            scopeId: $scopeId,
+            key: $key,
+        ));
+
         return $existed;
     }
 
@@ -75,11 +99,13 @@ final class CacheMemoryStore implements MemoryStore
     {
         $entries = [];
 
+        // Bypass get() here so listing does not emit a MemoryRead per entry.
         foreach ($this->index($scope, $scopeId) as $key) {
-            $entry = $this->get($scope, $scopeId, $key);
+            /** @var array<string, mixed>|null $payload */
+            $payload = $this->store()->get($this->entryKey($scope, $scopeId, $key));
 
-            if ($entry !== null) {
-                $entries[] = $entry;
+            if ($payload !== null) {
+                $entries[] = $this->decode($payload);
             }
         }
 
