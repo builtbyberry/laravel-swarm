@@ -1,0 +1,162 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BuiltByBerry\LaravelSwarm\Commands;
+
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
+use Illuminate\Console\GeneratorCommand;
+use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Input\InputOption;
+
+use function Laravel\Prompts\select;
+
+/**
+ * Scaffold a swarm class wired for a chosen topology.
+ *
+ * Produces output under `app/Ai/Swarms/`. The generated class shape mirrors
+ * the runnable starter examples shipped under `stubs/examples/` so what you
+ * generate looks like what `swarm:install:examples` lands.
+ *
+ * Companion command: `make:swarm:agent` scaffolds the individual agent
+ * classes a swarm composes. See `docs/generators.md`.
+ */
+#[AsCommand(name: 'make:swarm:swarm')]
+class MakeSwarmSwarmCommand extends GeneratorCommand
+{
+    use ResolvesStringConsoleInput;
+
+    /**
+     * The console command name.
+     *
+     * @var string
+     */
+    protected $name = 'make:swarm:swarm';
+
+    /**
+     * The console command description.
+     *
+     * @var string
+     */
+    protected $description = 'Create a new swarm class (sequential, parallel, hierarchical, or static-hierarchical)';
+
+    /**
+     * The type of class being generated.
+     *
+     * @var string
+     */
+    protected $type = 'Swarm';
+
+    /**
+     * Valid topology values for the --topology option.
+     *
+     * @var array<int, string>
+     */
+    protected const TOPOLOGIES = [
+        'sequential',
+        'parallel',
+        'hierarchical',
+        'static-hierarchical',
+    ];
+
+    /**
+     * The resolved topology, set during handle() before stub resolution.
+     */
+    protected string $resolvedTopology = 'sequential';
+
+    /**
+     * Validate the --topology option and resolve the stub before generating.
+     */
+    public function handle(): ?bool
+    {
+        $topology = $this->optionalOptionString('topology');
+
+        if ($topology === null) {
+            if ($this->input->isInteractive()) {
+                $chosen = select(
+                    label: 'Which topology?',
+                    options: [
+                        'sequential' => 'Sequential — agents in order, each receives prior output',
+                        'parallel' => 'Parallel — agents concurrent, each gets the original task',
+                        'hierarchical' => 'Hierarchical — coordinator returns a DAG route plan at runtime',
+                        'static-hierarchical' => 'Static hierarchical — PHP-defined route plan, no coordinator call',
+                    ],
+                    default: 'sequential',
+                    hint: 'Sequential is the most common starting point.',
+                );
+                $topology = is_string($chosen) ? $chosen : 'sequential';
+            } else {
+                // Non-interactive: skip the prompt and use the safe default.
+                // laravel/prompts has a Symfony QuestionHelper fallback under
+                // non-interactive mode, but that fallback re-enters
+                // `OutputStyle::askQuestion()` — which fails loudly in tests
+                // that didn't pre-register an expectsChoice/expectsQuestion.
+                // The explicit guard keeps test ergonomics simple and matches
+                // the pattern the other v0.8.0 installers use for prompts.
+                $topology = 'sequential';
+            }
+        }
+
+        if (! in_array($topology, self::TOPOLOGIES, true)) {
+            $this->error(
+                'Invalid topology ['.$topology.']. Valid options are: '.implode(', ', self::TOPOLOGIES).'.'
+            );
+
+            return true;
+        }
+
+        $this->resolvedTopology = $topology;
+
+        return parent::handle();
+    }
+
+    /**
+     * Get the stub file for the generator.
+     */
+    protected function getStub(): string
+    {
+        return $this->resolveStubPath();
+    }
+
+    /**
+     * Resolve the fully-qualified path to the stub.
+     *
+     * Allows applications to override the shipped stub by publishing
+     * `stubs/swarm.<topology>.stub` into the project root.
+     */
+    protected function resolveStubPath(): string
+    {
+        $stubFile = match ($this->resolvedTopology) {
+            'parallel' => 'swarm.parallel.stub',
+            'hierarchical' => 'swarm.hierarchical.stub',
+            'static-hierarchical' => 'swarm.static-hierarchical.stub',
+            default => 'swarm.stub',
+        };
+
+        return file_exists($customPath = $this->laravel->basePath("stubs/{$stubFile}"))
+            ? $customPath
+            : __DIR__."/../../stubs/{$stubFile}";
+    }
+
+    /**
+     * Get the default namespace for the class.
+     *
+     * @param  string  $rootNamespace
+     */
+    protected function getDefaultNamespace($rootNamespace): string
+    {
+        return $rootNamespace.'\Ai\Swarms';
+    }
+
+    /**
+     * Get the console command options.
+     *
+     * @return array<int, array<int, mixed>>
+     */
+    protected function getOptions(): array
+    {
+        return [
+            ['topology', 't', InputOption::VALUE_OPTIONAL, 'The topology for the swarm (sequential, parallel, hierarchical, static-hierarchical)', null],
+        ];
+    }
+}

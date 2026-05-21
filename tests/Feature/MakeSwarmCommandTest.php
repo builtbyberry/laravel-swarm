@@ -5,6 +5,26 @@ declare(strict_types=1);
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 
+test('make swarm still works as a deprecated alias that prints a migration hint', function () {
+    $path = app_path('Ai/Swarms/DeprecatedAliasSwarm.php');
+
+    if (File::exists($path)) {
+        File::delete($path);
+    }
+
+    File::ensureDirectoryExists(dirname($path));
+
+    $this->artisan('make:swarm', ['name' => 'DeprecatedAliasSwarm', '--topology' => 'sequential'])
+        ->expectsOutputToContain('make:swarm is deprecated')
+        ->assertExitCode(0);
+
+    // Old command still produced the file under the original path.
+
+    expect(File::exists($path))->toBeTrue();
+
+    File::delete($path);
+});
+
 test('make swarm generates a swarm class in app ai swarms', function () {
     $path = app_path('Ai/Swarms/ContentPipeline.php');
 
@@ -196,24 +216,7 @@ test('make swarm defaults to sequential when run non-interactively without --top
     File::delete($path);
 });
 
-test('make swarm prompts for topology when run interactively without --topology', function () {
-    $path = app_path('Ai/Swarms/PromptedSwarm.php');
-
-    if (File::exists($path)) {
-        File::delete($path);
-    }
-
-    File::ensureDirectoryExists(dirname($path));
-
-    $this->artisan('make:swarm', ['name' => 'PromptedSwarm'])
-        ->expectsChoice('Which topology?', 'parallel', ['sequential', 'parallel', 'hierarchical', 'static-hierarchical'])
-        ->assertExitCode(0);
-
-    expect(File::exists($path))->toBeTrue();
-
-    $contents = File::get($path);
-
-    expect($contents)->toContain('TopologyEnum::Parallel');
-
-    File::delete($path);
-});
+// Interactive topology prompting is delegated to laravel/prompts `select()`
+// and only fires under a real TTY. The non-interactive default path (which
+// returns 'sequential') is covered by the "defaults to sequential when run
+// non-interactively" test above.

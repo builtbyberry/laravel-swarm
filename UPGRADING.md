@@ -268,6 +268,118 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.8.0
+
+v0.8.0 is purely additive on top of v0.7.0 — **no required action**. No
+migrations, no env-var changes, no breaking surface, no public-method
+signature changes. Existing v0.7 deployments can pull v0.8 in and ship
+without code or config edits.
+
+The new surfaces are all opt-in:
+
+### Optional adoption
+
+#### `php artisan swarm:install` (#85)
+
+New orchestrator command — the recommended single entry point for any
+fresh `composer require builtbyberry/laravel-swarm`. Walks the operator
+through publishing `config/swarm.php`, seeding the canonical Swarm
+`.env` keys with safe defaults, choosing the persistence path (runs
+migrations on the database driver, or scaffolds
+`LaravelSwarm::ignoreMigrations()` into `AppServiceProvider` for
+cache-only), warns when `QUEUE_CONNECTION=sync`, and offers to dispatch
+each sub-installer in turn. **Nothing to do at upgrade time** — the
+manual install flow still works and is preserved in
+`docs/advanced-setup.md`. Existing deployments that already have config
+published, migrations run, and bindings wired by hand can ignore this
+command entirely. New apps and new operators get a faster on-ramp; the
+choice is the operator's. Flags for CI use: `--no-interaction`,
+`--persistence=database|cache`, `--with-{durable,audit,pulse,examples}`
+/ `--without-{...}`, `--force` (re-publish config), `--force-env`
+(overwrite an existing `SWARM_PERSISTENCE_DRIVER` value on mismatch
+with `--persistence`). See `docs/getting-started.md` for the
+walkthrough.
+
+#### Targeted sub-installers (#86, #87, #88, #90)
+
+`swarm:install:durable`, `swarm:install:audit`, `swarm:install:pulse`,
+and `swarm:install:examples` can each be invoked on their own at any
+time — they are also dispatched from `swarm:install` when the operator
+opts in. **Use these to retrofit one Swarm capability into an existing
+install** without re-running the base installer. Each uses
+sentinel-marker file mutation so re-runs are byte-level no-ops.
+Sub-installer-specific flag documentation lives in each
+command's Quick Setup section in the per-feature docs
+(`docs/durable-execution.md`, `docs/audit-evidence-contract.md`,
+`docs/pulse.md`, `docs/examples.md`).
+
+#### `LogChannelSwarmAuditSink` (#102)
+
+New concrete `SwarmAuditSink` implementation that writes every audit
+record as a structured log entry (`swarm.audit.<category>`) to the
+configured Laravel log channel (defaults to `audit`, falls back to the
+default channel when `audit` is not configured). **The zero-config
+dev/staging sink** the `swarm:install:audit --sink=readable` installer
+binds. Implements only `SwarmAuditSink`, not `ReadableSwarmAuditSink`
+(log channels are not queryable; `swarm:trace` degrades gracefully when
+this sink is bound). Production deployments should still ship a bounded
+backend (database, queue, SIEM export). **Nothing to do at upgrade
+time** — existing custom audit sinks remain valid.
+
+#### `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent` (#89)
+
+New abstract base for runnable provider-free agents. Subclasses
+implement `instructions(): string` and `reply(string $prompt): string`;
+the shipped `prompt()` wraps the reply in a standard `AgentResponse`.
+The starter examples extend it, and `make:swarm:agent` scaffolds it as
+the default agent shape. `stream()`, `queue()`, and the broadcast
+helpers throw with a clear "use a `Promptable` agent + `Agent::fake()`"
+message — this base is for end-to-end shape demos and smoke tests, not
+the test-double surface. **Nothing to do at upgrade time**; adopt as
+needed for demos or starter scaffolds.
+
+#### `make:swarm:swarm` and `make:swarm:agent` (#91)
+
+The v0.7-era single `make:swarm` generator was split into two dedicated
+commands so the generator surface matches the two kinds of class an app
+actually writes. `make:swarm:swarm <Name>` scaffolds a swarm class
+(with `--topology=sequential|parallel|hierarchical|static-hierarchical`);
+`make:swarm:agent <Name>` scaffolds an agent class extending
+`ScriptedAgent`. Both stubs are visually consistent with the starter
+examples in `stubs/examples/`. **The legacy `make:swarm` keeps
+working** — it is now a deprecated alias that delegates to
+`make:swarm:swarm` and prints a deprecation notice to stderr. Existing
+scripts, tutorials, and docs continue to function; migrate at your own
+pace. The alias is slated for removal in a future major release.
+
+#### Starter example pack (#89, #90)
+
+Three curated runnable starter examples ship under `stubs/examples/` and
+are copied into the host app via `swarm:install:examples`:
+`sequential-blog-pipeline` (the "hello world"),
+`parallel-research-fanout` (concurrent agents + result merge), and
+`durable-approval-workflow` (durable mode + `RoutesDurableWaits`
+checkpoint resumed by a `policy_decision` signal). Each runs end-to-end
+with no API key — they use `ScriptedAgent` for the agent layer with
+TODO markers showing where to plug in a real provider. **Nothing to do
+at upgrade time**; opt in via `php artisan swarm:install:examples
+--all` whenever it's useful for onboarding a new developer or
+demonstrating the shape to a stakeholder.
+
+### What did not change
+
+- The persisted schema. No migrations land in this release.
+- The `SwarmAuditSink`, `ReadableSwarmAuditSink`, `SwarmAuditSigner`,
+  `ActorResolver`, `CapturePolicy`, `SinkFailureHandler`, or
+  `AuditOutbox` contracts.
+- The runner contract surface (`Swarm`, `Runnable`,
+  `dispatchDurable()`, the broadcast helpers, the topology enum).
+- The Pulse recorder + dashboard card surface (`SwarmRuns`,
+  `SwarmStepDurations`, the three livewire cards).
+- `swarm:health`, `swarm:trace`, `swarm:audit:status`,
+  `swarm:audit:reconcile`, `swarm:relay`, `swarm:recover`, `swarm:prune`
+  command signatures and exit codes.
+
 ## Upgrading to v0.7.0
 
 v0.7.0 is purely additive on top of v0.6.0 — **no required action**. No

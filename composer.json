@@ -55,7 +55,7 @@
     },
     "extra": {
         "branch-alias": {
-            "dev-main": "0.7.x-dev"
+            "dev-main": "0.8.x-dev"
         },
         "laravel": {
             "providers": [
@@ -71,12 +71,12 @@
         "analyse": "vendor/bin/phpstan analyse --memory-limit=2G --no-progress",
         "format": "vendor/bin/pint",
         "lint": "vendor/bin/pint --test",
-        "test": "vendor/bin/pest tests/Feature tests/Unit",
+        "test": "vendor/bin/pest tests/Feature tests/Unit tests/Installer",
         "test:process-concurrency": "vendor/bin/pest tests/ProcessConcurrency",
         "test:process-concurrency:ci": "vendor/bin/pest tests/ProcessConcurrency --fail-on-skipped --exclude-group=skip-locked-real-db",
         "test:process-concurrency:real-db": "vendor/bin/pest tests/ProcessConcurrency --group=skip-locked-real-db --fail-on-skipped",
-        "test:coverage": "vendor/bin/pest tests/Feature tests/Unit --coverage",
-        "test:coverage:ci": "vendor/bin/pest tests/Feature tests/Unit --coverage --min=80",
+        "test:coverage": "vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage",
+        "test:coverage:ci": "vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=80",
         "test:mutation": "vendor/bin/pest --mutate --coverage --parallel --covered-only",
         "hooks:install": "ln -sfv ../../tools/git-hooks/commit-msg .git/hooks/commit-msg"
     },

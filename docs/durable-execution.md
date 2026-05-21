@@ -1,3 +1,47 @@
+## Quick Setup With `swarm:install:durable`
+
+The fastest way to wire a fresh Laravel app for durable execution is the
+package's targeted sub-installer:
+
+```bash
+php artisan swarm:install:durable
+```
+
+`swarm:install:durable` is also dispatched automatically by the broader
+[`swarm:install`](./getting-started.md) entry point — if you are setting
+up the package for the first time, start there and let it offer the
+durable wiring as one step in the full install. Use the targeted command
+directly when you are adding durable execution to an application that
+already has Laravel Swarm installed.
+
+The command verifies that `swarm.persistence.driver` is `database`, confirms
+the durable runtime tables (`swarm_durable_runs`, `swarm_durable_outbox`) have
+been migrated (offering to run `php artisan migrate` if they have not),
+appends the required scheduler block to `routes/console.php` (`swarm:relay`
+every minute, `swarm:recover` every five minutes, `swarm:prune` daily) behind
+an idempotency marker so re-runs are safe, inspects `QUEUE_CONNECTION` and
+refuses on `sync` (use `--allow-sync-queue` for local experiments), and
+prints copy-paste worker snippets for `queue:work`, Laravel Horizon, and
+Forge/Supervisor.
+
+Useful flags:
+
+- `--queue=<name>` — override the queue name printed in the worker snippets
+  (defaults to the configured `SWARM_DURABLE_QUEUE` or `swarm-durable`).
+- `--migrate` / `--skip-migrate` — explicit yes/no for the migration step
+  when running non-interactively (CI, container build).
+- `--allow-sync-queue` — proceed even when `QUEUE_CONNECTION=sync`. Local
+  iteration only; never for production.
+
+What this command does **not** do, by design: install Horizon
+(`composer require laravel/horizon`), edit `config/queue.php`, or spawn
+worker processes. Those remain explicit operator decisions.
+
+The step-by-step walkthrough below is the same plumbing the installer
+performs — read it when you want to understand the operational contract,
+or follow it when you are wiring durable execution into an app the
+installer cannot touch.
+
 ## Your First Durable Swarm
 
 This section walks through the minimum setup to dispatch and monitor a durable

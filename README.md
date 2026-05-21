@@ -29,8 +29,8 @@ Define a swarm once, return the Laravel AI agents that participate in it, and ru
 
 ```bash
 composer require builtbyberry/laravel-swarm
-php artisan migrate
-php artisan make:swarm ContentPipeline
+php artisan swarm:install
+php artisan make:swarm:swarm ContentPipeline
 ```
 
 ```php
@@ -64,47 +64,34 @@ Laravel Swarm orchestrates the same Laravel AI agents, providers, and streams as
 
 ## Installation
 
-Require the package with Composer:
+Require the package with Composer, then run the interactive installer:
 
 ```bash
 composer require builtbyberry/laravel-swarm
+php artisan swarm:install
 ```
 
 Tagged releases are available on [Packagist](https://packagist.org/packages/builtbyberry/laravel-swarm). Pin a tagged release for production applications.
 
-Laravel Swarm loads its package migrations automatically. If your application
-only uses cache persistence and should not create swarm tables, opt out before
-running migrations by calling `LaravelSwarm::ignoreMigrations()` in
-`AppServiceProvider::register()`:
+`swarm:install` walks you through the full setup in one shot — it publishes `config/swarm.php`, seeds the canonical Swarm `.env` keys with safe defaults, runs the package migrations (or scaffolds `LaravelSwarm::ignoreMigrations()` for a cache-only deployment), warns when `QUEUE_CONNECTION=sync`, and offers to dispatch the targeted sub-installers in the same pass:
 
-```php
-use BuiltByBerry\LaravelSwarm\LaravelSwarm;
+- [`swarm:install:durable`](docs/durable-execution.md) — scheduler entries (`swarm:relay`, `swarm:recover`, `swarm:prune`), persistence/queue checks, copy-paste worker snippets.
+- [`swarm:install:audit`](docs/audit-evidence-contract.md) — bind a `SwarmAuditSink` (and optional `SwarmAuditSigner` / `ActorResolver` / `CapturePolicy`) inside `AppServiceProvider`.
+- [`swarm:install:pulse`](docs/pulse.md) — register the Swarm recorders and dashboard cards (only offered when `laravel/pulse` is installed).
+- [`swarm:install:examples`](docs/examples.md) — copy the runnable starter example pack into `app/Ai/`.
 
-public function register(): void
-{
-    LaravelSwarm::ignoreMigrations();
-}
-```
-
-Otherwise, run your application migrations:
+For CI and scripted setups, every prompt has a flag override:
 
 ```bash
-php artisan migrate
+php artisan swarm:install \
+    --no-interaction \
+    --persistence=database \
+    --with-durable --with-audit --with-examples
 ```
 
-Publish the configuration when you want to change defaults:
+Pass `--without-<name>` to skip a sub-installer in non-interactive mode, `--persistence=cache` for cache-only deployments, `--skip-migrate` to defer migrations, or `--force` to overwrite an existing `config/swarm.php`.
 
-```bash
-php artisan vendor:publish --tag=swarm-config
-```
-
-Publish the stubs when you want to customize the `make:swarm` template:
-
-```bash
-php artisan vendor:publish --tag=swarm-stubs
-```
-
-Check the configured stores before deploying a new environment:
+After the install, confirm everything wired up cleanly:
 
 ```bash
 php artisan swarm:health
@@ -113,13 +100,21 @@ php artisan swarm:health --durable
 
 `--durable` also verifies the database tables required by `dispatchDurable()` and coordinated multi-worker hierarchical queueing.
 
+Read [Getting Started](docs/getting-started.md) for the full new-user walkthrough — installer flow, post-install verification, and running your first starter swarm in under five minutes.
+
+### Advanced setup (manual)
+
+Prefer to wire things by hand? Every step `swarm:install` performs has a stable manual equivalent. See [Advanced Setup](docs/advanced-setup.md) for the full manual flow — config publish, migrations vs. `ignoreMigrations()`, scheduler entries, audit sink binding, Pulse recorder + dashboard registration, and copying the starter examples by hand.
+
 ## Your First Swarm
 
 Generate a swarm class:
 
 ```bash
-php artisan make:swarm ContentPipeline
+php artisan make:swarm:swarm ContentPipeline
 ```
+
+See [Generators](docs/generators.md) for the full generator surface, including `make:swarm:agent` and the `--topology` flag.
 
 Swarms live in `App\Ai\Swarms`, implement `BuiltByBerry\LaravelSwarm\Contracts\Swarm`, use the `Runnable` trait, and return their participating Laravel AI agents from `agents()`:
 

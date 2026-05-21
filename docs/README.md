@@ -10,8 +10,11 @@ Laravel Swarm is a Laravel-native multi-agent orchestration package that lets yo
 
 The recommended reading path for new users.
 
+- [Getting Started](getting-started.md) — from `composer require` to a running starter swarm in five minutes, via `swarm:install`
+- [Advanced Setup](advanced-setup.md) — the manual equivalent of every `swarm:install` step, for environments where the installer cannot run
 - [Introduction](introduction.md) — what Swarm is, the three core concepts, and a decision tree for where to start
 - [Sequential Topology](sequential.md) — the default topology; start here to build your first swarm
+- [Generators](generators.md) — `make:swarm:swarm` and `make:swarm:agent` for scaffolding new swarms and agents
 - [Choosing an Execution Mode](execution-modes.md) — prompt, queue, stream, or durable: when to use each
 - [Structured Input](structured-input.md)
 - [Testing](testing.md)
@@ -85,9 +88,13 @@ The recommended reading path for new users.
 
 ## Examples
 
-Read [examples/README.md](../examples/README.md) for the recommended order and feature coverage table.
+See [Starter Examples](examples.md) for the curated, runnable starter pack
+that `swarm:install:examples` copies into a fresh app — three examples
+covering sequential, parallel, and the durable human-in-the-loop pattern.
 
-The examples are copy-paste starting points for Laravel applications. They are not a demo application and are not autoloaded by the package.
+Read [examples/README.md](../examples/README.md) for the recommended order and feature coverage table for the larger reference collection.
+
+The reference examples are copy-paste starting points for Laravel applications. They are not a demo application and are not autoloaded by the package.
 
 - [sequential-content-pipeline](../examples/sequential-content-pipeline/README.md) — the first copy-paste workflow; a simple sequential swarm
 - [parallel-research-swarm](../examples/parallel-research-swarm/README.md) — concurrent independent agents

@@ -6,6 +6,61 @@ Evidence is routed through the `SwarmAuditSink` contract, which defaults to a
 no-op implementation. Applications bind a custom sink to route evidence into an
 append-only store, queue listener, SIEM export, or object-storage archive.
 
+## Quick Setup
+
+Run the targeted installer to scaffold the audit pipeline wiring:
+
+```bash
+php artisan swarm:install:audit
+```
+
+`swarm:install:audit` is also dispatched automatically by the broader
+[`swarm:install`](./getting-started.md) entry point — if you are setting
+up the package for the first time, start there and let it offer the audit
+wiring as one step in the full install. Use the targeted command
+directly when you are adding the audit sink to an application that
+already has Laravel Swarm installed.
+
+The command writes a `SwarmAuditSink` binding into your
+`app/Providers/AppServiceProvider::register()` behind clearly marked sentinel
+comments (re-runs are no-ops), prints the current
+`SWARM_AUDIT_FAILURE_POLICY` and `SWARM_CAPTURE_*` flags with one-line
+explainers so you can see what is being recorded, confirms the
+`swarm_audit_outbox` table is present on the database persistence driver, and
+cross-links to `swarm:audit:status`, `swarm:audit:reconcile`, and
+`swarm:trace` for verification.
+
+Flags:
+
+- `--sink=readable|noop|custom` — pick the sink shape to bind. `readable` is
+  log-channel-backed (great for dev/staging; production should ship a bounded
+  backend); `noop` makes the silent-default binding explicit; `custom` emits
+  a TODO marker pointing at where you will plug your own sink in.
+- `--with-signer`, `--with-actor-resolver`, `--with-capture-policy` —
+  scaffold optional `SwarmAuditSigner`, `ActorResolver`, and `CapturePolicy`
+  stub bindings for regulated deployments.
+
+### Non-interactive defaults
+
+Under `--no-interaction`, the installer chooses safe-but-explicit defaults
+rather than the friendly interactive defaults. This avoids "the installer
+succeeded" footguns in CI/IaC provisioning:
+
+- `--sink` defaults to `custom` (TODO marker, no working sink) instead of
+  `readable`. Silent log-routing of audit evidence in CI is the wrong
+  default; the installer forces the operator to make a deliberate choice.
+- `--with-signer`, `--with-actor-resolver`, `--with-capture-policy` all
+  default to `false`. Pass them explicitly to scaffold the optional
+  extension stubs.
+
+For unattended provisioning, pass the desired sink explicitly:
+
+```bash
+php artisan swarm:install:audit --no-interaction --sink=readable
+```
+
+The sections below cover the contract surface that this command wires up.
+
 ## Operational Storage vs Audit Evidence
 
 Swarm database tables are **operational workflow storage** — they use TTL-based
