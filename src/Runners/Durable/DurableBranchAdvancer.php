@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
@@ -16,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
@@ -55,6 +57,7 @@ class DurableBranchAdvancer
         protected DurableOutbox $outbox,
         protected DurableRunTerminalHandler $terminal,
         protected LoggerInterface $logger,
+        protected SnapshotsMemory $snapshots,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId): void
@@ -122,10 +125,15 @@ class DurableBranchAdvancer
 
         try {
             $this->stepsRecorder->started($state, (int) $branch['step_index'], $branch['agent_class'], $branch['input']);
+            $snapshot = $this->snapshots->snapshot($runId, (int) $branch['step_index']);
             $response = $agent->prompt($branch['input']);
             $output = (string) $response;
             $usage = $response->usage->toArray();
             $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
+
+            foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
+                $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
+            }
             $this->guardrails->validateStep(
                 $swarm,
                 GuardrailStepContext::fromState(

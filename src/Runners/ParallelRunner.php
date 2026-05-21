@@ -6,9 +6,11 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
+use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -32,6 +34,7 @@ class ParallelRunner
         protected SwarmCapture $capture,
         protected SwarmGuardrailRunner $guardrails,
         protected ConfigRepository $config,
+        protected SnapshotsMemory $snapshots,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -45,9 +48,11 @@ class ParallelRunner
         $this->ensureAgentsAreContainerResolvable($agents, $state->swarm::class);
 
         $callbacks = [];
+        $snapshots = [];
         foreach ($agents as $index => $agent) {
             $agentClass = $agent::class;
             $this->stepsRecorder->started($state, $index, $agentClass, $input);
+            $snapshots[$index] = $this->snapshots->snapshot($state->context->runId, $index);
 
             $callbacks[$index] = function () use ($agentClass, $input): array {
                 $agent = Container::getInstance()->make($agentClass);
@@ -64,12 +69,25 @@ class ParallelRunner
                     'usage' => $response->usage->toArray(),
                     'class' => $agentClass,
                     'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                    'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
                 ];
             };
         }
 
-        /** @var array<int, array{output: string, usage: array<string, int>, class: string, duration_ms: int}> $results */
+        /** @var array<int, array{output: string, usage: array<string, int>, class: string, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
         $results = $this->concurrency->driver()->run($callbacks);
+
+        foreach ($results as $rowIndex => $rowData) {
+            if (! isset($snapshots[$rowIndex])) {
+                continue;
+            }
+
+            $snapshot = $snapshots[$rowIndex];
+            foreach ($rowData['tool_calls'] ?? [] as $toolCall) {
+                $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
+            }
+            $snapshots[$rowIndex] = $snapshot;
+        }
 
         if (hrtime(true) >= $state->deadlineMonotonic) {
             throw new SwarmTimeoutException('The swarm exceeded its configured timeout after parallel execution.');
