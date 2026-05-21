@@ -59,9 +59,10 @@ test('the swarm_memory_snapshots table exists with the expected columns', functi
 });
 
 test('migration rolls back cleanly', function () {
-    // Rolls back the snapshots migration only. The migration we just added is
-    // top of the stack so --step=1 removes it.
-    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 1]);
+    // The snapshots migration sits one below the memories migration added by
+    // #109, so rolling back the top two steps removes both. We only assert the
+    // snapshots table here; the memories migration owns its own rollback test.
+    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 2]);
 
     expect(Schema::hasTable('swarm_memory_snapshots'))->toBeFalse();
 });

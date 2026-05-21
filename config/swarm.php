@@ -351,5 +351,6 @@ return [
         'durable_webhook_idempotency' => env('SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE', 'swarm_durable_webhook_idempotency'),
         'durable_outbox' => env('SWARM_DURABLE_OUTBOX_TABLE', 'swarm_durable_outbox'),
         'audit_outbox' => env('SWARM_AUDIT_OUTBOX_TABLE', 'swarm_audit_outbox'),
+        'memories' => env('SWARM_MEMORIES_TABLE', 'swarm_memories'),
     ],
 ];
