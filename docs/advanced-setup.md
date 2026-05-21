@@ -16,6 +16,22 @@ The recommended flow is still
 [`php artisan swarm:install`](./getting-started.md). Read this page to
 understand the underlying contract, then choose whichever path fits.
 
+## Hybrid: installer + selective opt-outs
+
+You do not have to pick all-installer or all-manual. `swarm:install` accepts
+`--without-<name>` flags for every sub-installer, so you can let the
+orchestrator handle the base setup (config publish, env seeding, persistence
+path, queue check) and skip the sub-installers you want to wire by hand:
+
+```bash
+php artisan swarm:install --without-pulse --without-examples
+```
+
+Each `swarm:install:<name>` command is also runnable on its own at any time
+— so the inverse pattern works too: skip everything in the main installer
+and run the specific sub-installers manually as you adopt their features.
+Sub-installer flags are documented under each section below.
+
 ## Install the package
 
 ```bash
