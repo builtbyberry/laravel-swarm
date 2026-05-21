@@ -14,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\HaltsSwarmExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
@@ -84,6 +85,18 @@ class SwarmRunner
         protected DispatchValidator $validator,
         protected LeaseManager $leases,
     ) {}
+
+    /**
+     * Resolve the shared Swarm memory facade.
+     *
+     * Equivalent to `app(SwarmMemory::class)`; exposed here so the existing
+     * `Swarm::memory()` helper (via the facade `@mixin`) works consistently
+     * with the rest of the runtime accessor surface.
+     */
+    public function memory(): SwarmMemory
+    {
+        return Container::getInstance()->make(SwarmMemory::class);
+    }
 
     /**
      * @param  SwarmTaskInput  $task
