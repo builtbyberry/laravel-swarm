@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.8.0 - unreleased
+
+One-command install: scaffold config, migrations, queues, audit/durable/pulse wiring, and runnable starter examples so a fresh Laravel app is ready to run Swarm in under a minute. No breaking changes.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.7.0 - 2026-05-20
 
 Developer experience, test coverage, and one new operator forensics surface. One new opt-in public-surface contract (`ReadableSwarmAuditSink`) and one new Artisan command (`swarm:trace`). No migration changes. No breaking changes.
