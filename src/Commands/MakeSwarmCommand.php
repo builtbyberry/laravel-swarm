@@ -42,12 +42,18 @@ class MakeSwarmCommand extends MakeSwarmSwarmCommand
     protected $description = '[Deprecated] Alias for make:swarm:swarm. Use make:swarm:swarm or make:swarm:agent instead.';
 
     /**
-     * Print a deprecation notice, then delegate to the new command's logic.
+     * Print a deprecation notice to stderr, then delegate to the new
+     * command's logic. Routing the warning through getErrorOutput() keeps
+     * stdout clean for callers piping generator output into other tools
+     * (matches the docblock claim above).
      */
     public function handle(): ?bool
     {
-        $this->components->warn(
-            'make:swarm is deprecated. Use `make:swarm:swarm` to scaffold a swarm class or `make:swarm:agent` to scaffold an agent class. See docs/generators.md.'
+        // getErrorStyle() returns a SymfonyStyle bound to ConsoleOutput::getErrorOutput()
+        // in production (writes to stderr) and to the same buffer in tests
+        // (which use BufferedOutput). Keeps the warning out of piped stdout.
+        $this->output->getErrorStyle()->writeln(
+            '<comment>make:swarm is deprecated. Use `make:swarm:swarm` to scaffold a swarm class or `make:swarm:agent` to scaffold an agent class. See docs/generators.md.</comment>'
         );
 
         return parent::handle();

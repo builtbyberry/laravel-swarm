@@ -9,6 +9,8 @@ use Illuminate\Console\GeneratorCommand;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Input\InputOption;
 
+use function Laravel\Prompts\select;
+
 /**
  * Scaffold a swarm class wired for a chosen topology.
  *
@@ -71,9 +73,26 @@ class MakeSwarmSwarmCommand extends GeneratorCommand
 
         if ($topology === null) {
             if ($this->input->isInteractive()) {
-                $chosen = $this->choice('Which topology?', self::TOPOLOGIES, 'sequential');
+                $chosen = select(
+                    label: 'Which topology?',
+                    options: [
+                        'sequential' => 'Sequential — agents in order, each receives prior output',
+                        'parallel' => 'Parallel — agents concurrent, each gets the original task',
+                        'hierarchical' => 'Hierarchical — coordinator returns a DAG route plan at runtime',
+                        'static-hierarchical' => 'Static hierarchical — PHP-defined route plan, no coordinator call',
+                    ],
+                    default: 'sequential',
+                    hint: 'Sequential is the most common starting point.',
+                );
                 $topology = is_string($chosen) ? $chosen : 'sequential';
             } else {
+                // Non-interactive: skip the prompt and use the safe default.
+                // laravel/prompts has a Symfony QuestionHelper fallback under
+                // non-interactive mode, but that fallback re-enters
+                // `OutputStyle::askQuestion()` — which fails loudly in tests
+                // that didn't pre-register an expectsChoice/expectsQuestion.
+                // The explicit guard keeps test ergonomics simple and matches
+                // the pattern the other v0.8.0 installers use for prompts.
                 $topology = 'sequential';
             }
         }

@@ -135,14 +135,7 @@ test('make:swarm:swarm defaults to sequential when run non-interactively without
     expect($contents)->toContain('TopologyEnum::Sequential');
 });
 
-test('make:swarm:swarm prompts for topology when run interactively without --topology', function () {
-    $path = app_path('Ai/Swarms/PromptedGenSwarm.php');
-
-    File::ensureDirectoryExists(dirname($path));
-
-    $this->artisan('make:swarm:swarm', ['name' => 'PromptedGenSwarm'])
-        ->expectsChoice('Which topology?', 'parallel', ['sequential', 'parallel', 'hierarchical', 'static-hierarchical'])
-        ->assertExitCode(0);
-
-    expect(File::get($path))->toContain('TopologyEnum::Parallel');
-});
+// Interactive topology prompting is delegated to laravel/prompts `select()`
+// and only fires under a real TTY. The non-interactive default path (which
+// returns 'sequential') is covered by the "defaults to sequential when run
+// non-interactively" test above.

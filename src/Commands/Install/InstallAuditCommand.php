@@ -166,7 +166,7 @@ class InstallAuditCommand extends Command
         $choice = select(
             label: 'Which SwarmAuditSink should the installer bind?',
             options: [
-                'readable' => 'ReadableSwarmAuditSink — log-channel-backed; great for dev/staging',
+                'readable' => 'LogChannelSwarmAuditSink — log-channel-backed; great for dev/staging',
                 'noop' => 'NoOpSwarmAuditSink — explicit binding to the silent default',
                 'custom' => 'Custom sink — scaffold a TODO marker, you wire it later',
             ],
@@ -190,6 +190,14 @@ class InstallAuditCommand extends Command
         return confirm(label: $prompt, default: false);
     }
 
+    /**
+     * Indent used for the managed block contents inside register().
+     *
+     * Matches the existing register() body convention (8 spaces — 2 levels
+     * deep from class scope).
+     */
+    private const BODY_INDENT = '        ';
+
     private function buildManagedBlock(
         string $sink,
         bool $withSigner,
@@ -197,8 +205,8 @@ class InstallAuditCommand extends Command
         bool $withCapturePolicy,
     ): string {
         $sinkLine = match ($sink) {
-            'readable' => '$this->app->singleton(\\'.SwarmAuditSink::class.'::class, \\BuiltByBerry\\LaravelSwarm\\Contracts\\ReadableSwarmAuditSink::class);'
-                ."\n        // TIP: ReadableSwarmAuditSink is dev/staging-friendly. Production should ship a bounded backend.",
+            'readable' => '$this->app->singleton(\\'.SwarmAuditSink::class.'::class, \\BuiltByBerry\\LaravelSwarm\\Audit\\LogChannelSwarmAuditSink::class);'
+                ."\n        // TIP: LogChannelSwarmAuditSink is dev/staging-friendly. Production should ship a bounded backend.",
             'noop' => '$this->app->singleton(\\'.SwarmAuditSink::class.'::class, \\BuiltByBerry\\LaravelSwarm\\Audit\\NoOpSwarmAuditSink::class);',
             'custom' => '// TODO(swarm:install:audit): bind your SwarmAuditSink implementation here.'
                 ."\n        // \$this->app->singleton(\\".SwarmAuditSink::class.'::class, YourAppAuditSink::class);',
@@ -224,28 +232,32 @@ class InstallAuditCommand extends Command
 
         $body = $sinkLine;
         if ($optional !== []) {
-            $body .= "\n\n        ".implode("\n\n        ", $optional);
+            $body .= "\n\n".implode("\n\n", $optional);
         }
 
-        return self::SENTINEL_OPEN."\n        ".$body."\n        ".self::SENTINEL_CLOSE;
+        $indented = self::BODY_INDENT.str_replace("\n", "\n".self::BODY_INDENT, $body);
+
+        return self::SENTINEL_OPEN."\n".$indented."\n".self::BODY_INDENT.self::SENTINEL_CLOSE;
     }
 
     /**
      * Insert the managed block at the top of the register() method body.
      *
-     * Uses a tolerant regex that matches `public function register(): void {`
-     * (with arbitrary whitespace) and inserts the block immediately after the
-     * opening brace, preserving existing register() body content unchanged.
+     * Matches `public function register() {` (with or without the modern
+     * `: void` return type) so the installer works against Laravel 10 / 11 /
+     * 12 / 13 AppServiceProvider variants. Insertion places the block on its
+     * own line at the configured body indent, preserving existing register()
+     * body content unchanged.
      */
     private function insertManagedBlock(string $providerContents, string $block): ?string
     {
-        $pattern = '/(public function register\(\)\s*:\s*void\s*\{\s*)/';
+        $pattern = '/(public function register\(\)\s*(?::\s*void\s*)?\{)([\t ]*\n)/';
 
         if (preg_match($pattern, $providerContents) !== 1) {
             return null;
         }
 
-        $replacement = '$1'.$block."\n\n        ";
+        $replacement = '$1$2'.self::BODY_INDENT.$block."\n\n";
 
         $result = preg_replace($pattern, $replacement, $providerContents, 1);
 

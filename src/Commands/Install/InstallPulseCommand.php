@@ -294,6 +294,12 @@ class InstallPulseCommand extends Command
      *
      * Returns null when the array can't be located so the caller can emit a
      * copy-paste fallback.
+     *
+     * NOTE: this scanner is character-level, not token-aware. It does not
+     * skip `[` / `]` characters inside string literals or comments inside the
+     * recorders array. For the stock pulse config (mostly class references)
+     * this is safe; if reality produces a false positive in the wild, swap in
+     * a real PHP tokenizer (token_get_all() or nikic/php-parser).
      */
     private function insertIntoRecordersArray(string $contents, string $managedBlock): ?string
     {

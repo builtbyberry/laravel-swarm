@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\LogChannelSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
-use BuiltByBerry\LaravelSwarm\Contracts\ReadableSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Installer\InstallerTestCase;
@@ -18,7 +18,7 @@ test('swarm:install:audit scaffolds the readable sink binding in AppServiceProvi
         ->assertOutputContains('Installing the Swarm audit pipeline.')
         ->assertOutputContains('Next steps');
 
-    $this->assertProviderBinding(SwarmAuditSink::class, ReadableSwarmAuditSink::class);
+    $this->assertProviderBinding(SwarmAuditSink::class, LogChannelSwarmAuditSink::class);
     $this->assertFileContains('app/Providers/AppServiceProvider.php', 'swarm:install:audit — managed bindings');
 });
 
@@ -164,4 +164,53 @@ test('swarm:install:audit notes when persistence driver is not database', functi
         ->assertSucceeded()
         ->assertOutputContains('Persistence driver is [cache]')
         ->assertOutputContains('log-and-swallow');
+});
+
+test('the scaffolded LogChannelSwarmAuditSink is instantiable from the container', function () {
+    // Regression guard for the F1 finding (PR #98 originally bound the
+    // SwarmAuditSink contract to ReadableSwarmAuditSink, which is itself an
+    // interface — the binding failed at resolution time). Prove the concrete
+    // class the installer now scaffolds can actually be made.
+    $sink = $this->app->make(LogChannelSwarmAuditSink::class);
+
+    expect($sink)->toBeInstanceOf(SwarmAuditSink::class);
+
+    // Smoke-test the write path: emit() must not throw against the resolved
+    // log channel (the harness defaults to the testbench log config).
+    $sink->emit('test.category', ['run_id' => 'fake-run', 'occurred_at' => '2026-05-21T00:00:00Z']);
+});
+
+test('swarm:install:audit tolerates a register() method without a return type', function () {
+    // Regression guard for the F4 finding: pre-Laravel-11 AppServiceProviders
+    // declare `public function register() {` without `: void`. The original
+    // regex refused to insert there; the relaxed pattern now matches.
+    $this->writeSkeletonFile(
+        'app/Providers/AppServiceProvider.php',
+        <<<'PHP'
+<?php
+
+namespace App\Providers;
+
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function register()
+    {
+        //
+    }
+
+    public function boot(): void
+    {
+        //
+    }
+}
+PHP
+    );
+
+    $this->runInstaller('swarm:install:audit', ['--sink' => 'readable'])
+        ->assertSucceeded();
+
+    $this->assertProviderBinding(SwarmAuditSink::class, LogChannelSwarmAuditSink::class);
+    $this->assertFileContains('app/Providers/AppServiceProvider.php', 'swarm:install:audit — managed bindings');
 });
