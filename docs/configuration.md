@@ -1,10 +1,12 @@
 # Configuration Reference
 
-The Laravel Swarm configuration file controls every aspect of the package — topologies, execution modes, persistence, capture, limits, observability, and durable execution. Publish it to your application with `php artisan vendor:publish --tag=swarm-config`.
+The Laravel Swarm configuration file controls every aspect of the package — topologies, execution modes, persistence, capture, limits, observability, and durable execution. The recommended way to publish it is via the bundled installer; `swarm:install` handles the publish step (along with `.env` seeding, migrations, and sub-installer wiring) in one pass. The `vendor:publish` invocation below remains supported for manual setups — see [Advanced Setup](advanced-setup.md) for the full manual flow.
 
 ---
 
 ## Publishing Config
+
+`swarm:install` publishes `config/swarm.php` as part of its first-run flow. To publish manually:
 
 ```bash
 php artisan vendor:publish --tag=swarm-config

@@ -100,22 +100,11 @@ php artisan swarm:health --durable
 
 `--durable` also verifies the database tables required by `dispatchDurable()` and coordinated multi-worker hierarchical queueing.
 
+Read [Getting Started](docs/getting-started.md) for the full new-user walkthrough — installer flow, post-install verification, and running your first starter swarm in under five minutes.
+
 ### Advanced setup (manual)
 
-Prefer to wire things by hand? Each step the installer performs has a stable manual equivalent:
-
-```bash
-# Publish the configuration
-php artisan vendor:publish --tag=swarm-config
-
-# Run the package migrations (skip via LaravelSwarm::ignoreMigrations() in AppServiceProvider::register())
-php artisan migrate
-
-# Publish the generator stubs only when you want to customize them
-php artisan vendor:publish --tag=swarm-stubs
-```
-
-A full manual setup guide lands in `docs/getting-started.md` (in flight; tracked alongside the v0.8.0 docs rewrite).
+Prefer to wire things by hand? Every step `swarm:install` performs has a stable manual equivalent. See [Advanced Setup](docs/advanced-setup.md) for the full manual flow — config publish, migrations vs. `ignoreMigrations()`, scheduler entries, audit sink binding, Pulse recorder + dashboard registration, and copying the starter examples by hand.
 
 ## Your First Swarm
 

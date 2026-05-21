@@ -7,6 +7,13 @@ package's targeted sub-installer:
 php artisan swarm:install:durable
 ```
 
+`swarm:install:durable` is also dispatched automatically by the broader
+[`swarm:install`](./getting-started.md) entry point — if you are setting
+up the package for the first time, start there and let it offer the
+durable wiring as one step in the full install. Use the targeted command
+directly when you are adding durable execution to an application that
+already has Laravel Swarm installed.
+
 The command verifies that `swarm.persistence.driver` is `database`, confirms
 the durable runtime tables (`swarm_durable_runs`, `swarm_durable_outbox`) have
 been migrated (offering to run `php artisan migrate` if they have not),

@@ -14,6 +14,13 @@ Run the targeted installer to scaffold the audit pipeline wiring:
 php artisan swarm:install:audit
 ```
 
+`swarm:install:audit` is also dispatched automatically by the broader
+[`swarm:install`](./getting-started.md) entry point — if you are setting
+up the package for the first time, start there and let it offer the audit
+wiring as one step in the full install. Use the targeted command
+directly when you are adding the audit sink to an application that
+already has Laravel Swarm installed.
+
 The command writes a `SwarmAuditSink` binding into your
 `app/Providers/AppServiceProvider::register()` behind clearly marked sentinel
 comments (re-runs are no-ops), prints the current
