@@ -109,6 +109,7 @@ final class DatabaseMemoryStore implements MemoryStore
             scope: $scope,
             scopeId: $scopeId,
             key: $key,
+            existed: $deleted > 0,
         ));
 
         return $deleted > 0;

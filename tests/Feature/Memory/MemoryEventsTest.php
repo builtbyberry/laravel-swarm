@@ -90,12 +90,41 @@ test('cache store dispatches MemoryForgotten on forget whether or not the entry 
 
     Event::assertDispatched(MemoryForgotten::class, fn (MemoryForgotten $event): bool => $event->scope === MemoryScope::Run
         && $event->scopeId === 'run-1'
-        && $event->key === 'absent');
+        && $event->key === 'absent'
+        && $event->existed === false);
 
     $store->put(new MemoryEntry(MemoryScope::Run, 'run-1', 'present', 'x'));
     $store->forget(MemoryScope::Run, 'run-1', 'present');
 
     Event::assertDispatchedTimes(MemoryForgotten::class, 2);
+    Event::assertDispatched(MemoryForgotten::class, fn (MemoryForgotten $event): bool => $event->scope === MemoryScope::Run
+        && $event->scopeId === 'run-1'
+        && $event->key === 'present'
+        && $event->existed === true);
+});
+
+test('cache store MemoryForgotten exposes existed flag distinguishing real deletions from no-op probes', function () {
+    Event::fake([MemoryForgotten::class]);
+
+    /** @var MemoryStore $store */
+    $store = $this->app->make(MemoryStore::class);
+
+    // No-op probe — nothing at the address.
+    $store->forget(MemoryScope::Run, 'run-1', 'never-was');
+
+    // Real deletion — write, then forget.
+    $store->put(new MemoryEntry(MemoryScope::Run, 'run-1', 'real', 'value'));
+    $store->forget(MemoryScope::Run, 'run-1', 'real');
+
+    Event::assertDispatchedTimes(MemoryForgotten::class, 2);
+    Event::assertDispatched(
+        MemoryForgotten::class,
+        fn (MemoryForgotten $event): bool => $event->key === 'never-was' && $event->existed === false,
+    );
+    Event::assertDispatched(
+        MemoryForgotten::class,
+        fn (MemoryForgotten $event): bool => $event->key === 'real' && $event->existed === true,
+    );
 });
 
 test('cache store all() does not emit MemoryRead per entry', function () {
@@ -205,8 +234,35 @@ test('database store dispatches MemoryForgotten on forget whether row existed or
     $store->forget(MemoryScope::Swarm, 'SwarmA', 'present');
 
     Event::assertDispatchedTimes(MemoryForgotten::class, 2);
-    Event::assertDispatched(MemoryForgotten::class, fn (MemoryForgotten $e): bool => $e->key === 'absent' && $e->scope === MemoryScope::Swarm);
-    Event::assertDispatched(MemoryForgotten::class, fn (MemoryForgotten $e): bool => $e->key === 'present' && $e->scope === MemoryScope::Swarm);
+    Event::assertDispatched(MemoryForgotten::class, fn (MemoryForgotten $e): bool => $e->key === 'absent' && $e->scope === MemoryScope::Swarm && $e->existed === false);
+    Event::assertDispatched(MemoryForgotten::class, fn (MemoryForgotten $e): bool => $e->key === 'present' && $e->scope === MemoryScope::Swarm && $e->existed === true);
+});
+
+test('database store MemoryForgotten exposes existed flag distinguishing real deletions from no-op probes', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    makeSwarmMemoriesTable();
+
+    Event::fake([MemoryForgotten::class]);
+
+    /** @var MemoryStore $store */
+    $store = $this->app->make(MemoryStore::class);
+
+    // No-op probe — no row at the address.
+    $store->forget(MemoryScope::Swarm, 'SwarmB', 'never-was');
+
+    // Real deletion — insert, then delete.
+    $store->put(new MemoryEntry(MemoryScope::Swarm, 'SwarmB', 'real', 'v'));
+    $store->forget(MemoryScope::Swarm, 'SwarmB', 'real');
+
+    Event::assertDispatchedTimes(MemoryForgotten::class, 2);
+    Event::assertDispatched(
+        MemoryForgotten::class,
+        fn (MemoryForgotten $e): bool => $e->key === 'never-was' && $e->existed === false,
+    );
+    Event::assertDispatched(
+        MemoryForgotten::class,
+        fn (MemoryForgotten $e): bool => $e->key === 'real' && $e->existed === true,
+    );
 });
 
 // ---------------------------------------------------------------------------

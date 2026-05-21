@@ -90,6 +90,7 @@ final class CacheMemoryStore implements MemoryStore
             scope: $scope,
             scopeId: $scopeId,
             key: $key,
+            existed: $existed,
         ));
 
         return $existed;
