@@ -18,7 +18,11 @@ answer "how do I do X?" once the user has the basic mental model.
 
 ## Install the starter pack
 
-The recommended path is the dedicated sub-installer:
+If you are setting up Laravel Swarm for the first time, start with the
+broader [`swarm:install`](./getting-started.md) entry point — it offers
+the example pack as one step in the full install. To install the starter
+pack on its own (or to add it to an application that already has Laravel
+Swarm installed), use the dedicated sub-installer:
 
 ```bash
 # Pick one, several, or all in an interactive multiselect.

@@ -16,6 +16,13 @@ php artisan migrate
 php artisan swarm:install:pulse
 ```
 
+`swarm:install:pulse` is also dispatched automatically by the broader
+[`swarm:install`](./getting-started.md) entry point when `laravel/pulse`
+is detected — if you are setting up the package for the first time, start
+there and let it offer the Pulse wiring as one step in the full install.
+Use the targeted command directly when you are adding Pulse to an
+application that already has Laravel Swarm installed.
+
 `swarm:install:pulse` does the two file edits manually documented below — it
 registers the recorders in `config/pulse.php` and injects the swarm cards
 into `resources/views/vendor/pulse/dashboard.blade.php`. Both edits are
