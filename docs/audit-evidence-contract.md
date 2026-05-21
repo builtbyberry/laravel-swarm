@@ -33,9 +33,26 @@ Flags:
   scaffold optional `SwarmAuditSigner`, `ActorResolver`, and `CapturePolicy`
   stub bindings for regulated deployments.
 
-Under `--no-interaction` the installer defaults to a custom-sink TODO marker
-so CI passes never silently route evidence to the application log. The
-sections below cover the contract surface that this command wires up.
+### Non-interactive defaults
+
+Under `--no-interaction`, the installer chooses safe-but-explicit defaults
+rather than the friendly interactive defaults. This avoids "the installer
+succeeded" footguns in CI/IaC provisioning:
+
+- `--sink` defaults to `custom` (TODO marker, no working sink) instead of
+  `readable`. Silent log-routing of audit evidence in CI is the wrong
+  default; the installer forces the operator to make a deliberate choice.
+- `--with-signer`, `--with-actor-resolver`, `--with-capture-policy` all
+  default to `false`. Pass them explicitly to scaffold the optional
+  extension stubs.
+
+For unattended provisioning, pass the desired sink explicitly:
+
+```bash
+php artisan swarm:install:audit --no-interaction --sink=readable
+```
+
+The sections below cover the contract surface that this command wires up.
 
 ## Operational Storage vs Audit Evidence
 
