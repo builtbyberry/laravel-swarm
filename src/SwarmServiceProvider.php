@@ -12,7 +12,12 @@ use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\RunAuditEmitter;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallExamplesCommand;
+use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmAgentCommand;
+use BuiltByBerry\LaravelSwarm\Commands\Install\InstallPulseCommand;
+use BuiltByBerry\LaravelSwarm\Commands\Install\InstallAuditCommand;
+use BuiltByBerry\LaravelSwarm\Commands\Install\InstallDurableCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
+use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditReconcileCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditStatusCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
@@ -277,6 +282,8 @@ class SwarmServiceProvider extends ServiceProvider
 
             $this->commands([
                 MakeSwarmCommand::class,
+                MakeSwarmSwarmCommand::class,
+                MakeSwarmAgentCommand::class,
                 SwarmHealthCommand::class,
                 SwarmPruneCommand::class,
                 SwarmStatusCommand::class,
@@ -293,6 +300,9 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmProgressCommand::class,
                 SwarmTraceCommand::class,
                 InstallExamplesCommand::class,
+                InstallPulseCommand::class,
+                InstallAuditCommand::class,
+                InstallDurableCommand::class,
             ]);
         }
 

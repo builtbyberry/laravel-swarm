@@ -77,7 +77,9 @@ adding a new public API.
 
 | Command | Purpose | Primary documentation |
 | --- | --- | --- |
-| `make:swarm` | Generate a swarm class. | [README: Your First Swarm](../README.md#your-first-swarm) |
+| `make:swarm:swarm` | Generate a swarm class (`--topology=sequential\|parallel\|hierarchical\|static-hierarchical`). | [Generators](generators.md) |
+| `make:swarm:agent` | Generate an agent class extending `ScriptedAgent`. | [Generators](generators.md) |
+| `make:swarm` | **Deprecated** since v0.8.0 — alias for `make:swarm:swarm` that prints a migration hint. Slated for removal in a future major release. | [Generators](generators.md#migration-from-makeswarm) |
 | `swarm:health` | Verify configured stores, durable tables, and audit-outbox state. Options: `--durable` (durable infrastructure only), `--audit` (audit-outbox checks only; v0.5.0+). | [README: Installation](../README.md#installation), [Maintenance](maintenance.md) |
 | `swarm:status` | Inspect a run status from persisted history. | [Persistence And History](persistence-and-history.md#inspecting-run-history-in-the-console) |
 | `swarm:history` | List persisted run history. | [Persistence And History](persistence-and-history.md#inspecting-run-history-in-the-console) |

@@ -27,7 +27,7 @@ Your swarm class must:
 Scaffold a new swarm with:
 
 ```bash
-php artisan make:swarm MySwarm --topology=static-hierarchical
+php artisan make:swarm:swarm MySwarm --topology=static-hierarchical
 ```
 
 ```php
@@ -304,4 +304,4 @@ matching the behaviour of other topology-specific durable guards.
 | --- | --- | --- |
 | `broadcast()` / `broadcastNow()` / `broadcastOnQueue()` route through the same `StaticHierarchicalStreamRunner` as `stream()` | Separate broadcast runner | No divergence in event shape; broadcast wraps the stream generator identically to sequential |
 | `ensureStreamableTopology()` accepts an allowlist of topologies | Per-topology boolean methods | Single guard point; adding a new streamable topology requires one line change |
-| `make:swarm --topology` string option | `--static-hierarchical` boolean flag | Extensible to future topologies (`parallel`, `hierarchical`) without adding new flags |
+| `make:swarm:swarm --topology` string option | `--static-hierarchical` boolean flag | Extensible to future topologies (`parallel`, `hierarchical`) without adding new flags |

@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmAgentCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
+use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
@@ -55,6 +57,10 @@ test('the make swarm command is registered', function () {
 
     expect(array_key_exists('make:swarm', $commands))->toBeTrue();
     expect($commands['make:swarm'])->toBeInstanceOf(MakeSwarmCommand::class);
+    expect(array_key_exists('make:swarm:swarm', $commands))->toBeTrue();
+    expect($commands['make:swarm:swarm'])->toBeInstanceOf(MakeSwarmSwarmCommand::class);
+    expect(array_key_exists('make:swarm:agent', $commands))->toBeTrue();
+    expect($commands['make:swarm:agent'])->toBeInstanceOf(MakeSwarmAgentCommand::class);
     expect($commands['swarm:health'])->toBeInstanceOf(SwarmHealthCommand::class);
     expect($commands['swarm:prune'])->toBeInstanceOf(SwarmPruneCommand::class);
     expect($commands['swarm:status'])->toBeInstanceOf(SwarmStatusCommand::class);

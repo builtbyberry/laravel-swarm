@@ -2,6 +2,39 @@
 
 Laravel Swarm integrates with [Laravel Pulse](https://laravel.com/docs/pulse) through optional recorders and cards. If your application already uses Pulse, you can add swarm-level observability without changing how your swarms run.
 
+## Quick Setup
+
+Run the bundled installer once Pulse itself is installed:
+
+```bash
+composer require laravel/pulse
+
+php artisan vendor:publish --provider="Laravel\Pulse\PulseServiceProvider"
+
+php artisan migrate
+
+php artisan swarm:install:pulse
+```
+
+`swarm:install:pulse` does the two file edits manually documented below — it
+registers the recorders in `config/pulse.php` and injects the swarm cards
+into `resources/views/vendor/pulse/dashboard.blade.php`. Both edits are
+fenced with sentinel comments and are safe to re-run; the original files
+are copied to `<file>.bak` before the first mutation.
+
+Pick which cards to enable with `--cards` (default: all three):
+
+```bash
+php artisan swarm:install:pulse --no-interaction --cards=runs,steps
+```
+
+Re-run with `--force` to rewrite the managed blocks after you change the
+selected cards.
+
+If Pulse is not installed, the command refuses with a copy-paste hint and
+exits non-zero. The rest of this page documents the same edits by hand for
+operators who prefer (or whose host app blocks) installers.
+
 ## Install Pulse
 
 Install and publish Pulse in your application first:
