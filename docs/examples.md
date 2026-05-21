@@ -1,0 +1,88 @@
+# Starter Examples
+
+Laravel Swarm ships a small, runnable starter pack alongside the larger
+reference collection.
+
+- **Starter pack** — three curated, fully runnable examples published by
+  `php artisan swarm:install:examples` into the user's app. Each runs
+  end-to-end with no API keys and no extra config. Source lives at
+  `stubs/examples/` inside the package.
+- **Reference examples** — the older, larger collection of README-only
+  walkthroughs under the top-level `examples/` directory. Those cover the
+  advanced surfaces (hierarchical routing, streaming, broadcasts, Pulse,
+  guardrails, webhooks). See `examples/README.md` for the index.
+
+The starter pack is meant to get a new user from `composer require` to a
+working swarm in under a minute. The reference examples are meant to
+answer "how do I do X?" once the user has the basic mental model.
+
+## What the starter pack ships
+
+### 1. `sequential-blog-pipeline`
+
+Three agents in order: outline → draft → polish. The hello world.
+Demonstrates the `Swarm` contract, the sequential topology, the `Runnable`
+trait, and reading `$response->output` plus `$response->steps`. Plain
+in-memory `prompt()` execution — no queue worker, no database persistence.
+The lightest possible swarm.
+
+Runner: `php artisan swarm:example:blog-pipeline "your topic"`
+
+### 2. `parallel-research-fanout`
+
+Three research scouts (market, competitor, customer) run concurrently on
+the same prompt; results merge into a single `SwarmResponse`. Demonstrates
+the parallel topology, the container-resolvable agent contract, and how
+fan-out / join surfaces in `$response->steps`. Still in-memory `prompt()`
+execution.
+
+Runner: `php artisan swarm:example:research-fanout "your topic"`
+
+### 3. `durable-approval-workflow`
+
+The showcase. A two-step sequential swarm in **durable** mode with a
+`policy_decision` checkpoint between the steps: a draft agent runs, the
+swarm parks at the wait, an approver sends a signal, the finalize agent
+runs and the run completes. Demonstrates `dispatchDurable()`, the
+`RoutesDurableWaits` contract, `DurableSwarmManager::signal()` and the
+shipped `swarm:signal` operator command, plus `#[DurableLabels]` and
+`#[DurableDetails]` for the audit and dashboard surfaces.
+
+Runner:
+
+```bash
+php artisan swarm:example:approval-workflow start "Policy change description"
+php artisan swarm:example:approval-workflow signal <run-id> approve
+php artisan swarm:example:approval-workflow status <run-id>
+```
+
+Requires the durable runtime (database persistence, queue worker,
+`swarm:recover` scheduled). `swarm:install` provisions all of this.
+
+## ScriptedAgent — how the starters avoid API keys
+
+Every starter agent extends `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent`
+— a runnable, provider-free agent that returns canned text. The swarm
+runner treats it identically to a real Laravel AI agent: same `prompt()`
+signature, same `AgentResponse` return shape. That is what lets the
+starters execute end-to-end on a fresh install with zero environment
+configuration.
+
+Each agent file has a `TODO` comment pointing to the one-line edit that
+swaps `ScriptedAgent` for a `Promptable` Laravel AI agent. The swarm class,
+the runner command, the wait declaration, and the test all keep working
+unchanged.
+
+`ScriptedAgent` is intentionally minimal: `prompt()` only. `stream()`,
+`queue()`, and the broadcast helpers throw with a clear message that
+points users at the right next step (use a `Promptable` agent and
+`Agent::fake()`).
+
+## Customising the starters
+
+The starters are copies in the user's app. Edit them freely — there is no
+upgrade path that overwrites them. The only convention to keep is the
+namespace shape (`App\Ai\Swarms\<Name>` for swarms,
+`App\Ai\Agents\<Name>` for agents) so the rest of the package's tooling
+(`swarm:status`, `swarm:trace`, Pulse cards) keeps locating runs by their
+swarm class.

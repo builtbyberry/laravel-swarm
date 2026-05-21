@@ -85,9 +85,13 @@ The recommended reading path for new users.
 
 ## Examples
 
-Read [examples/README.md](../examples/README.md) for the recommended order and feature coverage table.
+See [Starter Examples](examples.md) for the curated, runnable starter pack
+that `swarm:install:examples` copies into a fresh app — three examples
+covering sequential, parallel, and the durable human-in-the-loop pattern.
 
-The examples are copy-paste starting points for Laravel applications. They are not a demo application and are not autoloaded by the package.
+Read [examples/README.md](../examples/README.md) for the recommended order and feature coverage table for the larger reference collection.
+
+The reference examples are copy-paste starting points for Laravel applications. They are not a demo application and are not autoloaded by the package.
 
 - [sequential-content-pipeline](../examples/sequential-content-pipeline/README.md) — the first copy-paste workflow; a simple sequential swarm
 - [parallel-research-swarm](../examples/parallel-research-swarm/README.md) — concurrent independent agents
