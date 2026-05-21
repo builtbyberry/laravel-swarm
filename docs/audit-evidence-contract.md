@@ -6,6 +6,37 @@ Evidence is routed through the `SwarmAuditSink` contract, which defaults to a
 no-op implementation. Applications bind a custom sink to route evidence into an
 append-only store, queue listener, SIEM export, or object-storage archive.
 
+## Quick Setup
+
+Run the targeted installer to scaffold the audit pipeline wiring:
+
+```bash
+php artisan swarm:install:audit
+```
+
+The command writes a `SwarmAuditSink` binding into your
+`app/Providers/AppServiceProvider::register()` behind clearly marked sentinel
+comments (re-runs are no-ops), prints the current
+`SWARM_AUDIT_FAILURE_POLICY` and `SWARM_CAPTURE_*` flags with one-line
+explainers so you can see what is being recorded, confirms the
+`swarm_audit_outbox` table is present on the database persistence driver, and
+cross-links to `swarm:audit:status`, `swarm:audit:reconcile`, and
+`swarm:trace` for verification.
+
+Flags:
+
+- `--sink=readable|noop|custom` — pick the sink shape to bind. `readable` is
+  log-channel-backed (great for dev/staging; production should ship a bounded
+  backend); `noop` makes the silent-default binding explicit; `custom` emits
+  a TODO marker pointing at where you will plug your own sink in.
+- `--with-signer`, `--with-actor-resolver`, `--with-capture-policy` —
+  scaffold optional `SwarmAuditSigner`, `ActorResolver`, and `CapturePolicy`
+  stub bindings for regulated deployments.
+
+Under `--no-interaction` the installer defaults to a custom-sink TODO marker
+so CI passes never silently route evidence to the application log. The
+sections below cover the contract surface that this command wires up.
+
 ## Operational Storage vs Audit Evidence
 
 Swarm database tables are **operational workflow storage** — they use TTL-based

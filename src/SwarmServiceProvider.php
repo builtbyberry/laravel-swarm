@@ -12,6 +12,8 @@ use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\RunAuditEmitter;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallPulseCommand;
+use BuiltByBerry\LaravelSwarm\Commands\Install\InstallAuditCommand;
+use BuiltByBerry\LaravelSwarm\Commands\Install\InstallDurableCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditReconcileCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditStatusCommand;
@@ -293,6 +295,8 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmProgressCommand::class,
                 SwarmTraceCommand::class,
                 InstallPulseCommand::class,
+                InstallAuditCommand::class,
+                InstallDurableCommand::class,
             ]);
         }
 
