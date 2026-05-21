@@ -13,7 +13,7 @@ Each agent receives the **full text output** of the agent before it as its promp
 Scaffold a new swarm with:
 
 ```bash
-php artisan make:swarm ContentPipelineSwarm
+php artisan make:swarm:swarm ContentPipelineSwarm
 ```
 
 The generated class uses `#[Topology(TopologyEnum::Sequential)]` by default:
