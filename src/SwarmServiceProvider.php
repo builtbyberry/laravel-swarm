@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Audit\NoOpAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\RunAuditEmitter;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Commands\Install\InstallDurableCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditReconcileCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditStatusCommand;
@@ -291,6 +292,7 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmInspectCommand::class,
                 SwarmProgressCommand::class,
                 SwarmTraceCommand::class,
+                InstallDurableCommand::class,
             ]);
         }
 
