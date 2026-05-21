@@ -18,6 +18,28 @@ use Illuminate\Support\Facades\DB;
  */
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');
+
+    // Run-scoped memory rows FK into swarm_run_histories.run_id via the
+    // 2026_05_21_000003 migration. Seed the run ids these tests put against
+    // so the FK insert succeeds. Conversation/Agent/Swarm scopes are FK-free.
+    $now = now('UTC');
+    foreach (['run-1', 'run-2', 'run-A', 'run-B', 'shared-id'] as $runId) {
+        DB::table('swarm_run_histories')->insert([
+            'run_id' => $runId,
+            'swarm_class' => 'ExampleSwarm',
+            'topology' => 'sequential',
+            'status' => 'running',
+            'context' => json_encode([]),
+            'metadata' => json_encode([]),
+            'steps' => json_encode([]),
+            'output' => null,
+            'usage' => json_encode([]),
+            'error' => null,
+            'artifacts' => json_encode([]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
 });
 
 test('the database store is bound as the default MemoryStore when persistence is database', function () {
@@ -202,4 +224,55 @@ test('metadata defaults to an empty array when not provided', function () {
 
     $fetched = $store->get(MemoryScope::Run, 'run-1', 'k');
     expect($fetched?->metadata)->toBe([]);
+});
+
+// ---------------------------------------------------------------------------
+// run_id denormalization — Run-scoped puts populate the FK column; other
+// scopes leave it null. The column itself is not part of MemoryEntry identity
+// and is only used for the FK cascade to swarm_run_histories.
+// ---------------------------------------------------------------------------
+
+test('Run-scoped put populates the run_id column with the scope_id value', function () {
+    // Need a parent history row so the FK insert succeeds.
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => 'run-with-fk',
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    /** @var MemoryStore $store */
+    $store = $this->app->make(MemoryStore::class);
+
+    $store->put(new MemoryEntry(MemoryScope::Run, 'run-with-fk', 'k', 'v'));
+
+    $row = DB::table('swarm_memories')->where('scope', 'run')->where('scope_id', 'run-with-fk')->first();
+    expect($row)->not->toBeNull()
+        ->and($row->run_id)->toBe('run-with-fk');
+});
+
+test('non-Run-scoped puts leave run_id null', function () {
+    /** @var MemoryStore $store */
+    $store = $this->app->make(MemoryStore::class);
+
+    $store->put(new MemoryEntry(MemoryScope::Conversation, 'convo-1', 'k', 'v'));
+    $store->put(new MemoryEntry(MemoryScope::Agent, 'App\\Agents\\Foo', 'k', 'v'));
+    $store->put(new MemoryEntry(MemoryScope::Swarm, 'App\\Swarms\\Bar', 'k', 'v'));
+
+    $conversation = DB::table('swarm_memories')->where('scope', 'conversation')->first();
+    $agent = DB::table('swarm_memories')->where('scope', 'agent')->first();
+    $swarm = DB::table('swarm_memories')->where('scope', 'swarm')->first();
+
+    expect($conversation->run_id)->toBeNull()
+        ->and($agent->run_id)->toBeNull()
+        ->and($swarm->run_id)->toBeNull();
 });

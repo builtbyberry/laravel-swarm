@@ -28,6 +28,18 @@ use Illuminate\Database\Query\Builder;
  * constraint on the tuple. `value` and `metadata` are JSON columns to support
  * arbitrary plain-data shapes.
  *
+ * Run-scope cascade denormalization:
+ *
+ * The `run_id` column is a denormalization of `scope_id` for Run-scoped rows
+ * only. It exists solely to carry a foreign-key cascade to
+ * `swarm_run_histories.run_id`, giving regulated workloads a DB-level
+ * guarantee that Run-scoped memories die synchronously with their parent
+ * history row (no waiting on the v0.10 retention purge). Non-Run scopes leave
+ * `run_id` NULL — `scope_id` remains polymorphic and is the authoritative
+ * identity carrier for every scope. The column is not part of
+ * {@see MemoryEntry}'s identity and is intentionally ignored by
+ * {@see DatabaseMemoryStore::hydrate()}.
+ *
  * @internal
  */
 final class DatabaseMemoryStore implements MemoryStore
@@ -57,6 +69,7 @@ final class DatabaseMemoryStore implements MemoryStore
             [[
                 'scope' => $entry->scope->value,
                 'scope_id' => $entry->scopeId,
+                'run_id' => $entry->scope === MemoryScope::Run ? $entry->scopeId : null,
                 'key' => $entry->key,
                 'value' => $this->encodeJson($entry->value),
                 'metadata' => $this->encodeJson($entry->metadata),
@@ -64,7 +77,7 @@ final class DatabaseMemoryStore implements MemoryStore
                 'updated_at' => $now,
             ]],
             ['scope', 'scope_id', 'key'],
-            ['value', 'metadata', 'updated_at'],
+            ['value', 'metadata', 'run_id', 'updated_at'],
         );
 
         $persisted = $entry->withTimestamps($createdAt, $now);

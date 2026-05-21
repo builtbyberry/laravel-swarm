@@ -27,7 +27,8 @@ test('run_id FK migration adds all expected foreign key constraints', function (
     expect(Schema::hasTable('swarm_contexts'))->toBeTrue()
         ->and(Schema::hasTable('swarm_artifacts'))->toBeTrue()
         ->and(Schema::hasTable('swarm_run_steps'))->toBeTrue()
-        ->and(Schema::hasTable('swarm_stream_events'))->toBeTrue();
+        ->and(Schema::hasTable('swarm_stream_events'))->toBeTrue()
+        ->and(Schema::hasTable('swarm_memories'))->toBeTrue();
 
     // Durable family
     expect(Schema::hasTable('swarm_durable_branches'))->toBeTrue()
@@ -44,11 +45,13 @@ test('run_id FK migration adds all expected foreign key constraints', function (
 });
 
 test('FK migration rolls back cleanly', function () {
-    // Step 6 rolls back: memories (v0.9), memory-snapshots (v0.9), audit-outbox,
-    // durable-outbox-indexes, durable-outbox-table, and the FK migration itself.
-    // The FK migration is the sixth-most-recent now that v0.9 added both memory
-    // tables on top of the v0.5 audit + durable outbox stack.
-    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 6]);
+    // Step 7 rolls back, top of stack first: memories.run_id FK column
+    // (v0.9 review follow-up), memories (v0.9), memory-snapshots (v0.9),
+    // audit-outbox, durable-outbox-indexes, durable-outbox-table, and the FK
+    // migration itself. The FK migration is the seventh-most-recent now that
+    // v0.9 added the memory tables (and run_id FK column) on top of the v0.5
+    // audit + durable outbox stack.
+    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 7]);
 
     // Tables still exist; FK constraints are just removed. Insert into a child
     // table without a parent row — should succeed now that FKs are dropped.
