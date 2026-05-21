@@ -12,6 +12,8 @@ use Illuminate\Filesystem\Filesystem;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
+use function Laravel\Prompts\confirm;
+
 /**
  * `swarm:install:durable` — targeted setup for the durable execution runtime.
  *
@@ -190,7 +192,7 @@ class InstallDurableCommand extends Command
         }
 
         if ($this->input->isInteractive()) {
-            return $this->confirm('Run pending migrations now?', true);
+            return confirm(label: 'Run pending migrations now?', default: true);
         }
 
         // Non-interactive default: skip and warn. Operators can re-run with
