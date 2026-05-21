@@ -44,10 +44,11 @@ test('run_id FK migration adds all expected foreign key constraints', function (
 });
 
 test('FK migration rolls back cleanly', function () {
-    // Step 4 rolls back: audit-outbox, durable-outbox-indexes, durable-outbox-table,
-    // and the FK migration itself. The FK migration is the fourth-most-recent now
-    // that v0.5 added the audit outbox migration on top of the durable outbox pair.
-    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 4]);
+    // Step 5 rolls back: memory-snapshots (v0.9), audit-outbox, durable-outbox-indexes,
+    // durable-outbox-table, and the FK migration itself. The FK migration is the
+    // fifth-most-recent now that v0.9 added the memory snapshots table on top of
+    // the v0.5 audit + durable outbox stack.
+    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 5]);
 
     // Tables still exist; FK constraints are just removed. Insert into a child
     // table without a parent row — should succeed now that FKs are dropped.
