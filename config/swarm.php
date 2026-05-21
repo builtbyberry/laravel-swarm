@@ -331,6 +331,12 @@ return [
 
     // These table names are honored by the database repositories at runtime.
     // If you change them, publish and update the package migrations as well.
+    //
+    // Table-name overrides are configuration-only: the SWARM_*_TABLE env vars
+    // below are not seeded into .env by swarm:install. Operators who need to
+    // rename a Swarm table (e.g. multi-tenant schemas) declare the env var in
+    // .env themselves, or override the value directly in config/swarm.php
+    // after publishing.
     'tables' => [
         'contexts' => env('SWARM_CONTEXTS_TABLE', 'swarm_contexts'),
         'artifacts' => env('SWARM_ARTIFACTS_TABLE', 'swarm_artifacts'),
@@ -352,5 +358,6 @@ return [
         'durable_outbox' => env('SWARM_DURABLE_OUTBOX_TABLE', 'swarm_durable_outbox'),
         'audit_outbox' => env('SWARM_AUDIT_OUTBOX_TABLE', 'swarm_audit_outbox'),
         'memories' => env('SWARM_MEMORIES_TABLE', 'swarm_memories'),
+        'memory_snapshots' => env('SWARM_MEMORY_SNAPSHOTS_TABLE', 'swarm_memory_snapshots'),
     ],
 ];
