@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.8.0 - unreleased
+## v0.8.0 - 2026-05-21
 
-One-command install: scaffold config, migrations, queues, audit/durable/pulse wiring, and runnable starter examples so a fresh Laravel app is ready to run Swarm in under a minute. No breaking changes.
+One-command install. A new `swarm:install` orchestrator plus four targeted sub-installers (`swarm:install:durable`, `swarm:install:audit`, `swarm:install:pulse`, `swarm:install:examples`) cut the read-the-docs-and-hand-wire-five-things ritual down to a single Artisan command, and a curated runnable starter example pack ships so a fresh Laravel app is up and dispatching swarms inside a minute. New concrete `LogChannelSwarmAuditSink` (the zero-config dev/staging sink the audit installer binds), new `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent` provider-free agent base class (the starter examples extend it; `make:swarm:agent` scaffolds it), and a polished `make:swarm:swarm` + `make:swarm:agent` generator pair with topology-aware stubs that match the starter pack. The legacy `make:swarm` keeps working as a deprecated alias. Getting Started and Advanced Setup docs rewritten around the new install flow. No migration changes. No breaking changes.
 
 ### Added
 
