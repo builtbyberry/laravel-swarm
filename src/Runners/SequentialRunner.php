@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
+use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
@@ -47,6 +50,7 @@ class SequentialRunner
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
         protected SwarmGuardrailRunner $guardrails,
+        protected SnapshotsMemory $snapshots,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -97,6 +101,7 @@ class SequentialRunner
             $agentName = class_basename($agent::class);
 
             $this->steps->started($state, $index, $agent::class, $input);
+            $snapshot = $this->snapshots->snapshot($state->context->runId, $index);
 
             yield new SwarmStepStart(
                 id: SwarmStreamEvent::newId(),
@@ -115,6 +120,8 @@ class SequentialRunner
             if ($index === $lastIndex) {
                 $stream = $agent->stream($input);
                 $output = '';
+                /** @var array<string, ToolCallData> $pendingToolCalls */
+                $pendingToolCalls = [];
 
                 foreach ($stream as $event) {
                     if ($event instanceof TextDelta) {
@@ -170,6 +177,13 @@ class SequentialRunner
 
                         yield $swarmEvent;
                     } elseif ($event instanceof ToolCall) {
+                        // Hold the call until we see its matching ToolResult so the
+                        // snapshot row records a paired input/output entry, then a
+                        // single appendToolCall persists the finalized pair. This
+                        // keeps the snapshot row write count proportional to tool
+                        // results, not events.
+                        $pendingToolCalls[$event->toolCall->id] = $event->toolCall;
+
                         $swarmEvent = new SwarmToolCall(
                             id: $event->id,
                             runId: $state->context->runId,
@@ -182,6 +196,17 @@ class SequentialRunner
 
                         yield $swarmEvent;
                     } elseif ($event instanceof ToolResult) {
+                        $matchedCallId = $event->toolResult->id;
+                        $matchedCall = $pendingToolCalls[$matchedCallId] ?? null;
+
+                        if ($matchedCall !== null) {
+                            unset($pendingToolCalls[$matchedCallId]);
+                            $snapshot = $this->snapshots->appendToolCall(
+                                $snapshot,
+                                SnapshotToolCallNormalizer::entry($matchedCall, $event->toolResult),
+                            );
+                        }
+
                         $swarmEvent = new SwarmToolResult(
                             id: $event->id,
                             runId: $state->context->runId,
@@ -210,6 +235,16 @@ class SequentialRunner
                     }
                 }
 
+                // Any tool calls without a matching ToolResult by stream end
+                // are still part of the agent's invocation surface, so persist
+                // them with result=null so replay can detect partial runs.
+                foreach ($pendingToolCalls as $unpairedCall) {
+                    $snapshot = $this->snapshots->appendToolCall(
+                        $snapshot,
+                        SnapshotToolCallNormalizer::entry($unpairedCall),
+                    );
+                }
+
                 $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
                 $this->guardrails->validateStep(
                     $state->swarm,
@@ -229,6 +264,7 @@ class SequentialRunner
                 $response = $agent->prompt($input);
                 $output = (string) $response;
                 $stepUsage = $this->usageFromResponse($response);
+                $this->appendResponseToolCalls($snapshot, $response);
 
                 $this->guardrails->validateStep(
                     $state->swarm,
@@ -285,11 +321,13 @@ class SequentialRunner
 
         $input = $state->context->prompt();
         $this->steps->started($state, $index, $agent::class, $input);
+        $snapshot = $this->snapshots->snapshot($state->context->runId, $index);
 
         $startedAt = MonotonicTime::now();
         $response = $agent->prompt($input);
         $output = (string) $response;
         $usage = $this->usageFromResponse($response);
+        $this->appendResponseToolCalls($snapshot, $response);
         $mergedUsage = $this->mergeUsage(
             is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [],
             $usage,
@@ -396,6 +434,15 @@ class SequentialRunner
         if (is_string($invocationId)) {
             $swarmEvent->withInvocationId($invocationId);
         }
+    }
+
+    protected function appendResponseToolCalls(MemorySnapshot $snapshot, mixed $response): MemorySnapshot
+    {
+        foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
+            $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
+        }
+
+        return $snapshot;
     }
 
     /**
