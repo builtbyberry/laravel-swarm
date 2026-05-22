@@ -4,14 +4,37 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+use ArrayAccess;
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\DurableWaitOutcome;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
+use Illuminate\Container\Container;
 use Illuminate\Contracts\Auth\Authenticatable;
 use JsonException;
 
-class RunContext
+/**
+ * Per-run state handle that carries the run id, input, and a write-through
+ * cache of Run-scoped {@see SwarmMemory} entries.
+ *
+ * `$data` is the in-memory cache for the Run-scoped memory view. Writes go
+ * through {@see mergeData()} (and the {@see ArrayAccess} surface) to both
+ * the cache and the bound {@see SwarmMemory}, so reads through `$data`
+ * stay array-fast on the hot path (`prompt()` and runner inter-step relays)
+ * while the canonical store is always current. This mirrors Eloquent's
+ * attribute caching: the in-memory representation is authoritative for the
+ * duration of the run; persistence happens on the documented mutation paths.
+ *
+ * `$metadata` and `$artifacts` are framework-operational state — durable
+ * labels, actor binding, signal payloads, wait outcomes, captured artifacts.
+ * Those intentionally do not write through to SwarmMemory: they're not
+ * agent-readable knowledge, just plumbing.
+ *
+ * @implements ArrayAccess<string, mixed>
+ */
+class RunContext implements ArrayAccess
 {
     /**
      * @param  array<string, mixed>  $data
@@ -141,6 +164,8 @@ class RunContext
     public function mergeData(array $values): self
     {
         $this->data = array_merge($this->data, $values);
+
+        $this->writeThroughToMemory($values);
 
         return $this;
     }
@@ -293,6 +318,113 @@ class RunContext
     public function toQueuePayload(): array
     {
         return self::validateSerializedPayload($this->toArray(), 'RunContext queue payload');
+    }
+
+    // ------------------------------------------------------------------
+    // ArrayAccess — direct SwarmMemory Run-scope reads/writes
+    // ------------------------------------------------------------------
+    //
+    // `$context[$key]` is the canonical context-level memory accessor:
+    // every operation goes straight through {@see SwarmMemory} so callers
+    // see the latest value, including writes made outside this RunContext
+    // instance (e.g. from another worker on a durable parallel branch).
+    // The cached `$data` projection is intentionally bypassed here — its
+    // purpose is to keep `prompt()` and runner inter-step relays fast, not
+    // to be the source of truth.
+    //
+    // When SwarmMemory isn't bound (e.g. test setups that never boot the
+    // app), every operation falls back to the cached `$data` array so
+    // POPO-style usage keeps working.
+
+    public function offsetExists(mixed $offset): bool
+    {
+        $memory = $this->resolveMemory();
+
+        if ($memory === null) {
+            return array_key_exists((string) $offset, $this->data);
+        }
+
+        return $memory->entry(MemoryScope::Run, $this->runId, (string) $offset) !== null;
+    }
+
+    public function offsetGet(mixed $offset): mixed
+    {
+        $memory = $this->resolveMemory();
+
+        if ($memory === null) {
+            return $this->data[(string) $offset] ?? null;
+        }
+
+        return $memory->get(MemoryScope::Run, $this->runId, (string) $offset);
+    }
+
+    public function offsetSet(mixed $offset, mixed $value): void
+    {
+        if ($offset === null) {
+            throw new SwarmException('RunContext memory keys are addressed by string — appending without a key is not supported.');
+        }
+
+        $key = (string) $offset;
+        $this->data[$key] = $value;
+
+        $memory = $this->resolveMemory();
+
+        if ($memory !== null) {
+            $memory->put(MemoryScope::Run, $this->runId, $key, $value);
+        }
+    }
+
+    public function offsetUnset(mixed $offset): void
+    {
+        $key = (string) $offset;
+        unset($this->data[$key]);
+
+        $memory = $this->resolveMemory();
+
+        if ($memory !== null) {
+            $memory->forget(MemoryScope::Run, $this->runId, $key);
+        }
+    }
+
+    /**
+     * Mirror {@see mergeData()} writes into the bound {@see SwarmMemory}
+     * Run scope. Best-effort: when no SwarmMemory is bound (typical for
+     * unbooted-app test setups) the cache is the only writer and the
+     * canonical store is whatever the test asserts on directly.
+     *
+     * @param  array<string, mixed>  $values
+     */
+    protected function writeThroughToMemory(array $values): void
+    {
+        $memory = $this->resolveMemory();
+
+        if ($memory === null) {
+            return;
+        }
+
+        foreach ($values as $key => $value) {
+            $memory->put(MemoryScope::Run, $this->runId, (string) $key, $value);
+        }
+    }
+
+    /**
+     * Resolve the bound {@see SwarmMemory} or null when no container/binding
+     * is available. Uses `Container::getInstance()` rather than the global
+     * `app()` helper so RunContext can be constructed in tests that never
+     * boot the framework. Returns null cheaply — callers must guard.
+     */
+    protected function resolveMemory(): ?SwarmMemory
+    {
+        $container = Container::getInstance();
+
+        if (! $container->bound(SwarmMemory::class)) {
+            return null;
+        }
+
+        /** @var SwarmMemory $memory */
+        $memory = $container->make(SwarmMemory::class);
+
+        return $memory;
     }
 
     /**
