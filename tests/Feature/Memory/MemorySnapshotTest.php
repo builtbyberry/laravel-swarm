@@ -11,9 +11,14 @@ use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Tests\Support\InMemoryMemoryStore;
+use BuiltByBerry\LaravelSwarm\Tests\Support\ThrowingMemoryStore;
 use Illuminate\Database\Connection;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
+use Psr\Log\LoggerInterface;
 
 beforeEach(function () {
     DB::table('swarm_run_histories')->insert([
@@ -41,6 +46,7 @@ beforeEach(function () {
             connection: $this->app->make(Connection::class),
             config: $this->app->make('config'),
             memory: $this->app->make(SwarmMemory::class),
+            logger: $this->app->make(LoggerInterface::class),
         );
     });
 });
@@ -212,4 +218,57 @@ test('snapshot payload stays within a reasonable byte budget for typical workloa
     $row = DB::table('swarm_memory_snapshots')->where('run_id', 'run-snap')->where('step_index', 0)->first();
     /** @var object $row */
     expect(strlen((string) $row->payload))->toBeLessThan(32 * 1024);
+});
+
+// ---------------------------------------------------------------------------
+// Hardened error handling — review F1 + F5
+// ---------------------------------------------------------------------------
+//
+// The recorder used to wrap the Run-scoped memory read in a bare
+// `catch (QueryException)` so the staged 0.9.0 rollout could land the
+// snapshots migration ahead of the entries migration without the recorder
+// failing every agent invocation. Both migrations now ship together, so the
+// catch is reshaped into a `Schema::hasTable()` precheck — missing table
+// degrades gracefully with a log line, but any *real* `QueryException`
+// (connection drop, permission revocation, deadlock, schema corruption)
+// must propagate so operators see the failure instead of getting a
+// silently-empty audit trail.
+
+test('snapshot returns empty entries and logs when swarm_memories table is missing', function () {
+    Schema::drop('swarm_memories');
+
+    Log::spy();
+
+    /** @var SnapshotsMemory $recorder */
+    $recorder = $this->app->make(SnapshotsMemory::class);
+    $snapshot = $recorder->snapshot('run-snap', 0);
+
+    expect($snapshot->entries)->toBe([]);
+
+    $row = DB::table('swarm_memory_snapshots')->where('run_id', 'run-snap')->where('step_index', 0)->first();
+    expect($row)->not->toBeNull();
+    /** @var object $row */
+    expect(json_decode((string) $row->payload, true)['entries'])->toBe([]);
+
+    Log::shouldHaveReceived('info')
+        ->withArgs(fn (string $message, array $context = []) => str_contains($message, 'memory table missing')
+            && ($context['table'] ?? null) === 'swarm_memories')
+        ->once();
+});
+
+test('snapshot propagates real QueryException from the memory store instead of swallowing it', function () {
+    // Re-bind the recorder against a memory store that throws QueryException
+    // from `all()`. We have to rebuild the recorder so it picks up the new
+    // store via DefaultSwarmMemory.
+    $this->app->instance(MemoryStore::class, new ThrowingMemoryStore);
+    $this->app->forgetInstance(SwarmMemory::class);
+    $this->app->forgetInstance(SnapshotsMemory::class);
+
+    /** @var SnapshotsMemory $recorder */
+    $recorder = $this->app->make(SnapshotsMemory::class);
+
+    expect(fn () => $recorder->snapshot('run-snap', 0))->toThrow(QueryException::class);
+
+    // The snapshot row must not have landed — propagation is the contract.
+    expect(DB::table('swarm_memory_snapshots')->where('run_id', 'run-snap')->count())->toBe(0);
 });
