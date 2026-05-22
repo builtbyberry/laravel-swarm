@@ -273,6 +273,28 @@ Controls the audit evidence sink. Bind `SwarmAuditSink` in your service containe
 
 ---
 
+## Memory
+
+Controls the memory subsystem introduced in v0.9.0. Memory stores scoped values (Run, Conversation, Agent, and Swarm scopes) and captures per-step snapshots for deterministic crash-resume replay. See [Swarm Memory](memory.md) for the full subsystem reference.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.memory.replay_mode` | string | `frozen_view` | `SWARM_MEMORY_REPLAY_MODE` | Controls what memory a durable agent sees when a step is retried after a crash. `frozen_view` — the agent re-executes against the `MemoryScope::Run` entries frozen in the snapshot taken at the original invocation; live writes during the retry are buffered and never reach the backing store. `fresh_execution` — the agent re-executes against live memory with no snapshot guard; use only when idempotency is guaranteed externally. Override per swarm class with the `#[MemoryReplay]` attribute. |
+
+```ini
+# .env — override the global default
+SWARM_MEMORY_REPLAY_MODE=frozen_view
+```
+
+```php
+// config/swarm.php
+'memory' => [
+    'replay_mode' => env('SWARM_MEMORY_REPLAY_MODE', 'frozen_view'),
+],
+```
+
+---
+
 ## Tables
 
 Table name overrides for all database-backed stores. If you change these, publish and update the package migrations as well.

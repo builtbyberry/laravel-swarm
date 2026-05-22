@@ -47,6 +47,12 @@ The recommended reading path for new users.
 
 ---
 
+## Memory
+
+- [Swarm Memory](memory.md) — scoped, snapshot-replayable memory subsystem; read/write, lifecycle events, replay semantics, and the RunContext bridge (v0.9.0+)
+
+---
+
 ## Reliability & Safety
 
 - [Guardrails](guardrails.md) — input, step, and output validation; child inheritance

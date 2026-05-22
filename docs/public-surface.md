@@ -28,7 +28,7 @@ adding a new public API.
 | `RunContext` | Explicit run input, run ID, data, metadata, artifacts, labels, and details. | [Structured Input](structured-input.md), [Persistence And History](persistence-and-history.md) |
 | `SwarmHistory` | Query persisted history and replay stored stream events. | [Persistence And History](persistence-and-history.md), [Run Inspector](../examples/run-inspector/README.md) |
 | `AuditDrainResult` | Result of an `AuditOutbox::drain()` invocation — `replayed`, `dead_lettered`, `failed`, `claimed`, `reclaimed`. (v0.5.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
-| `ReplayMode` | Enum used by `#[MemoryReplay]` and `swarm.memory.replay_mode`. Cases: `FrozenView` (deterministic replay from frozen snapshot — the default) and `FreshExecution` (live memory, no snapshot guard). (v0.9.0+) | Memory (v0.9.0) |
+| `ReplayMode` | Enum used by `#[MemoryReplay]` and `swarm.memory.replay_mode`. Cases: `FrozenView` (deterministic replay from frozen snapshot — the default) and `FreshExecution` (live memory, no snapshot guard). (v0.9.0+) | [Swarm Memory](memory.md#replay-semantics) |
 
 ## Attributes
 
@@ -44,7 +44,7 @@ adding a new public API.
 | `#[DurableWait]` | Declare durable waits entered after checkpoints. | [Durable Waits And Signals](durable-waits-and-signals.md) |
 | `#[DurableLabels]` | Attach initial durable labels for inspection. | [Durable Waits And Signals](durable-waits-and-signals.md#labels-and-details), [Durable Execution](durable-execution.md#durable-operator-surfaces) |
 | `#[DurableDetails]` | Attach durable details for inspection. | [Durable Waits And Signals](durable-waits-and-signals.md#labels-and-details), [Durable Execution](durable-execution.md#durable-operator-surfaces) |
-| `#[MemoryReplay]` | Override the global `swarm.memory.replay_mode` config for a single swarm class. Accepts `ReplayMode::FrozenView` (default — agents re-execute against the memory snapshot frozen at the original invocation, preserving the canonical audit record) or `ReplayMode::FreshExecution` (agents re-execute against live memory; use only when idempotency is guaranteed externally). When absent, the global config default (`frozen_view`) applies. (v0.9.0+) | Memory (v0.9.0) |
+| `#[MemoryReplay]` | Override the global `swarm.memory.replay_mode` config for a single swarm class. Accepts `ReplayMode::FrozenView` (default — agents re-execute against the memory snapshot frozen at the original invocation, preserving the canonical audit record) or `ReplayMode::FreshExecution` (agents re-execute against live memory; use only when idempotency is guaranteed externally). When absent, the global config default (`frozen_view`) applies. (v0.9.0+) | [Swarm Memory](memory.md#replay-semantics) |
 
 ## Testing Surface
 
@@ -140,3 +140,13 @@ adding a new public API.
 | `LogChannelSwarmAuditSink` | Concrete `SwarmAuditSink` implementation that writes every audit record as a structured log entry (`swarm.audit.<category>`) to the configured Laravel log channel (defaults to `audit`, falls back to the default channel when `audit` is not configured). Dev/staging-friendly zero-config sink; production deployments should ship a bounded backend. Bound by `swarm:install:audit --sink=readable`. Does not implement `ReadableSwarmAuditSink` (log channels are not queryable); `swarm:trace` degrades gracefully when this sink is bound. (v0.8.0+) | [Audit Evidence Contract](audit-evidence-contract.md#quick-setup) |
 | `HaltsSwarmExecution` | Marker interface for sink failure exceptions that must halt the run. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `AuditSinkHaltedException` | Raised when a sink failure handler halts execution. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
+
+## Memory (v0.9.0)
+
+| Surface | Purpose | Primary documentation |
+| --- | --- | --- |
+| `SwarmMemory` | Primary contract for reading and writing scoped memory entries. Methods: `put(scope, scopeId, key, value, metadata)`, `get(scope, scopeId, key)`, `entry(scope, scopeId, key)`, `forget(scope, scopeId, key)`, `all(scope, scopeId)`. Resolved from the container via `app(SwarmMemory::class)`. Custom drivers and test doubles implement this contract. (v0.9.0+) | [Swarm Memory](memory.md#reading-and-writing) |
+| `MemoryEntry` | Immutable value object returned by `put()`, `entry()`, and `all()`. Properties: `scope` (`MemoryScope`), `scopeId` (string), `key` (string), `value` (mixed — plain data only), `metadata` (array), `createdAt` (`?CarbonImmutable`), `updatedAt` (`?CarbonImmutable`). (v0.9.0+) | [Swarm Memory](memory.md#memoryentry) |
+| `MemoryScope` | Enum addressing the four memory scopes. Cases: `Run` (bounded to a single run), `Conversation` (shared across runs in a thread), `Agent` (per-agent-class persistent state), `Swarm` (shared across all agents in a swarm class). (v0.9.0+) | [Swarm Memory](memory.md#scope-hierarchy) |
+| `MemorySnapshot` | Immutable value object representing the frozen memory view captured before each agent invocation. Properties: `runId`, `stepIndex`, `entries` (Run-scope rows as recorded), `toolCalls` (input/output pairs for the invocation), `frozen` (true on snapshots loaded from persistence). (v0.9.0+) | [Swarm Memory](memory.md#snapshot-mechanism) |
+| `SnapshotsMemory` | Contract for the snapshot recorder. Methods: `snapshot(runId, stepIndex)` — capture and persist a snapshot; `appendToolCall(runId, stepIndex, call)` — append a tool call record; `resetToolCalls(runId, stepIndex)` — clear in-flight tool calls; `find(runId, stepIndex)` — retrieve a persisted snapshot or null. Used by all four runners and by `MemoryReplayCoordinator`. (v0.9.0+) | [Swarm Memory](memory.md#snapshot-mechanism) |
