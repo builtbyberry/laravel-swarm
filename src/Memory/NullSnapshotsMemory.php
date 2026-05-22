@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Exceptions\SnapshotFrozenException;
 
 /**
  * No-op {@see SnapshotsMemory} implementation used when persistence runs in
@@ -27,7 +28,16 @@ final class NullSnapshotsMemory implements SnapshotsMemory
 
     public function appendToolCall(MemorySnapshot $snapshot, array $toolCall): MemorySnapshot
     {
+        if ($snapshot->frozen) {
+            throw SnapshotFrozenException::forStep($snapshot->runId, $snapshot->stepIndex);
+        }
+
         return $snapshot->withToolCall($toolCall);
+    }
+
+    public function resetToolCalls(MemorySnapshot $snapshot): MemorySnapshot
+    {
+        return $snapshot->withClearedToolCalls();
     }
 
     public function find(string $runId, int $stepIndex): ?MemorySnapshot

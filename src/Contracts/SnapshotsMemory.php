@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use BuiltByBerry\LaravelSwarm\Exceptions\SnapshotFrozenException;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 
 /**
@@ -48,13 +49,47 @@ interface SnapshotsMemory
      * Returns the updated snapshot with the new tool call included. Callers
      * should treat the original snapshot as stale after this call.
      *
+     * Implementations MUST throw
+     * {@see SnapshotFrozenException}
+     * when `$snapshot->frozen` is true. The frozen flag marks a snapshot as
+     * the canonical record of a completed step (loaded via {@see find()});
+     * silently allowing a write through that guard would corrupt the audit
+     * trail. Callers that legitimately need to rewrite tool calls (the
+     * durable mid-flight retry path) must call {@see resetToolCalls()} first
+     * so the reset is itself recorded as a deliberate action.
+     *
      * @param  array{name: string, arguments: array<string, mixed>, result: mixed, id?: string|null, result_id?: string|null}  $toolCall
      */
     public function appendToolCall(MemorySnapshot $snapshot, array $toolCall): MemorySnapshot;
 
     /**
+     * Clear the persisted `tool_calls` column for `(run_id, step_index)` and
+     * return an unfrozen snapshot the caller can append to.
+     *
+     * Exists for the durable mid-flight retry path: when a worker crashed
+     * after the snapshot was frozen but before the step completed, the row
+     * holds a partial tool-call record. The retry preserves the frozen
+     * memory view (determinism guarantee) but rebuilds tool calls from
+     * scratch — that rebuild starts here.
+     *
+     * Implementations MUST persist the empty `tool_calls` column eagerly so
+     * the reset is durable even if the retry worker also crashes before
+     * appending any new tool calls. The returned {@see MemorySnapshot} has
+     * `$frozen === false` so subsequent {@see appendToolCall()} calls
+     * succeed without tripping the canonical-record guard.
+     *
+     * Public on the contract — not private to the recorder — so v0.10
+     * operator tooling (CLI dump/inspect/purge) and future debugger
+     * surfaces can use it as a first-class reset primitive.
+     */
+    public function resetToolCalls(MemorySnapshot $snapshot): MemorySnapshot;
+
+    /**
      * Look up a previously persisted snapshot by its natural key. Returns
      * null when no snapshot was recorded for that step.
+     *
+     * The returned snapshot is `frozen` — implementations construct it via
+     * {@see MemorySnapshot::fromPersisted()} which defaults the flag to true.
      */
     public function find(string $runId, int $stepIndex): ?MemorySnapshot;
 }

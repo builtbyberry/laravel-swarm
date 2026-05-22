@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Exceptions\SnapshotFrozenException;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemorySnapshotRecorder;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
@@ -188,6 +189,100 @@ test('snapshot persists with an empty entries list when no memory has been writt
     $row = DB::table('swarm_memory_snapshots')->where('run_id', 'run-snap')->where('step_index', 0)->first();
     /** @var object $row */
     expect(json_decode((string) $row->payload, true)['entries'])->toBe([]);
+});
+
+// ---------------------------------------------------------------------------
+// Replay-determinism contract: frozen flag + appendToolCall guard + reset
+// ---------------------------------------------------------------------------
+//
+// The canonical-record guard (`SnapshotFrozenException`) and the mid-flight
+// retry reset (`resetToolCalls`) are the load-bearing contract additions for
+// #112's replay-snapshot-determinism guarantee. See ReplaySwarmMemoryTest for
+// the decorator-side coverage.
+
+test('find returns a snapshot with frozen=true so the canonical-record guard fires', function () {
+    /** @var SnapshotsMemory $recorder */
+    $recorder = $this->app->make(SnapshotsMemory::class);
+    $recorder->snapshot('run-snap', 0);
+
+    $rehydrated = $recorder->find('run-snap', 0);
+
+    expect($rehydrated)->not->toBeNull();
+    /** @var MemorySnapshot $rehydrated */
+    expect($rehydrated->frozen)->toBeTrue();
+});
+
+test('snapshot returns a fresh snapshot with frozen=false so appends to the in-flight invocation succeed', function () {
+    /** @var SnapshotsMemory $recorder */
+    $recorder = $this->app->make(SnapshotsMemory::class);
+    $snapshot = $recorder->snapshot('run-snap', 0);
+
+    expect($snapshot->frozen)->toBeFalse();
+});
+
+test('appendToolCall throws SnapshotFrozenException when handed a snapshot loaded via find()', function () {
+    /** @var SnapshotsMemory $recorder */
+    $recorder = $this->app->make(SnapshotsMemory::class);
+    $recorder->snapshot('run-snap', 0);
+
+    /** @var MemorySnapshot $frozen */
+    $frozen = $recorder->find('run-snap', 0);
+
+    expect(fn () => $recorder->appendToolCall($frozen, [
+        'name' => 't',
+        'arguments' => [],
+        'result' => 'ok',
+    ]))->toThrow(SnapshotFrozenException::class);
+
+    // The canonical row must be untouched after the guard fires.
+    $row = DB::table('swarm_memory_snapshots')->where('run_id', 'run-snap')->where('step_index', 0)->first();
+    /** @var object $row */
+    expect(json_decode((string) $row->tool_calls, true))->toBe([]);
+});
+
+test('resetToolCalls clears the persisted tool_calls column and returns an unfrozen snapshot', function () {
+    /** @var SnapshotsMemory $recorder */
+    $recorder = $this->app->make(SnapshotsMemory::class);
+    $snapshot = $recorder->snapshot('run-snap', 0);
+    $recorder->appendToolCall($snapshot, ['name' => 'first', 'arguments' => [], 'result' => 'a']);
+    $recorder->appendToolCall($snapshot->withToolCall(['name' => 'first', 'arguments' => [], 'result' => 'a']), [
+        'name' => 'second', 'arguments' => [], 'result' => 'b',
+    ]);
+
+    /** @var MemorySnapshot $frozen */
+    $frozen = $recorder->find('run-snap', 0);
+    expect($frozen->toolCalls)->toHaveCount(2);
+
+    $cleared = $recorder->resetToolCalls($frozen);
+
+    expect($cleared->toolCalls)->toBe([]);
+    expect($cleared->frozen)->toBeFalse();
+
+    $row = DB::table('swarm_memory_snapshots')->where('run_id', 'run-snap')->where('step_index', 0)->first();
+    /** @var object $row */
+    expect(json_decode((string) $row->tool_calls, true))->toBe([]);
+});
+
+test('after resetToolCalls a subsequent appendToolCall on the returned snapshot succeeds and persists', function () {
+    /** @var SnapshotsMemory $recorder */
+    $recorder = $this->app->make(SnapshotsMemory::class);
+    $recorder->snapshot('run-snap', 0);
+
+    /** @var MemorySnapshot $frozen */
+    $frozen = $recorder->find('run-snap', 0);
+    $reset = $recorder->resetToolCalls($frozen);
+
+    $appended = $recorder->appendToolCall($reset, [
+        'name' => 'rebuilt-on-retry', 'arguments' => [], 'result' => 'ok',
+    ]);
+
+    expect($appended->toolCalls)->toHaveCount(1);
+
+    $row = DB::table('swarm_memory_snapshots')->where('run_id', 'run-snap')->where('step_index', 0)->first();
+    /** @var object $row */
+    $toolCalls = json_decode((string) $row->tool_calls, true);
+    expect($toolCalls)->toHaveCount(1);
+    expect($toolCalls[0]['name'])->toBe('rebuilt-on-retry');
 });
 
 // ---------------------------------------------------------------------------

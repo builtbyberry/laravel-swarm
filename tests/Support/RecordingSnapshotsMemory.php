@@ -20,6 +20,12 @@ final class RecordingSnapshotsMemory implements SnapshotsMemory
     /** @var array<int, array{run_id: string, step_index: int, tool_call: array<string, mixed>}> */
     public array $toolCallAppends = [];
 
+    /** @var array<int, array{run_id: string, step_index: int}> */
+    public array $toolCallResets = [];
+
+    /** @var array<string, MemorySnapshot> Stub canned `find()` results keyed by `{runId}:{stepIndex}`. */
+    public array $preloaded = [];
+
     public function snapshot(string $runId, int $stepIndex): MemorySnapshot
     {
         $this->snapshotCalls[] = ['run_id' => $runId, 'step_index' => $stepIndex];
@@ -38,8 +44,23 @@ final class RecordingSnapshotsMemory implements SnapshotsMemory
         return $snapshot->withToolCall($toolCall);
     }
 
+    public function resetToolCalls(MemorySnapshot $snapshot): MemorySnapshot
+    {
+        $this->toolCallResets[] = [
+            'run_id' => $snapshot->runId,
+            'step_index' => $snapshot->stepIndex,
+        ];
+
+        return $snapshot->withClearedToolCalls();
+    }
+
     public function find(string $runId, int $stepIndex): ?MemorySnapshot
     {
-        return null;
+        return $this->preloaded[$runId.':'.$stepIndex] ?? null;
+    }
+
+    public function preload(MemorySnapshot $snapshot): void
+    {
+        $this->preloaded[$snapshot->runId.':'.$snapshot->stepIndex] = $snapshot;
     }
 }
