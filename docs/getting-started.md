@@ -249,6 +249,8 @@ From here:
   installer step, for environments where the installer cannot run.
 - [Durable Execution](./durable-execution.md) — checkpointed, recoverable,
   long-running workflows.
+- [Swarm Memory](./memory.md) — scoped, snapshot-replayable memory; run,
+  conversation, agent, and swarm scopes with replay semantics. (v0.9.0+)
 - [Audit Evidence Contract](./audit-evidence-contract.md) — regulated
   evidence export with `SwarmAuditSink`.
 - [Pulse](./pulse.md) — Pulse cards for run counts, step latencies, and

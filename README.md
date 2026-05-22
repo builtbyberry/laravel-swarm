@@ -333,6 +333,23 @@ Schedule::command('swarm:prune')->daily();         // retention: removes expired
 
 Start with [Durable Execution](docs/durable-execution.md), then use the topic guides for [waits and signals](docs/durable-waits-and-signals.md), [retries and progress](docs/durable-retries-and-progress.md), [child swarms](docs/durable-child-swarms.md), and [webhooks](docs/durable-webhooks.md).
 
+## Memory (v0.9.0+)
+
+Swarm Memory is a first-class, scoped, snapshot-replayable memory subsystem. It gives agents and application code a place to read and write structured values that persist across steps, survive queue boundaries, and can be replayed deterministically from a frozen snapshot on a crash-resume.
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+
+$memory = app(SwarmMemory::class);
+$memory->put(MemoryScope::Run, $runId, 'draft_approved', true);
+$approved = $memory->get(MemoryScope::Run, $runId, 'draft_approved');
+```
+
+`RunContext` writes through to `MemoryScope::Run` automatically via its `ArrayAccess` interface — `$context['key'] = $value` mirrors to memory without any code change.
+
+See [Swarm Memory](docs/memory.md) for the full reference: scope hierarchy, store drivers, lifecycle events, snapshot inspection, replay semantics (`frozen_view` vs `fresh_execution`), and the `#[MemoryReplay]` attribute. Vector-backed recall ships as the [laravel-swarm-memory-vector](https://github.com/builtbyberry/laravel-swarm-memory-vector) companion package.
+
 ## Topologies
 
 Laravel Swarm supports four topologies.
