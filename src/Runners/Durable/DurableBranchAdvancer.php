@@ -11,12 +11,15 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Memory\ReplaySwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -93,9 +96,42 @@ class DurableBranchAdvancer
             throw new SwarmException("Unable to resolve durable swarm [{$run['swarm_class']}] from the container.");
         }
 
+        // Detect mid-flight retry: a snapshot row for this step exists, but
+        // the branch never completed (the advancer returns early on completed
+        // branches at the top of this method, so any find() hit here is a
+        // crashed prior attempt). The retry preserves the frozen memory view
+        // for determinism but rebuilds tool calls from scratch — the previous
+        // attempt's partial capture is no longer authoritative.
+        $existingSnapshot = $this->snapshots->find($runId, (int) $branch['step_index']);
+        $isReplay = $existingSnapshot !== null;
+
+        // Swap the SwarmMemory binding to a snapshot-backed view BEFORE the
+        // agent resolves so constructor-injected dependencies see the frozen
+        // memory. The original binding is captured for read-through on
+        // non-Run scopes (the snapshot only freezes Run scope) and restored
+        // in the finally block below.
+        $originalMemory = null;
+
+        if ($isReplay) {
+            /** @var SwarmMemory $originalMemory */
+            $originalMemory = $this->application->make(SwarmMemory::class);
+            $this->application->instance(
+                SwarmMemory::class,
+                new ReplaySwarmMemory(
+                    live: $originalMemory,
+                    snapshot: $existingSnapshot,
+                    events: $this->events,
+                ),
+            );
+        }
+
         $agent = $this->application->make($branch['agent_class']);
 
         if (! $agent instanceof Agent) {
+            if ($originalMemory !== null) {
+                $this->application->instance(SwarmMemory::class, $originalMemory);
+            }
+
             throw new SwarmException("Durable branch agent [{$branch['agent_class']}] must resolve to a Laravel AI agent.");
         }
 
@@ -125,7 +161,17 @@ class DurableBranchAdvancer
 
         try {
             $this->stepsRecorder->started($state, (int) $branch['step_index'], $branch['agent_class'], $branch['input']);
-            $snapshot = $this->snapshots->snapshot($runId, (int) $branch['step_index']);
+
+            // On the fresh-execution path we freeze a new snapshot from live
+            // memory. On the retry path the snapshot already exists; we keep
+            // its frozen entries (the determinism guarantee) but clear the
+            // partial tool-call record so this attempt can rebuild it. Both
+            // paths converge on an unfrozen MemorySnapshot we can append to.
+            /** @var MemorySnapshot $snapshot */
+            $snapshot = $isReplay
+                ? $this->snapshots->resetToolCalls($existingSnapshot)
+                : $this->snapshots->snapshot($runId, (int) $branch['step_index']);
+
             $response = $agent->prompt($branch['input']);
             $output = (string) $response;
             $usage = $response->usage->toArray();
@@ -207,6 +253,14 @@ class DurableBranchAdvancer
                         $this->terminal->failCurrentRunFromBranchFailures($freshRun, $freshToken, $context, $stepLeaseSeconds, $parentNodeId);
                     },
                 );
+            }
+        } finally {
+            // Restore the live SwarmMemory binding even if we returned from a
+            // catch block above. The replay decorator only ever covers one
+            // agent invocation; leaving it bound after the advancer exits
+            // would poison subsequent resolutions on this worker.
+            if ($originalMemory !== null) {
+                $this->application->instance(SwarmMemory::class, $originalMemory);
             }
         }
 

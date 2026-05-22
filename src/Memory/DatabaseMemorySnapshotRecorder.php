@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Memory;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Exceptions\SnapshotFrozenException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -80,6 +81,10 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
 
     public function appendToolCall(MemorySnapshot $snapshot, array $toolCall): MemorySnapshot
     {
+        if ($snapshot->frozen) {
+            throw SnapshotFrozenException::forStep($snapshot->runId, $snapshot->stepIndex);
+        }
+
         $updated = $snapshot->withToolCall($toolCall);
 
         $this->table()
@@ -91,6 +96,22 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
             ]);
 
         return $updated;
+    }
+
+    public function resetToolCalls(MemorySnapshot $snapshot): MemorySnapshot
+    {
+        // The reset persists eagerly so an interrupted retry can't leak the
+        // previous attempt's partial tool-call record back into the canonical
+        // row on its next try.
+        $this->table()
+            ->where('run_id', $snapshot->runId)
+            ->where('step_index', $snapshot->stepIndex)
+            ->update([
+                'tool_calls' => $this->encodeJson([]),
+                'updated_at' => CarbonImmutable::now('UTC'),
+            ]);
+
+        return $snapshot->withClearedToolCalls();
     }
 
     public function find(string $runId, int $stepIndex): ?MemorySnapshot
