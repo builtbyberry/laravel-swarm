@@ -496,6 +496,28 @@ Event::listen(SwarmChildFailed::class, function (SwarmChildFailed $event): void 
 
 ---
 
+## Memory Events
+
+Swarm Memory dispatches five events through Laravel's event system when memory operations occur. All five are dispatched at the **store layer** — they fire from `DatabaseMemoryStore` and `CacheMemoryStore` directly, so custom `MemoryStore` drivers must dispatch them from their own `put()`, `get()`, and `forget()` implementations to keep the listener contract uniform.
+
+| Event | Full class | When | Key properties |
+| --- | --- | --- | --- |
+| `MemoryWritten` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten` | After a successful `put()` | `scope`, `scopeId`, `key`, `metadata` |
+| `MemoryRead` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRead` | After every `get()`, hit or miss | `scope`, `scopeId`, `key` |
+| `MemoryForgotten` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryForgotten` | After every `forget()` | `scope`, `scopeId`, `key`, `existed` |
+| `MemorySnapshotted` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemorySnapshotted` | After a per-step snapshot is captured | `runId`, `stepIndex`, `snapshotId` |
+| `MemoryScopeOutOfSnapshot` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryScopeOutOfSnapshot` | During replay when a read targets a non-Run scope | `runId`, `stepIndex`, `scope`, `scopeId`, `key`, `operation` |
+
+`MemoryRead` intentionally does not expose the entry value. Listeners that need the value should re-read through the store under their own access controls — this keeps the event surface compatible with capture-policy redaction in v0.10.
+
+`MemoryForgotten` includes an `existed` boolean so listeners can distinguish a real deletion from a no-op probe (a `forget()` call on a key that was never set).
+
+`MemoryScopeOutOfSnapshot` fires during `frozen_view` replay when a read targets a Conversation, Agent, or Swarm scoped entry (only Run scope is snapshotted in v0.9.0). Without a listener the read falls through to the live store; no persistent record is created by default. Wire a listener for compliance postures that require a record of every cross-scope read during replay.
+
+For full listener examples and the compliance hard-fail pattern, see [Swarm Memory](memory.md#lifecycle-events).
+
+---
+
 ## Common Patterns
 
 ### Dashboard Run Tracking

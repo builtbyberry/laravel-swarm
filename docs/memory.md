@@ -201,7 +201,7 @@ Event::listen(MemoryScopeOutOfSnapshot::class, function (MemoryScopeOutOfSnapsho
 });
 ```
 
-Without this listener the event fires silently and the read falls through to the live store — pragmatic enough not to break agents that read shared knowledge, but the drift is recorded. Stricter compliance postures should wire this listener.
+Without this listener the event fires silently and the read falls through to the live store — pragmatic enough not to break agents that read shared knowledge, but no persistent record is created. Stricter compliance postures should wire this listener from day one; there is no passive record to fall back on.
 
 **Monitoring — track forget with deletion audit:**
 

@@ -6,15 +6,13 @@ Memory Foundation — first-class scoped, snapshot-replayable memory subsystem w
 
 ### Added
 
-_To be filled in during release wrap-up._
+_Feature entries to be filled in during release wrap-up._
+
+- **`docs/memory.md` — Swarm Memory keystone reference (#116).**
 
 ### Changed
 
-_To be filled in during release wrap-up._
-
-### Documentation
-
-- **`docs/memory.md` — Swarm Memory keystone reference (#116).** New page covering the full memory subsystem: four-scope hierarchy (Run / Conversation / Agent / Swarm), `SwarmMemory` contract read/write API with examples, `MemoryEntry` and `MemoryScope` value object reference, store drivers (`DatabaseMemoryStore` / `CacheMemoryStore` / custom), all five lifecycle events (`MemoryWritten`, `MemoryRead`, `MemoryForgotten`, `MemorySnapshotted`, `MemoryScopeOutOfSnapshot`) with listener examples, snapshot mechanism and `MemorySnapshot` value object, replay semantics (`frozen_view` vs `fresh_execution`) including the `#[MemoryReplay]` per-swarm attribute, the binding-restore constraint on `MemoryReplayCoordinator::during()`, and the RunContext ArrayAccess write-through bridge. Cross-linked from `README.md`, `docs/README.md`, `docs/getting-started.md`, and `docs/advanced-setup.md`.
+_To be filled in during release wrap-up._ New page covering the full memory subsystem: four-scope hierarchy (Run / Conversation / Agent / Swarm), `SwarmMemory` contract read/write API with examples, `MemoryEntry` and `MemoryScope` value object reference, store drivers (`DatabaseMemoryStore` / `CacheMemoryStore` / custom), all five lifecycle events (`MemoryWritten`, `MemoryRead`, `MemoryForgotten`, `MemorySnapshotted`, `MemoryScopeOutOfSnapshot`) with listener examples, snapshot mechanism and `MemorySnapshot` value object, replay semantics (`frozen_view` vs `fresh_execution`) including the `#[MemoryReplay]` per-swarm attribute, the binding-restore constraint on `MemoryReplayCoordinator::during()`, and the RunContext ArrayAccess write-through bridge. Cross-linked from `README.md`, `docs/README.md`, `docs/getting-started.md`, and `docs/advanced-setup.md`.
 
 ## v0.8.0 - 2026-05-21
 
