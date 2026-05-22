@@ -65,6 +65,9 @@ pass:
    - [`swarm:install:audit`](./audit-evidence-contract.md) — binds a
      `SwarmAuditSink` (and the optional `SwarmAuditSigner`,
      `ActorResolver`, `CapturePolicy` stubs) into `AppServiceProvider`.
+   - [`swarm:install:memory`](./memory.md) — verifies the memory tables
+     (`swarm_memories`, `swarm_memory_snapshots`) and prints the effective
+     replay mode. Run standalone at any time to validate your memory config.
    - [`swarm:install:pulse`](./pulse.md) — registers the Swarm recorders
      and dashboard cards. Only offered when `laravel/pulse` is installed.
    - [`swarm:install:examples`](./examples.md) — copies the runnable
@@ -81,6 +84,7 @@ php artisan swarm:install \
     --persistence=database \
     --with-durable \
     --with-audit \
+    --with-memory \
     --with-examples
 ```
 
