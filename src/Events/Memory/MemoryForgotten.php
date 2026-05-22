@@ -20,6 +20,22 @@ use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
  * address. Listeners can hook in for app-level audit trails, custom metrics,
  * or downstream cleanup automation.
  *
+ * The `$existed` flag distinguishes the two possible outcomes:
+ *
+ * - `$existed === true` — an entry was present at the address and a row was
+ *   actually removed by the store. This is the case audit-trail listeners
+ *   typically care about ("show me every Run-scoped deletion in Q3").
+ * - `$existed === false` — no entry was present at the address; the
+ *   `forget()` call was a no-op probe. The event is still dispatched so the
+ *   listener contract stays uniform across calls, but consumers building
+ *   compliance / audit reports will usually want to filter these out to
+ *   avoid noisy false positives.
+ *
+ * Listeners doing audit-trail capture should typically filter by
+ * `$existed === true` to avoid no-op noise. Monitoring listeners (for
+ * example, security probing detection that wants to see callers poking at
+ * addresses they have no right to delete) may want to observe both states.
+ *
  * Companion / third-party {@see MemoryStore}
  * drivers are expected to dispatch this event from their own `forget()`
  * implementations to keep the listener contract uniform across drivers. See
@@ -32,5 +48,6 @@ final class MemoryForgotten
         public readonly MemoryScope $scope,
         public readonly string $scopeId,
         public readonly string $key,
+        public readonly bool $existed,
     ) {}
 }
