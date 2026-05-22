@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use Illuminate\Contracts\Cache\Factory;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 
@@ -169,6 +170,11 @@ function makeSwarmMemoriesTable(): void
         $table->id();
         $table->string('scope');
         $table->string('scope_id');
+        // run_id mirrors the production schema added by
+        // 2026_05_21_000003_add_run_id_to_swarm_memories_table. No FK here —
+        // these synthetic tests don't exercise the cascade; that's covered by
+        // MemoryRunIdCascadeTest against the real migration stack.
+        $table->string('run_id')->nullable();
         $table->string('key');
         $table->json('value')->nullable();
         $table->json('metadata')->nullable();
@@ -176,6 +182,32 @@ function makeSwarmMemoriesTable(): void
         $table->timestamp('updated_at')->useCurrent();
         $table->unique(['scope', 'scope_id', 'key']);
     });
+}
+
+function seedSwarmRunHistory(string $runId): void
+{
+    // Seed a parent swarm_run_histories row so Run-scoped memory puts pass the
+    // run_id FK added by 2026_05_21_000003. Only required when the real
+    // (migrated) memories table is in play.
+    if (DB::table('swarm_run_histories')->where('run_id', $runId)->exists()) {
+        return;
+    }
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => $runId,
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
 }
 
 test('database store dispatches MemoryWritten on put with metadata payload', function () {
@@ -205,6 +237,7 @@ test('database store dispatches MemoryWritten on put with metadata payload', fun
 test('database store dispatches MemoryRead on get whether the row exists or not', function () {
     config()->set('swarm.persistence.driver', 'database');
     makeSwarmMemoriesTable();
+    seedSwarmRunHistory('r1');
 
     Event::fake([MemoryRead::class]);
 

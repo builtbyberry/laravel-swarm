@@ -39,9 +39,9 @@ test('the swarm_memories table exists with the expected columns', function () {
 });
 
 test('migration up/down is idempotent', function () {
-    // Top of the stack — rolling back step=1 removes the memories table
-    // (and only the memories table; #110's snapshots migration is below us).
-    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 1]);
+    // Stack from the top: (1) memories.run_id FK column (review follow-up),
+    // (2) memories table itself. Step=2 drops the run_id FK then the table.
+    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 2]);
     expect(Schema::hasTable('swarm_memories'))->toBeFalse();
 
     // And re-running migrate brings it back cleanly.
