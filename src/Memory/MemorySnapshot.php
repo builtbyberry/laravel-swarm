@@ -32,12 +32,26 @@ final readonly class MemorySnapshot
     /**
      * @param  array<int, array{scope: string, scope_id: string, key: string, value: mixed, metadata: array<string, mixed>, created_at: string|null, updated_at: string|null}>  $entries
      * @param  array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id?: string|null, result_id?: string|null}>  $toolCalls
+     *
+     * `$frozen` records the canonical-replay invariant: true means the snapshot
+     * was loaded from persistence as the canonical record of a completed step
+     * and any attempt to mutate it (via
+     * {@see SnapshotsMemory::appendToolCall()}) must raise loudly. False means
+     * the snapshot is either freshly frozen for an in-flight invocation or
+     * being rebuilt during a mid-flight retry — both legitimate write paths.
+     *
+     * Constructors that produce fresh-snapshot instances (`fromEntries()`,
+     * implementations of {@see SnapshotsMemory::snapshot()}) leave `$frozen`
+     * false. The read-side hydrator (`fromPersisted()`) and any other
+     * read-only producer must opt in to `$frozen = true` so the contract
+     * layer can defend the canonical record from drift-time mutation.
      */
     public function __construct(
         public string $runId,
         public int $stepIndex,
         public array $entries,
         public array $toolCalls = [],
+        public bool $frozen = false,
     ) {}
 
     /**
@@ -80,6 +94,31 @@ final readonly class MemorySnapshot
             stepIndex: $this->stepIndex,
             entries: $this->entries,
             toolCalls: [...$this->toolCalls, $toolCall],
+            frozen: $this->frozen,
+        );
+    }
+
+    /**
+     * Return a copy of this snapshot with `toolCalls` reset to an empty list.
+     *
+     * Used by the mid-flight retry path in the durable runner: the original
+     * worker crashed after the snapshot was frozen but before the step
+     * completed, leaving a partial `tool_calls` record. The retry preserves
+     * the frozen memory view (determinism guarantee) but rebuilds tool calls
+     * from scratch.
+     *
+     * The returned snapshot is unfrozen so subsequent
+     * {@see SnapshotsMemory::appendToolCall()} calls succeed. Carries no
+     * other state change.
+     */
+    public function withClearedToolCalls(): self
+    {
+        return new self(
+            runId: $this->runId,
+            stepIndex: $this->stepIndex,
+            entries: $this->entries,
+            toolCalls: [],
+            frozen: false,
         );
     }
 
@@ -95,6 +134,7 @@ final readonly class MemorySnapshot
             stepIndex: $this->stepIndex,
             entries: $this->entries,
             toolCalls: array_values($toolCalls),
+            frozen: $this->frozen,
         );
     }
 
@@ -117,10 +157,15 @@ final readonly class MemorySnapshot
      * columns. The shape mirrors what {@see toPayloadArray()} and
      * {@see toolCalls} emit on persist.
      *
+     * `$frozen` defaults to true because the typical caller is the read-side
+     * `find()` path that loads a canonical record. Mid-flight retry callers
+     * explicitly pass `frozen: false` so they can rebuild tool calls without
+     * tripping the canonical-record guard.
+     *
      * @param  array<string, mixed>  $payload
      * @param  array<int, array<string, mixed>>  $toolCalls
      */
-    public static function fromPersisted(array $payload, array $toolCalls): self
+    public static function fromPersisted(array $payload, array $toolCalls, bool $frozen = true): self
     {
         /** @var array<int, array{scope: string, scope_id: string, key: string, value: mixed, metadata: array<string, mixed>, created_at: string|null, updated_at: string|null}> $entries */
         $entries = is_array($payload['entries'] ?? null) ? $payload['entries'] : [];
@@ -133,6 +178,7 @@ final readonly class MemorySnapshot
             stepIndex: (int) ($payload['step_index'] ?? 0),
             entries: $entries,
             toolCalls: $normalizedToolCalls,
+            frozen: $frozen,
         );
     }
 }
