@@ -354,6 +354,8 @@ underlying tables are unavailable by design.
   operational hygiene.
 - [Durable Execution](./durable-execution.md) — checkpointing, the relay,
   recovery, and operator controls.
+- [Swarm Memory](./memory.md) — scoped, snapshot-replayable memory; run,
+  conversation, agent, and swarm scopes with replay semantics. (v0.9.0+)
 - [Audit Evidence Contract](./audit-evidence-contract.md) — the full
   audit contract surface and regulated-deployment extension points.
 - [Pulse](./pulse.md) — recorders, cards, and aggregate observability.

@@ -12,6 +12,10 @@ _To be filled in during release wrap-up._
 
 _To be filled in during release wrap-up._
 
+### Documentation
+
+- **`docs/memory.md` — Swarm Memory keystone reference (#116).** New page covering the full memory subsystem: four-scope hierarchy (Run / Conversation / Agent / Swarm), `SwarmMemory` contract read/write API with examples, `MemoryEntry` and `MemoryScope` value object reference, store drivers (`DatabaseMemoryStore` / `CacheMemoryStore` / custom), all five lifecycle events (`MemoryWritten`, `MemoryRead`, `MemoryForgotten`, `MemorySnapshotted`, `MemoryScopeOutOfSnapshot`) with listener examples, snapshot mechanism and `MemorySnapshot` value object, replay semantics (`frozen_view` vs `fresh_execution`) including the `#[MemoryReplay]` per-swarm attribute, the binding-restore constraint on `MemoryReplayCoordinator::during()`, and the RunContext ArrayAccess write-through bridge. Cross-linked from `README.md`, `docs/README.md`, `docs/getting-started.md`, and `docs/advanced-setup.md`.
+
 ## v0.8.0 - 2026-05-21
 
 One-command install. A new `swarm:install` orchestrator plus four targeted sub-installers (`swarm:install:durable`, `swarm:install:audit`, `swarm:install:pulse`, `swarm:install:examples`) cut the read-the-docs-and-hand-wire-five-things ritual down to a single Artisan command, and a curated runnable starter example pack ships so a fresh Laravel app is up and dispatching swarms inside a minute. New concrete `LogChannelSwarmAuditSink` (the zero-config dev/staging sink the audit installer binds), new `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent` provider-free agent base class (the starter examples extend it; `make:swarm:agent` scaffolds it), and a polished `make:swarm:swarm` + `make:swarm:agent` generator pair with topology-aware stubs that match the starter pack. The legacy `make:swarm` keeps working as a deprecated alias. Getting Started and Advanced Setup docs rewritten around the new install flow. No migration changes. No breaking changes.
