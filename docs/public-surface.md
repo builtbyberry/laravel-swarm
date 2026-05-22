@@ -28,6 +28,7 @@ adding a new public API.
 | `RunContext` | Explicit run input, run ID, data, metadata, artifacts, labels, and details. | [Structured Input](structured-input.md), [Persistence And History](persistence-and-history.md) |
 | `SwarmHistory` | Query persisted history and replay stored stream events. | [Persistence And History](persistence-and-history.md), [Run Inspector](../examples/run-inspector/README.md) |
 | `AuditDrainResult` | Result of an `AuditOutbox::drain()` invocation — `replayed`, `dead_lettered`, `failed`, `claimed`, `reclaimed`. (v0.5.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `ReplayMode` | Enum used by `#[MemoryReplay]` and `swarm.memory.replay_mode`. Cases: `FrozenView` (deterministic replay from frozen snapshot — the default) and `FreshExecution` (live memory, no snapshot guard). (v0.9.0+) | Memory (v0.9.0) |
 
 ## Attributes
 
@@ -43,6 +44,7 @@ adding a new public API.
 | `#[DurableWait]` | Declare durable waits entered after checkpoints. | [Durable Waits And Signals](durable-waits-and-signals.md) |
 | `#[DurableLabels]` | Attach initial durable labels for inspection. | [Durable Waits And Signals](durable-waits-and-signals.md#labels-and-details), [Durable Execution](durable-execution.md#durable-operator-surfaces) |
 | `#[DurableDetails]` | Attach durable details for inspection. | [Durable Waits And Signals](durable-waits-and-signals.md#labels-and-details), [Durable Execution](durable-execution.md#durable-operator-surfaces) |
+| `#[MemoryReplay]` | Override the global `swarm.memory.replay_mode` config for a single swarm class. Accepts `ReplayMode::FrozenView` (default — agents re-execute against the memory snapshot frozen at the original invocation, preserving the canonical audit record) or `ReplayMode::FreshExecution` (agents re-execute against live memory; use only when idempotency is guaranteed externally). When absent, the global config default (`frozen_view`) applies. (v0.9.0+) | Memory (v0.9.0) |
 
 ## Testing Surface
 
