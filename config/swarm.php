@@ -222,6 +222,23 @@ return [
         'stream_parallel_branches' => env('SWARM_STATIC_HIERARCHICAL_STREAM_PARALLEL_BRANCHES', 'concurrent'),
     ],
 
+    'memory' => [
+        /*
+         * Controls how a durable swarm re-executes after a crash-resume.
+         *
+         * 'frozen_view'     — agents re-execute against the memory snapshot frozen
+         *                     at the original invocation. Live writes are buffered
+         *                     and never reach the backing store, preserving the
+         *                     canonical audit record. Recommended for reproducible runs.
+         *
+         * 'fresh_execution' — agents re-execute against live memory with no snapshot
+         *                     guard. Use only when idempotency is guaranteed externally.
+         *
+         * Override per swarm with the #[MemoryReplay(mode: ReplayMode::...)] attribute.
+         */
+        'replay_mode' => env('SWARM_MEMORY_REPLAY_MODE', 'frozen_view'),
+    ],
+
     'streaming' => [
         'replay' => [
             'enabled' => env('SWARM_STREAM_REPLAY_ENABLED', false),
