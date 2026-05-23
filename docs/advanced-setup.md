@@ -312,6 +312,69 @@ the host app's PSR-4 root from `composer.json`. See
 [Starter Examples](./examples.md) for the full inventory and per-example
 runner command.
 
+## Set up Swarm Memory (manual equivalent of `swarm:install:memory`)
+
+The memory subsystem provides scoped, snapshot-replayable in-process memory
+for agent runs. On the `database` persistence driver it requires two tables —
+`swarm_memories` and `swarm_memory_snapshots` — introduced in v0.9.0.
+
+### Run the sub-installer
+
+```bash
+php artisan swarm:install:memory
+```
+
+The command:
+
+1. **Resolves the effective memory driver** — checks `swarm.memory.driver`
+   first (per-subsystem override), falls back to `swarm.persistence.driver`.
+   When driver is `cache`, memory is ephemeral and the tables are not
+   required; the command warns and exits cleanly rather than refusing.
+2. **Detects missing memory tables** and offers to run `php artisan migrate`.
+   Pass `--migrate` to skip the prompt; `--skip-migrate` to defer.
+3. **Prints your current `SWARM_MEMORY_REPLAY_MODE`** so you can confirm
+   the replay strategy is what you expect.
+
+You can re-run `swarm:install:memory` at any time — it is idempotent.
+
+### Configure the replay mode
+
+The replay mode controls what memory an agent sees when a durable run is
+retried after a crash:
+
+| Mode | Behaviour | When to use |
+|---|---|---|
+| `frozen_view` (default) | Agent reads the snapshot captured at the start of the failed step — deterministic, same tool calls replayed from the same context | Most workloads |
+| `fresh_execution` | Agent reads live memory at retry time — non-deterministic, may produce different tool calls | Only when idempotency is guaranteed externally |
+
+Set via `.env`:
+
+```dotenv
+SWARM_MEMORY_REPLAY_MODE=frozen_view
+```
+
+Or override per-swarm class:
+
+```php
+use BuiltByBerry\LaravelSwarm\Memory\ReplayMode;
+use BuiltByBerry\LaravelSwarm\Memory\Attributes\MemoryReplay;
+
+#[MemoryReplay(mode: ReplayMode::FreshExecution)]
+class MySwarm extends Swarm { ... }
+```
+
+### Manual migration
+
+If you prefer to control migrations yourself rather than using the
+sub-installer prompt:
+
+```bash
+php artisan vendor:publish --tag=swarm-migrations
+php artisan migrate
+```
+
+See [Memory](./memory.md) for the full memory model reference.
+
 ## Publish the generator stubs (optional)
 
 Customize the `make:swarm:swarm` and `make:swarm:agent` output by
@@ -354,6 +417,8 @@ underlying tables are unavailable by design.
   operational hygiene.
 - [Durable Execution](./durable-execution.md) — checkpointing, the relay,
   recovery, and operator controls.
+- [Memory](./memory.md) — scoped memory, replay modes, snapshot
+  determinism, and the `#[MemoryReplay]` attribute.
 - [Audit Evidence Contract](./audit-evidence-contract.md) — the full
   audit contract surface and regulated-deployment extension points.
 - [Pulse](./pulse.md) — recorders, cards, and aggregate observability.

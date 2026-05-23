@@ -18,4 +18,5 @@ parameters:
                 - src/Persistence/DatabaseDurableRunStore.php
                 - src/Persistence/DatabaseRunHistoryStore.php
                 - src/Persistence/DatabaseContextStore.php
+                - src/Memory/DatabaseMemoryStore.php
                 - src/Pulse/Livewire/SwarmSteps.php

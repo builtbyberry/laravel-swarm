@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
@@ -173,6 +174,7 @@ class DurableManagerCollaboratorFactory
             'jobs' => $jobs,
             'children' => $children,
         ]);
+        $memoryReplayCoordinator = $this->application->make(MemoryReplayCoordinator::class);
         $hierarchical = $this->application->makeWith(DurableHierarchicalCoordinator::class, [
             'durableRuns' => $durableRuns,
             'historyStore' => $historyStore,
@@ -184,6 +186,7 @@ class DurableManagerCollaboratorFactory
             'branches' => $branches,
             'hierarchical' => $hierarchicalRunner,
             'outbox' => $outbox,
+            'coordinator' => $memoryReplayCoordinator,
         ]);
         $terminal = $this->application->makeWith(DurableRunTerminalHandler::class, [
             'durableRuns' => $durableRuns,
@@ -220,6 +223,7 @@ class DurableManagerCollaboratorFactory
         ]);
         $sequentialAdvancer = $this->application->makeWith(DurableSequentialStepAdvancer::class, [
             'sequential' => $sequential,
+            'coordinator' => $memoryReplayCoordinator,
         ]);
         $checkpointCoordinator = $this->application->makeWith(DurableStepCheckpointCoordinator::class, [
             'durableRuns' => $durableRuns,
@@ -254,6 +258,7 @@ class DurableManagerCollaboratorFactory
             'retryHandler' => $retryHandler,
             'outbox' => $outbox,
             'terminal' => $terminal,
+            'coordinator' => $memoryReplayCoordinator,
         ]);
 
         return new DurableManagerCollaborators(

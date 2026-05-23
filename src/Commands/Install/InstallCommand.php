@@ -62,7 +62,9 @@ class InstallCommand extends Command
         {--with-pulse : Dispatch swarm:install:pulse when Laravel Pulse is detected}
         {--without-pulse : Skip swarm:install:pulse in --no-interaction mode}
         {--with-examples : Dispatch swarm:install:examples (installs all starter examples)}
-        {--without-examples : Skip swarm:install:examples in --no-interaction mode}';
+        {--without-examples : Skip swarm:install:examples in --no-interaction mode}
+        {--with-memory : Dispatch swarm:install:memory after the base install}
+        {--without-memory : Skip swarm:install:memory in --no-interaction mode}';
 
     /** @var string */
     protected $description = 'Install Laravel Swarm into the host application (interactive walkthrough).';
@@ -104,6 +106,7 @@ class InstallCommand extends Command
         'SWARM_CAPTURE_OUTPUTS' => 'false',
         'SWARM_CAPTURE_ARTIFACTS' => 'false',
         'SWARM_CAPTURE_ACTIVE_CONTEXT' => 'false',
+        'SWARM_MEMORY_REPLAY_MODE' => 'frozen_view',
     ];
 
     public function handle(Application $app, ConfigRepository $config, Filesystem $files): int
@@ -652,6 +655,14 @@ class InstallCommand extends Command
                     ? 'Dispatched swarm:install:pulse'
                     : 'swarm:install:pulse returned a non-zero exit code (review its output above)';
             }
+        }
+
+        // Memory: always worth offering. Default yes interactively.
+        if ($this->shouldDispatch('memory', defaultYes: true)) {
+            $exit = $this->call('swarm:install:memory', $this->forwardingArgs());
+            $results[] = $exit === self::SUCCESS
+                ? 'Dispatched swarm:install:memory'
+                : 'swarm:install:memory returned a non-zero exit code (review its output above)';
         }
 
         // Examples: low-stakes scaffold, always worth offering. In

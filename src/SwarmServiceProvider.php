@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Commands\Install\InstallAuditCommand;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallCommand;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallDurableCommand;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallExamplesCommand;
+use BuiltByBerry\LaravelSwarm\Commands\Install\InstallMemoryCommand;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallPulseCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmAgentCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
@@ -41,12 +42,20 @@ use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemorySnapshotRecorder;
+use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
+use BuiltByBerry\LaravelSwarm\Memory\NullSnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -243,6 +252,27 @@ class SwarmServiceProvider extends ServiceProvider
             CacheStreamEventStore::class,
             DatabaseStreamEventStore::class,
         ));
+
+        $this->app->singleton(MemoryStore::class, fn (Application $app): MemoryStore => $this->resolvePersistenceStore(
+            $app,
+            'memory',
+            CacheMemoryStore::class,
+            DatabaseMemoryStore::class,
+        ));
+        $this->app->singleton(SwarmMemory::class, DefaultSwarmMemory::class);
+
+        // Snapshot recording requires the `swarm_memory_snapshots` table from
+        // migration #110. When persistence runs in `cache` mode (default for
+        // tests and ephemeral workloads) the table is not migrated, so fall
+        // back to a no-op implementation rather than failing every run. The
+        // database recorder is wired automatically when `swarm.persistence.driver`
+        // is `database` or `swarm.memory.driver` overrides it explicitly.
+        $this->app->singleton(SnapshotsMemory::class, fn (Application $app): SnapshotsMemory => $this->resolvePersistenceStore(
+            $app,
+            'memory',
+            NullSnapshotsMemory::class,
+            DatabaseMemorySnapshotRecorder::class,
+        ));
     }
 
     /**
@@ -302,6 +332,7 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmTraceCommand::class,
                 InstallCommand::class,
                 InstallExamplesCommand::class,
+                InstallMemoryCommand::class,
                 InstallPulseCommand::class,
                 InstallAuditCommand::class,
                 InstallDurableCommand::class,

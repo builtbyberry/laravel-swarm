@@ -7,11 +7,13 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
+use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalFinishNode;
@@ -45,6 +47,7 @@ class HierarchicalRunner
         protected DurableRunStore $durableRuns,
         protected SwarmGuardrailRunner $guardrails,
         protected ConfigRepository $config,
+        protected SnapshotsMemory $snapshots,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -764,6 +767,7 @@ class HierarchicalRunner
                     $branchDefinitions = [];
                     $callbacks = [];
 
+                    $branchSnapshots = [];
                     foreach ($node->branches as $branchNodeId) {
                         /** @var HierarchicalWorkerNode $branch */
                         $branch = $plan->node($branchNodeId);
@@ -774,12 +778,14 @@ class HierarchicalRunner
                         $this->resolveParallelWorker($state->swarm::class, $workerClass);
                         $input = $this->composePrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
 
-                        $this->stepsRecorder->started($state, $nextIndex + count($branchDefinitions), $branch->agentClass, $input);
+                        $branchIndex = $nextIndex + count($branchDefinitions);
+                        $this->stepsRecorder->started($state, $branchIndex, $branch->agentClass, $input);
+                        $branchSnapshots[$branchNodeId] = $this->snapshots->snapshot($state->context->runId, $branchIndex);
 
                         $branchDefinitions[$branchNodeId] = [
                             'node' => $branch,
                             'input' => $input,
-                            'index' => $nextIndex + count($branchDefinitions),
+                            'index' => $branchIndex,
                         ];
 
                         $agentClass = $branch->agentClass;
@@ -797,12 +803,24 @@ class HierarchicalRunner
                                 'output' => (string) $response,
                                 'usage' => $response->usage->toArray(),
                                 'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                                'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
                             ];
                         };
                     }
 
-                    /** @var array<string, array{output: string, usage: array<string, int>, duration_ms: int}> $results */
+                    /** @var array<string, array{output: string, usage: array<string, int>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
                     $results = $this->concurrency->driver()->run($callbacks);
+
+                    foreach ($results as $branchNodeId => $rowData) {
+                        if (! isset($branchSnapshots[$branchNodeId])) {
+                            continue;
+                        }
+                        $branchSnapshot = $branchSnapshots[$branchNodeId];
+                        foreach ($rowData['tool_calls'] ?? [] as $toolCall) {
+                            $branchSnapshot = $this->snapshots->appendToolCall($branchSnapshot, $toolCall);
+                        }
+                        $branchSnapshots[$branchNodeId] = $branchSnapshot;
+                    }
 
                     $policy = GuardrailParallelFailurePolicy::tryFrom((string) $this->config->get(
                         'swarm.guardrails.parallel_failure_policy',
@@ -1292,11 +1310,16 @@ class HierarchicalRunner
         }
 
         $this->stepsRecorder->started($state, $index, $agent::class, $input);
+        $snapshot = $this->snapshots->snapshot($state->context->runId, $index);
 
         $startedAt = MonotonicTime::now();
         $response = $agent->prompt($input);
         $output = (string) $response;
         $usage = $this->usageFromResponse($response);
+
+        foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
+            $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
+        }
 
         $this->guardrails->validateStep(
             $state->swarm,

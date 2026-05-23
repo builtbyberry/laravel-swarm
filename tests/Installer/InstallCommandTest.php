@@ -38,6 +38,7 @@ test('swarm:install runs the happy path with database persistence and seeds env 
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])
         ->assertSucceeded()
@@ -76,6 +77,7 @@ test('swarm:install --persistence=cache scaffolds LaravelSwarm::ignoreMigrations
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])->assertSucceeded();
 
@@ -98,6 +100,7 @@ test('swarm:install is idempotent on a second --no-interaction run', function ()
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ];
 
@@ -122,6 +125,7 @@ test('swarm:install leaves operator-overridden non-persistence env values untouc
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])->assertSucceeded();
 
@@ -157,6 +161,7 @@ test('swarm:install warns when QUEUE_CONNECTION=sync', function () {
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])->assertSucceeded();
 
@@ -172,6 +177,7 @@ test('swarm:install --with-examples dispatches the examples sub-installer', func
         '--without-audit' => true,
         '--without-pulse' => true,
         '--with-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])->assertSucceeded();
 
@@ -189,6 +195,7 @@ test('swarm:install --with-audit dispatches the audit sub-installer', function (
         '--with-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])->assertSucceeded();
 
@@ -210,6 +217,7 @@ test('swarm:install silently skips swarm:install:pulse when Pulse is not install
         '--without-audit' => true,
         '--with-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])->assertSucceeded();
 
@@ -228,6 +236,7 @@ test('swarm:install --force re-publishes config/swarm.php in place', function ()
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])->assertSucceeded();
 
@@ -243,6 +252,7 @@ test('swarm:install --force re-publishes config/swarm.php in place', function ()
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])->assertSucceeded();
 
@@ -258,6 +268,7 @@ test('swarm:install cache-only scaffold is idempotent', function () {
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ];
 
@@ -285,6 +296,7 @@ test('swarm:install refuses when --persistence flag conflicts with existing .env
             '--without-audit' => true,
             '--without-pulse' => true,
             '--without-examples' => true,
+            '--without-memory' => true,
             '--no-interaction' => true,
         ],
         'Mismatch: --persistence=database but .env declares SWARM_PERSISTENCE_DRIVER=cache',
@@ -308,6 +320,7 @@ test('swarm:install --force-env overwrites the existing SWARM_PERSISTENCE_DRIVER
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])
         ->assertSucceeded()
@@ -337,6 +350,7 @@ test('swarm:install extends the existing managed env block when only some keys a
         '--without-audit' => true,
         '--without-pulse' => true,
         '--without-examples' => true,
+        '--without-memory' => true,
         '--no-interaction' => true,
     ])->assertSucceeded();
 
@@ -362,8 +376,46 @@ test('swarm:install refuses when both --with-durable and --without-durable are p
             '--without-audit' => true,
             '--without-pulse' => true,
             '--without-examples' => true,
+            '--without-memory' => true,
             '--no-interaction' => true,
         ],
         'Pass either --with-durable or --without-durable, not both.',
+    );
+});
+
+test('swarm:install --with-memory dispatches the memory sub-installer', function () {
+    $result = $this->runInstaller('swarm:install', [
+        '--persistence' => 'database',
+        '--skip-migrate' => true,
+        '--without-durable' => true,
+        '--without-audit' => true,
+        '--without-pulse' => true,
+        '--without-examples' => true,
+        '--with-memory' => true,
+        '--no-interaction' => true,
+    ])->assertSucceeded();
+
+    $result->assertOutputContains('Dispatched swarm:install:memory');
+
+    // The memory sub-installer prints the replay mode — a signal the
+    // dispatch actually ran rather than just printing a summary line.
+    $result->assertOutputContains('SWARM_MEMORY_REPLAY_MODE');
+});
+
+test('swarm:install refuses when both --with-memory and --without-memory are passed', function () {
+    $this->assertInstallerFailsWith(
+        'swarm:install',
+        [
+            '--persistence' => 'database',
+            '--skip-migrate' => true,
+            '--without-durable' => true,
+            '--without-audit' => true,
+            '--without-pulse' => true,
+            '--without-examples' => true,
+            '--with-memory' => true,
+            '--without-memory' => true,
+            '--no-interaction' => true,
+        ],
+        'Pass either --with-memory or --without-memory, not both.',
     );
 });

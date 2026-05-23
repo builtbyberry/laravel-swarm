@@ -222,6 +222,23 @@ return [
         'stream_parallel_branches' => env('SWARM_STATIC_HIERARCHICAL_STREAM_PARALLEL_BRANCHES', 'concurrent'),
     ],
 
+    'memory' => [
+        /*
+         * Controls how a durable swarm re-executes after a crash-resume.
+         *
+         * 'frozen_view'     — agents re-execute against the memory snapshot frozen
+         *                     at the original invocation. Live writes are buffered
+         *                     and never reach the backing store, preserving the
+         *                     canonical audit record. Recommended for reproducible runs.
+         *
+         * 'fresh_execution' — agents re-execute against live memory with no snapshot
+         *                     guard. Use only when idempotency is guaranteed externally.
+         *
+         * Override per swarm with the #[MemoryReplay(mode: ReplayMode::...)] attribute.
+         */
+        'replay_mode' => env('SWARM_MEMORY_REPLAY_MODE', 'frozen_view'),
+    ],
+
     'streaming' => [
         'replay' => [
             'enabled' => env('SWARM_STREAM_REPLAY_ENABLED', false),
@@ -331,6 +348,12 @@ return [
 
     // These table names are honored by the database repositories at runtime.
     // If you change them, publish and update the package migrations as well.
+    //
+    // Table-name overrides are configuration-only: the SWARM_*_TABLE env vars
+    // below are not seeded into .env by swarm:install. Operators who need to
+    // rename a Swarm table (e.g. multi-tenant schemas) declare the env var in
+    // .env themselves, or override the value directly in config/swarm.php
+    // after publishing.
     'tables' => [
         'contexts' => env('SWARM_CONTEXTS_TABLE', 'swarm_contexts'),
         'artifacts' => env('SWARM_ARTIFACTS_TABLE', 'swarm_artifacts'),
@@ -351,5 +374,7 @@ return [
         'durable_webhook_idempotency' => env('SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE', 'swarm_durable_webhook_idempotency'),
         'durable_outbox' => env('SWARM_DURABLE_OUTBOX_TABLE', 'swarm_durable_outbox'),
         'audit_outbox' => env('SWARM_AUDIT_OUTBOX_TABLE', 'swarm_audit_outbox'),
+        'memories' => env('SWARM_MEMORIES_TABLE', 'swarm_memories'),
+        'memory_snapshots' => env('SWARM_MEMORY_SNAPSHOTS_TABLE', 'swarm_memory_snapshots'),
     ],
 ];
