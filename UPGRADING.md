@@ -268,6 +268,98 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.9.0
+
+v0.9.0 is **non-breaking** on public-surface contracts but ships two new database
+tables and one new env key. No public-method signatures changed; no existing
+config keys were renamed or removed.
+
+### Required: run migrations
+
+Two new tables are added for the memory subsystem. If you use the
+**database persistence driver**, run `php artisan migrate` before deploying:
+
+```bash
+php artisan migrate
+```
+
+This creates:
+
+- `swarm_memories` — scoped key-value memory entries (`MemoryScope::Run /
+  Conversation / Agent / Swarm`).
+- `swarm_memory_snapshots` — frozen point-in-time snapshots of Run-scope memory,
+  used by `MemoryReplayCoordinator` to serve a crash-retried agent the same view
+  it saw at the original invocation.
+
+If you use the **cache persistence driver**, neither table is needed and no
+migration action is required. `CacheMemoryStore` is the automatic fallback on
+non-database drivers and needs no configuration.
+
+### Optional: seed `SWARM_MEMORY_REPLAY_MODE`
+
+A new env key controls the default replay policy for the Run-scope memory
+snapshot:
+
+```
+SWARM_MEMORY_REPLAY_MODE=frozen_view
+```
+
+- **`frozen_view`** (default) — a retried agent sees the frozen snapshot from the
+  original invocation; mutations made between the crash and the retry are not
+  visible. This is the safe choice for idempotent, deterministic reruns.
+- **`fresh_execution`** — the retry agent reads live memory; useful when
+  intermediate mutations are intentional (operator corrections, observability
+  writes you want the retry to act on).
+
+`swarm:install` seeds this key with `frozen_view` automatically if you run it
+now. If you manage `.env` manually, append the line above. Omitting the key
+defaults to `frozen_view` in the package config — existing deployments are
+unaffected at runtime but may want the key explicitly for documentation and
+operator clarity.
+
+Override per-swarm with the `#[MemoryReplay]` attribute when the global default
+does not fit a particular swarm's retry contract:
+
+```php
+use BuiltByBerry\LaravelSwarm\Memory\Attributes\MemoryReplay;
+use BuiltByBerry\LaravelSwarm\Memory\Enums\ReplayMode;
+
+#[MemoryReplay(mode: ReplayMode::FreshExecution)]
+class MySpecialSwarm implements Swarm { ... }
+```
+
+### Optional: verify with `swarm:install:memory`
+
+The new `swarm:install:memory` sub-installer verifies the two tables are present,
+prints the effective memory driver, and confirms your `SWARM_MEMORY_REPLAY_MODE`:
+
+```bash
+php artisan swarm:install:memory
+```
+
+Use this for a quick sanity-check after deploying, or as part of a
+post-deploy health script alongside `swarm:health`.
+
+### What did not change
+
+- No public `Swarm`, `SwarmHistory`, or `Runnable` method signatures changed.
+- The audit pipeline contracts (`SwarmAuditSink`, `ReadableSwarmAuditSink`,
+  `SwarmAuditSigner`, `ActorResolver`, `CapturePolicy`, `SinkFailureHandler`,
+  `AuditOutbox`) are unchanged.
+- The durable execution contract surface (`dispatchDurable()`, `swarm:relay`,
+  `swarm:recover`, `swarm:prune`) is unchanged.
+- `RunContext` is non-breaking: `mergeData()` and the existing fluent builder
+  API continue to work unchanged. The new `ArrayAccess` implementation is
+  additive; internal mutations already went through `mergeData()`, so the
+  write-through to `SwarmMemory` is transparent to existing callers.
+- Published `config/swarm.php`: new `memory` section with `driver` and
+  `replay_mode` keys is appended with safe defaults; no existing key was renamed
+  or removed. If you published and pinned the config, diff against the current
+  package config to pick up the new keys.
+- The Pulse recorder + dashboard card surface is unchanged.
+- `swarm:health`, `swarm:trace`, `swarm:audit:status`, `swarm:audit:reconcile`
+  command signatures and exit codes are unchanged.
+
 ## Upgrading to v0.8.0
 
 v0.8.0 is purely additive on top of v0.7.0 — **no required action**. No
