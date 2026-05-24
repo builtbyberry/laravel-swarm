@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.1 - 2026-05-24
+
+### Changed
+
+- **Widen `laravel/ai` constraint to `^0.6 || ^0.7`.** Allows installation alongside Laravel AI v0.7.0 while remaining compatible with v0.6.x for consumers not yet ready to move. No code changes were required — none of the APIs Swarm depends on (streaming events, response shapes, tool call data structures, the `Lab` enum, `FakePendingDispatch`) changed in v0.7.0. The two v0.7.0 breaking changes (OpenAI strict mode now opt-in; stricter embeddings/reranking validation) do not touch any surface Swarm owns.
+
 ## v0.9.0 - 2026-05-23
 
 Memory Foundation — first-class scoped, snapshot-replayable memory subsystem with RunContext consolidation. Foundation for v0.10.0 propagation/operator surface and v0.11.0 memory-as-tool DX. Vector-backed recall ships as the `laravel-swarm-memory-vector` companion package.
