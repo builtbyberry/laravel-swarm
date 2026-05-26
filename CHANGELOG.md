@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.10.0 - unreleased
+
+Propagation + operator surface — MemoryPropagationPolicy controlling what workers see, CapturePolicy redaction at memory-write, CLI operator commands (inspect/dump/purge), Pulse memory metrics, and the compliance audit guide. Builds on the v0.9.0 memory foundation.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.9.1 - 2026-05-24
 
 ### Changed
