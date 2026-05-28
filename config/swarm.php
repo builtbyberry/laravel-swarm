@@ -237,6 +237,55 @@ return [
          * Override per swarm with the #[MemoryReplay(mode: ReplayMode::...)] attribute.
          */
         'replay_mode' => env('SWARM_MEMORY_REPLAY_MODE', 'frozen_view'),
+
+        /*
+         * Per-scope retention windows for `swarm:memory:purge`.
+         *
+         * Each value is the maximum age in days for entries in that scope —
+         * rows whose `created_at` is older than `now() - N days` are eligible
+         * for purge. `null` disables retention enforcement for that scope
+         * (the default for every scope, so existing applications never lose
+         * data without an explicit policy decision).
+         *
+         * Scope hint:
+         *   run          — bounded to a single swarm run; usually the shortest
+         *                  window (PII-heavy step I/O via memory writes).
+         *   conversation — multi-run conversation thread state.
+         *   agent        — per-agent-class persistent state (preferences,
+         *                  remembered knowledge); typically the longest window.
+         *   swarm        — package- or workflow-wide shared state.
+         *
+         * The `swarm:memory:purge` Artisan command reads this map. Schedule it
+         * via Laravel's scheduler once you have set windows that match your
+         * compliance commitments — see docs/advanced-setup.md.
+         */
+        'retention' => [
+            'days' => [
+                'run' => env('SWARM_MEMORY_RETENTION_RUN_DAYS') !== null
+                    ? (int) env('SWARM_MEMORY_RETENTION_RUN_DAYS')
+                    : null,
+                'conversation' => env('SWARM_MEMORY_RETENTION_CONVERSATION_DAYS') !== null
+                    ? (int) env('SWARM_MEMORY_RETENTION_CONVERSATION_DAYS')
+                    : null,
+                'agent' => env('SWARM_MEMORY_RETENTION_AGENT_DAYS') !== null
+                    ? (int) env('SWARM_MEMORY_RETENTION_AGENT_DAYS')
+                    : null,
+                'swarm' => env('SWARM_MEMORY_RETENTION_SWARM_DAYS') !== null
+                    ? (int) env('SWARM_MEMORY_RETENTION_SWARM_DAYS')
+                    : null,
+            ],
+            /*
+             * When true (default), `swarm_memory_snapshots` rows owned by a
+             * purged Run-scoped memory are removed in the same purge run.
+             * Override per invocation with `--keep-snapshots`. Snapshot rows
+             * are addressed by `run_id`; non-Run scopes never own snapshots,
+             * so this flag only affects the Run scope's cascade.
+             */
+            'prune_snapshots' => filter_var(
+                env('SWARM_MEMORY_RETENTION_PRUNE_SNAPSHOTS', true),
+                FILTER_VALIDATE_BOOLEAN
+            ),
+        ],
     ],
 
     'streaming' => [

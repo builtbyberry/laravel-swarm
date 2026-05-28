@@ -6,7 +6,7 @@ Propagation + operator surface — MemoryPropagationPolicy controlling what work
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **`swarm:memory:purge` retention enforcement (#124).** New Artisan command that prunes `swarm_memories` rows older than per-scope retention windows configured under `swarm.memory.retention.days` (`run`, `conversation`, `agent`, `swarm`). Supports `--dry-run` for preview, `--scope=<value>` to limit a run to a single scope, and `--keep-snapshots` to skip the `swarm_memory_snapshots` cascade. Honors `swarm.retention.prevent_prune` so regulated deployments can suppress destructive deletes without disabling the audit trail. Dispatches a new `MemoryPurged` event with per-scope counts and the criteria the operator ran with (retention windows, scope filter, snapshot flag, dry-run flag, ISO-8601 cutoffs per scope) so app-level audit listeners can record what was removed (or, in dry-run mode, what would have been removed). Emits a `command.memory.purge` audit category via the package audit dispatcher. Scheduler wiring documented in `docs/advanced-setup.md`; retention guidance lives in the new `docs/compliance-audit.md` stub (the full guide ships under #126).
 
 ### Changed
 
