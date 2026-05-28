@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Tests\Support\InMemoryMemoryStore;
 use BuiltByBerry\LaravelSwarm\Tests\Support\ThrowingMemoryStore;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
@@ -48,6 +49,7 @@ beforeEach(function () {
             config: $this->app->make('config'),
             memory: $this->app->make(SwarmMemory::class),
             logger: $this->app->make(LoggerInterface::class),
+            events: $this->app->make(Dispatcher::class),
         );
     });
 });

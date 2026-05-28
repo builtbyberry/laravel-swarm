@@ -371,6 +371,57 @@ The write-through does not replace direct `SwarmMemory` reads and writes — it 
 
 ---
 
+## Pulse observability
+
+When Laravel Pulse is installed, the optional `<livewire:swarm.memory />` card surfaces four signals operators tune retention and capture policy against:
+
+- **Entries written per scope** — count of `put()` calls grouped by `MemoryScope` (Run / Conversation / Agent / Swarm).
+- **Average bytes per write** — approximate JSON byte size of the persisted `value` + `metadata`, averaged per scope.
+- **Recall hit rate** — `MemoryRead` hits divided by total reads, per scope. Sustained low hit rates often indicate a propagation policy or scope mismatch.
+- **Snapshot footprint** — total snapshot count, average bytes per persisted snapshot row, and average entries per snapshot. Ballooning snapshot sizes are an early warning that capture policy is letting too much payload through.
+
+The card is registered automatically by `php artisan swarm:install:pulse` (re-run with `--force` after upgrading to pick up the new card and recorder), or you can wire it manually:
+
+```php
+// config/pulse.php
+use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmMemoryMetrics;
+
+'recorders' => [
+    SwarmMemoryMetrics::class => [
+        'enabled' => env('PULSE_SWARM_MEMORY_METRICS_ENABLED', true),
+    ],
+],
+```
+
+```blade
+{{-- resources/views/vendor/pulse/dashboard.blade.php --}}
+<livewire:swarm.memory cols="6" />
+```
+
+### Tuning the sample rate
+
+`swarm.pulse.memory.sample_rate` controls how often the recorder samples memory events. Default is `1.0` (record every event). High-volume apps should lower this:
+
+```env
+SWARM_PULSE_MEMORY_SAMPLE_RATE=0.1   # ~10% sampling
+SWARM_PULSE_MEMORY_SAMPLE_RATE=0.0   # disable entirely
+```
+
+Sampling is uniform across writes, reads, and snapshots — so averages reported by the card remain statistically meaningful at any rate above zero. Counts (total entries, total snapshots) scale linearly with the sample rate, so multiply by `1 / sample_rate` if you need an absolute estimate.
+
+### Tuning when the card raises an alarm
+
+The card itself does not raise red-state alarms; it surfaces numbers an operator interprets. The common signals and the knobs that move them:
+
+- **Entries-per-scope growing unbounded** — schedule `php artisan swarm:memory:purge` more aggressively, or tighten the retention window in `swarm.memory.retention.*` (v0.10.0).
+- **Average bytes per write climbing** — review `swarm.capture.outputs` and `swarm.capture.artifacts`; tighten the metadata allowlist; reduce the size of values being written through `RunContext` write-through.
+- **Snapshot bytes spike with no entries change** — a single agent is appending large tool-call payloads. Inspect the offending run with `php artisan swarm:inspect <run-id>` and consider redacting that tool's input/output via the capture policy.
+- **Recall hit rate near 0%** — agents are reading keys that were never written. Confirm the propagation policy (`MemoryPropagationPolicy`, v0.10.0) carries the expected scopes into the worker context.
+
+For aggregate Pulse internals — period selectors, recorder enable flag, troubleshooting — see [Pulse](pulse.md#swarm-memory-card).
+
+---
+
 ## See Also
 
 - [RunContext](run-context.md) — the envelope that carries input, identity, and carry-forward data through a run; includes ArrayAccess reference

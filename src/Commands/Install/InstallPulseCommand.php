@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
+use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmMemoryMetrics;
 use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmRuns;
 use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmStepDurations;
 use Illuminate\Console\Command;
@@ -19,8 +20,8 @@ use function Laravel\Prompts\multiselect;
  * Detects Pulse (via class_exists() — not composer), refuses gracefully if
  * absent, then performs two idempotent file edits with .bak backups:
  *
- *   1. Registers the SwarmRuns + SwarmStepDurations recorders in
- *      config/pulse.php inside a sentinel-fenced managed block.
+ *   1. Registers the SwarmRuns + SwarmStepDurations + SwarmMemoryMetrics
+ *      recorders in config/pulse.php inside a sentinel-fenced managed block.
  *   2. Injects the requested livewire cards into
  *      resources/views/vendor/pulse/dashboard.blade.php inside a
  *      sentinel-fenced managed block.
@@ -37,7 +38,7 @@ class InstallPulseCommand extends Command
      * @var string
      */
     protected $signature = 'swarm:install:pulse
-        {--cards= : Comma-separated card list (runs,steps,audit-outbox). Defaults to all available.}
+        {--cards= : Comma-separated card list (runs,steps,audit-outbox,memory). Defaults to all available.}
         {--force : Rewrite even when the swarm:install:pulse managed blocks are already present.}';
 
     /**
@@ -69,6 +70,7 @@ class InstallPulseCommand extends Command
         'runs' => '<livewire:swarm.runs cols="6" />',
         'steps' => '<livewire:swarm.steps cols="6" />',
         'audit-outbox' => '<livewire:swarm.audit-outbox cols="6" />',
+        'memory' => '<livewire:swarm.memory cols="6" />',
     ];
 
     public function handle(Filesystem $files): int
@@ -176,6 +178,7 @@ class InstallPulseCommand extends Command
                 'runs' => 'swarm.runs — per-swarm totals, failures, durations, topology mix',
                 'steps' => 'swarm.steps — slowest average step durations by agent',
                 'audit-outbox' => 'swarm.audit-outbox — live state of the audit outbox',
+                'memory' => 'swarm.memory — memory growth + snapshot size per scope',
             ],
             default: array_keys(self::AVAILABLE_CARDS),
             hint: 'Skip audit-outbox if you do not run the audit outbox.',
@@ -361,6 +364,7 @@ class InstallPulseCommand extends Command
     {
         $runs = SwarmRuns::class;
         $steps = SwarmStepDurations::class;
+        $memory = SwarmMemoryMetrics::class;
         $begin = self::RECORDERS_BEGIN;
         $end = self::RECORDERS_END;
 
@@ -371,6 +375,9 @@ class InstallPulseCommand extends Command
 ],
 \\{$steps}::class => [
     'enabled' => env('PULSE_SWARM_STEP_DURATIONS_ENABLED', true),
+],
+\\{$memory}::class => [
+    'enabled' => env('PULSE_SWARM_MEMORY_METRICS_ENABLED', true),
 ],
 {$end}
 PHP;

@@ -6,11 +6,13 @@ Propagation + operator surface — MemoryPropagationPolicy controlling what work
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **Pulse memory metrics card and recorder (#125).** New `<livewire:swarm.memory />` card and companion `SwarmMemoryMetrics` recorder surface entry-count per scope, average write bytes, recall hit/miss rate, and average snapshot bytes/entries — the early-warning signals operators tune retention and capture policy against. Sampling is configurable via `swarm.pulse.memory.sample_rate` (default `1.0`; `SWARM_PULSE_MEMORY_SAMPLE_RATE` env override). The `swarm:install:pulse` sub-installer now registers the new recorder and offers the card; re-run with `--force` to adopt it in an existing install. Recorder dispatches are driven by the bundled `CacheMemoryStore`, `DatabaseMemoryStore`, and `DatabaseMemorySnapshotRecorder` — see [docs/memory.md](docs/memory.md#pulse-observability) for tuning guidance.
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **`MemoryRead` carries a `hit` boolean (#125).** The event now exposes whether the underlying lookup returned a stored entry or missed. Existing listeners keep working — the parameter defaults to `false` so listener-side construction and third-party drivers that have not been updated still type-check and behave conservatively.
+- **`MemoryWritten` carries an optional `bytes` field (#125).** Approximate JSON byte size of the persisted `value` + `metadata`, populated at write time by the bundled stores. Defaults to `null` so listener-side construction and third-party drivers remain source-compatible.
+- **`MemorySnapshotted` carries optional `bytes` and `entryCount` fields (#125).** The bundled `DatabaseMemorySnapshotRecorder` populates both at persistence time. Both default to `null` for source-compatible third-party drivers.
 
 ## v0.9.1 - 2026-05-24
 
