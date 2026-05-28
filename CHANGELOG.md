@@ -6,7 +6,7 @@ Propagation + operator surface — MemoryPropagationPolicy controlling what work
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **`swarm:memory:inspect` operator CLI (#122).** Displays the frozen `MemorySnapshot` for a run — exactly what the agent saw at invocation time, plus any tool-call inputs/outputs recorded during the invocation. Required `<run-id>` argument; `--step=N` selects a specific step (omit to list every step recorded for the run); `--format=table|json` controls output (default `table`); `--scope=run|conversation|agent|swarm` filters the entries view. Reads `swarm_memory_snapshots` directly via the configured table name, so it works uniformly across all four runners (sequential, parallel, hierarchical, durable branch) with no special-casing. Pairs with `swarm:memory:dump` for full-run exports; see `docs/memory.md` for examples.
 
 ### Changed
 
