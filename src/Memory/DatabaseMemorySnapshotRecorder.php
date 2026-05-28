@@ -126,6 +126,27 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
             return null;
         }
 
+        return $this->hydrate($record);
+    }
+
+    public function allForRun(string $runId): array
+    {
+        $records = $this->table()
+            ->where('run_id', $runId)
+            ->orderBy('step_index')
+            ->get();
+
+        $snapshots = [];
+
+        foreach ($records as $record) {
+            $snapshots[] = $this->hydrate($record);
+        }
+
+        return $snapshots;
+    }
+
+    protected function hydrate(object $record): MemorySnapshot
+    {
         $rawPayload = $record->payload ?? null;
         $rawToolCalls = $record->tool_calls ?? null;
 

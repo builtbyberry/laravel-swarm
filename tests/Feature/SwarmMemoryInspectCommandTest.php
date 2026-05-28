@@ -2,9 +2,12 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryInspected;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 
 beforeEach(function (): void {
     // The snapshots table is part of the database persistence stack. The
@@ -97,12 +100,18 @@ function mixedScopeEntries(string $runId): array
 }
 
 // ---------------------------------------------------------------------------
-// Per-runner inspection — the inspector treats every runner identically because
-// they all write to `swarm_memory_snapshots`. We simulate each runner's typical
-// row shape and confirm the command surfaces it the same way.
+// Read-path coverage against the persisted snapshot table.
+//
+// The inspector treats every runner identically because all four runners
+// (sequential, parallel, hierarchical, durable branch) write to the same
+// `swarm_memory_snapshots` table — the proof that they share that table
+// shape lives in `tests/Feature/Memory/RunnerSnapshotIntegrationTest`. The
+// tests in this section therefore only need to exercise the inspector's
+// read path against representative row shapes; per-runner naming would be
+// misleading because nothing in the inspector branches on runner identity.
 // ---------------------------------------------------------------------------
 
-test('inspects a sequential-runner-style run (one row per step in order)', function () {
+test('lists multiple steps in step_index order', function () {
     seedMemorySnapshotRow('run-seq', 0, runEntries('run-seq'));
     seedMemorySnapshotRow('run-seq', 1, runEntries('run-seq'));
     seedMemorySnapshotRow('run-seq', 2, runEntries('run-seq'));
@@ -120,9 +129,10 @@ test('inspects a sequential-runner-style run (one row per step in order)', funct
     expect(array_column($output['snapshots'], 'step_index'))->toBe([0, 1, 2]);
 });
 
-test('inspects a parallel-runner-style run (multiple branch steps sharing a run_id)', function () {
-    // Parallel runners snapshot each branch under the same run_id with
-    // monotonically increasing step indices.
+test('lists multiple steps sharing a run id', function () {
+    // The list view exposes every snapshot row recorded under `run_id`,
+    // regardless of which runner wrote them — the only column the inspector
+    // sorts by is `step_index`.
     seedMemorySnapshotRow('run-par', 0, runEntries('run-par'));
     seedMemorySnapshotRow('run-par', 1, runEntries('run-par'));
     seedMemorySnapshotRow('run-par', 2, runEntries('run-par'));
@@ -137,9 +147,9 @@ test('inspects a parallel-runner-style run (multiple branch steps sharing a run_
     expect($output['snapshot_count'])->toBe(3);
 });
 
-test('inspects a hierarchical-runner-style run (coordinator at step 0, workers after)', function () {
-    seedMemorySnapshotRow('run-hier', 0, runEntries('run-hier')); // coordinator
-    seedMemorySnapshotRow('run-hier', 1, runEntries('run-hier')); // worker
+test('expands a single step from a multi-step run', function () {
+    seedMemorySnapshotRow('run-hier', 0, runEntries('run-hier'));
+    seedMemorySnapshotRow('run-hier', 1, runEntries('run-hier'));
 
     $exit = Artisan::call('swarm:memory:inspect', [
         'run_id' => 'run-hier',
@@ -154,7 +164,7 @@ test('inspects a hierarchical-runner-style run (coordinator at step 0, workers a
     expect($output['entry_count'])->toBe(2);
 });
 
-test('inspects a durable-branch-style run with recorded tool calls', function () {
+test('expands a step including its recorded tool calls', function () {
     seedMemorySnapshotRow('run-dur', 0, runEntries('run-dur'), [
         ['id' => 'call-1', 'name' => 'Recall', 'arguments' => ['key' => 'pref'], 'result' => 'dark', 'result_id' => 'r-1'],
         ['id' => 'call-2', 'name' => 'Recall', 'arguments' => ['key' => 'lang'], 'result' => 'en', 'result_id' => 'r-2'],
@@ -395,4 +405,103 @@ test('empty run id argument fails fast', function () {
 
     expect($exit)->toBe(1);
     expect(Artisan::output())->toContain('run_id argument is required.');
+});
+
+// ---------------------------------------------------------------------------
+// Cache-driver diagnostic — the SnapshotsMemory binding resolves to
+// `NullSnapshotsMemory` and the command surfaces a configuration hint rather
+// than the misleading "no snapshots found" message.
+// ---------------------------------------------------------------------------
+
+test('cache persistence driver fails with a configuration hint', function () {
+    // Re-bind to the cache-driver snapshot store. The service provider
+    // resolves this lazily on driver lookup, so it is enough to set the
+    // config and forget the singleton.
+    config()->set('swarm.persistence.driver', 'cache');
+    app()->forgetInstance(SnapshotsMemory::class);
+
+    $exit = Artisan::call('swarm:memory:inspect', ['run_id' => 'r-cache']);
+
+    expect($exit)->toBe(1);
+    expect(Artisan::output())->toContain('Ensure swarm.persistence.driver=database');
+});
+
+// ---------------------------------------------------------------------------
+// Audit / event coverage — successful reads dispatch the `MemoryInspected`
+// event and emit the `command.memory.inspect` audit category. Failed reads
+// do not.
+// ---------------------------------------------------------------------------
+
+test('dispatches MemoryInspected on successful read', function () {
+    seedMemorySnapshotRow('run-evt', 0, runEntries('run-evt'));
+    seedMemorySnapshotRow('run-evt', 1, runEntries('run-evt'));
+
+    Event::fake([MemoryInspected::class]);
+
+    Artisan::call('swarm:memory:inspect', ['run_id' => 'run-evt', '--format' => 'json']);
+
+    Event::assertDispatched(MemoryInspected::class, function (MemoryInspected $event): bool {
+        return $event->runId === 'run-evt'
+            && $event->stepIndex === null
+            && $event->scopeFilter === null
+            && $event->format === 'json'
+            && $event->snapshotCount === 2;
+    });
+});
+
+test('does not dispatch MemoryInspected when the run has no snapshots', function () {
+    Event::fake([MemoryInspected::class]);
+
+    $exit = Artisan::call('swarm:memory:inspect', ['run_id' => 'never-existed']);
+
+    expect($exit)->toBe(1);
+
+    Event::assertNotDispatched(MemoryInspected::class);
+});
+
+test('dispatches MemoryInspected carrying step and scope filters', function () {
+    seedMemorySnapshotRow('run-fil', 0, mixedScopeEntries('run-fil'));
+
+    Event::fake([MemoryInspected::class]);
+
+    Artisan::call('swarm:memory:inspect', [
+        'run_id' => 'run-fil',
+        '--step' => 0,
+        '--scope' => 'agent',
+        '--format' => 'json',
+    ]);
+
+    Event::assertDispatched(MemoryInspected::class, function (MemoryInspected $event): bool {
+        return $event->stepIndex === 0
+            && $event->scopeFilter?->value === 'agent'
+            && $event->snapshotCount === 1;
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Truncation hint — tabular output points the operator at `--format=json` if
+// any rendered cell hits the truncation budget.
+// ---------------------------------------------------------------------------
+
+test('table mode hints at --format=json when a tool-call cell truncates', function () {
+    seedMemorySnapshotRow(
+        'run-trunc',
+        0,
+        runEntries('run-trunc', 1),
+        [[
+            'id' => 'call-long',
+            'name' => 'Recall',
+            'arguments' => ['key' => str_repeat('x', 200)],
+            'result' => 'ok',
+        ]],
+    );
+
+    Artisan::call('swarm:memory:inspect', [
+        'run_id' => 'run-trunc',
+        '--step' => 0,
+    ]);
+
+    $output = Artisan::output();
+    expect($output)->toContain('--format=json');
+    expect($output)->toContain('truncated');
 });

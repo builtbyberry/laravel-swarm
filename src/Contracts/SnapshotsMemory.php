@@ -92,4 +92,19 @@ interface SnapshotsMemory
      * {@see MemorySnapshot::fromPersisted()} which defaults the flag to true.
      */
     public function find(string $runId, int $stepIndex): ?MemorySnapshot;
+
+    /**
+     * Return every persisted snapshot for `$runId`, ordered by `step_index`
+     * ascending. Returns an empty array when no snapshots were recorded.
+     *
+     * Used by operator tooling — `swarm:memory:inspect` lists every step
+     * recorded for a run via this method so the inspector does not need to
+     * reach past the contract into the underlying table.
+     *
+     * Each returned snapshot is `frozen` — implementations construct them via
+     * {@see MemorySnapshot::fromPersisted()} which defaults the flag to true.
+     *
+     * @return array<int, MemorySnapshot>
+     */
+    public function allForRun(string $runId): array;
 }

@@ -4,13 +4,18 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryInspected;
+use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Memory\NullSnapshotsMemory;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Database\ConnectionResolverInterface;
+use Illuminate\Contracts\Events\Dispatcher;
 use Symfony\Component\Console\Attribute\AsCommand;
-use Throwable;
 use ValueError;
 
 /**
@@ -24,16 +29,23 @@ use ValueError;
  * the audit / debugging primitive that pairs with `swarm:memory:dump`
  * (full-run export, issue #123).
  *
- * Reads the snapshot row directly via the configured table name so the
- * command works against any driver that backs the contract — it does not
- * special-case `DatabaseMemorySnapshotRecorder` and does not need a runner
- * to be active. When persistence is in `cache` mode the table is absent
+ * Reads route through the {@see SnapshotsMemory} contract so any driver
+ * binding the host application chooses to use is honored. When persistence
+ * is in `cache` mode the resolved binding is {@see NullSnapshotsMemory},
  * and the command surfaces a clear configuration error rather than 500ing.
  */
 #[AsCommand(name: 'swarm:memory:inspect')]
 class SwarmMemoryInspectCommand extends Command
 {
     use ResolvesStringConsoleInput;
+
+    /**
+     * Character budget for a single rendered table cell before truncation.
+     * Bumped from the original 40 to give the operator more signal in the
+     * default view; the `--format=json` hint surfaces when any cell hits the
+     * cap so the operator knows to switch formats for the full value.
+     */
+    protected const TABLE_CELL_BUDGET = 60;
 
     protected $signature = 'swarm:memory:inspect
                             {run_id : The run identifier to inspect snapshots for.}
@@ -72,7 +84,9 @@ class SwarmMemoryInspectCommand extends Command
 
     public function handle(
         ConfigRepository $config,
-        ConnectionResolverInterface $connectionResolver,
+        SnapshotsMemory $snapshots,
+        Dispatcher $events,
+        SwarmAuditDispatcher $audit,
     ): int {
         $runId = trim($this->argumentString('run_id'));
 
@@ -98,28 +112,25 @@ class SwarmMemoryInspectCommand extends Command
             return $this->failWith('--step must be a non-negative integer.');
         }
 
-        $connection = $connectionResolver->connection();
-        $table = (string) $config->get('swarm.tables.memory_snapshots', 'swarm_memory_snapshots');
-
-        $query = $connection->table($table)
-            ->where('run_id', $runId)
-            ->orderBy('step_index');
-
-        if ($step !== null) {
-            $query = $query->where('step_index', $step);
-        }
-
-        try {
-            $rows = $query->get();
-        } catch (Throwable $exception) {
+        // Diagnostic fallback for the cache-driver path: the resolved
+        // binding is the no-op `NullSnapshotsMemory`, which silently returns
+        // empty lookups. Surface the configuration hint instead of telling
+        // the operator "no snapshots found" — that would be misleading.
+        if ($snapshots instanceof NullSnapshotsMemory) {
             return $this->failWith(sprintf(
-                'Could not read %s: %s. Ensure swarm.persistence.driver=database and the memory-snapshots migration has run.',
-                $table,
-                $exception->getMessage(),
+                'Could not read %s. Ensure swarm.persistence.driver=database and the memory-snapshots migration has run.',
+                (string) $config->get('swarm.tables.memory_snapshots', 'swarm_memory_snapshots'),
             ));
         }
 
-        if ($rows->isEmpty()) {
+        if ($step !== null) {
+            $snapshot = $snapshots->find($runId, $step);
+            $found = $snapshot !== null ? [$snapshot] : [];
+        } else {
+            $found = $snapshots->allForRun($runId);
+        }
+
+        if ($found === []) {
             $message = $step !== null
                 ? sprintf('No snapshot found for run_id=%s step=%d.', $runId, $step)
                 : sprintf('No snapshots found for run_id=%s.', $runId);
@@ -127,16 +138,33 @@ class SwarmMemoryInspectCommand extends Command
             return $this->failWith($message);
         }
 
-        $snapshots = [];
-        foreach ($rows as $row) {
-            $snapshots[] = $this->normalizeRow($row, $scope);
-        }
+        $projected = array_map(
+            fn (MemorySnapshot $snapshot): array => $this->projectSnapshot($snapshot, $scope),
+            $found,
+        );
+
+        $events->dispatch(new MemoryInspected(
+            runId: $runId,
+            stepIndex: $step,
+            scopeFilter: $scope,
+            format: $format,
+            snapshotCount: count($projected),
+        ));
+
+        $audit->emit('command.memory.inspect', [
+            'run_id' => $runId,
+            'step_index' => $step,
+            'scope_filter' => $scope?->value,
+            'format' => $format,
+            'snapshot_count' => count($projected),
+            ...$audit->metadata(['actor' => Actor::system('artisan')->toArray()]),
+        ]);
 
         if ($step !== null) {
-            return $this->renderSingle($snapshots[0], $format, $scope);
+            return $this->renderSingle($projected[0], $format, $scope);
         }
 
-        return $this->renderList($runId, $snapshots, $format, $scope);
+        return $this->renderList($runId, $projected, $format, $scope);
     }
 
     /**
@@ -176,16 +204,25 @@ class SwarmMemoryInspectCommand extends Command
         $this->line('');
         $this->components->info('Entries');
 
+        $truncated = false;
+
         if ($snapshot['entries'] === []) {
             $this->components->warn('No entries captured at this snapshot.');
         } else {
-            $rows = array_map(static fn (array $entry): array => [
-                (string) ($entry['scope'] ?? '-'),
-                (string) ($entry['scope_id'] ?? '-'),
-                (string) ($entry['key'] ?? '-'),
-                self::truncateForTable(self::prettyOneLine($entry['value'] ?? null), 60),
-                (string) ($entry['updated_at'] ?? $entry['created_at'] ?? '-'),
-            ], $snapshot['entries']);
+            $rows = [];
+            foreach ($snapshot['entries'] as $entry) {
+                $rendered = self::prettyOneLine($entry['value'] ?? null);
+                $cell = self::truncateForTable($rendered, self::TABLE_CELL_BUDGET);
+                $truncated = $truncated || $cell !== $rendered;
+
+                $rows[] = [
+                    (string) ($entry['scope'] ?? '-'),
+                    (string) ($entry['scope_id'] ?? '-'),
+                    (string) ($entry['key'] ?? '-'),
+                    $cell,
+                    (string) ($entry['updated_at'] ?? $entry['created_at'] ?? '-'),
+                ];
+            }
 
             $this->table(['Scope', 'Scope ID', 'Key', 'Value', 'Updated At'], $rows);
         }
@@ -196,21 +233,37 @@ class SwarmMemoryInspectCommand extends Command
         if ($snapshot['tool_calls'] === []) {
             $this->components->warn('No tool calls recorded for this invocation.');
 
+            if ($truncated) {
+                $this->emitTruncationHint();
+            }
+
             return self::SUCCESS;
         }
 
         $rows = [];
         foreach ($snapshot['tool_calls'] as $index => $call) {
+            $args = self::prettyOneLine($call['arguments'] ?? null);
+            $result = self::prettyOneLine($call['result'] ?? null);
+
+            $argsCell = self::truncateForTable($args, self::TABLE_CELL_BUDGET);
+            $resultCell = self::truncateForTable($result, self::TABLE_CELL_BUDGET);
+
+            $truncated = $truncated || $argsCell !== $args || $resultCell !== $result;
+
             $rows[] = [
                 (string) $index,
                 (string) ($call['name'] ?? '-'),
-                self::truncateForTable(self::prettyOneLine($call['arguments'] ?? null), 40),
-                self::truncateForTable(self::prettyOneLine($call['result'] ?? null), 40),
+                $argsCell,
+                $resultCell,
                 (string) ($call['id'] ?? '-'),
             ];
         }
 
         $this->table(['#', 'Name', 'Arguments', 'Result', 'Call ID'], $rows);
+
+        if ($truncated) {
+            $this->emitTruncationHint();
+        }
 
         return self::SUCCESS;
     }
@@ -264,50 +317,35 @@ class SwarmMemoryInspectCommand extends Command
     }
 
     /**
+     * Project a `MemorySnapshot` value object into the array shape the
+     * renderers consume.
+     *
      * @return array<string, mixed>
      */
-    protected function normalizeRow(object $row, ?MemoryScope $scope): array
+    protected function projectSnapshot(MemorySnapshot $snapshot, ?MemoryScope $scope): array
     {
-        $payload = $this->decodeJson($row->payload ?? null);
-        $toolCalls = $this->decodeJson($row->tool_calls ?? null);
-
-        /** @var array<int, array<string, mixed>> $entries */
-        $entries = is_array($payload['entries'] ?? null) ? $payload['entries'] : [];
+        $entries = $snapshot->entries;
 
         if ($scope !== null) {
             $entries = array_values(array_filter(
                 $entries,
-                static fn (mixed $entry): bool => is_array($entry)
-                    && (($entry['scope'] ?? null) === $scope->value),
+                static fn (array $entry): bool => ($entry['scope'] ?? null) === $scope->value,
             ));
         }
 
         return [
-            'run_id' => (string) ($payload['run_id'] ?? $row->run_id ?? ''),
-            'step_index' => (int) ($payload['step_index'] ?? $row->step_index ?? 0),
+            'run_id' => $snapshot->runId,
+            'step_index' => $snapshot->stepIndex,
             'entries' => $entries,
-            'tool_calls' => array_values($toolCalls),
-            'recorded_at' => isset($row->created_at) ? (string) $row->created_at : null,
-            'updated_at' => isset($row->updated_at) ? (string) $row->updated_at : null,
+            'tool_calls' => array_values($snapshot->toolCalls),
+            // The contract's `MemorySnapshot` value object does not carry the
+            // persisted row timestamps. The renderers tolerate `null` here —
+            // they default to `-` in table mode and pass through as `null` in
+            // JSON, which matches what the operator surfaces from any
+            // future driver that chooses not to record per-row timestamps.
+            'recorded_at' => null,
+            'updated_at' => null,
         ];
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    protected function decodeJson(mixed $raw): array
-    {
-        if (! is_string($raw) || $raw === '') {
-            return [];
-        }
-
-        try {
-            $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            return [];
-        }
-
-        return is_array($decoded) ? $decoded : [];
     }
 
     protected function resolveFormat(): ?string
@@ -379,6 +417,14 @@ class SwarmMemoryInspectCommand extends Command
     {
         $encoded = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         $this->line($encoded !== false ? $encoded : '{}');
+    }
+
+    protected function emitTruncationHint(): void
+    {
+        $this->components->info(sprintf(
+            'Some cells were truncated to %d characters. Re-run with --format=json for full values.',
+            self::TABLE_CELL_BUDGET,
+        ));
     }
 
     protected function failWith(string $message): int
