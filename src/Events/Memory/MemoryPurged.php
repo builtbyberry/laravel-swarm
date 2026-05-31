@@ -38,13 +38,20 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
  *     - `dry_run`        — `true` when the operator passed `--dry-run` (in
  *        which case `counts` reports what *would* have been removed and no
  *        rows were actually deleted).
+ *     - `prevent_prune`  — `true` when `swarm.retention.prevent_prune`
+ *        (`SWARM_PREVENT_PRUNE`) suppressed the destructive deletes for this
+ *        run. The event still dispatches so scheduled runs stay visible to the
+ *        audit pipeline, but `counts` are all zero. This is what distinguishes
+ *        a compliance-suppressed run from a run that simply had nothing to
+ *        delete — both report zero counts with `dry_run = false`.
  *     - `cutoffs`        — associative `scope` => ISO-8601 timestamp map of
  *        the `created_at` threshold used for each scope. Omitted scopes
  *        either had no retention configured or were filtered out.
  *
  * Listeners doing audit-trail capture will typically want to filter on
  * `criteria.dry_run === false` to avoid recording preview runs as deletion
- * evidence.
+ * evidence, and inspect `criteria.prevent_prune` to tell a suppressed run
+ * apart from a genuine zero-delete run.
  *
  * Companion / third-party {@see MemoryStore}
  * drivers that ship their own retention command should dispatch this event
@@ -60,6 +67,7 @@ final class MemoryPurged
      *     scope_filter: string|null,
      *     prune_snapshots: bool,
      *     dry_run: bool,
+     *     prevent_prune: bool,
      *     cutoffs: array<string, string>,
      * }  $criteria
      */

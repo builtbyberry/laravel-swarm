@@ -245,7 +245,9 @@ return [
          * rows whose `created_at` is older than `now() - N days` are eligible
          * for purge. `null` disables retention enforcement for that scope
          * (the default for every scope, so existing applications never lose
-         * data without an explicit policy decision).
+         * data without an explicit policy decision). The minimum enforceable
+         * window is 1 day: a value below 1 (e.g. `0`) is treated as `null`
+         * (disabled) and the command warns rather than purging everything.
          *
          * Scope hint:
          *   run          — bounded to a single swarm run; usually the shortest

@@ -110,6 +110,28 @@ test('swarm:memory:purge deletes rows older than the per-scope retention window'
     expect(DB::table('swarm_memories')->where('id', $oldAgent)->exists())->toBeTrue();
 });
 
+test('swarm:memory:purge compares created_at against the cutoff instant, not the calendar day', function (): void {
+    // Regression guard for the cutoff binding: the cutoff must reach the query
+    // as a native datetime, not a pre-formatted ISO-8601 string. A row one hour
+    // *inside* the window must survive; a row one hour *outside* must be purged.
+    // With a string cutoff like "2026-05-24T10:00:00+00:00" this fails — on
+    // SQLite every same-day row sorts lexicographically before the "T", so the
+    // inside-window row is wrongly deleted; on MySQL the literal is an invalid
+    // datetime. Existing tests only used rows days from the boundary and never
+    // caught it.
+    config()->set('swarm.memory.retention.days.run', 7);
+
+    $cutoff = Carbon::now('UTC')->subDays(7);
+
+    $insideWindow = seedMemoryRow(MemoryScope::Run, 'run-inside', 'k', $cutoff->copy()->addHour());
+    $outsideWindow = seedMemoryRow(MemoryScope::Run, 'run-outside', 'k', $cutoff->copy()->subHour());
+
+    Artisan::call('swarm:memory:purge');
+
+    expect(DB::table('swarm_memories')->where('id', $insideWindow)->exists())->toBeTrue();
+    expect(DB::table('swarm_memories')->where('id', $outsideWindow)->exists())->toBeFalse();
+});
+
 test('swarm:memory:purge --dry-run reports counts without deleting any rows', function (): void {
     config()->set('swarm.memory.retention.days.run', 7);
 
@@ -173,6 +195,7 @@ test('swarm:memory:purge dispatches MemoryPurged with per-scope counts and crite
         return $event->counts['run'] === 2
             && $event->criteria['retention_days']['run'] === 5
             && $event->criteria['dry_run'] === false
+            && $event->criteria['prevent_prune'] === false
             && $event->criteria['scope_filter'] === null
             && $event->criteria['prune_snapshots'] === true
             && isset($event->criteria['cutoffs']['run']);
@@ -200,6 +223,52 @@ test('swarm:memory:purge cascades snapshot rows for Run-scoped purges by default
         return $event->counts['run'] === 1
             && ($event->counts['snapshots'] ?? null) === 2;
     });
+});
+
+test('swarm:memory:purge cascades a run\'s snapshots when any of its Run-scoped memory rows ages out', function (): void {
+    // A long-running/durable run can hold multiple Run-scoped memory rows that
+    // straddle the cutoff. Documented semantics: if ANY Run-scoped row for a
+    // run_id is older than the cutoff, that run's snapshots cascade — even
+    // though a fresher Run-scoped row for the same run survives. This locks in
+    // the behavior so a future change to the cascade keying is a conscious one.
+    config()->set('swarm.memory.retention.days.run', 7);
+
+    seedRunHistory('run-straddle');
+
+    $aged = (int) DB::table('swarm_memories')->insertGetId([
+        'scope' => MemoryScope::Run->value,
+        'scope_id' => 'run-straddle',
+        'run_id' => 'run-straddle',
+        'key' => 'aged-key',
+        'value' => json_encode('payload'),
+        'metadata' => json_encode([]),
+        'created_at' => Carbon::now('UTC')->subDays(30),
+        'updated_at' => Carbon::now('UTC')->subDays(30),
+    ]);
+
+    $fresh = (int) DB::table('swarm_memories')->insertGetId([
+        'scope' => MemoryScope::Run->value,
+        'scope_id' => 'run-straddle',
+        'run_id' => 'run-straddle',
+        'key' => 'fresh-key',
+        'value' => json_encode('payload'),
+        'metadata' => json_encode([]),
+        'created_at' => Carbon::now('UTC')->subDays(1),
+        'updated_at' => Carbon::now('UTC')->subDays(1),
+    ]);
+
+    seedSnapshotRow('run-straddle', 0, Carbon::now('UTC')->subDays(30));
+    seedSnapshotRow('run-straddle', 1, Carbon::now('UTC')->subDays(1));
+
+    Artisan::call('swarm:memory:purge');
+
+    // The aged Run-scoped row is purged; the fresh one survives.
+    expect(DB::table('swarm_memories')->where('id', $aged)->exists())->toBeFalse();
+    expect(DB::table('swarm_memories')->where('id', $fresh)->exists())->toBeTrue();
+
+    // Both snapshots cascade because the run_id matched an aged Run-scoped row,
+    // including the 1-day-old snapshot whose memory sibling survived.
+    expect(DB::table('swarm_memory_snapshots')->where('run_id', 'run-straddle')->count())->toBe(0);
 });
 
 test('swarm:memory:purge --keep-snapshots leaves swarm_memory_snapshots intact', function (): void {
@@ -239,7 +308,8 @@ test('swarm:memory:purge respects swarm.retention.prevent_prune and still emits 
 
     Event::assertDispatched(MemoryPurged::class, function (MemoryPurged $event): bool {
         return ($event->counts['run'] ?? null) === 0
-            && $event->criteria['dry_run'] === false;
+            && $event->criteria['dry_run'] === false
+            && $event->criteria['prevent_prune'] === true;
     });
 });
 

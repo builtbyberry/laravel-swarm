@@ -56,20 +56,32 @@ Schedule::command('swarm:memory:purge')->daily();
   `swarm_memory_snapshots` cascade for Run-scoped purges. The cascade is on
   by default so replay snapshots do not outlive their memory.
 
+The snapshot cascade only reaches snapshots whose run wrote a Run-scoped
+memory row. Snapshots for a run that never wrote Run-scoped memory are owned
+by run-history retention instead: `swarm_memory_snapshots.run_id` has a
+`cascadeOnDelete` foreign key to `swarm_run_histories`, so they are removed
+when `swarm:prune` ages out the parent run. In short, `swarm:memory:purge`
+removes snapshots *early* when their memory ages out first; `swarm:prune` is
+the backstop that guarantees no snapshot outlives its run history.
+
 ### Audit evidence
 
 Every run dispatches a `MemoryPurged` event with per-scope counts and the
 criteria the operator ran with (retention windows, scope filter, snapshot
-flag, dry-run flag, ISO-8601 cutoffs per scope). Listeners that record
-audit evidence should filter on `criteria.dry_run === false` to avoid
-treating preview runs as deletion events. The command also emits a
-`command.memory.purge` audit category via the package audit dispatcher so
-configured sinks (and the audit outbox, when database persistence is
-active) capture the same payload.
+flag, dry-run flag, prevent-prune flag, ISO-8601 cutoffs per scope).
+Listeners that record audit evidence should filter on
+`criteria.dry_run === false` to avoid treating preview runs as deletion
+events, and inspect `criteria.prevent_prune` to tell a compliance-suppressed
+run apart from a genuine zero-delete run (both report zero counts). The
+command also emits a `command.memory.purge` audit category via the package
+audit dispatcher so configured sinks (and the audit outbox, when database
+persistence is active) capture the same payload.
 
 ### Prevent-prune escape hatch
 
 `swarm:memory:purge` honors `swarm.retention.prevent_prune` the same way
-`swarm:prune` does. With `SWARM_PREVENT_PRUNE=true`, destructive deletes
-are suppressed but the `MemoryPurged` event still dispatches with
-`status=skipped`, so scheduled runs remain visible to your audit pipeline.
+`swarm:prune` does. With `SWARM_PREVENT_PRUNE=true`, destructive deletes are
+suppressed but the run stays visible to your audit pipeline: the
+`MemoryPurged` event still dispatches (with `criteria.prevent_prune = true`
+and zero counts), and the `command.memory.purge` audit category is emitted
+with `status=skipped`.

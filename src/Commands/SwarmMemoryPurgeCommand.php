@@ -33,8 +33,10 @@ use Symfony\Component\Console\Attribute\AsCommand;
  * what was removed (and, in dry-run mode, what would have been removed).
  *
  * Respects `swarm.retention.prevent_prune` the same way `swarm:prune` does:
- * the flag short-circuits destructive deletes but still emits the event with
- * `status=skipped` so audit pipelines see every scheduled run.
+ * the flag short-circuits destructive deletes but still dispatches the
+ * {@see MemoryPurged} event (with `criteria.prevent_prune=true`) and emits the
+ * `command.memory.purge` audit entry with `status=skipped`, so audit pipelines
+ * see every scheduled run.
  */
 #[AsCommand(name: 'swarm:memory:purge')]
 class SwarmMemoryPurgeCommand extends Command
@@ -112,6 +114,7 @@ class SwarmMemoryPurgeCommand extends Command
                 scopeFilter: $scopeFilter,
                 pruneSnapshots: $pruneSnapshots,
                 dryRun: false,
+                preventPrune: true,
                 cutoffs: $cutoffs,
             );
 
@@ -177,6 +180,7 @@ class SwarmMemoryPurgeCommand extends Command
             scopeFilter: $scopeFilter,
             pruneSnapshots: $pruneSnapshots,
             dryRun: $dryRun,
+            preventPrune: false,
             cutoffs: $cutoffs,
         );
 
@@ -232,6 +236,11 @@ class SwarmMemoryPurgeCommand extends Command
     /**
      * Build the per-scope retention map filtered by the operator's `--scope` flag.
      *
+     * `null` disables retention for a scope. The minimum enforceable window is
+     * one day: a configured value below 1 (e.g. `0` or a negative) is treated as
+     * "no retention" and surfaces a warning, so an operator who set `0` expecting
+     * an immediate purge is not silently no-op'd.
+     *
      * @return array<string, int|null>
      */
     protected function resolveRetentionDays(ConfigRepository $config, ?string $scopeFilter): array
@@ -245,6 +254,16 @@ class SwarmMemoryPurgeCommand extends Command
             }
 
             $raw = is_array($configured) ? ($configured[$scope->value] ?? null) : null;
+
+            if (is_int($raw) && $raw < 1) {
+                $this->components->warn(sprintf(
+                    'Ignoring retention window [%d] for scope [%s]: the minimum enforceable window is 1 day. '
+                    .'Set null to disable, or a value >= 1 to enforce.',
+                    $raw,
+                    $scope->value,
+                ));
+            }
+
             $map[$scope->value] = is_int($raw) && $raw >= 1 ? $raw : null;
         }
 
@@ -252,8 +271,19 @@ class SwarmMemoryPurgeCommand extends Command
     }
 
     /**
+     * Resolve the per-scope `created_at` cutoff as a {@see CarbonImmutable}.
+     *
+     * The cutoff is kept as a Carbon instance (not a pre-formatted string) so it
+     * is handed to the query builder as a `DateTimeInterface`. The builder then
+     * binds it in the connection's native datetime format (`Y-m-d H:i:s`), which
+     * matches how `created_at` is stored. Pre-formatting to ISO-8601 here would
+     * bind a string like `2026-05-24T00:00:00+00:00` whose `T`/offset shape does
+     * not match the stored format, producing wrong comparisons (lexicographic on
+     * SQLite, invalid-datetime on MySQL). The ISO-8601 representation is derived
+     * only for the audit/event payload — see {@see criteria()}.
+     *
      * @param  array<string, int|null>  $retentionDays
-     * @return array<string, string>
+     * @return array<string, CarbonImmutable>
      */
     protected function resolveCutoffs(array $retentionDays, CarbonImmutable $now): array
     {
@@ -264,7 +294,7 @@ class SwarmMemoryPurgeCommand extends Command
                 continue;
             }
 
-            $cutoffs[$scope] = $now->subDays($days)->toIso8601String();
+            $cutoffs[$scope] = $now->subDays($days);
         }
 
         return $cutoffs;
@@ -291,12 +321,13 @@ class SwarmMemoryPurgeCommand extends Command
 
     /**
      * @param  array<string, int|null>  $retentionDays
-     * @param  array<string, string>  $cutoffs
+     * @param  array<string, CarbonImmutable>  $cutoffs
      * @return array{
      *     retention_days: array<string, int|null>,
      *     scope_filter: string|null,
      *     prune_snapshots: bool,
      *     dry_run: bool,
+     *     prevent_prune: bool,
      *     cutoffs: array<string, string>,
      * }
      */
@@ -305,6 +336,7 @@ class SwarmMemoryPurgeCommand extends Command
         ?string $scopeFilter,
         bool $pruneSnapshots,
         bool $dryRun,
+        bool $preventPrune,
         array $cutoffs,
     ): array {
         return [
@@ -312,23 +344,27 @@ class SwarmMemoryPurgeCommand extends Command
             'scope_filter' => $scopeFilter,
             'prune_snapshots' => $pruneSnapshots,
             'dry_run' => $dryRun,
-            'cutoffs' => $cutoffs,
+            'prevent_prune' => $preventPrune,
+            'cutoffs' => array_map(
+                static fn (CarbonImmutable $cutoff): string => $cutoff->toIso8601String(),
+                $cutoffs,
+            ),
         ];
     }
 
-    protected function scopedQuery(Connection $connection, string $table, string $scope, string $cutoff): Builder
+    protected function scopedQuery(Connection $connection, string $table, string $scope, CarbonImmutable $cutoff): Builder
     {
         return $connection->table($table)
             ->where('scope', $scope)
             ->where('created_at', '<', $cutoff);
     }
 
-    protected function countScope(Connection $connection, string $table, string $scope, string $cutoff): int
+    protected function countScope(Connection $connection, string $table, string $scope, CarbonImmutable $cutoff): int
     {
         return (int) $this->scopedQuery($connection, $table, $scope, $cutoff)->count();
     }
 
-    protected function deleteScope(Connection $connection, string $table, string $scope, string $cutoff): int
+    protected function deleteScope(Connection $connection, string $table, string $scope, CarbonImmutable $cutoff): int
     {
         $deleted = 0;
 
@@ -356,12 +392,19 @@ class SwarmMemoryPurgeCommand extends Command
      * Snapshot rows whose owning Run-scoped memory will be (or has been)
      * purged. Resolves the set via the same `created_at` cutoff applied to
      * `swarm_memories` so the dry-run counts and post-delete counts agree.
+     *
+     * Scope note: this only reaches snapshots for runs that wrote a Run-scoped
+     * memory row. Snapshots for a run with no Run-scoped memory are owned by
+     * run-history retention — `swarm_memory_snapshots.run_id` cascades on
+     * delete from `swarm_run_histories`, so `swarm:prune` is the backstop that
+     * removes them. This command only prunes snapshots *early* when their
+     * memory ages out first.
      */
     protected function snapshotQuery(
         Connection $connection,
         string $memoriesTable,
         string $snapshotsTable,
-        string $cutoff,
+        CarbonImmutable $cutoff,
     ): Builder {
         return $connection->table($snapshotsTable)
             ->whereIn('run_id', function ($subquery) use ($memoriesTable, $cutoff): void {
@@ -377,7 +420,7 @@ class SwarmMemoryPurgeCommand extends Command
         Connection $connection,
         string $memoriesTable,
         string $snapshotsTable,
-        string $cutoff,
+        CarbonImmutable $cutoff,
     ): int {
         return (int) $this->snapshotQuery($connection, $memoriesTable, $snapshotsTable, $cutoff)->count();
     }
@@ -386,7 +429,7 @@ class SwarmMemoryPurgeCommand extends Command
         Connection $connection,
         string $memoriesTable,
         string $snapshotsTable,
-        string $cutoff,
+        CarbonImmutable $cutoff,
     ): int {
         $deleted = 0;
 
