@@ -44,4 +44,9 @@ final class NullSnapshotsMemory implements SnapshotsMemory
     {
         return null;
     }
+
+    public function allForRun(string $runId): array
+    {
+        return [];
+    }
 }

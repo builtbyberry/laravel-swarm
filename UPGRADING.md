@@ -268,6 +268,46 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.10.0
+
+v0.10.0 is **non-breaking for applications** that only consume the documented
+public surface. It is **breaking for code that implements the `SnapshotsMemory`
+contract directly** — almost always a custom or companion persistence driver
+(for example, the `laravel-swarm-memory-vector` package). If you have never
+implemented `SnapshotsMemory` yourself, no action is required.
+
+### Breaking for custom drivers: `SnapshotsMemory::allForRun()`
+
+The `BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory` contract gains one new
+required method:
+
+```php
+/**
+ * Return every persisted snapshot for $runId, ordered by step_index ascending.
+ * Returns an empty array when no snapshots were recorded.
+ *
+ * @return array<int, \BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot>
+ */
+public function allForRun(string $runId): array;
+```
+
+It backs the new `swarm:memory:inspect` operator command, which lists every step
+recorded for a run without reaching past the contract into the underlying table.
+
+The package's own drivers — `DatabaseMemorySnapshotRecorder` and
+`NullSnapshotsMemory` — already implement it. **If you ship your own
+`SnapshotsMemory` implementation, add the method or your container binding will
+fatal with `Class … must implement method allForRun`.** A minimal database-style
+implementation orders by `step_index` and hydrates each row the same way `find()`
+does; a no-op store may simply `return [];`.
+
+### New: `swarm:memory:inspect` command
+
+No action required — additive. `php artisan swarm:memory:inspect <run-id>` renders
+the frozen `MemorySnapshot` rows for a run (the database persistence driver only;
+under the cache driver it surfaces a configuration hint). See
+[docs/memory.md](docs/memory.md) for usage.
+
 ## Upgrading to v0.9.0
 
 v0.9.0 is **non-breaking** on public-surface contracts but ships two new database

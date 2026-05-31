@@ -59,6 +59,24 @@ final class RecordingSnapshotsMemory implements SnapshotsMemory
         return $this->preloaded[$runId.':'.$stepIndex] ?? null;
     }
 
+    public function allForRun(string $runId): array
+    {
+        $matches = [];
+
+        foreach ($this->preloaded as $key => $snapshot) {
+            if (str_starts_with($key, $runId.':')) {
+                $matches[] = $snapshot;
+            }
+        }
+
+        usort(
+            $matches,
+            static fn (MemorySnapshot $a, MemorySnapshot $b): int => $a->stepIndex <=> $b->stepIndex,
+        );
+
+        return $matches;
+    }
+
     public function preload(MemorySnapshot $snapshot): void
     {
         $this->preloaded[$snapshot->runId.':'.$snapshot->stepIndex] = $snapshot;
