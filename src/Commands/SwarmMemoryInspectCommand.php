@@ -329,7 +329,7 @@ class SwarmMemoryInspectCommand extends Command
         if ($scope !== null) {
             $entries = array_values(array_filter(
                 $entries,
-                static fn (array $entry): bool => ($entry['scope'] ?? null) === $scope->value,
+                static fn (array $entry): bool => $entry['scope'] === $scope->value,
             ));
         }
 
