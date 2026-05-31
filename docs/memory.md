@@ -242,7 +242,7 @@ The snapshot captures:
 | `toolCalls` | `array` | Tool input/output pairs recorded during the invocation |
 | `frozen` | `bool` | `true` on snapshots loaded from persistence; `false` on in-flight writes |
 
-**Inspecting a snapshot** (requires raw database access or the v0.10.0 CLI):
+**Inspecting a snapshot** from PHP:
 
 ```php
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
@@ -259,6 +259,26 @@ if ($snapshot !== null) {
     }
 }
 ```
+
+**Inspecting a snapshot** from the CLI with `swarm:memory:inspect`:
+
+```bash
+# List every snapshot recorded for a run (one row per step).
+php artisan swarm:memory:inspect r-abc123
+
+# Expand the frozen view for a single step — entries and tool calls.
+php artisan swarm:memory:inspect r-abc123 --step=0
+
+# JSON output for pipelines, audit evidence, and jq.
+php artisan swarm:memory:inspect r-abc123 --step=0 --format=json
+
+# Filter the entries view to a single scope. v0.9.0 snapshots freeze
+# MemoryScope::Run only, so non-Run scopes will return empty entries
+# until the propagation policy lands a wider snapshot.
+php artisan swarm:memory:inspect r-abc123 --step=0 --scope=run
+```
+
+The command reads the `swarm_memory_snapshots` table directly and works uniformly across all four runners (sequential, parallel, hierarchical, durable branch). Pair it with `swarm:memory:dump` for full-run exports. See the [compliance audit guide](compliance-audit.md) for the broader operator workflow.
 
 ### v0.9.0 scope coverage
 

@@ -178,7 +178,19 @@ use Illuminate\Support\Facades\Schedule;
 Schedule::command('swarm:relay')->everyMinute();        // drains the outbox after each checkpoint
 Schedule::command('swarm:recover')->everyFiveMinutes(); // safety net: redispatches stranded runs
 Schedule::command('swarm:prune')->daily();              // retention: removes expired persistence rows
+Schedule::command('swarm:memory:purge')->daily();       // memory retention: enforces per-scope windows
 ```
+
+`swarm:memory:purge` is opt-in retention enforcement for the SwarmMemory
+subsystem. Configure per-scope windows in `config/swarm.php` under
+`memory.retention.days` (`run`, `conversation`, `agent`, `swarm`) — `null`
+disables enforcement for that scope. The command dispatches a
+`MemoryPurged` event with per-scope counts and the criteria it ran with so
+app-level audit listeners can record deletions before they happen. Use
+`--dry-run` to preview, `--scope=<value>` to limit a run to a single scope,
+and `--keep-snapshots` to skip the `swarm_memory_snapshots` cascade. See
+[Compliance & Audit](./compliance-audit.md) for how memory retention fits
+into the wider compliance evidence chain.
 
 `swarm:relay` is required — durable runs stall permanently if the relay is
 not running. It also drains the v0.5 audit outbox, so a single schedule
