@@ -45,13 +45,13 @@ test('run_id FK migration adds all expected foreign key constraints', function (
 });
 
 test('FK migration rolls back cleanly', function () {
-    // Step 7 rolls back, top of stack first: memories.run_id FK column
-    // (v0.9 review follow-up), memories (v0.9), memory-snapshots (v0.9),
-    // audit-outbox, durable-outbox-indexes, durable-outbox-table, and the FK
-    // migration itself. The FK migration is the seventh-most-recent now that
-    // v0.9 added the memory tables (and run_id FK column) on top of the v0.5
-    // audit + durable outbox stack.
-    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 7]);
+    // Step 8 rolls back, top of stack first: memories (scope, created_at)
+    // retention-sweep index (v0.10), memories.run_id FK column (v0.9 review
+    // follow-up), memories (v0.9), memory-snapshots (v0.9), audit-outbox,
+    // durable-outbox-indexes, durable-outbox-table, and the FK migration
+    // itself. The FK migration is the eighth-most-recent now that v0.10 added
+    // the (scope, created_at) index on top of the v0.9 memory stack.
+    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 8]);
 
     // Tables still exist; FK constraints are just removed. Insert into a child
     // table without a parent row — should succeed now that FKs are dropped.

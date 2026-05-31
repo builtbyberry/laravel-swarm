@@ -39,9 +39,10 @@ test('the swarm_memories table exists with the expected columns', function () {
 });
 
 test('migration up/down is idempotent', function () {
-    // Stack from the top: (1) memories.run_id FK column (review follow-up),
-    // (2) memories table itself. Step=2 drops the run_id FK then the table.
-    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 2]);
+    // Stack from the top: (1) memories (scope, created_at) retention-sweep index
+    // (v0.10.0), (2) memories.run_id FK column (review follow-up), (3) memories
+    // table itself. Step=3 drops the index, then the run_id FK, then the table.
+    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 3]);
     expect(Schema::hasTable('swarm_memories'))->toBeFalse();
 
     // And re-running migrate brings it back cleanly.
@@ -72,6 +73,15 @@ test('the retention-purge index on created_at exists', function () {
         ->map(fn (array $index): array => $index['columns']);
 
     expect($indexes->contains(fn (array $cols): bool => $cols === ['created_at']))->toBeTrue();
+});
+
+test('the retention-sweep composite index (scope, created_at) exists', function () {
+    // Serves swarm:memory:purge's `WHERE scope = ? AND created_at < ?` sweep
+    // and the Run-scope snapshot-cascade subquery. Added in v0.10.0.
+    $indexes = collect(Schema::getIndexes('swarm_memories'))
+        ->map(fn (array $index): array => $index['columns']);
+
+    expect($indexes->contains(fn (array $cols): bool => $cols === ['scope', 'created_at']))->toBeTrue();
 });
 
 test('the unique (scope, scope_id, key) index exists and is marked unique', function () {
