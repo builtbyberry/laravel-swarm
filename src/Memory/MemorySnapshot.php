@@ -45,6 +45,12 @@ final readonly class MemorySnapshot
      * false. The read-side hydrator (`fromPersisted()`) and any other
      * read-only producer must opt in to `$frozen = true` so the contract
      * layer can defend the canonical record from drift-time mutation.
+     *
+     * `$recordedAt` / `$updatedAt` are the persisted row timestamps (ISO-8601
+     * strings) when the snapshot was hydrated from storage, or null for
+     * fresh / in-flight snapshots that have no row yet. They are metadata for
+     * operator tooling only — they are NOT part of the agent-visible payload
+     * and never participate in replay (see {@see toPayloadArray()}).
      */
     public function __construct(
         public string $runId,
@@ -52,6 +58,8 @@ final readonly class MemorySnapshot
         public array $entries,
         public array $toolCalls = [],
         public bool $frozen = false,
+        public ?string $recordedAt = null,
+        public ?string $updatedAt = null,
     ) {}
 
     /**
@@ -162,11 +170,20 @@ final readonly class MemorySnapshot
      * explicitly pass `frozen: false` so they can rebuild tool calls without
      * tripping the canonical-record guard.
      *
+     * `$recordedAt` / `$updatedAt` are the persisted row timestamps as
+     * ISO-8601 strings, surfaced for operator tooling; pass null when the
+     * caller has no row timestamps to carry.
+     *
      * @param  array<string, mixed>  $payload
      * @param  array<int, array<string, mixed>>  $toolCalls
      */
-    public static function fromPersisted(array $payload, array $toolCalls, bool $frozen = true): self
-    {
+    public static function fromPersisted(
+        array $payload,
+        array $toolCalls,
+        bool $frozen = true,
+        ?string $recordedAt = null,
+        ?string $updatedAt = null,
+    ): self {
         /** @var array<int, array{scope: string, scope_id: string, key: string, value: mixed, metadata: array<string, mixed>, created_at: string|null, updated_at: string|null}> $entries */
         $entries = is_array($payload['entries'] ?? null) ? $payload['entries'] : [];
 
@@ -179,6 +196,8 @@ final readonly class MemorySnapshot
             entries: $entries,
             toolCalls: $normalizedToolCalls,
             frozen: $frozen,
+            recordedAt: $recordedAt,
+            updatedAt: $updatedAt,
         );
     }
 }
