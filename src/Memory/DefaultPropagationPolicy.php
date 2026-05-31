@@ -21,6 +21,11 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
  */
 final class DefaultPropagationPolicy implements MemoryPropagationPolicy
 {
+    public function scopes(): array
+    {
+        return [MemoryScope::Run];
+    }
+
     public function present(array $candidateEntries, RunContext $context, ?Agent $agent): array
     {
         return array_values(array_filter(

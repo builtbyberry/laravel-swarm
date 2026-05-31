@@ -46,30 +46,47 @@ final class AgentVisibleMemoryView
      */
     public function present(Swarm $swarm, RunContext $context, ?Agent $agent): array
     {
-        $candidates = $this->gatherCandidates($swarm, $context, $agent);
+        $policy = $this->resolvePolicy($swarm);
 
-        return $this->resolvePolicy($swarm)->present($candidates, $context, $agent);
+        $candidates = $this->gatherCandidates($policy->scopes(), $swarm, $context, $agent);
+
+        return $policy->present($candidates, $context, $agent);
     }
 
     /**
-     * Gather candidate entries in a deterministic scope order: Run first (so
-     * the default policy's filtered output matches the pre-v0.10 order), then
-     * Agent and Swarm. The Conversation scope is intentionally omitted — the
-     * runtime exposes no conversation handle to key it on. The non-Run scopes
-     * are unpopulated by package code today; gathering them is a forward hook
-     * for custom policies.
+     * Gather candidate entries from exactly the scopes the policy declares, in
+     * the declared order — so a policy never pays to load a scope it will not
+     * look at, and the default policy (Run only) reads nothing extra.
      *
+     * The Agent scope is gathered only when the concrete agent instance is
+     * known; on the durable and hierarchical-parallel paths only the
+     * class-string is in hand, so a declared Agent scope is skipped there. The
+     * Conversation scope has no scope-id to key on yet (the runtime exposes no
+     * conversation handle), so it is skipped if declared.
+     *
+     * @param  array<int, MemoryScope>  $scopes
      * @return array<int, MemoryEntry>
      */
-    protected function gatherCandidates(Swarm $swarm, RunContext $context, ?Agent $agent): array
+    protected function gatherCandidates(array $scopes, Swarm $swarm, RunContext $context, ?Agent $agent): array
     {
-        $entries = $this->memory->all(MemoryScope::Run, $context->runId);
+        $entries = [];
 
-        if ($agent !== null) {
-            $entries = [...$entries, ...$this->memory->all(MemoryScope::Agent, $agent::class)];
+        foreach ($scopes as $scope) {
+            $scopeId = match ($scope) {
+                MemoryScope::Run => $context->runId,
+                MemoryScope::Swarm => $swarm::class,
+                MemoryScope::Agent => $agent !== null ? $agent::class : null,
+                MemoryScope::Conversation => null,
+            };
+
+            if ($scopeId === null) {
+                continue;
+            }
+
+            $entries = [...$entries, ...$this->memory->all($scope, $scopeId)];
         }
 
-        return [...$entries, ...$this->memory->all(MemoryScope::Swarm, $swarm::class)];
+        return $entries;
     }
 
     protected function resolvePolicy(Swarm $swarm): MemoryPropagationPolicy

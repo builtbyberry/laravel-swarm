@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalSingleRouteSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
@@ -92,6 +93,48 @@ test('default policy presents the Run-scoped view only across runners', function
     'parallel' => FakeParallelSwarm::class,
     'hierarchical' => FakeHierarchicalSingleRouteSwarm::class,
 ]);
+
+test('default policy filters the view on hierarchical parallel branches', function () {
+    // Drives the parallel-branch snapshot site, where only the worker
+    // class-string is known and the view receives a null agent. The default
+    // policy must still drop the seeded Swarm-scoped entry on every branch.
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('parallel_node', [
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['writer_node', 'editor_node'],
+                'next' => 'finish_node',
+            ],
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-branch',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-branch',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'editor_node',
+            ],
+        ]),
+    ]);
+
+    app(SwarmMemory::class)->put(MemoryScope::Swarm, FakeHierarchicalFullSwarm::class, 'shared-note', 'swarm-value');
+
+    FakeHierarchicalFullSwarm::make()->run('hierarchical-task');
+
+    /** @var RecordingSnapshotsMemory $recorder */
+    $recorder = $this->recorder;
+
+    // The parallel branches produced snapshots (steps beyond the coordinator).
+    expect(count($recorder->snapshotCalls))->toBeGreaterThanOrEqual(3);
+    foreach (capturedEntries($recorder) as $entry) {
+        expect($entry->scope)->toBe(MemoryScope::Run);
+    }
+});
 
 test('a per-swarm #[PropagationPolicy] attribute widens the agent-visible view', function () {
     app(SwarmMemory::class)->put(MemoryScope::Swarm, FakeWideViewPropagationSwarm::class, 'shared-note', 'swarm-value');

@@ -325,20 +325,26 @@ This is a **semantic** seam, not an API change: if you bind a custom policy
 memory than they did before — by design. No action is required to keep the
 v0.9 behavior; it is the default.
 
-**For custom `SnapshotsMemory` drivers:** `snapshot()` gains an optional third
+**Breaking for custom `SnapshotsMemory` drivers:** `snapshot()` gains a third
 parameter:
 
 ```php
 public function snapshot(string $runId, int $stepIndex, ?array $entries = null): MemorySnapshot;
 ```
 
-The runners now resolve the propagation-policy view and pass it in `$entries`.
-A driver that keeps the two-argument signature still satisfies the interface
-(the parameter has a default) and keeps working, but it will **not** honor the
-propagation policy — it will fall back to whatever view it gathers internally.
-To respect propagation policy, accept `$entries` and, when it is non-null,
-freeze exactly those entries instead of querying memory yourself. When it is
-null, keep your existing Run-scope gather as the back-compat path.
+This is a **required signature change for implementors**, in the same class as
+the `allForRun()` addition above. A driver that keeps the two-argument
+`snapshot(string $runId, int $stepIndex)` signature does **not** keep working —
+PHP rejects it at class declaration with `Declaration of …::snapshot() must be
+compatible with …`, so the container binding fatals on the first swarm run. You
+must add the third parameter. *Callers* are unaffected: existing two-argument
+calls to `snapshot()` still bind to the optional parameter and behave exactly as
+before — only classes that **implement** the contract must update.
+
+To honor propagation policy once you've updated the signature: when `$entries`
+is non-null, freeze exactly those entries (the runner has already applied the
+policy); when it is null, fall back to your existing Run-scope gather — that is
+the back-compat path for any caller that hasn't adopted the parameter.
 
 ## Upgrading to v0.9.0
 

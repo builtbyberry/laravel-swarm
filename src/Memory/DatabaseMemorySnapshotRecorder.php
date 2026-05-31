@@ -68,6 +68,12 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         // back-compat path for callers that predate the parameter, which
         // preserves pre-v0.10 behaviour byte-for-byte.
         //
+        // Note: the `ensureMemoryTableExists()` precheck below only guards this
+        // internal fallback gather. On the runner path (`$entries` supplied) the
+        // table-missing tolerance lives wherever the runner read memory — and in
+        // practice a missing `swarm_memories` table fails the run at the first
+        // memory access regardless, so nothing relied on this guard there.
+        //
         // The companion `swarm_memories` table (issue #109) is required for
         // the Run-scoped read below. We probe its existence exactly once per
         // recorder instance via `Schema::hasTable()` and cache the result on

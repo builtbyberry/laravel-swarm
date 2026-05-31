@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
+use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
@@ -199,6 +200,7 @@ class InstallMemoryCommand extends Command
     private function printCurrentConfig(ConfigRepository $config): void
     {
         $replayMode = (string) $config->get('swarm.memory.replay_mode', 'frozen_view');
+        $propagationPolicy = (string) $config->get('swarm.memory.propagation_policy', DefaultPropagationPolicy::class);
 
         $this->newLine();
         $this->components->info('Current memory configuration');
@@ -206,6 +208,17 @@ class InstallMemoryCommand extends Command
             'SWARM_MEMORY_REPLAY_MODE',
             $replayMode.' '.$this->explainReplayMode($replayMode),
         );
+        $this->components->twoColumnDetail(
+            'Propagation policy',
+            class_basename($propagationPolicy).' '.$this->explainPropagationPolicy($propagationPolicy),
+        );
+    }
+
+    private function explainPropagationPolicy(string $policy): string
+    {
+        return $policy === DefaultPropagationPolicy::class
+            ? '(Run-scope view only — preserves pre-v0.10 behaviour)'
+            : '(custom — overrides what workers see; override per swarm with #[PropagationPolicy])';
     }
 
     private function explainReplayMode(string $mode): string

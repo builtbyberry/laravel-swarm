@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
@@ -39,6 +40,27 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
  */
 interface MemoryPropagationPolicy
 {
+    /**
+     * Declare which memory scopes this policy considers. The runner gathers
+     * candidate entries from exactly these scopes — and no others — before
+     * calling {@see present()}, so a policy never pays to load a scope it will
+     * not look at.
+     *
+     * This is the coarse "what to load" half of the contract; {@see present()}
+     * is the fine "what to show" half (drop, reorder, filter by key or age
+     * within the gathered scopes). The default policy declares
+     * `[MemoryScope::Run]` only.
+     *
+     * The {@see MemoryScope::Agent} scope is gathered only when the target
+     * agent instance is known at invocation; on the durable and
+     * hierarchical-parallel paths it is skipped even if declared. The
+     * {@see MemoryScope::Conversation} scope is not yet gatherable (the runtime
+     * exposes no conversation handle) and is ignored if declared.
+     *
+     * @return array<int, MemoryScope>
+     */
+    public function scopes(): array;
+
     /**
      * Filter and order the memory entries an agent sees at invocation time.
      *
