@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SnapshotFrozenException;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 
 /**
@@ -32,6 +33,11 @@ use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
  * Implementations are free to no-op when the runtime has no SwarmMemory bound
  * (e.g. tests that never wire memory). The contract guarantees the returned
  * {@see MemorySnapshot} reflects whatever was frozen, even if empty.
+ *
+ * As of v0.10.0 the runners resolve the agent-visible view through the
+ * {@see MemoryPropagationPolicy} and pass it to {@see snapshot()} via the
+ * `$entries` parameter, so the frozen snapshot mirrors exactly what the policy
+ * permits the agent to see.
  */
 interface SnapshotsMemory
 {
@@ -39,8 +45,20 @@ interface SnapshotsMemory
      * Freeze the agent-visible memory view for `(run_id, step_index)` and
      * persist it with an empty `tool_calls` list. Returns the value object
      * that subsequent {@see appendToolCall()} calls must reference.
+     *
+     * `$entries` is the agent-visible view a runner has already resolved
+     * through the {@see MemoryPropagationPolicy} — the implementation freezes
+     * exactly those, in order. When `$entries` is null the implementation falls
+     * back to freezing the Run-scoped view itself, preserving pre-v0.10
+     * behaviour; this is the back-compat path for *callers* that pass only two
+     * arguments. Note the distinction for *implementors*: the third parameter
+     * is part of the contract signature, so a class implementing this interface
+     * must declare it (a two-argument `snapshot()` is rejected as incompatible
+     * at class declaration). See `UPGRADING.md` for the v0.10.0 driver note.
+     *
+     * @param  array<int, MemoryEntry>|null  $entries
      */
-    public function snapshot(string $runId, int $stepIndex): MemorySnapshot;
+    public function snapshot(string $runId, int $stepIndex, ?array $entries = null): MemorySnapshot;
 
     /**
      * Append one tool-call input/output pair to the snapshot for

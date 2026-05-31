@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
@@ -35,6 +36,7 @@ class ParallelRunner
         protected SwarmGuardrailRunner $guardrails,
         protected ConfigRepository $config,
         protected SnapshotsMemory $snapshots,
+        protected AgentVisibleMemoryView $view,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -52,7 +54,11 @@ class ParallelRunner
         foreach ($agents as $index => $agent) {
             $agentClass = $agent::class;
             $this->stepsRecorder->started($state, $index, $agentClass, $input);
-            $snapshots[$index] = $this->snapshots->snapshot($state->context->runId, $index);
+            $snapshots[$index] = $this->snapshots->snapshot(
+                $state->context->runId,
+                $index,
+                $this->view->present($state->swarm, $state->context, $agent),
+            );
 
             $callbacks[$index] = function () use ($agentClass, $input): array {
                 $agent = Container::getInstance()->make($agentClass);

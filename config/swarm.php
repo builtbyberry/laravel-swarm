@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 
 $swarmPersistenceDriver = env('SWARM_PERSISTENCE_DRIVER', 'cache');
 $swarmContextDriver = env('SWARM_CONTEXT_DRIVER');
@@ -237,6 +238,20 @@ return [
          * Override per swarm with the #[MemoryReplay(mode: ReplayMode::...)] attribute.
          */
         'replay_mode' => env('SWARM_MEMORY_REPLAY_MODE', 'frozen_view'),
+
+        /*
+         * The memory propagation policy: decides which memory entries an agent
+         * sees when it is invoked, across scopes (run / conversation / agent /
+         * swarm). The frozen MemorySnapshot mirrors exactly what this policy
+         * returns, so it governs both what the agent reads and the audit record.
+         *
+         * The default (DefaultPropagationPolicy) presents the Run-scoped view
+         * only, preserving pre-v0.10 behaviour. Bind a class implementing
+         * BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy to widen
+         * or reshape the view globally, or override per swarm with the
+         * #[PropagationPolicy(MyPolicy::class)] attribute.
+         */
+        'propagation_policy' => env('SWARM_MEMORY_PROPAGATION_POLICY', DefaultPropagationPolicy::class),
 
         /*
          * Per-scope retention windows for `swarm:memory:purge`.

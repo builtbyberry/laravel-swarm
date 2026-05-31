@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Tests\Support;
 
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 
 /**
@@ -14,7 +15,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
  */
 final class RecordingSnapshotsMemory implements SnapshotsMemory
 {
-    /** @var array<int, array{run_id: string, step_index: int}> */
+    /** @var array<int, array{run_id: string, step_index: int, entries: array<int, MemoryEntry>|null}> */
     public array $snapshotCalls = [];
 
     /** @var array<int, array{run_id: string, step_index: int, tool_call: array<string, mixed>}> */
@@ -26,11 +27,16 @@ final class RecordingSnapshotsMemory implements SnapshotsMemory
     /** @var array<string, MemorySnapshot> Stub canned `find()` results keyed by `{runId}:{stepIndex}`. */
     public array $preloaded = [];
 
-    public function snapshot(string $runId, int $stepIndex): MemorySnapshot
+    /**
+     * @param  array<int, MemoryEntry>|null  $entries
+     */
+    public function snapshot(string $runId, int $stepIndex, ?array $entries = null): MemorySnapshot
     {
-        $this->snapshotCalls[] = ['run_id' => $runId, 'step_index' => $stepIndex];
+        $this->snapshotCalls[] = ['run_id' => $runId, 'step_index' => $stepIndex, 'entries' => $entries];
 
-        return new MemorySnapshot($runId, $stepIndex, [], []);
+        return $entries === null
+            ? new MemorySnapshot($runId, $stepIndex, [], [])
+            : MemorySnapshot::fromEntries($runId, $stepIndex, $entries, []);
     }
 
     public function appendToolCall(MemorySnapshot $snapshot, array $toolCall): MemorySnapshot

@@ -271,10 +271,12 @@ stability settings while Laravel AI remains pre-stable.
 ## Upgrading to v0.10.0
 
 v0.10.0 is **non-breaking for applications** that only consume the documented
-public surface. It is **breaking for code that implements the `SnapshotsMemory`
-contract directly** — almost always a custom or companion persistence driver
-(for example, the `laravel-swarm-memory-vector` package). If you have never
-implemented `SnapshotsMemory` yourself, no action is required.
+public surface, and the **default behavior is identical to v0.9** — see the
+memory propagation policy note below for the one semantic change and why it does
+not affect unmodified swarms. It is **breaking for code that implements the
+`SnapshotsMemory` contract directly** — almost always a custom or companion
+persistence driver (for example, the `laravel-swarm-memory-vector` package). If
+you have never implemented `SnapshotsMemory` yourself, no action is required.
 
 ### Breaking for custom drivers: `SnapshotsMemory::allForRun()`
 
@@ -307,6 +309,42 @@ No action required — additive. `php artisan swarm:memory:inspect <run-id>` ren
 the frozen `MemorySnapshot` rows for a run (the database persistence driver only;
 under the cache driver it surfaces a configuration hint). See
 [docs/memory.md](docs/memory.md) for usage.
+
+### New: memory propagation policy (semantic change, default preserves v0.9)
+
+A new `BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy` now decides
+which memory entries a worker agent sees at invocation. **The default
+(`DefaultPropagationPolicy`) presents the Run-scoped view only — byte-identical
+to what runners froze and agents saw before v0.10.** No package code writes to
+the Conversation / Agent / Swarm scopes during a run, so unmodified swarms are
+unaffected.
+
+This is a **semantic** seam, not an API change: if you bind a custom policy
+(globally via `swarm.memory.propagation_policy`, or per swarm with
+`#[PropagationPolicy(MyPolicy::class)]`), downstream agents may see different
+memory than they did before — by design. No action is required to keep the
+v0.9 behavior; it is the default.
+
+**Breaking for custom `SnapshotsMemory` drivers:** `snapshot()` gains a third
+parameter:
+
+```php
+public function snapshot(string $runId, int $stepIndex, ?array $entries = null): MemorySnapshot;
+```
+
+This is a **required signature change for implementors**, in the same class as
+the `allForRun()` addition above. A driver that keeps the two-argument
+`snapshot(string $runId, int $stepIndex)` signature does **not** keep working —
+PHP rejects it at class declaration with `Declaration of …::snapshot() must be
+compatible with …`, so the container binding fatals on the first swarm run. You
+must add the third parameter. *Callers* are unaffected: existing two-argument
+calls to `snapshot()` still bind to the optional parameter and behave exactly as
+before — only classes that **implement** the contract must update.
+
+To honor propagation policy once you've updated the signature: when `$entries`
+is non-null, freeze exactly those entries (the runner has already applied the
+policy); when it is null, fall back to your existing Run-scope gather — that is
+the back-compat path for any caller that hasn't adopted the parameter.
 
 ## Upgrading to v0.9.0
 

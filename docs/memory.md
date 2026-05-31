@@ -123,6 +123,82 @@ MemoryScope::Swarm        // 'swarm'
 
 ---
 
+## Propagation policy
+
+When a runner invokes a worker agent, a **propagation policy** decides which memory entries that agent sees. The policy runs at the snapshot chokepoint — the same point where the agent-visible view is frozen — so the persisted `MemorySnapshot` mirrors exactly what the policy permitted. Every runner (sequential, parallel, hierarchical, and the durable/queued path) consults it.
+
+The contract has two methods. `scopes()` declares *what to load* — the runner gathers candidates from exactly those scopes and no others, so a policy never pays to read a scope it ignores. `present()` is the *what to show* filter: drop, reorder, or narrow by key or age within the gathered candidates.
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+final class SharedSwarmStatePolicy implements MemoryPropagationPolicy
+{
+    /**
+     * Load Run- and Swarm-scoped candidates; ignore everything else.
+     *
+     * @return array<int, MemoryScope>
+     */
+    public function scopes(): array
+    {
+        return [MemoryScope::Run, MemoryScope::Swarm];
+    }
+
+    /**
+     * @param  array<int, MemoryEntry>  $candidateEntries
+     * @return array<int, MemoryEntry>
+     */
+    public function present(array $candidateEntries, RunContext $context, ?Agent $agent): array
+    {
+        // Already scoped to Run + Swarm by scopes(); pass through unchanged.
+        return $candidateEntries;
+    }
+}
+```
+
+`present()` receives the candidates gathered from the scopes `scopes()` declared, the live `RunContext`, and the target `Agent` (null on the durable and hierarchical-parallel paths, where only the agent class is known at freeze time). It returns the ordered subset the agent may see. Implementations must not fabricate or mutate entries — they may only drop and reorder. Note: the `Agent` scope is gathered only when the concrete agent instance is known, and the `Conversation` scope is not yet gatherable (no conversation handle exists) — declaring it is a no-op for now.
+
+### Default behavior
+
+The default `DefaultPropagationPolicy` presents the **Run-scoped view only**, which is exactly what runners froze and agents saw before v0.10. Unmodified swarms are unaffected: no package code writes to the Conversation, Agent, or Swarm scopes during a run, so the default view is byte-identical to pre-v0.10 behavior.
+
+### Choosing a policy
+
+Bind a global default in a service provider or via config:
+
+```php
+// config/swarm.php
+'memory' => [
+    'propagation_policy' => \App\Memory\SharedSwarmStatePolicy::class,
+],
+```
+
+```bash
+# or via env
+SWARM_MEMORY_PROPAGATION_POLICY="App\\Memory\\SharedSwarmStatePolicy"
+```
+
+Override for a single swarm with the `#[PropagationPolicy]` attribute (the class is resolved through the container, so it may declare its own dependencies):
+
+```php
+use BuiltByBerry\LaravelSwarm\Attributes\PropagationPolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+
+#[PropagationPolicy(SharedSwarmStatePolicy::class)]
+class ResearchSwarm implements Swarm
+{
+    // ...
+}
+```
+
+The attribute takes precedence over the config-bound default. Widening the view is a **semantic** change — downstream agents may see more memory than they did before — but it is never an API change, and the default keeps the v0.9 behavior.
+
+---
+
 ## Store drivers
 
 The `MemoryStore` contract is the low-level storage driver. `SwarmMemory` delegates persistence to a bound `MemoryStore` implementation.

@@ -44,6 +44,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
@@ -56,6 +57,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemorySnapshotRecorder;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\NullSnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
@@ -137,6 +139,12 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(SwarmAuditSink::class, NoOpSwarmAuditSink::class);
         $this->app->singleton(ActorResolver::class, DefaultActorResolver::class);
         $this->app->singleton(CapturePolicy::class, BooleanCapturePolicy::class);
+        $this->app->singleton(MemoryPropagationPolicy::class, function (Application $app): MemoryPropagationPolicy {
+            /** @var class-string<MemoryPropagationPolicy> $class */
+            $class = $app->make(ConfigRepository::class)->get('swarm.memory.propagation_policy', DefaultPropagationPolicy::class);
+
+            return $app->make($class);
+        });
         $this->app->singleton(SinkFailureHandler::class, ConfiguredSinkFailureHandler::class);
         $this->app->singleton(AuditOutbox::class, function (Application $app): AuditOutbox {
             $driver = $app->make(ConfigRepository::class)->get('swarm.persistence.driver');

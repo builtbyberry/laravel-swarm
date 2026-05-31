@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -51,6 +52,7 @@ class SequentialRunner
         protected SwarmPayloadLimits $limits,
         protected SwarmGuardrailRunner $guardrails,
         protected SnapshotsMemory $snapshots,
+        protected AgentVisibleMemoryView $view,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -101,7 +103,11 @@ class SequentialRunner
             $agentName = class_basename($agent::class);
 
             $this->steps->started($state, $index, $agent::class, $input);
-            $snapshot = $this->snapshots->snapshot($state->context->runId, $index);
+            $snapshot = $this->snapshots->snapshot(
+                $state->context->runId,
+                $index,
+                $this->view->present($state->swarm, $state->context, $agent),
+            );
 
             yield new SwarmStepStart(
                 id: SwarmStreamEvent::newId(),
@@ -321,7 +327,11 @@ class SequentialRunner
 
         $input = $state->context->prompt();
         $this->steps->started($state, $index, $agent::class, $input);
-        $snapshot = $this->snapshots->snapshot($state->context->runId, $index);
+        $snapshot = $this->snapshots->snapshot(
+            $state->context->runId,
+            $index,
+            $this->view->present($state->swarm, $state->context, $agent),
+        );
 
         $startedAt = MonotonicTime::now();
         $response = $agent->prompt($input);
