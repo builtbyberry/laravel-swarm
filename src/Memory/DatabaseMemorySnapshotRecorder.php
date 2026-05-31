@@ -155,7 +155,31 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         /** @var array<int, array<string, mixed>> $toolCalls */
         $toolCalls = $this->decodeJson(is_string($rawToolCalls) ? $rawToolCalls : null, []);
 
-        return MemorySnapshot::fromPersisted($payload, $toolCalls);
+        return MemorySnapshot::fromPersisted(
+            $payload,
+            $toolCalls,
+            recordedAt: $this->normalizeTimestamp($record->created_at ?? null),
+            updatedAt: $this->normalizeTimestamp($record->updated_at ?? null),
+        );
+    }
+
+    /**
+     * Normalize a persisted row timestamp into an ISO-8601 string in UTC so
+     * the inspector renders the same shape as the per-entry timestamps. The
+     * raw value arrives as a datetime string from the query builder; tolerate
+     * a `DateTimeInterface` too in case a driver casts the column.
+     */
+    protected function normalizeTimestamp(mixed $value): ?string
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return CarbonImmutable::instance($value)->toIso8601String();
+        }
+
+        if (is_string($value) && $value !== '') {
+            return CarbonImmutable::parse($value, 'UTC')->toIso8601String();
+        }
+
+        return null;
     }
 
     protected function persist(MemorySnapshot $snapshot): void

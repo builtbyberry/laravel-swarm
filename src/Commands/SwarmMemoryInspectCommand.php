@@ -338,13 +338,12 @@ class SwarmMemoryInspectCommand extends Command
             'step_index' => $snapshot->stepIndex,
             'entries' => $entries,
             'tool_calls' => array_values($snapshot->toolCalls),
-            // The contract's `MemorySnapshot` value object does not carry the
-            // persisted row timestamps. The renderers tolerate `null` here —
-            // they default to `-` in table mode and pass through as `null` in
-            // JSON, which matches what the operator surfaces from any
-            // future driver that chooses not to record per-row timestamps.
-            'recorded_at' => null,
-            'updated_at' => null,
+            // Persisted row timestamps when the snapshot was hydrated from
+            // storage; null for drivers that record no per-row timestamps
+            // (e.g. the cache-mode null driver). The renderers tolerate null —
+            // `-` in table mode, pass-through in JSON.
+            'recorded_at' => $snapshot->recordedAt,
+            'updated_at' => $snapshot->updatedAt,
         ];
     }
 

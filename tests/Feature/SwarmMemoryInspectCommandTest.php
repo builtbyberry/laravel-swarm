@@ -256,6 +256,39 @@ test('--format=json emits a structured envelope with entries and tool calls', fu
     expect($output['tool_calls'])->toHaveCount(1);
 });
 
+test('--step exposes the persisted row recorded_at timestamp', function () {
+    // The snapshot row carries created_at/updated_at; the inspector must
+    // surface them rather than always reporting null. Seed a fixed instant so
+    // the rendered ISO-8601 value is deterministic.
+    $recordedAt = Carbon::parse('2026-05-27T12:00:00+00:00');
+
+    seedMemorySnapshotRow('run-ts', 0, runEntries('run-ts', 1), createdAt: $recordedAt);
+
+    Artisan::call('swarm:memory:inspect', [
+        'run_id' => 'run-ts',
+        '--step' => 0,
+        '--format' => 'json',
+    ]);
+
+    $output = json_decode(Artisan::output(), true);
+    expect($output['recorded_at'])->toBe('2026-05-27T12:00:00+00:00');
+    expect($output['updated_at'])->toBe('2026-05-27T12:00:00+00:00');
+});
+
+test('the list view exposes the persisted row recorded_at per step', function () {
+    $recordedAt = Carbon::parse('2026-05-27T12:00:00+00:00');
+
+    seedMemorySnapshotRow('run-ts-list', 0, runEntries('run-ts-list', 1), createdAt: $recordedAt);
+
+    Artisan::call('swarm:memory:inspect', [
+        'run_id' => 'run-ts-list',
+        '--format' => 'json',
+    ]);
+
+    $output = json_decode(Artisan::output(), true);
+    expect($output['snapshots'][0]['recorded_at'])->toBe('2026-05-27T12:00:00+00:00');
+});
+
 test('invalid --format fails fast with a clear error', function () {
     $exit = Artisan::call('swarm:memory:inspect', [
         'run_id' => 'run-fmt',
