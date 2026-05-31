@@ -61,6 +61,7 @@ Once Pulse is installed, Laravel Swarm will register its Pulse cards automatical
 Add the swarm recorders to the `recorders` array in `config/pulse.php`:
 
 ```php
+use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmMemoryMetrics;
 use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmRuns;
 use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmStepDurations;
 
@@ -74,10 +75,14 @@ use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmStepDurations;
     SwarmStepDurations::class => [
         'enabled' => env('PULSE_SWARM_STEP_DURATIONS_ENABLED', true),
     ],
+
+    SwarmMemoryMetrics::class => [
+        'enabled' => env('PULSE_SWARM_MEMORY_METRICS_ENABLED', true),
+    ],
 ],
 ```
 
-`SwarmRuns` records run totals, failures, failure rate inputs, topology usage, and average run duration. `SwarmStepDurations` records average step duration by swarm, topology, and agent.
+`SwarmRuns` records run totals, failures, failure rate inputs, topology usage, and average run duration. `SwarmStepDurations` records average step duration by swarm, topology, and agent. `SwarmMemoryMetrics` records memory entry counts, write byte sizes, recall hit/miss totals per scope, and snapshot byte sizes — gated by the `swarm.pulse.memory.sample_rate` config knob.
 
 Pulse is the aggregate observability layer. If your browser needs a live
 operations feed for individual runs, listen to Laravel Swarm lifecycle events
@@ -100,9 +105,10 @@ Then add the swarm cards to `resources/views/vendor/pulse/dashboard.blade.php`:
 <livewire:swarm.runs cols="6" />
 <livewire:swarm.steps cols="6" />
 <livewire:swarm.audit-outbox cols="6" />
+<livewire:swarm.memory cols="6" />
 ```
 
-`<livewire:swarm.runs />` shows per-swarm totals, failures, failure rate, average run duration, and topology mix. `<livewire:swarm.steps />` shows the slowest average swarm steps by agent. `<livewire:swarm.audit-outbox />` surfaces the live operational state of the audit outbox.
+`<livewire:swarm.runs />` shows per-swarm totals, failures, failure rate, average run duration, and topology mix. `<livewire:swarm.steps />` shows the slowest average swarm steps by agent. `<livewire:swarm.audit-outbox />` surfaces the live operational state of the audit outbox. `<livewire:swarm.memory />` surfaces memory growth + snapshot size per scope (see [Swarm Memory](memory.md#pulse-observability) for tuning guidance).
 
 ## What Pulse Aggregates
 
@@ -158,6 +164,32 @@ The card surfaces:
 When `swarm.persistence.driver` is not `database`, the `AuditOutbox` contract resolves to `NoOpAuditOutbox::isAvailable() === false` and the card renders a neutral "Audit outbox unavailable on cache persistence driver." state without touching the database.
 
 When the card raises an alarm signal, follow the in-card hint: run `php artisan swarm:audit:status` for the full breakdown (age distribution, top dead-letter categories, oldest IDs), and `php artisan swarm:audit:reconcile` to triage. See [Maintenance](maintenance.md) and [Audit Evidence Contract](audit-evidence-contract.md) for the full operator workflow.
+
+### swarm.memory card
+
+The `swarm.memory` card surfaces memory growth + snapshot size signals operators tune retention and capture policy against. The `SwarmMemoryMetrics` recorder fires on the `MemoryWritten`, `MemoryRead`, and `MemorySnapshotted` events, gated by `swarm.pulse.memory.sample_rate` (default `1.0` — record every event; dial down for high-volume apps).
+
+The card queries the following Pulse aggregate types, keyed by `MemoryScope` value (`Run`, `Conversation`, `Agent`, `Swarm`) for write/read signals and a single virtual `snapshots` key for snapshot signals:
+
+| Aggregate type | What it represents |
+| --- | --- |
+| `swarm_memory_entries` | Count of `put()` calls per scope (sum) |
+| `swarm_memory_bytes_total` | Summed JSON byte size of `value` + `metadata` per scope (sum) |
+| `swarm_memory_bytes_samples` | Sample count for the byte total (denominator for average) |
+| `swarm_memory_read_total` | Count of `get()` calls per scope (sum) |
+| `swarm_memory_read_hits` | Count of `get()` calls that returned a stored entry (sum) |
+| `swarm_memory_snapshot_count` | Count of persisted snapshot rows (sum) |
+| `swarm_memory_snapshot_bytes` | Summed JSON byte size of snapshot rows (sum) |
+| `swarm_memory_snapshot_entries` | Summed entry count of snapshot rows (sum) |
+
+From these, the card derives:
+
+- **Entries per scope** — `swarm_memory_entries`.
+- **Avg bytes per write** — `swarm_memory_bytes_total / swarm_memory_bytes_samples`.
+- **Hit rate** — `swarm_memory_read_hits / swarm_memory_read_total * 100`, rounded to one decimal place. `n/a` when no reads were sampled in the period.
+- **Snapshots persisted, avg snapshot bytes, avg snapshot entries** — same averaging pattern using the snapshot aggregates.
+
+For tuning guidance — which knob moves which number — see [Swarm Memory: Pulse observability](memory.md#pulse-observability).
 
 ### Period selectors
 

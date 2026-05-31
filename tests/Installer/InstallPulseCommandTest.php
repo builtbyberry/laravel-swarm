@@ -98,13 +98,16 @@ it('wires up recorders and the default card set on a clean skeleton', function (
     $this->assertFileContains('config/pulse.php', 'swarm:install:pulse recorders');
     $this->assertFileContains('config/pulse.php', 'SwarmRuns::class');
     $this->assertFileContains('config/pulse.php', 'SwarmStepDurations::class');
+    $this->assertFileContains('config/pulse.php', 'SwarmMemoryMetrics::class');
     $this->assertFileContains('config/pulse.php', 'PULSE_SWARM_RUNS_ENABLED');
+    $this->assertFileContains('config/pulse.php', 'PULSE_SWARM_MEMORY_METRICS_ENABLED');
 
     // Dashboard published + cards inserted
     $this->assertFileContains('resources/views/vendor/pulse/dashboard.blade.php', 'swarm:install:pulse cards');
     $this->assertFileContains('resources/views/vendor/pulse/dashboard.blade.php', '<livewire:swarm.runs');
     $this->assertFileContains('resources/views/vendor/pulse/dashboard.blade.php', '<livewire:swarm.steps');
     $this->assertFileContains('resources/views/vendor/pulse/dashboard.blade.php', '<livewire:swarm.audit-outbox');
+    $this->assertFileContains('resources/views/vendor/pulse/dashboard.blade.php', '<livewire:swarm.memory');
 
     // .bak written for the pre-existing config; the dashboard is published
     // from the stock Pulse view first, then backed up before injection so

@@ -7,10 +7,12 @@ namespace BuiltByBerry\LaravelSwarm\Memory;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemorySnapshotted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SnapshotFrozenException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Schema;
@@ -52,6 +54,7 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         protected ConfigRepository $config,
         protected SwarmMemory $memory,
         protected LoggerInterface $logger,
+        protected Dispatcher $events,
     ) {}
 
     public function snapshot(string $runId, int $stepIndex): MemorySnapshot
@@ -186,18 +189,31 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
     {
         $now = CarbonImmutable::now('UTC');
 
+        $encodedPayload = $this->encodeJson($snapshot->toPayloadArray());
+        $encodedToolCalls = $this->encodeJson($snapshot->toolCalls);
+
         $this->table()->upsert(
             [[
                 'run_id' => $snapshot->runId,
                 'step_index' => $snapshot->stepIndex,
-                'payload' => $this->encodeJson($snapshot->toPayloadArray()),
-                'tool_calls' => $this->encodeJson($snapshot->toolCalls),
+                'payload' => $encodedPayload,
+                'tool_calls' => $encodedToolCalls,
                 'created_at' => $now,
                 'updated_at' => $now,
             ]],
             ['run_id', 'step_index'],
             ['payload', 'tool_calls', 'updated_at'],
         );
+
+        // Dispatch after a successful upsert so listeners do not record bytes
+        // for a snapshot that never landed.
+        $this->events->dispatch(new MemorySnapshotted(
+            runId: $snapshot->runId,
+            stepIndex: $snapshot->stepIndex,
+            snapshotId: $snapshot->runId.':'.$snapshot->stepIndex,
+            bytes: strlen((string) $encodedPayload) + strlen((string) $encodedToolCalls),
+            entryCount: count($snapshot->entries),
+        ));
     }
 
     protected function table(): Builder

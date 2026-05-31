@@ -71,6 +71,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\AuditOutbox as AuditOutboxCard;
+use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmMemory as SwarmMemoryCard;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmSteps;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
@@ -297,6 +298,7 @@ class SwarmServiceProvider extends ServiceProvider
                 $livewire->component('swarm.runs', SwarmRuns::class);
                 $livewire->component('swarm.steps', SwarmSteps::class);
                 $livewire->component('swarm.audit-outbox', AuditOutboxCard::class);
+                $livewire->component('swarm.memory', SwarmMemoryCard::class);
             });
         }
 

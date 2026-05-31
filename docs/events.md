@@ -502,13 +502,17 @@ Swarm Memory dispatches five events through Laravel's event system when memory o
 
 | Event | Full class | When | Key properties |
 | --- | --- | --- | --- |
-| `MemoryWritten` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten` | After a successful `put()` | `scope`, `scopeId`, `key`, `metadata` |
-| `MemoryRead` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRead` | After every `get()`, hit or miss | `scope`, `scopeId`, `key` |
+| `MemoryWritten` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten` | After a successful `put()` | `scope`, `scopeId`, `key`, `metadata`, `bytes` |
+| `MemoryRead` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRead` | After every `get()`, hit or miss | `scope`, `scopeId`, `key`, `hit` |
 | `MemoryForgotten` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryForgotten` | After every `forget()` | `scope`, `scopeId`, `key`, `existed` |
-| `MemorySnapshotted` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemorySnapshotted` | After a per-step snapshot is captured | `runId`, `stepIndex`, `snapshotId` |
+| `MemorySnapshotted` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemorySnapshotted` | After a per-step snapshot is captured | `runId`, `stepIndex`, `snapshotId`, `bytes`, `entryCount` |
 | `MemoryScopeOutOfSnapshot` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryScopeOutOfSnapshot` | During replay when a read targets a non-Run scope | `runId`, `stepIndex`, `scope`, `scopeId`, `key`, `operation` |
 
-`MemoryRead` intentionally does not expose the entry value. Listeners that need the value should re-read through the store under their own access controls — this keeps the event surface compatible with capture-policy redaction in v0.10.
+`MemoryRead` intentionally does not expose the entry value. Listeners that need the value should re-read through the store under their own access controls — this keeps the event surface compatible with capture-policy redaction in v0.10. The `hit` boolean reports whether the underlying lookup returned a stored entry (`true`) or missed (`false`); the bundled stores set it from the store result. Third-party drivers that have not been updated leave it at the conservative default `false` — listeners should treat the field as advisory in that case.
+
+`MemoryWritten` carries an optional `bytes` field with the approximate JSON-encoded byte size of the persisted `value` + `metadata`. The bundled stores populate it at write time; third-party drivers leave it `null`. Treat it as a sampling input, not the row's database footprint.
+
+`MemorySnapshotted` carries optional `bytes` and `entryCount` fields measured at snapshot persistence time. The bundled `DatabaseMemorySnapshotRecorder` populates both; third-party drivers leave them `null`.
 
 `MemoryForgotten` includes an `existed` boolean so listeners can distinguish a real deletion from a no-op probe (a `forget()` call on a key that was never set).
 

@@ -290,6 +290,25 @@ return [
         ],
     ],
 
+    'pulse' => [
+        'memory' => [
+            /*
+             * Sample rate applied to the SwarmMemoryMetrics Pulse recorder
+             * (entries per scope, write bytes, recall hit/miss, snapshot
+             * bytes + entry counts). Values are clamped to [0.0, 1.0]:
+             *
+             *   1.0 — record every event (default; safe for low/moderate volume)
+             *   0.1 — record ~10% of events (recommended for high-volume apps)
+             *   0.0 — disable sampling entirely (recorder runs as a no-op)
+             *
+             * Sampling is uniform across writes, reads, and snapshots so the
+             * averages stay statistically meaningful — they are the average of
+             * a uniform random sample.
+             */
+            'sample_rate' => (float) env('SWARM_PULSE_MEMORY_SAMPLE_RATE', 1.0),
+        ],
+    ],
+
     'streaming' => [
         'replay' => [
             'enabled' => env('SWARM_STREAM_REPLAY_ENABLED', false),
