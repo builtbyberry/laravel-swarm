@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
@@ -61,6 +62,7 @@ class DurableBranchAdvancer
         protected LoggerInterface $logger,
         protected SnapshotsMemory $snapshots,
         protected MemoryReplayCoordinator $coordinator,
+        protected AgentVisibleMemoryView $view,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId): void
@@ -148,7 +150,11 @@ class DurableBranchAdvancer
                     /** @var MemorySnapshot $snapshot */
                     $snapshot = $existing !== null
                         ? $this->snapshots->resetToolCalls($existing)
-                        : $this->snapshots->snapshot($runId, (int) $branch['step_index']);
+                        : $this->snapshots->snapshot(
+                            $runId,
+                            (int) $branch['step_index'],
+                            $this->view->present($swarm, $context, $agent),
+                        );
 
                     $response = $agent->prompt($branch['input']);
                     $output = (string) $response;

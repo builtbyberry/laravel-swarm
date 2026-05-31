@@ -224,5 +224,6 @@ class InstallMemoryCommand extends Command
         $this->line('  • Verify the install: <comment>php artisan swarm:health</comment>');
         $this->line('  • Full memory reference: <comment>docs/memory.md</comment>');
         $this->line('  • Per-swarm replay tuning: <comment>#[MemoryReplay(mode: ReplayMode::FreshExecution)]</comment>');
+        $this->line('  • Per-swarm worker visibility: <comment>#[PropagationPolicy(MyPolicy::class)]</comment>');
     }
 }

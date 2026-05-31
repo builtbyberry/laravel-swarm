@@ -21,7 +21,10 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SnapshotFrozenException;
  */
 final class NullSnapshotsMemory implements SnapshotsMemory
 {
-    public function snapshot(string $runId, int $stepIndex): MemorySnapshot
+    /**
+     * @param  array<int, MemoryEntry>|null  $entries
+     */
+    public function snapshot(string $runId, int $stepIndex, ?array $entries = null): MemorySnapshot
     {
         return new MemorySnapshot($runId, $stepIndex, [], []);
     }

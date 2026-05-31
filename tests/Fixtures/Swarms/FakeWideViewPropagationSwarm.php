@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms;
+
+use BuiltByBerry\LaravelSwarm\Attributes\PropagationPolicy;
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
+use BuiltByBerry\LaravelSwarm\Tests\Support\WideViewPropagationPolicy;
+
+#[Topology(TopologyEnum::Sequential)]
+#[PropagationPolicy(WideViewPropagationPolicy::class)]
+class FakeWideViewPropagationSwarm implements Swarm
+{
+    use Runnable;
+
+    public function agents(): array
+    {
+        return [
+            new FakeResearcher,
+        ];
+    }
+}

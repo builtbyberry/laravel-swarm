@@ -57,8 +57,17 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         protected Dispatcher $events,
     ) {}
 
-    public function snapshot(string $runId, int $stepIndex): MemorySnapshot
+    /**
+     * @param  array<int, MemoryEntry>|null  $entries
+     */
+    public function snapshot(string $runId, int $stepIndex, ?array $entries = null): MemorySnapshot
     {
+        // When the runner resolved the agent-visible view through the
+        // propagation policy it passes it in `$entries`; freeze exactly those.
+        // Otherwise fall back to gathering the Run-scoped view ourselves — the
+        // back-compat path for callers that predate the parameter, which
+        // preserves pre-v0.10 behaviour byte-for-byte.
+        //
         // The companion `swarm_memories` table (issue #109) is required for
         // the Run-scoped read below. We probe its existence exactly once per
         // recorder instance via `Schema::hasTable()` and cache the result on
@@ -69,10 +78,10 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         // drop, permission revocation, schema corruption, deadlock, …)
         // propagate — silently swallowing those would corrupt the audit
         // trail without surfacing the failure to the operator.
-        if (! $this->ensureMemoryTableExists()) {
-            $entries = [];
-        } else {
-            $entries = $this->memory->all(MemoryScope::Run, $runId);
+        if ($entries === null) {
+            $entries = $this->ensureMemoryTableExists()
+                ? $this->memory->all(MemoryScope::Run, $runId)
+                : [];
         }
 
         $snapshot = MemorySnapshot::fromEntries($runId, $stepIndex, $entries, []);

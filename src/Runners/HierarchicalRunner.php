@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -48,6 +49,7 @@ class HierarchicalRunner
         protected SwarmGuardrailRunner $guardrails,
         protected ConfigRepository $config,
         protected SnapshotsMemory $snapshots,
+        protected AgentVisibleMemoryView $view,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -780,7 +782,16 @@ class HierarchicalRunner
 
                         $branchIndex = $nextIndex + count($branchDefinitions);
                         $this->stepsRecorder->started($state, $branchIndex, $branch->agentClass, $input);
-                        $branchSnapshots[$branchNodeId] = $this->snapshots->snapshot($state->context->runId, $branchIndex);
+                        // The worker instance is resolved lazily inside the
+                        // concurrency callback below, so only the class-string is
+                        // in hand here; pass a null agent to the view. The default
+                        // policy ignores the agent, and Agent-scope candidates are
+                        // unpopulated by package code today.
+                        $branchSnapshots[$branchNodeId] = $this->snapshots->snapshot(
+                            $state->context->runId,
+                            $branchIndex,
+                            $this->view->present($state->swarm, $state->context, null),
+                        );
 
                         $branchDefinitions[$branchNodeId] = [
                             'node' => $branch,
@@ -1310,7 +1321,11 @@ class HierarchicalRunner
         }
 
         $this->stepsRecorder->started($state, $index, $agent::class, $input);
-        $snapshot = $this->snapshots->snapshot($state->context->runId, $index);
+        $snapshot = $this->snapshots->snapshot(
+            $state->context->runId,
+            $index,
+            $this->view->present($state->swarm, $state->context, $agent),
+        );
 
         $startedAt = MonotonicTime::now();
         $response = $agent->prompt($input);

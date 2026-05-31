@@ -6,14 +6,18 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Attributes\DurableParallelFailurePolicy as DurableParallelFailurePolicyAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\MaxAgentSteps as MaxAgentStepsAttribute;
+use BuiltByBerry\LaravelSwarm\Attributes\PropagationPolicy as PropagationPolicyAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\QueuedHierarchicalParallelCoordination as QueuedHierarchicalParallelCoordinationAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\StreamParallelBranches as StreamParallelBranchesAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Timeout as TimeoutAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use ReflectionClass;
 use ValueError;
@@ -151,5 +155,32 @@ class SwarmAttributeResolver
         } catch (ValueError $exception) {
             throw new SwarmException("Invalid durable parallel failure policy [{$configured}]. Supported policies: collect_failures, fail_run, partial_success.", previous: $exception);
         }
+    }
+
+    /**
+     * Resolve the propagation-policy class for a swarm: the
+     * `#[PropagationPolicy(...)]` attribute when present, otherwise the
+     * configured `swarm.memory.propagation_policy` default.
+     *
+     * Returns the class-string rather than an instance so this resolver stays
+     * container-free, consistent with its other resolvers. The caller
+     * ({@see AgentVisibleMemoryView}) resolves
+     * and type-guards it.
+     *
+     * @return class-string<MemoryPropagationPolicy>
+     */
+    public function resolvePropagationPolicyClass(Swarm $swarm): string
+    {
+        $reflection = new ReflectionClass($swarm);
+        $attributes = $reflection->getAttributes(PropagationPolicyAttribute::class);
+
+        if ($attributes !== []) {
+            return $attributes[0]->newInstance()->policy;
+        }
+
+        /** @var class-string<MemoryPropagationPolicy> $configured */
+        $configured = (string) $this->config->get('swarm.memory.propagation_policy', DefaultPropagationPolicy::class);
+
+        return $configured;
     }
 }
