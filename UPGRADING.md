@@ -346,6 +346,50 @@ is non-null, freeze exactly those entries (the runner has already applied the
 policy); when it is null, fall back to your existing Run-scope gather — that is
 the back-compat path for any caller that hasn't adopted the parameter.
 
+### New: memory capture policy (default preserves v0.9, no action required)
+
+A new `BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy` governs whether a
+memory entry is written as-is, redacted, or dropped at the write boundary — the
+write-side counterpart to the audit `CapturePolicy`. **The default
+(`DefaultMemoryCapturePolicy`) writes every entry as-is, byte-identical to v0.9.**
+
+This is a **sibling contract, not a change to `CapturePolicy`** — nothing is
+added to the existing interface, so **no third-party `CapturePolicy`
+implementation breaks** and there is no required signature change. Enforcement
+lives in a new `RedactingMemoryStore` decorator applied with
+`$this->app->extend(MemoryStore::class, …)`; if you resolve `MemoryStore` you now
+receive the decorator (call `->inner()` for the wrapped driver). Because it is an
+extender, it wraps **whatever** `MemoryStore` is bound — including a custom or
+companion driver you register yourself — so redaction can't be bypassed by
+rebinding the store. One caveat: bind a custom store with `bind()`/`singleton()`,
+**not** `Container::instance()` — a pre-built instance registered via `instance()`
+sidesteps container extenders and would not be wrapped.
+
+To opt in to redaction, bind a policy:
+
+```php
+// config/swarm.php → 'memory' => ['capture_policy' => App\Memory\RedactSsnPolicy::class]
+// or SWARM_MEMORY_CAPTURE_POLICY=App\Memory\RedactSsnPolicy
+
+final class RedactSsnPolicy implements MemoryCapturePolicy
+{
+    public function memory(MemoryScope $scope, string $key, ?RunContext $context = null, ?Actor $actor = null): CaptureDecision
+    {
+        return $key === 'ssn' ? CaptureDecision::Redact : CaptureDecision::Full;
+    }
+}
+```
+
+`Redact` replaces scalar **values** with the `SwarmCapture::REDACTED` sentinel
+(preserving array shape and keys, the same convention the audit path uses; entry
+`metadata` and keys are not redacted — keep PII out of those); `Skip` drops the
+entry entirely (no row, no `MemoryWritten` event) and leaves any pre-existing
+entry at the address untouched. Because redaction happens at the store, the
+propagation view and frozen `MemorySnapshot` honor it automatically. A `Redact`
+dispatches a new `MemoryRedacted` event and a `Skip` a new `MemoryWriteSkipped`
+event (address only, no value) for audit listeners; the default `Full` policy
+fires neither. See [docs/memory.md](docs/memory.md#capture-policy-write-time-redaction).
+
 ## Upgrading to v0.9.0
 
 v0.9.0 is **non-breaking** on public-surface contracts but ships two new database

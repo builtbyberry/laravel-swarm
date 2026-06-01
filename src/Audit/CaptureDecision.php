@@ -16,6 +16,10 @@ namespace BuiltByBerry\LaravelSwarm\Audit;
  *          per-field omit lands in v0.5 alongside the audit dispatcher
  *          Skip-aware path. Custom policies may return Skip today to
  *          declare intent; the contract is locked.
+ *
+ * Note that MemoryCapturePolicy (v0.10) interprets Skip more strongly than the
+ * audit path: a Skip on a memory write drops the entry entirely — no row is
+ * persisted and no MemoryWritten event fires — rather than collapsing to Redact.
  */
 enum CaptureDecision
 {

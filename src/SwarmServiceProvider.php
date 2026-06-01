@@ -44,6 +44,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
@@ -54,12 +55,15 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemorySnapshotRecorder;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultMemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\NullSnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -117,6 +121,7 @@ use BuiltByBerry\LaravelSwarm\Telemetry\PackageJobTelemetryState;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryEventListener;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -144,6 +149,20 @@ class SwarmServiceProvider extends ServiceProvider
             $class = $app->make(ConfigRepository::class)->get('swarm.memory.propagation_policy', DefaultPropagationPolicy::class);
 
             return $app->make($class);
+        });
+        $this->app->singleton(MemoryCapturePolicy::class, function (Application $app): MemoryCapturePolicy {
+            /** @var class-string $class */
+            $class = $app->make(ConfigRepository::class)->get('swarm.memory.capture_policy', DefaultMemoryCapturePolicy::class);
+
+            $policy = $app->make($class);
+
+            if (! $policy instanceof MemoryCapturePolicy) {
+                throw new SwarmException(
+                    "Memory capture policy [{$class}] must implement ".MemoryCapturePolicy::class.'.',
+                );
+            }
+
+            return $policy;
         });
         $this->app->singleton(SinkFailureHandler::class, ConfiguredSinkFailureHandler::class);
         $this->app->singleton(AuditOutbox::class, function (Application $app): AuditOutbox {
@@ -269,6 +288,19 @@ class SwarmServiceProvider extends ServiceProvider
             'memory',
             CacheMemoryStore::class,
             DatabaseMemoryStore::class,
+        ));
+
+        // Wrap whatever MemoryStore is bound — the bundled drivers OR a
+        // consumer/companion driver re-bound later — in the redaction decorator,
+        // so the capture policy governs every write at a single chokepoint that
+        // cannot be bypassed by rebinding the store. Reads pass through, so the
+        // propagation view and frozen snapshots inherit redaction for free.
+        // (A store registered via Container::instance() bypasses extenders; bind
+        // custom drivers, don't instance() them — see UPGRADING.md.)
+        $this->app->extend(MemoryStore::class, fn (MemoryStore $store, Application $app): MemoryStore => new RedactingMemoryStore(
+            inner: $store,
+            policy: $app->make(MemoryCapturePolicy::class),
+            events: $app->make(Dispatcher::class),
         ));
         $this->app->singleton(SwarmMemory::class, DefaultSwarmMemory::class);
 
