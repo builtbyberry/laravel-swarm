@@ -408,6 +408,110 @@ php artisan swarm:memory:inspect r-abc123 --step=0 --scope=run
 
 The command reads the `swarm_memory_snapshots` table directly and works uniformly across all four runners (sequential, parallel, hierarchical, durable branch). Pair it with `swarm:memory:dump` for full-run exports. See the [compliance audit guide](compliance-audit.md) for the broader operator workflow.
 
+### Exporting a full run with `swarm:memory:dump`
+
+Where `swarm:memory:inspect` is the interactive view of one run's snapshots,
+`swarm:memory:dump` produces a **stable, machine-readable export** of a run's
+complete memory + snapshot trail — for audit packets, legal/DSAR handoff, and
+third-party debugging where raw DB access is not an option. It is read-only and
+never mutates memory.
+
+```bash
+# Export a run as a pretty-printed JSON envelope (snapshot references only).
+php artisan swarm:memory:dump 9b2c0e7a-... --format=json
+
+# Embed each snapshot's full entries + tool calls.
+php artisan swarm:memory:dump 9b2c0e7a-... --include-snapshots
+
+# Stream one JSON object per line for large runs and jq pipelines.
+php artisan swarm:memory:dump 9b2c0e7a-... --format=ndjson
+
+# Write the export to a file instead of stdout.
+php artisan swarm:memory:dump 9b2c0e7a-... --include-snapshots --output=/tmp/run.json
+```
+
+A run id and a conversation id are both bare UUIDs, so the command resolves the
+subject by probe — `swarm_run_histories` first, then Conversation-scoped
+`swarm_memories`. An id that matches **both** is refused; pass
+`--as=run|conversation` to force the interpretation (and to script it
+deterministically).
+
+**Stable envelope schema** (`schema_version: "1.0"`). By default snapshots are
+references only; `--include-snapshots` adds `entries` + `tool_calls` to each.
+
+```jsonc
+{
+  "ok": true,
+  "schema_version": "1.0",
+  "subject_type": "run",            // "run" | "conversation"
+  "subject_id": "9b2c0e7a-...",
+  "generated_at": "2026-06-01T12:00:00+00:00",
+  "include_snapshots": false,
+  "entry_count": 2,
+  "snapshot_count": 1,
+  "scopes_included": ["run"],       // scopes the top-level "entries" cover
+  "entries": [
+    {
+      "scope": "run", "scope_id": "9b2c0e7a-...", "key": "goal",
+      "value": "ship it", "metadata": {},
+      "created_at": "2026-06-01T11:59:00+00:00",
+      "updated_at": "2026-06-01T11:59:00+00:00"
+    }
+  ],
+  "snapshots": [
+    {
+      "run_id": "9b2c0e7a-...", "step_index": 0,
+      "recorded_at": "2026-06-01T11:59:30+00:00",
+      "updated_at": "2026-06-01T11:59:30+00:00",
+      "entry_count": 1, "tool_call_count": 1
+      // with --include-snapshots: + "entries": [...], "tool_calls": [...]
+    }
+  ]
+}
+```
+
+In **NDJSON** mode the same data streams as one object per line: a
+`{"record":"header", ...}` line carrying the envelope metadata, then one
+`{"record":"entry", ...}` per memory entry, then one `{"record":"snapshot", ...}`
+per snapshot.
+
+**Scope boundary.** A run export carries only `Run`-scoped entries. `Agent`- and
+`Swarm`-scoped memory key on an agent or swarm id, not a run id, so they cannot
+be filtered by run and are not included. The `scopes_included` field declares
+exactly what the top-level `entries` array covers (`["run"]` for a run;
+`["conversation"]` or `["conversation", "run"]` for a conversation, depending on
+whether a resolver expanded it). **Read `scopes_included` before certifying a run
+export as a complete GDPR Art. 15 subject-access response** — confirm the
+subject's data lives in `Run` scope.
+
+**Conversation exports.** Given a conversation id, the dump carries that
+conversation's Conversation-scoped entries. Swarm records no link between a run
+and a conversation in v0.10 (the runtime exposes no conversation handle), so
+run expansion is delegated to a bindable
+`BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver`. The bundled
+`NullConversationRunResolver` resolves to no runs, and the envelope says so —
+`runs_expanded: false`, the resolver class, and any `skipped_runs` — so a
+non-expanded conversation export is never mistaken for a complete one. Bind your
+own resolver (your application knows its conversation/run topology) to expand a
+conversation into its runs and fold each run's Run-scoped entries + snapshots
+into the same envelope:
+
+```php
+$this->app->singleton(
+    \BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver::class,
+    \App\Swarm\AppConversationRunResolver::class,
+);
+```
+
+Like `swarm:memory:inspect`, dump requires `swarm.persistence.driver=database`
+and surfaces a configuration hint (rather than a misleadingly partial export)
+under the cache driver. Successful exports dispatch a `MemoryDumped` event and
+emit a `command.memory.dump` audit category recording what left the system —
+including the requesting OS user (`requested_by`) and an optional `--reason` so
+the egress record names who ran the export and why. See
+the [compliance audit guide](compliance-audit.md#exporting-an-audit-packet) for
+the end-to-end audit workflow.
+
 ### v0.9.0 scope coverage
 
 The snapshot captures only `MemoryScope::Run` entries. Conversation, Agent, and Swarm scope entries are **not** snapshotted — reads against those scopes during replay fall through to the live store, and a `MemoryScopeOutOfSnapshot` event fires for each one. This is a pragmatic trade-off: most agents operate on Run-scoped data, and snapshotting the wider scope graph would require coordinating across runs and agent lifecycles that may be long-lived.
