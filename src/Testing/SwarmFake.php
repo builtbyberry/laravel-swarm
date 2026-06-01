@@ -10,10 +10,14 @@ use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
@@ -30,6 +34,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSigner;
+use BuiltByBerry\LaravelSwarm\Testing\Memory\RecordingMemoryCapturePolicy;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
@@ -680,6 +685,38 @@ class SwarmFake implements Swarm
         $recorder = new RecordingSwarmAuditSigner($delegate);
 
         self::bindAuditIntercept(SwarmAuditSigner::class, $recorder);
+
+        return $recorder;
+    }
+
+    /**
+     * Install a {@see RecordingMemoryCapturePolicy} as the bound
+     * {@see MemoryCapturePolicy} for the duration of the test.
+     *
+     * The returned recorder records every memory-write decision the
+     * {@see RedactingMemoryStore} consults
+     * (scope, key, context, actor, decision). The optional delegate is
+     * forwarded to behind the recording layer so existing policy logic still
+     * drives decisions; pass null to record-and-return
+     * {@see CaptureDecision::Full} for every write.
+     *
+     * Unlike {@see interceptCapturePolicy()}, this also flushes the
+     * {@see MemoryStore} singleton — the redaction decorator captures its
+     * policy at resolve time, so the store must re-resolve to pick up the
+     * recorder.
+     */
+    public static function interceptMemoryCapturePolicy(?MemoryCapturePolicy $delegate = null): RecordingMemoryCapturePolicy
+    {
+        $recorder = new RecordingMemoryCapturePolicy($delegate);
+
+        $container = Container::getInstance();
+
+        $container->instance(MemoryCapturePolicy::class, $recorder);
+        // The decorator captures its policy at MemoryStore resolve time, and the
+        // SwarmMemory facade captures the store at its resolve time — flush both
+        // so the next memory access rebuilds the chain around the recorder.
+        $container->forgetInstance(MemoryStore::class);
+        $container->forgetInstance(SwarmMemory::class);
 
         return $recorder;
     }

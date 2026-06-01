@@ -3,7 +3,34 @@
 > **Status:** stub. The full compliance guide is owned by
 > [#126 — compliance & audit guide](https://github.com/builtbyberry/laravel-swarm/issues/126)
 > and will land later in v0.10.0. This page exists today to host the memory
-> retention section so `swarm:memory:purge` users have a stable doc anchor.
+> retention and capture-policy sections so operators have a stable doc anchor.
+
+## Memory capture policy
+
+Retention (below) ages PII *out* after it lands. The **capture policy** is the
+complementary control that keeps PII from landing in the first place — the
+strongest form of data minimization (GDPR Art. 5(1)(c); HIPAA minimum-necessary,
+§164.502(b)). `MemoryCapturePolicy` is consulted at the write boundary and
+decides, per `(scope, key)`, whether each memory entry is written as-is
+(`Full`), structurally redacted (`Redact`), or dropped entirely (`Skip`).
+
+Redaction is enforced by the `RedactingMemoryStore` decorator that wraps the
+memory driver, so it is the single chokepoint every write passes through.
+Critically, the agent-visible propagation view and the frozen `MemorySnapshot`
+read back through that same store — so PII redacted at write **never reaches a
+snapshot**, and the audit-replay record is clean by construction rather than by a
+separate scrubbing pass. A policy never sees the value it is deciding on (only
+the scope and key), so the policy code itself cannot become a leak path.
+
+The default preserves pre-v0.10 behavior (every write is `Full`). Opt in by
+binding a policy via `swarm.memory.capture_policy`
+(`SWARM_MEMORY_CAPTURE_POLICY`) or the container. See the worked example and
+`Redact`/`Skip` semantics in
+[docs/memory.md → Capture policy](memory.md#capture-policy-write-time-redaction).
+
+Together the two controls form the memory compliance story: **capture policy**
+keeps disallowed data out at write, **retention** ages permitted data out on a
+schedule.
 
 ## Memory retention
 

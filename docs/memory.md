@@ -199,6 +199,56 @@ The attribute takes precedence over the config-bound default. Widening the view 
 
 ---
 
+## Capture policy (write-time redaction)
+
+Where the propagation policy decides what an agent *reads*, the **capture policy** decides what gets *written*. `MemoryCapturePolicy` is consulted at the write boundary and returns a `CaptureDecision` per `(scope, key)`:
+
+- **`Full`** — persist the value unchanged (the default for every write).
+- **`Redact`** — persist the entry with scalar values replaced by the `SwarmCapture::REDACTED` sentinel (`'[redacted]'`), preserving array structure and keys so the entry stays addressable. This is the same sentinel the audit capture path uses.
+- **`Skip`** — drop the entry entirely: no row is written and no `MemoryWritten` event fires.
+
+This is the write-side counterpart to the audit `CapturePolicy` (`swarm.capture.*`): redacting here keeps PII out of memory in the first place, so it never reaches a frozen `MemorySnapshot`. Like the audit policy, a capture policy **never receives the value** — only the scope and key — so a decision cannot couple to payload shape or leak unredacted data.
+
+Enforcement lives in the `RedactingMemoryStore` decorator the container wraps around your memory driver, so **every** write flows through one chokepoint (including direct `MemoryStore` resolution), and reads return already-redacted values — the propagation view and frozen snapshots inherit redaction with no extra work.
+
+> Redaction is applied at the persistence boundary. A run's own in-process `RunContext` still holds the raw value it just wrote until the run ends; the policy governs what is *persisted*, snapshotted, and visible to other agents via memory.
+
+The default `DefaultMemoryCapturePolicy` returns `Full` for everything, preserving pre-v0.10 behavior. Bind your own globally:
+
+```php
+// config/swarm.php
+'memory' => [
+    'capture_policy' => \App\Memory\RedactSsnPolicy::class,
+],
+```
+
+```bash
+# or via env
+SWARM_MEMORY_CAPTURE_POLICY="App\\Memory\\RedactSsnPolicy"
+```
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+final class RedactSsnPolicy implements MemoryCapturePolicy
+{
+    public function memory(MemoryScope $scope, string $key, ?RunContext $context = null, ?Actor $actor = null): CaptureDecision
+    {
+        return in_array($key, ['ssn', 'card_number'], true)
+            ? CaptureDecision::Redact
+            : CaptureDecision::Full;
+    }
+}
+```
+
+In tests, `SwarmFake::interceptMemoryCapturePolicy()` installs a `RecordingMemoryCapturePolicy` that records every decision (and optionally wraps a delegate that drives them), so you can assert what the store saw.
+
+---
+
 ## Store drivers
 
 The `MemoryStore` contract is the low-level storage driver. `SwarmMemory` delegates persistence to a bound `MemoryStore` implementation.
@@ -240,7 +290,7 @@ Swarm Memory dispatches five events through Laravel's event system. Register lis
 
 Events are dispatched at the **store layer**, not from the `SwarmMemory` facade. Custom `MemoryStore` drivers must dispatch them from their own `put()`, `get()`, and `forget()` implementations to keep the listener contract uniform.
 
-`MemoryRead` does not expose the entry value. Listeners that need the value should re-read through the store under their own access controls — this keeps the event surface compatible with capture-policy redaction in v0.10.
+`MemoryRead` does not expose the entry value. Listeners that need the value should re-read through the store under their own access controls — this keeps the event surface compatible with [capture-policy redaction](#capture-policy-write-time-redaction), which can redact or drop the value at write.
 
 ### Listener examples
 

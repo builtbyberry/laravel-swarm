@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultMemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 
 $swarmPersistenceDriver = env('SWARM_PERSISTENCE_DRIVER', 'cache');
@@ -252,6 +253,24 @@ return [
          * #[PropagationPolicy(MyPolicy::class)] attribute.
          */
         'propagation_policy' => env('SWARM_MEMORY_PROPAGATION_POLICY', DefaultPropagationPolicy::class),
+
+        /*
+         * The memory capture policy: decides, at the write boundary, whether
+         * each memory entry is persisted as-is, redacted, or dropped entirely —
+         * by scope and key. This is the write-side counterpart to the audit
+         * CapturePolicy (swarm.capture.*): redaction here keeps PII out of
+         * memory entirely, so it never reaches a frozen MemorySnapshot.
+         *
+         * Decisions: CaptureDecision::Full persists the value unchanged;
+         * ::Redact structurally redacts scalars to '[redacted]' (preserving
+         * array shape); ::Skip drops the entry (no row, no MemoryWritten event).
+         *
+         * The default (DefaultMemoryCapturePolicy) returns Full for every write,
+         * preserving pre-v0.10 behaviour exactly. Bind a class implementing
+         * BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy to redact or
+         * drop sensitive entries globally.
+         */
+        'capture_policy' => env('SWARM_MEMORY_CAPTURE_POLICY', DefaultMemoryCapturePolicy::class),
 
         /*
          * Per-scope retention windows for `swarm:memory:purge`.

@@ -44,6 +44,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
@@ -54,12 +55,15 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemorySnapshotRecorder;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultMemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\NullSnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -144,6 +148,20 @@ class SwarmServiceProvider extends ServiceProvider
             $class = $app->make(ConfigRepository::class)->get('swarm.memory.propagation_policy', DefaultPropagationPolicy::class);
 
             return $app->make($class);
+        });
+        $this->app->singleton(MemoryCapturePolicy::class, function (Application $app): MemoryCapturePolicy {
+            /** @var class-string $class */
+            $class = $app->make(ConfigRepository::class)->get('swarm.memory.capture_policy', DefaultMemoryCapturePolicy::class);
+
+            $policy = $app->make($class);
+
+            if (! $policy instanceof MemoryCapturePolicy) {
+                throw new SwarmException(
+                    "Memory capture policy [{$class}] must implement ".MemoryCapturePolicy::class.'.',
+                );
+            }
+
+            return $policy;
         });
         $this->app->singleton(SinkFailureHandler::class, ConfiguredSinkFailureHandler::class);
         $this->app->singleton(AuditOutbox::class, function (Application $app): AuditOutbox {
@@ -264,12 +282,23 @@ class SwarmServiceProvider extends ServiceProvider
             DatabaseStreamEventStore::class,
         ));
 
-        $this->app->singleton(MemoryStore::class, fn (Application $app): MemoryStore => $this->resolvePersistenceStore(
-            $app,
-            'memory',
-            CacheMemoryStore::class,
-            DatabaseMemoryStore::class,
-        ));
+        $this->app->singleton(MemoryStore::class, function (Application $app): MemoryStore {
+            /** @var MemoryStore $driver */
+            $driver = $this->resolvePersistenceStore(
+                $app,
+                'memory',
+                CacheMemoryStore::class,
+                DatabaseMemoryStore::class,
+            );
+
+            // Wrap the concrete driver so the capture policy governs every
+            // write at a single chokepoint. Reads pass through, so the
+            // propagation view and frozen snapshots inherit redaction for free.
+            return new RedactingMemoryStore(
+                inner: $driver,
+                policy: $app->make(MemoryCapturePolicy::class),
+            );
+        });
         $this->app->singleton(SwarmMemory::class, DefaultSwarmMemory::class);
 
         // Snapshot recording requires the `swarm_memory_snapshots` table from

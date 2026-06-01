@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
+use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use Illuminate\Contracts\Cache\Factory;
 
 beforeEach(function () {
@@ -17,7 +18,11 @@ beforeEach(function () {
 test('the cache store is bound as the default MemoryStore when persistence is cache', function () {
     $store = $this->app->make(MemoryStore::class);
 
-    expect($store)->toBeInstanceOf(CacheMemoryStore::class);
+    // The container wraps the driver in the redaction decorator; the cache
+    // driver is the wrapped inner store.
+    expect($store)->toBeInstanceOf(RedactingMemoryStore::class);
+    $inner = $store instanceof RedactingMemoryStore ? $store->inner() : null;
+    expect($inner)->toBeInstanceOf(CacheMemoryStore::class);
 });
 
 test('put persists an entry and stamps timestamps', function () {
