@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryDumped;
@@ -68,7 +69,8 @@ class SwarmMemoryDumpCommand extends Command
                             {--as= : Force the id interpretation. One of: run, conversation. Default: auto-detect by probe.}
                             {--format=json : Output format. One of: json, ndjson.}
                             {--include-snapshots : Embed full snapshot payloads (entries + tool calls). Default: references only.}
-                            {--output= : Write the export to this file instead of stdout.}';
+                            {--output= : Write the export to this file instead of stdout.}
+                            {--reason= : Optional operator-supplied reason recorded in the audit trail.}';
 
     protected $description = 'Export the complete memory + snapshot trail for a run or conversation as a stable JSON/NDJSON envelope.';
 
@@ -202,6 +204,11 @@ class SwarmMemoryDumpCommand extends Command
             'snapshot_count' => count($export['snapshots']),
             'runs_expanded' => $export['runs_expanded'],
             'output' => $outputPath !== null && trim($outputPath) !== '' ? trim($outputPath) : null,
+            // "who took a copy": artisan has no authenticated user, so record the
+            // OS process owner and any operator-supplied reason alongside the
+            // system actor so the egress record names a human where it can.
+            'requested_by' => $this->resolveRequestedBy(),
+            'reason' => $this->optionalOptionString('reason'),
             ...$audit->metadata(['actor' => Actor::system('artisan')->toArray()]),
         ]);
 
@@ -251,6 +258,17 @@ class SwarmMemoryDumpCommand extends Command
         return null;
     }
 
+    /**
+     * Raw existence probe for a run-history row.
+     *
+     * Deliberately queries the history table directly rather than routing
+     * through {@see RunHistoryStore::find()}:
+     * this is a subject-resolution check, not export data (the actual entries
+     * and snapshots DO route through the MemoryStore / SnapshotsMemory
+     * contracts), and an audit probe must see a row whatever its lease/TTL
+     * state. Coupling subject resolution to a contract's read-time row
+     * filtering could hide a run from an export that should include it.
+     */
     protected function runExists(string $id, Connection $connection, string $historyTable): bool
     {
         return $connection->table($historyTable)->where('run_id', $id)->exists();
@@ -346,6 +364,15 @@ class SwarmMemoryDumpCommand extends Command
             'include_snapshots' => $includeSnapshots,
             'entry_count' => count($export['entries']),
             'snapshot_count' => count($export['snapshots']),
+            // Declare which memory scopes the top-level `entries` array covers,
+            // so a run export is as self-describing about its scope boundary as
+            // the conversation export is about run expansion. A run export
+            // carries only Run-scoped entries (Agent/Swarm-scoped memory keys on
+            // an agent/swarm id, not a run id, and cannot be filtered by run);
+            // a conversation export adds `run` only when a resolver expands it.
+            'scopes_included' => $subjectType === 'run'
+                ? ['run']
+                : ($export['runs_expanded'] ? ['conversation', 'run'] : ['conversation']),
         ];
 
         if ($subjectType === 'conversation') {
@@ -434,6 +461,11 @@ class SwarmMemoryDumpCommand extends Command
     /**
      * Write the rendered export to a file. Returns the byte count on success,
      * or false when the path is not writable.
+     *
+     * The file is created empty and locked to owner-only (0600) BEFORE the
+     * payload is written: an audit export can carry unredacted memory values,
+     * so it must never exist world-readable on a shared host, even briefly.
+     * The payload only lands after the mode is tightened.
      */
     protected function writeToFile(string $path, string $contents): int|false
     {
@@ -443,7 +475,26 @@ class SwarmMemoryDumpCommand extends Command
             return false;
         }
 
+        if (@file_put_contents($path, '') === false) {
+            return false;
+        }
+
+        @chmod($path, 0600);
+
         return @file_put_contents($path, $contents);
+    }
+
+    /**
+     * Best-effort identity of the operator who ran the export, for the audit
+     * trail's "who took a copy" record. Returns the OS process owner — for an
+     * interactive `artisan` invocation this is the shell user; under a queued
+     * worker it is the worker's user, not an authenticated app identity.
+     */
+    protected function resolveRequestedBy(): string
+    {
+        $user = get_current_user();
+
+        return $user !== '' ? $user : 'unknown';
     }
 
     /**

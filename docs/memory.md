@@ -449,6 +449,7 @@ references only; `--include-snapshots` adds `entries` + `tool_calls` to each.
   "include_snapshots": false,
   "entry_count": 2,
   "snapshot_count": 1,
+  "scopes_included": ["run"],       // scopes the top-level "entries" cover
   "entries": [
     {
       "scope": "run", "scope_id": "9b2c0e7a-...", "key": "goal",
@@ -474,6 +475,15 @@ In **NDJSON** mode the same data streams as one object per line: a
 `{"record":"entry", ...}` per memory entry, then one `{"record":"snapshot", ...}`
 per snapshot.
 
+**Scope boundary.** A run export carries only `Run`-scoped entries. `Agent`- and
+`Swarm`-scoped memory key on an agent or swarm id, not a run id, so they cannot
+be filtered by run and are not included. The `scopes_included` field declares
+exactly what the top-level `entries` array covers (`["run"]` for a run;
+`["conversation"]` or `["conversation", "run"]` for a conversation, depending on
+whether a resolver expanded it). **Read `scopes_included` before certifying a run
+export as a complete GDPR Art. 15 subject-access response** — confirm the
+subject's data lives in `Run` scope.
+
 **Conversation exports.** Given a conversation id, the dump carries that
 conversation's Conversation-scoped entries. Swarm records no link between a run
 and a conversation in v0.10 (the runtime exposes no conversation handle), so
@@ -496,7 +506,9 @@ $this->app->singleton(
 Like `swarm:memory:inspect`, dump requires `swarm.persistence.driver=database`
 and surfaces a configuration hint (rather than a misleadingly partial export)
 under the cache driver. Successful exports dispatch a `MemoryDumped` event and
-emit a `command.memory.dump` audit category recording what left the system. See
+emit a `command.memory.dump` audit category recording what left the system —
+including the requesting OS user (`requested_by`) and an optional `--reason` so
+the egress record names who ran the export and why. See
 the [compliance audit guide](compliance-audit.md#exporting-an-audit-packet) for
 the end-to-end audit workflow.
 

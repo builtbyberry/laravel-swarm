@@ -2,9 +2,12 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryDumped;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -161,6 +164,7 @@ test('detects a conversation id and exports conversation-scoped entries without 
         ->and($out['entry_count'])->toBe(1)
         ->and($out['runs_expanded'])->toBeFalse()
         ->and($out['skipped_runs'])->toBe([])
+        ->and($out['scopes_included'])->toBe(['conversation'])
         ->and($out['conversation_run_resolver'])->toContain('NullConversationRunResolver');
 });
 
@@ -186,6 +190,7 @@ test('a bound resolver expands a conversation into runs and reports skipped runs
         // conversation entry + run-a's run-scoped entry
         ->and($out['entry_count'])->toBe(2)
         ->and($out['snapshot_count'])->toBe(1)
+        ->and($out['scopes_included'])->toBe(['conversation', 'run'])
         ->and($out['skipped_runs'])->toBe(['run-missing']);
 });
 
@@ -311,3 +316,116 @@ test('does not dispatch MemoryDumped for a missing id', function (): void {
 
     Event::assertNotDispatched(MemoryDumped::class);
 });
+
+// ---------------------------------------------------------------------------
+// Audit category — the extraction egress record (`command.memory.dump`)
+// ---------------------------------------------------------------------------
+
+function dumpBindRecordingAuditSink(): RecordingSwarmAuditSink
+{
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    return $sink;
+}
+
+test('emits the command.memory.dump audit category recording what left the system', function (): void {
+    dumpSeedMemory(MemoryScope::Run, 'run-1', 'goal', 'g');
+    dumpSeedSnapshot('run-1', 0, [], []);
+
+    $sink = dumpBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:dump', ['id' => 'run-1', '--format' => 'json', '--reason' => 'dsar-1234']);
+
+    expect($exit)->toBe(0)
+        ->and($sink->hasCategory('command.memory.dump'))->toBeTrue();
+
+    $record = $sink->recordsForCategory('command.memory.dump')[0];
+
+    expect($record['subject_type'])->toBe('run')
+        ->and($record['subject_id'])->toBe('run-1')
+        ->and($record['format'])->toBe('json')
+        ->and($record['entry_count'])->toBe(1)
+        ->and($record['snapshot_count'])->toBe(1)
+        ->and($record['runs_expanded'])->toBeFalse()
+        ->and($record['output'])->toBeNull()
+        ->and($record['reason'])->toBe('dsar-1234')
+        ->and($record)->toHaveKey('requested_by');
+});
+
+test('records the output target in the audit category when writing to a file', function (): void {
+    dumpSeedMemory(MemoryScope::Run, 'run-1', 'goal', 'g');
+
+    $sink = dumpBindRecordingAuditSink();
+    $path = sys_get_temp_dir().'/swarm-dump-audit-'.bin2hex(random_bytes(4)).'.json';
+
+    try {
+        Artisan::call('swarm:memory:dump', ['id' => 'run-1', '--output' => $path]);
+
+        $record = $sink->recordsForCategory('command.memory.dump')[0];
+        expect($record['output'])->toBe($path);
+    } finally {
+        @unlink($path);
+    }
+});
+
+test('does not emit the command.memory.dump audit category on a failed export', function (): void {
+    $sink = dumpBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:dump', ['id' => 'nope', '--format' => 'json']);
+
+    expect($exit)->toBe(1)
+        ->and($sink->hasCategory('command.memory.dump'))->toBeFalse();
+});
+
+test('does not emit the command.memory.dump audit category under the cache driver', function (): void {
+    config()->set('swarm.persistence.driver', 'cache');
+
+    $sink = dumpBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:dump', ['id' => 'run-1', '--format' => 'json']);
+
+    expect($exit)->toBe(1)
+        ->and($sink->hasCategory('command.memory.dump'))->toBeFalse();
+});
+
+// ---------------------------------------------------------------------------
+// Scope boundary — a run export covers only Run-scoped entries and says so
+// ---------------------------------------------------------------------------
+
+test('a run export carries only run-scoped entries and declares scopes_included', function (): void {
+    dumpSeedMemory(MemoryScope::Run, 'run-scoped', 'goal', 'ship');
+    // An Agent-scoped row that reuses the run id as its scope_id must NOT leak
+    // into a run export — only Run-scoped entries belong to the run subject.
+    dumpSeedMemory(MemoryScope::Agent, 'run-scoped', 'note', 'secret');
+
+    $exit = Artisan::call('swarm:memory:dump', ['id' => 'run-scoped', '--format' => 'json']);
+    $out = json_decode(Artisan::output(), true);
+
+    expect($exit)->toBe(0)
+        ->and($out['subject_type'])->toBe('run')
+        ->and($out['entry_count'])->toBe(1)
+        ->and($out['entries'][0]['scope'])->toBe('run')
+        ->and($out['scopes_included'])->toBe(['run']);
+});
+
+// ---------------------------------------------------------------------------
+// File output hardening — exports never land world-readable
+// ---------------------------------------------------------------------------
+
+test('--output writes the file with owner-only (0600) permissions', function (): void {
+    dumpSeedMemory(MemoryScope::Run, 'run-1', 'goal', 'g');
+
+    $path = sys_get_temp_dir().'/swarm-dump-perms-'.bin2hex(random_bytes(4)).'.json';
+
+    try {
+        $exit = Artisan::call('swarm:memory:dump', ['id' => 'run-1', '--output' => $path]);
+
+        expect($exit)->toBe(0)
+            ->and(file_exists($path))->toBeTrue()
+            ->and(substr(sprintf('%o', fileperms($path)), -3))->toBe('600');
+    } finally {
+        @unlink($path);
+    }
+})->skip(PHP_OS_FAMILY === 'Windows', 'POSIX file permissions are not enforced on Windows.');

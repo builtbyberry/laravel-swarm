@@ -149,11 +149,20 @@ any downstream tooling. The full schema and NDJSON record shape are documented
 in [docs/memory.md → Exporting a full run](memory.md#exporting-a-full-run-with-swarmmemorydump).
 
 **Self-describing for audit.** The envelope records `subject_type`/`subject_id`,
-`generated_at`, the `include_snapshots` flag, and entry/snapshot counts — so a
-packet states exactly what it contains and how it was produced. A run id and a
-conversation id are both bare UUIDs; the command resolves the subject by probe
-and **refuses** an id that matches both (pass `--as=run|conversation`) rather
-than silently guessing, so an export is never quietly about the wrong subject.
+`generated_at`, the `include_snapshots` flag, entry/snapshot counts, and a
+`scopes_included` field — so a packet states exactly what it contains and how it
+was produced. A run id and a conversation id are both bare UUIDs; the command
+resolves the subject by probe and **refuses** an id that matches both (pass
+`--as=run|conversation`) rather than silently guessing, so an export is never
+quietly about the wrong subject.
+
+**Scope boundary — read `scopes_included`.** A run export covers only
+`Run`-scoped memory; `Agent`- and `Swarm`-scoped entries key on an agent/swarm
+id, not a run id, and are not included. The `scopes_included` field states this
+explicitly (`["run"]` for a run subject). Before certifying a run export as a
+complete GDPR Art. 15 / CCPA right-to-know response, confirm the subject's data
+lives in `Run` scope — if it spans agent or swarm scope, that data is gathered
+separately.
 
 **Conversation exports and run expansion.** Swarm records no link between a run
 and a conversation in v0.10 (the runtime exposes no conversation handle), so a
@@ -167,10 +176,13 @@ is required.
 
 **Audit evidence of the extraction itself.** Every successful dump dispatches a
 `MemoryDumped` event and emits a `command.memory.dump` audit category recording
-what left the system (subject, format, counts, output target). Subscribe an
-audit listener (or rely on the audit outbox under database persistence) to keep
-a positive record of every export — the answer to "who took a copy of this
-data, and when".
+what left the system (subject, format, counts, output target), the requesting OS
+user (`requested_by`), and an optional operator `--reason`. Subscribe an audit
+listener (or rely on the audit outbox under database persistence) to keep a
+positive record of every export — when it happened, what left, who ran it, and
+why. (`requested_by` is the OS process owner — the shell user for an interactive
+`artisan` run; for an authenticated end-user identity, capture it in your own
+listener, since an artisan command has no app session.)
 
 > Encryption of the dump output is out of scope for the command — wrap the
 > `--output` file (or the piped stdout) in your own encryption-at-rest /
