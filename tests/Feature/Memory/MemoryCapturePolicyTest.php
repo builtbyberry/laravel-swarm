@@ -8,15 +8,19 @@ use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRedacted;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWriteSkipped;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
+use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\InMemoryMemoryStore;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RedactingMemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingMemoryCapturePolicy;
@@ -116,8 +120,8 @@ test('a Redact decision structurally redacts the value at write, preserving keys
     expect($memory->get(MemoryScope::Run, 'run-1', 'safe'))->toBe('keep-me');
 });
 
-test('a Skip decision drops the entry entirely and dispatches no MemoryWritten event', function () {
-    Event::fake([MemoryWritten::class]);
+test('a Skip decision drops the entry entirely, fires MemoryWriteSkipped, and dispatches no MemoryWritten event', function () {
+    Event::fake([MemoryWritten::class, MemoryWriteSkipped::class]);
 
     bindMemoryCapture(new SkippingMemoryCapturePolicy(['secret']));
 
@@ -133,6 +137,12 @@ test('a Skip decision drops the entry entirely and dispatches no MemoryWritten e
 
     Event::assertDispatched(MemoryWritten::class, fn (MemoryWritten $e): bool => $e->key === 'kept');
     Event::assertNotDispatched(MemoryWritten::class, fn (MemoryWritten $e): bool => $e->key === 'secret');
+
+    // The dropped write is still observable.
+    Event::assertDispatched(MemoryWriteSkipped::class, fn (MemoryWriteSkipped $e): bool => $e->key === 'secret'
+        && $e->scope === MemoryScope::Run
+        && $e->scopeId === 'run-1');
+    Event::assertNotDispatched(MemoryWriteSkipped::class, fn (MemoryWriteSkipped $e): bool => $e->key === 'kept');
 });
 
 test('a Redact decision still dispatches MemoryWritten with bytes reflecting the redacted payload', function () {
@@ -225,4 +235,61 @@ test('a capture policy class that does not implement the contract throws', funct
 
     expect(fn () => $this->app->make(SwarmMemory::class)->put(MemoryScope::Run, 'run-1', 'k', 'v'))
         ->toThrow(SwarmException::class, 'must implement');
+});
+
+test('a Redact decision dispatches MemoryRedacted only for redacted keys', function () {
+    Event::fake([MemoryRedacted::class]);
+
+    bindMemoryCapture(new RedactingMemoryCapturePolicy(['pii']));
+
+    /** @var SwarmMemory $memory */
+    $memory = $this->app->make(SwarmMemory::class);
+    $memory->put(MemoryScope::Run, 'run-1', 'pii', 'secret');
+    $memory->put(MemoryScope::Run, 'run-1', 'safe', 'plain');
+
+    Event::assertDispatched(MemoryRedacted::class, fn (MemoryRedacted $e): bool => $e->key === 'pii'
+        && $e->scope === MemoryScope::Run
+        && $e->scopeId === 'run-1');
+    Event::assertNotDispatched(MemoryRedacted::class, fn (MemoryRedacted $e): bool => $e->key === 'safe');
+});
+
+test('the default policy dispatches no capture-decision events', function () {
+    Event::fake([MemoryRedacted::class, MemoryWriteSkipped::class]);
+
+    $this->app->make(SwarmMemory::class)->put(MemoryScope::Run, 'run-1', 'k', 'v');
+
+    Event::assertNotDispatched(MemoryRedacted::class);
+    Event::assertNotDispatched(MemoryWriteSkipped::class);
+});
+
+test('Skip suppresses the write but leaves any pre-existing entry untouched', function () {
+    Event::fake([MemoryWriteSkipped::class]);
+
+    // First write under the default (Full) policy persists v1.
+    $this->app->make(SwarmMemory::class)->put(MemoryScope::Run, 'run-1', 'k', 'v1');
+
+    // A Skip policy then drops a second write to the same key; v1 must remain.
+    bindMemoryCapture(new SkippingMemoryCapturePolicy(['k']));
+    $memory = $this->app->make(SwarmMemory::class);
+    $memory->put(MemoryScope::Run, 'run-1', 'k', 'v2');
+
+    expect($memory->get(MemoryScope::Run, 'run-1', 'k'))->toBe('v1');
+    Event::assertDispatched(MemoryWriteSkipped::class, fn (MemoryWriteSkipped $e): bool => $e->key === 'k');
+});
+
+test('the redaction decorator wraps a consumer-rebound MemoryStore driver', function () {
+    // A consumer or companion package registers its own driver after boot.
+    app()->singleton(MemoryStore::class, fn (): InMemoryMemoryStore => new InMemoryMemoryStore);
+
+    bindMemoryCapture(new RedactingMemoryCapturePolicy(['pii']));
+
+    $store = $this->app->make(MemoryStore::class);
+    expect($store)->toBeInstanceOf(RedactingMemoryStore::class);
+    $inner = $store instanceof RedactingMemoryStore ? $store->inner() : null;
+    expect($inner)->toBeInstanceOf(InMemoryMemoryStore::class);
+
+    // Redaction still applies through the rebound driver — the bypass is closed.
+    $memory = $this->app->make(SwarmMemory::class);
+    $memory->put(MemoryScope::Run, 'run-1', 'pii', 'secret');
+    expect($memory->get(MemoryScope::Run, 'run-1', 'pii'))->toBe(SwarmCapture::REDACTED);
 });

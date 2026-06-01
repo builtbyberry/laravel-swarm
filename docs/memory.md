@@ -205,13 +205,15 @@ Where the propagation policy decides what an agent *reads*, the **capture policy
 
 - **`Full`** — persist the value unchanged (the default for every write).
 - **`Redact`** — persist the entry with scalar values replaced by the `SwarmCapture::REDACTED` sentinel (`'[redacted]'`), preserving array structure and keys so the entry stays addressable. This is the same sentinel the audit capture path uses.
-- **`Skip`** — drop the entry entirely: no row is written and no `MemoryWritten` event fires.
+- **`Skip`** — drop the entry entirely: no row is written and no `MemoryWritten` event fires. Skip suppresses *this* write only — any pre-existing entry at the address is left untouched (it is not deleted).
 
 This is the write-side counterpart to the audit `CapturePolicy` (`swarm.capture.*`): redacting here keeps PII out of memory in the first place, so it never reaches a frozen `MemorySnapshot`. Like the audit policy, a capture policy **never receives the value** — only the scope and key — so a decision cannot couple to payload shape or leak unredacted data.
 
-Enforcement lives in the `RedactingMemoryStore` decorator the container wraps around your memory driver, so **every** write flows through one chokepoint (including direct `MemoryStore` resolution), and reads return already-redacted values — the propagation view and frozen snapshots inherit redaction with no extra work.
+Enforcement lives in the `RedactingMemoryStore` decorator the container wraps around your memory driver (via `$app->extend(MemoryStore::class, …)`), so **every** write flows through one chokepoint — including a custom or companion driver you bind yourself. (Bind it with `bind()`/`singleton()`, not `Container::instance()`, so the decorator still wraps it.) Reads return already-redacted values, so the propagation view and frozen snapshots inherit redaction with no extra work.
 
-> Redaction is applied at the persistence boundary. A run's own in-process `RunContext` still holds the raw value it just wrote until the run ends; the policy governs what is *persisted*, snapshotted, and visible to other agents via memory.
+> **Scope.** Redaction applies at the persistence boundary and covers the entry **value** only — not the entry **`metadata`** (which carries functional annotations like `source`/`usage`) and not the **key** (keys are addressing; redacting them would break `get`/`all`). Don't put PII in memory metadata or keys. A run's own in-process `RunContext` also still holds the raw value it just wrote until the run ends; the policy governs what is *persisted*, snapshotted, and visible to other agents.
+
+Each non-`Full` decision is observable: a `Redact` write dispatches `MemoryRedacted` (alongside the usual `MemoryWritten`), and a `Skip` dispatches `MemoryWriteSkipped`. Both carry only the entry address (`scope`, `scopeId`, `key`), never the value — subscribe to them for an audit trail of capture-policy actions.
 
 The default `DefaultMemoryCapturePolicy` returns `Full` for everything, preserving pre-v0.10 behavior. Bind your own globally:
 

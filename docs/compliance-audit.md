@@ -15,17 +15,30 @@ decides, per `(scope, key)`, whether each memory entry is written as-is
 (`Full`), structurally redacted (`Redact`), or dropped entirely (`Skip`).
 
 Redaction is enforced by the `RedactingMemoryStore` decorator that wraps the
-memory driver, so it is the single chokepoint every write passes through.
-Critically, the agent-visible propagation view and the frozen `MemorySnapshot`
-read back through that same store — so PII redacted at write **never reaches a
-snapshot**, and the audit-replay record is clean by construction rather than by a
-separate scrubbing pass. A policy never sees the value it is deciding on (only
-the scope and key), so the policy code itself cannot become a leak path.
+memory driver (via `$app->extend(MemoryStore::class, …)`), so it is the single
+chokepoint every write passes through — including a custom or companion store a
+deployment binds itself (bind it, don't `Container::instance()` it). Critically,
+the agent-visible propagation view and the frozen `MemorySnapshot` read back
+through that same store — so PII redacted at write **never reaches a snapshot**,
+and the audit-replay record is clean by construction rather than by a separate
+scrubbing pass. A policy never sees the value it is deciding on (only the scope
+and key), so the policy code itself cannot become a leak path.
 
-The default preserves pre-v0.10 behavior (every write is `Full`). Opt in by
-binding a policy via `swarm.memory.capture_policy`
-(`SWARM_MEMORY_CAPTURE_POLICY`) or the container. See the worked example and
-`Redact`/`Skip` semantics in
+**Scope.** Redaction covers the entry **value** only. The entry's `metadata`
+(functional annotations such as `source`/`usage`) and the entry **key** are
+persisted unchanged — do not place PII in memory metadata or keys.
+
+**Audit evidence.** Each capture decision is observable: a `Redact` write
+dispatches a `MemoryRedacted` event and a `Skip` dispatches `MemoryWriteSkipped`
+(both carry only `scope`/`scopeId`/`key`, never the value). Subscribe an audit
+listener to these to produce a positive record that redaction/drop occurred —
+the answer to "prove the policy acted" — rather than inferring it from absent
+data.
+
+The default preserves pre-v0.10 behavior (every write is `Full`, and no
+`MemoryRedacted`/`MemoryWriteSkipped` events fire). Opt in by binding a policy
+via `swarm.memory.capture_policy` (`SWARM_MEMORY_CAPTURE_POLICY`) or the
+container. See the worked example and `Redact`/`Skip` semantics in
 [docs/memory.md → Capture policy](memory.md#capture-policy-write-time-redaction).
 
 Together the two controls form the memory compliance story: **capture policy**

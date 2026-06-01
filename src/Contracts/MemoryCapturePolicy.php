@@ -50,7 +50,9 @@ interface MemoryCapturePolicy
      * - {@see CaptureDecision::Full}   — persist the value unchanged.
      * - {@see CaptureDecision::Redact} — persist the entry with scalar values
      *   replaced by the redaction sentinel, preserving array structure and keys
-     *   so the entry remains addressable.
+     *   so the entry remains addressable. Redaction covers the entry **value**
+     *   only; the entry's `metadata` is persisted unchanged, so do not place PII
+     *   in memory metadata.
      * - {@see CaptureDecision::Skip}   — do not persist the entry at all; no row
      *   is written and no `MemoryWritten` event is dispatched.
      *

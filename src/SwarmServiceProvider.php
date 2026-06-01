@@ -121,6 +121,7 @@ use BuiltByBerry\LaravelSwarm\Telemetry\PackageJobTelemetryState;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryEventListener;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -282,23 +283,25 @@ class SwarmServiceProvider extends ServiceProvider
             DatabaseStreamEventStore::class,
         ));
 
-        $this->app->singleton(MemoryStore::class, function (Application $app): MemoryStore {
-            /** @var MemoryStore $driver */
-            $driver = $this->resolvePersistenceStore(
-                $app,
-                'memory',
-                CacheMemoryStore::class,
-                DatabaseMemoryStore::class,
-            );
+        $this->app->singleton(MemoryStore::class, fn (Application $app): MemoryStore => $this->resolvePersistenceStore(
+            $app,
+            'memory',
+            CacheMemoryStore::class,
+            DatabaseMemoryStore::class,
+        ));
 
-            // Wrap the concrete driver so the capture policy governs every
-            // write at a single chokepoint. Reads pass through, so the
-            // propagation view and frozen snapshots inherit redaction for free.
-            return new RedactingMemoryStore(
-                inner: $driver,
-                policy: $app->make(MemoryCapturePolicy::class),
-            );
-        });
+        // Wrap whatever MemoryStore is bound — the bundled drivers OR a
+        // consumer/companion driver re-bound later — in the redaction decorator,
+        // so the capture policy governs every write at a single chokepoint that
+        // cannot be bypassed by rebinding the store. Reads pass through, so the
+        // propagation view and frozen snapshots inherit redaction for free.
+        // (A store registered via Container::instance() bypasses extenders; bind
+        // custom drivers, don't instance() them — see UPGRADING.md.)
+        $this->app->extend(MemoryStore::class, fn (MemoryStore $store, Application $app): MemoryStore => new RedactingMemoryStore(
+            inner: $store,
+            policy: $app->make(MemoryCapturePolicy::class),
+            events: $app->make(Dispatcher::class),
+        ));
         $this->app->singleton(SwarmMemory::class, DefaultSwarmMemory::class);
 
         // Snapshot recording requires the `swarm_memory_snapshots` table from
