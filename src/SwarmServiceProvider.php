@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmInspectCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmMemoryDumpCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmMemoryInspectCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmMemoryPurgeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPauseCommand;
@@ -42,6 +43,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
@@ -62,6 +64,7 @@ use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultMemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
+use BuiltByBerry\LaravelSwarm\Memory\NullConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Memory\NullSnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
@@ -304,6 +307,12 @@ class SwarmServiceProvider extends ServiceProvider
         ));
         $this->app->singleton(SwarmMemory::class, DefaultSwarmMemory::class);
 
+        // Default conversation→runs resolver is the honest no-op: Swarm records
+        // no run/conversation link in v0.10, so `swarm:memory:dump` of a
+        // conversation expands to no runs unless an application binds its own
+        // resolver in place of this one.
+        $this->app->singleton(ConversationRunResolver::class, NullConversationRunResolver::class);
+
         // Snapshot recording requires the `swarm_memory_snapshots` table from
         // migration #110. When persistence runs in `cache` mode (default for
         // tests and ephemeral workloads) the table is not migrated, so fall
@@ -374,6 +383,7 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmSignalCommand::class,
                 SwarmInspectCommand::class,
                 SwarmMemoryInspectCommand::class,
+                SwarmMemoryDumpCommand::class,
                 SwarmProgressCommand::class,
                 SwarmTraceCommand::class,
                 InstallCommand::class,

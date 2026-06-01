@@ -50,6 +50,7 @@ The recommended reading path for new users.
 ## Memory
 
 - [Swarm Memory](memory.md) — scoped, snapshot-replayable memory subsystem; read/write, lifecycle events, replay semantics, and the RunContext bridge (v0.9.0+)
+- [Compliance & Audit](compliance-audit.md) — memory capture policy, retention enforcement, and audit-packet export (`swarm:memory:dump`) for DSAR / regulatory handoff (v0.10.0+)
 
 ---
 

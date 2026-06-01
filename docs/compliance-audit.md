@@ -125,3 +125,53 @@ suppressed but the run stays visible to your audit pipeline: the
 `MemoryPurged` event still dispatches (with `criteria.prevent_prune = true`
 and zero counts), and the `command.memory.purge` audit category is emitted
 with `status=skipped`.
+
+## Exporting an audit packet
+
+`swarm:memory:dump` produces a self-contained, machine-readable export of a
+run's (or conversation's) complete memory + snapshot trail — the artifact you
+hand to an auditor, a regulator, or opposing counsel when the answer to "show me
+everything this run remembered" cannot be "here's our database". It is strictly
+read-only and never mutates memory. This satisfies subject-access / portability
+obligations (GDPR Art. 15 access, Art. 20 portability; CCPA §1798.110 right to
+know) without granting third-party DB access.
+
+```bash
+# Full audit packet for one run, snapshots embedded, written to a file.
+php artisan swarm:memory:dump 9b2c0e7a-... --include-snapshots --output=/tmp/run-9b2c.json
+
+# DSAR-style conversation export (see the run-expansion note below).
+php artisan swarm:memory:dump 1f0a... --as=conversation --include-snapshots --output=/tmp/conv-1f0a.json
+```
+
+The export is a stable envelope (`schema_version: "1.0"`) — pin that version in
+any downstream tooling. The full schema and NDJSON record shape are documented
+in [docs/memory.md → Exporting a full run](memory.md#exporting-a-full-run-with-swarmmemorydump).
+
+**Self-describing for audit.** The envelope records `subject_type`/`subject_id`,
+`generated_at`, the `include_snapshots` flag, and entry/snapshot counts — so a
+packet states exactly what it contains and how it was produced. A run id and a
+conversation id are both bare UUIDs; the command resolves the subject by probe
+and **refuses** an id that matches both (pass `--as=run|conversation`) rather
+than silently guessing, so an export is never quietly about the wrong subject.
+
+**Conversation exports and run expansion.** Swarm records no link between a run
+and a conversation in v0.10 (the runtime exposes no conversation handle), so a
+conversation export carries its Conversation-scoped entries and reports
+`runs_expanded: false` unless your application binds a `ConversationRunResolver`
+(see [docs/memory.md](memory.md#exporting-a-full-run-with-swarmmemorydump)).
+This matters for DSAR completeness: read `runs_expanded` in the envelope before
+certifying a conversation export as a complete subject-access response, and bind
+a resolver mapping your conversation/run topology if a full conversation trail
+is required.
+
+**Audit evidence of the extraction itself.** Every successful dump dispatches a
+`MemoryDumped` event and emits a `command.memory.dump` audit category recording
+what left the system (subject, format, counts, output target). Subscribe an
+audit listener (or rely on the audit outbox under database persistence) to keep
+a positive record of every export — the answer to "who took a copy of this
+data, and when".
+
+> Encryption of the dump output is out of scope for the command — wrap the
+> `--output` file (or the piped stdout) in your own encryption-at-rest /
+> transport controls when the packet contains regulated data.
