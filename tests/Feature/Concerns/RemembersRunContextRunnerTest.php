@@ -6,10 +6,15 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RememberingWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingStaticHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
+use Illuminate\Support\Facades\Context;
 use Laravel\Ai\Messages\Message;
 
 /**
@@ -57,6 +62,34 @@ test('the parallel runner exposes run memory to the worker closure', function ()
     expect(ActiveRunContext::current())->toBeNull();
 });
 
+test('the hierarchical runner exposes run memory to the worker', function () {
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => RememberingWriter::class,
+                'prompt' => 'writer-task',
+            ],
+        ]),
+    ]);
+    app(SwarmMemory::class)->put(MemoryScope::Run, 'hier-run', 'brief', 'hierarchically');
+
+    RememberingHierarchicalSwarm::make()->run(RunContext::fake(['run_id' => 'hier-run', 'input' => 'go']));
+
+    expect(firstCapturedContents())->toContain('brief: hierarchically');
+    expect(ActiveRunContext::current())->toBeNull();
+});
+
+test('the static-hierarchical streaming runner exposes run memory to the worker', function () {
+    app(SwarmMemory::class)->put(MemoryScope::Run, 'static-run', 'brief', 'statically streamed');
+
+    $response = RememberingStaticHierarchicalSwarm::make()->stream(RunContext::fake(['run_id' => 'static-run', 'input' => 'go']));
+    iterator_to_array($response);
+
+    expect(firstCapturedContents())->toContain('brief: statically streamed');
+    expect(ActiveRunContext::current())->toBeNull();
+});
+
 test('the streaming runner exposes run memory to the agent', function () {
     app(SwarmMemory::class)->put(MemoryScope::Run, 'stream-run', 'brief', 'stream it');
 
@@ -65,6 +98,21 @@ test('the streaming runner exposes run memory to the agent', function () {
 
     expect(firstCapturedContents())->toContain('brief: stream it');
     expect(ActiveRunContext::current())->toBeNull();
+});
+
+test('the active run never leaks into visible Context (and thus into logs)', function () {
+    app(SwarmMemory::class)->put(MemoryScope::Run, 'leak-run', 'brief', 'secret');
+
+    RememberingSequentialSwarm::make()->run(RunContext::fake(['run_id' => 'leak-run', 'input' => 'go']));
+
+    // The agent observed memory during its invocation...
+    expect(firstCapturedContents())->toContain('brief: secret');
+    // ...but the run handle was never written to the visible Context bucket that
+    // the framework's context log processor copies into every log record.
+    foreach (RememberingWriter::$capturedContextKeys as $keys) {
+        expect($keys)->not->toContain('swarm:active_run');
+    }
+    expect(Context::all())->not->toHaveKey('swarm:active_run');
 });
 
 test('the active run context is cleared even when the agent throws', function () {

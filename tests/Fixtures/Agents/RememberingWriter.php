@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 
 use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Illuminate\Support\Facades\Context;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Messages\Message;
@@ -33,9 +34,13 @@ class RememberingWriter implements Agent, Conversational
     /** @var array<int, array<int, Message>> */
     public static array $capturedMessages = [];
 
+    /** @var array<int, array<int, string>> Visible Context keys observed at each invocation. */
+    public static array $capturedContextKeys = [];
+
     public static function resetCaptured(): void
     {
         self::$capturedMessages = [];
+        self::$capturedContextKeys = [];
     }
 
     public function instructions(): string
@@ -70,5 +75,6 @@ class RememberingWriter implements Agent, Conversational
         $messages = $this->messages();
 
         self::$capturedMessages[] = is_array($messages) ? $messages : iterator_to_array($messages);
+        self::$capturedContextKeys[] = array_keys(Context::all());
     }
 }

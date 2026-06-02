@@ -54,7 +54,7 @@ final class RunContextMemoryReader
 
         $messages = [];
 
-        foreach ($this->view->present($swarm, $record->context(), $agent) as $entry) {
+        foreach ($this->view->present($swarm, $record->context, $agent) as $entry) {
             $content = $this->renderContent($entry->key, $entry->value);
 
             if ($content === null) {

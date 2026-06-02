@@ -266,7 +266,7 @@ protected function mergeRunContextMessages(array $runContextMessages): iterable
 }
 ```
 
-The runner publishes the active run around every agent invocation across all four runners (sequential, parallel, hierarchical/static-hierarchical, durable) and both streaming paths, via the internal `ActiveRunContext` handle (backed by `Illuminate\Support\Facades\Context`, so it survives queue and concurrency-process boundaries). On a real multi-process concurrency driver, run-memory visibility inside a parallel worker requires a process-shared `MemoryStore` (database or shared cache) — the same constraint that applies to snapshots.
+The runner publishes the active run around every agent invocation across all four runners (sequential, parallel, hierarchical/static-hierarchical, durable) and both streaming paths, via the internal `ActiveRunContext` handle — a process-local stack holding the live `RunContext`, cleared in a `finally`. It is deliberately *not* backed by `Illuminate\Support\Facades\Context`: the run's input and memory never enter log records or queued-job payloads, and there is no observable change for agents that don't use the trait. Cross-process workers re-establish the handle explicitly from the forwarded run context, so on a real multi-process concurrency driver run-memory visibility inside a parallel worker requires a process-shared `MemoryStore` (database or shared cache) — the same constraint that applies to snapshots.
 
 ---
 
