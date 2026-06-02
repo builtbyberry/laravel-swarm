@@ -199,6 +199,77 @@ The attribute takes precedence over the config-bound default. Widening the view 
 
 ---
 
+## Reading run memory inside an agent with `RemembersRunContext`
+
+The propagation policy decides what an agent is *allowed* to see, and the runner freezes that view into the snapshot. But a plain `laravel/ai` agent is still invoked with only the prompt string — it never sees the memory view as conversation. The opt-in `BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext` trait bridges that gap.
+
+Add the trait to an agent that also implements `Laravel\Ai\Contracts\Conversational`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Conversational;
+use Laravel\Ai\Promptable;
+
+class Editor implements Agent, Conversational
+{
+    use Promptable;
+    use RemembersRunContext;
+
+    public function instructions(): string
+    {
+        return 'You refine the draft using the shared run context.';
+    }
+}
+```
+
+When the agent runs inside a swarm, `messages()` returns the active run's propagation-policy view rendered as `Laravel\Ai\Messages\Message[]`. `laravel/ai` prepends those messages before the new user turn, so the model sees a real conversation. Each presented entry becomes one message, prefixed with its key (`"{key}: {value}"`); arrays are JSON-encoded, `null` values are skipped, and messages preserve the policy's canonical order. **Outside a swarm run the trait is a no-op** — `messages()` returns an empty list (subject to the merge hook below), so the agent behaves exactly as it would without the trait.
+
+Because the view is built through the same `AgentVisibleMemoryView` the runners use, `messages()` is filtered by the swarm's `MemoryPropagationPolicy` and redacted by the `MemoryCapturePolicy` — it can never surface more than [`swarm:memory:inspect`](#exporting-a-full-run-with-swarmmemorydump) shows.
+
+### What gets rendered today
+
+No package code writes Run-scoped memory during a run — step outputs live on the `RunContext`, not in `SwarmMemory` (see [the RunContext bridge](#runcontext-bridge)). So under the default policy `messages()` renders only what **your application** writes to Run memory, e.g.:
+
+```php
+// In a tool, guardrail, or an earlier step:
+Swarm::memory()->put(MemoryScope::Run, $runId, 'brief', 'Ship the v2 launch post.');
+// or, via the RunContext array bridge:
+$context['brief'] = 'Ship the v2 launch post.';
+```
+
+Automatic per-step output capture (so a sequential pipeline renders a true turn-by-turn transcript with no app wiring) is tracked in [#163](https://github.com/builtbyberry/laravel-swarm/issues/163).
+
+### Configuring the message role
+
+Rendered entries use the `assistant` role by default (they are prior context, not the new user turn). Change it globally:
+
+```php
+// config/swarm.php
+'memory' => [
+    'run_context_messages' => [
+        'role' => env('SWARM_MEMORY_RUN_CONTEXT_ROLE', 'assistant'), // assistant | user | tool_result
+    ],
+],
+```
+
+…or per agent by overriding `runContextMessageRole(): MessageRole`.
+
+### Combining with the agent's own history
+
+The trait *owns* `messages()`, so it cannot be combined with `laravel/ai`'s `RemembersConversations` (both define `messages()` — PHP rejects the conflict). To blend the run-context messages with history of your own, override `mergeRunContextMessages()`:
+
+```php
+protected function mergeRunContextMessages(array $runContextMessages): iterable
+{
+    return [...$this->priorTurns(), ...$runContextMessages];
+}
+```
+
+The runner publishes the active run around every agent invocation across all four runners (sequential, parallel, hierarchical/static-hierarchical, durable) and both streaming paths, via the internal `ActiveRunContext` handle — a process-local stack holding the live `RunContext`, cleared in a `finally`. It is deliberately *not* backed by `Illuminate\Support\Facades\Context`: the run's input and memory never enter log records or queued-job payloads, and there is no observable change for agents that don't use the trait. Cross-process workers re-establish the handle explicitly from the forwarded run context, so on a real multi-process concurrency driver run-memory visibility inside a parallel worker requires a process-shared `MemoryStore` (database or shared cache) — the same constraint that applies to snapshots.
+
+---
+
 ## Capture policy (write-time redaction)
 
 Where the propagation policy decides what an agent *reads*, the **capture policy** decides what gets *written*. `MemoryCapturePolicy` is consulted at the write boundary and returns a `CaptureDecision` per `(scope, key)`:

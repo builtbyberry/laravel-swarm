@@ -255,6 +255,20 @@ return [
         'propagation_policy' => env('SWARM_MEMORY_PROPAGATION_POLICY', DefaultPropagationPolicy::class),
 
         /*
+         * Configuration for the RemembersRunContext trait
+         * (Concerns\RemembersRunContext). Agents using the trait render the
+         * active swarm's propagation-policy memory view as laravel/ai messages;
+         * laravel/ai prepends them before the agent's new user turn.
+         *
+         * 'role' is the Laravel\Ai\Messages\MessageRole each rendered entry
+         * carries: 'assistant' (default), 'user', or 'tool_result'. Override per
+         * agent by overriding RemembersRunContext::runContextMessageRole().
+         */
+        'run_context_messages' => [
+            'role' => env('SWARM_MEMORY_RUN_CONTEXT_ROLE', 'assistant'),
+        ],
+
+        /*
          * The memory capture policy: decides, at the write boundary, whether
          * each memory entry is persisted as-is, redacted, or dropped entirely —
          * by scope and key. This is the write-side counterpart to the audit

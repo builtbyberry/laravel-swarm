@@ -67,6 +67,7 @@ use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\NullConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Memory\NullSnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\RunContextMemoryReader;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -167,6 +168,7 @@ class SwarmServiceProvider extends ServiceProvider
 
             return $policy;
         });
+        $this->app->singleton(RunContextMemoryReader::class);
         $this->app->singleton(SinkFailureHandler::class, ConfiguredSinkFailureHandler::class);
         $this->app->singleton(AuditOutbox::class, function (Application $app): AuditOutbox {
             $driver = $app->make(ConfigRepository::class)->get('swarm.persistence.driver');
