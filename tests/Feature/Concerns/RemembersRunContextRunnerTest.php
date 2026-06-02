@@ -6,12 +6,16 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RememberingWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingHierarchicalParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingStaticHierarchicalConcurrentSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RememberingStaticHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use Illuminate\Support\Facades\Context;
@@ -77,6 +81,51 @@ test('the hierarchical runner exposes run memory to the worker', function () {
     RememberingHierarchicalSwarm::make()->run(RunContext::fake(['run_id' => 'hier-run', 'input' => 'go']));
 
     expect(firstCapturedContents())->toContain('brief: hierarchically');
+    expect(ActiveRunContext::current())->toBeNull();
+});
+
+test('the hierarchical parallel branch closure exposes run memory to the worker', function () {
+    FakeEditor::fake(['editor-out']);
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('parallel_node', [
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['writer_node', 'editor_node'],
+                'next' => 'finish_node',
+            ],
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => RememberingWriter::class,
+                'prompt' => 'writer-branch',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-branch',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'editor_node',
+            ],
+        ]),
+    ]);
+    app(SwarmMemory::class)->put(MemoryScope::Run, 'hier-par-run', 'brief', 'parallel branch');
+
+    RememberingHierarchicalParallelSwarm::make()->run(RunContext::fake(['run_id' => 'hier-par-run', 'input' => 'go']));
+
+    expect(firstCapturedContents())->toContain('brief: parallel branch');
+    expect(ActiveRunContext::current())->toBeNull();
+});
+
+test('the static-hierarchical concurrent parallel branch closure exposes run memory to the worker', function () {
+    FakeResearcher::fake(['research-out']);
+    FakeEditor::fake(['editor-out']);
+    app(SwarmMemory::class)->put(MemoryScope::Run, 'static-par-run', 'brief', 'concurrent branch');
+
+    $response = RememberingStaticHierarchicalConcurrentSwarm::make()->stream(RunContext::fake(['run_id' => 'static-par-run', 'input' => 'go']));
+    iterator_to_array($response);
+
+    expect(firstCapturedContents())->toContain('brief: concurrent branch');
     expect(ActiveRunContext::current())->toBeNull();
 });
 
