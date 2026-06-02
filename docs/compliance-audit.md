@@ -45,6 +45,23 @@ Together the two controls form the memory compliance story: **capture policy**
 keeps disallowed data out at write, **retention** ages permitted data out on a
 schedule.
 
+## What an agent can see
+
+When an agent uses the `RemembersRunContext` trait
+([docs/memory.md](memory.md#reading-run-memory-inside-an-agent-with-remembersruncontext)),
+its `messages()` renders the run's memory as conversation for the model. That
+rendering is **not** a separate data path: it is built through the same
+`AgentVisibleMemoryView` the runners use to freeze each snapshot, so it inherits
+both compliance controls above. The propagation policy filters which entries are
+presented, and the capture policy has already redacted or skipped values at the
+write boundary — reads return the already-redacted value.
+
+The practical guarantee for auditors: **what the trait feeds the model can never
+exceed what `swarm:memory:inspect <run-id>` displays for that step.** The frozen
+snapshot is the upper bound on agent-visible memory, and the inspector shows the
+snapshot verbatim. There is no back channel that bypasses the policy or the
+redaction sentinel.
+
 ## Memory retention
 
 Laravel Swarm's memory subsystem (`SwarmMemory`) stores per-run,

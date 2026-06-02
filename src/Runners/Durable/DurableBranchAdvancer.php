@@ -25,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -156,7 +157,13 @@ class DurableBranchAdvancer
                             $this->view->present($swarm, $context, $agent),
                         );
 
-                    $response = $agent->prompt($branch['input']);
+                    ActiveRunContext::enter($runId, $swarm::class, $context);
+
+                    try {
+                        $response = $agent->prompt($branch['input']);
+                    } finally {
+                        ActiveRunContext::exit();
+                    }
                     $output = (string) $response;
                     $usage = $response->usage->toArray();
                     $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);

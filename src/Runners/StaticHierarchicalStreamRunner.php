@@ -42,6 +42,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -496,21 +497,30 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             ];
 
                             $agentClass = $branch->agentClass;
-                            $callbacks[$ordinal] = function () use ($agentClass, $input): array {
+                            $branchRunId = $state->context->runId;
+                            $branchSwarmClass = $state->swarm::class;
+                            $branchContextPayload = $state->context->toQueuePayload();
+                            $callbacks[$ordinal] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload): array {
                                 $worker = Container::getInstance()->make($agentClass);
 
                                 if (! $worker instanceof Agent) {
                                     throw new SwarmException("Static hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
                                 }
 
-                                $branchStartedAt = MonotonicTime::now();
-                                $response = $worker->prompt($input);
+                                ActiveRunContext::enter($branchRunId, $branchSwarmClass, RunContext::fromPayload($branchContextPayload, $branchRunId));
 
-                                return [
-                                    'output' => (string) $response,
-                                    'usage' => $response->usage->toArray(),
-                                    'duration_ms' => MonotonicTime::elapsedMilliseconds($branchStartedAt),
-                                ];
+                                try {
+                                    $branchStartedAt = MonotonicTime::now();
+                                    $response = $worker->prompt($input);
+
+                                    return [
+                                        'output' => (string) $response,
+                                        'usage' => $response->usage->toArray(),
+                                        'duration_ms' => MonotonicTime::elapsedMilliseconds($branchStartedAt),
+                                    ];
+                                } finally {
+                                    ActiveRunContext::exit();
+                                }
                             };
                         }
 
@@ -716,101 +726,110 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         $output = '';
         $stepUsage = [];
 
-        foreach ($agent->stream($input) as $event) {
-            if ($event instanceof TextDelta) {
-                $output .= $event->delta;
-                $swarmEvent = new SwarmTextDelta(
-                    id: $event->id,
-                    runId: $context->runId,
-                    stepIndex: $stepIndex,
-                    agentClass: $agent::class,
-                    delta: $this->capture->output($event->delta),
-                    timestamp: $event->timestamp,
-                );
-                $this->syncInvocationId($swarmEvent, $event->invocationId);
-                yield $swarmEvent;
-                $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-            } elseif ($event instanceof TextEnd) {
-                $swarmEvent = new SwarmTextEnd(
-                    id: $event->id,
-                    runId: $context->runId,
-                    stepIndex: $stepIndex,
-                    agentClass: $agent::class,
-                    messageId: $event->messageId,
-                    timestamp: $event->timestamp,
-                );
-                $this->syncInvocationId($swarmEvent, $event->invocationId);
-                yield $swarmEvent;
-                $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-            } elseif ($event instanceof ReasoningDelta) {
-                $swarmEvent = new SwarmReasoningDelta(
-                    id: $event->id,
-                    runId: $context->runId,
-                    stepIndex: $stepIndex,
-                    agentClass: $agent::class,
-                    reasoningId: $event->reasoningId,
-                    delta: $this->capture->output($event->delta),
-                    timestamp: $event->timestamp,
-                    summary: $this->captureStaticReasoningSummary($event->summary),
-                );
-                $this->syncInvocationId($swarmEvent, $event->invocationId);
-                yield $swarmEvent;
-                $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-            } elseif ($event instanceof ReasoningEnd) {
-                $swarmEvent = new SwarmReasoningEnd(
-                    id: $event->id,
-                    runId: $context->runId,
-                    stepIndex: $stepIndex,
-                    agentClass: $agent::class,
-                    reasoningId: $event->reasoningId,
-                    timestamp: $event->timestamp,
-                    summary: $this->captureStaticReasoningSummary($event->summary),
-                );
-                $this->syncInvocationId($swarmEvent, $event->invocationId);
-                yield $swarmEvent;
-                $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-            } elseif ($event instanceof ToolCall) {
-                $swarmEvent = new SwarmToolCall(
-                    id: $event->id,
-                    runId: $context->runId,
-                    stepIndex: $stepIndex,
-                    agentClass: $agent::class,
-                    toolCall: $this->captureStaticToolCall($event->toolCall),
-                    timestamp: $event->timestamp,
-                );
-                $this->syncInvocationId($swarmEvent, $event->invocationId);
-                yield $swarmEvent;
-                $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-            } elseif ($event instanceof ToolResult) {
-                $swarmEvent = new SwarmToolResult(
-                    id: $event->id,
-                    runId: $context->runId,
-                    stepIndex: $stepIndex,
-                    agentClass: $agent::class,
-                    toolResult: $this->captureStaticToolResult($event->toolResult),
-                    successful: $event->successful,
-                    error: $this->captureStaticToolError($event->error),
-                    timestamp: $event->timestamp,
-                );
-                $this->syncInvocationId($swarmEvent, $event->invocationId);
-                yield $swarmEvent;
-                $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-            } elseif ($event instanceof StreamEnd) {
-                $stepUsage = $event->usage->toArray();
-            } elseif ($event instanceof ProviderStreamError) {
-                throw new SwarmStreamProviderException(
-                    message: $event->message,
-                    eventId: $event->id,
-                    invocationId: $event->invocationId,
-                    recoverable: $event->recoverable,
-                    metadata: $this->captureStaticProviderErrorMetadata($event),
-                    timestamp: $event->timestamp,
-                    providerErrorType: $event->type,
-                );
-            }
-        }
+        // Publish the active run for the agent's RemembersRunContext trait while
+        // its stream is consumed; cleared in finally so it never leaks past the
+        // streamed step.
+        ActiveRunContext::enter($context->runId, $swarm::class, $context);
 
-        return ['output' => $output, 'usage' => $stepUsage];
+        try {
+            foreach ($agent->stream($input) as $event) {
+                if ($event instanceof TextDelta) {
+                    $output .= $event->delta;
+                    $swarmEvent = new SwarmTextDelta(
+                        id: $event->id,
+                        runId: $context->runId,
+                        stepIndex: $stepIndex,
+                        agentClass: $agent::class,
+                        delta: $this->capture->output($event->delta),
+                        timestamp: $event->timestamp,
+                    );
+                    $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    yield $swarmEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                } elseif ($event instanceof TextEnd) {
+                    $swarmEvent = new SwarmTextEnd(
+                        id: $event->id,
+                        runId: $context->runId,
+                        stepIndex: $stepIndex,
+                        agentClass: $agent::class,
+                        messageId: $event->messageId,
+                        timestamp: $event->timestamp,
+                    );
+                    $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    yield $swarmEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                } elseif ($event instanceof ReasoningDelta) {
+                    $swarmEvent = new SwarmReasoningDelta(
+                        id: $event->id,
+                        runId: $context->runId,
+                        stepIndex: $stepIndex,
+                        agentClass: $agent::class,
+                        reasoningId: $event->reasoningId,
+                        delta: $this->capture->output($event->delta),
+                        timestamp: $event->timestamp,
+                        summary: $this->captureStaticReasoningSummary($event->summary),
+                    );
+                    $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    yield $swarmEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                } elseif ($event instanceof ReasoningEnd) {
+                    $swarmEvent = new SwarmReasoningEnd(
+                        id: $event->id,
+                        runId: $context->runId,
+                        stepIndex: $stepIndex,
+                        agentClass: $agent::class,
+                        reasoningId: $event->reasoningId,
+                        timestamp: $event->timestamp,
+                        summary: $this->captureStaticReasoningSummary($event->summary),
+                    );
+                    $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    yield $swarmEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                } elseif ($event instanceof ToolCall) {
+                    $swarmEvent = new SwarmToolCall(
+                        id: $event->id,
+                        runId: $context->runId,
+                        stepIndex: $stepIndex,
+                        agentClass: $agent::class,
+                        toolCall: $this->captureStaticToolCall($event->toolCall),
+                        timestamp: $event->timestamp,
+                    );
+                    $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    yield $swarmEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                } elseif ($event instanceof ToolResult) {
+                    $swarmEvent = new SwarmToolResult(
+                        id: $event->id,
+                        runId: $context->runId,
+                        stepIndex: $stepIndex,
+                        agentClass: $agent::class,
+                        toolResult: $this->captureStaticToolResult($event->toolResult),
+                        successful: $event->successful,
+                        error: $this->captureStaticToolError($event->error),
+                        timestamp: $event->timestamp,
+                    );
+                    $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    yield $swarmEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                } elseif ($event instanceof StreamEnd) {
+                    $stepUsage = $event->usage->toArray();
+                } elseif ($event instanceof ProviderStreamError) {
+                    throw new SwarmStreamProviderException(
+                        message: $event->message,
+                        eventId: $event->id,
+                        invocationId: $event->invocationId,
+                        recoverable: $event->recoverable,
+                        metadata: $this->captureStaticProviderErrorMetadata($event),
+                        timestamp: $event->timestamp,
+                        providerErrorType: $event->type,
+                    );
+                }
+            }
+
+            return ['output' => $output, 'usage' => $stepUsage];
+        } finally {
+            ActiveRunContext::exit();
+        }
     }
 
     /**
