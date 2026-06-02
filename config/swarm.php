@@ -255,6 +255,42 @@ return [
         'propagation_policy' => env('SWARM_MEMORY_PROPAGATION_POLICY', DefaultPropagationPolicy::class),
 
         /*
+         * Whether runners persist each step's output to Run scope under the
+         * reserved key `swarm:step.{n}.output`. This is what lets the
+         * RemembersRunContext trait (with ConversationPropagationPolicy) render
+         * a real turn-by-turn conversation, and what audit exports surface as
+         * the per-step record.
+         *
+         * Enabled by default. The keys are hidden from the default agent view
+         * (DefaultPropagationPolicy excludes them), so enabling this never
+         * changes what a non-trait agent sees — it only adds Run-scoped rows
+         * (and snapshot bytes). Disable to opt out of the extra writes entirely.
+         */
+        'capture_step_output' => filter_var(
+            env('SWARM_MEMORY_CAPTURE_STEP_OUTPUT', true),
+            FILTER_VALIDATE_BOOLEAN,
+        ),
+
+        /*
+         * Tuning for ConversationPropagationPolicy — the opt-in policy that
+         * surfaces the reserved step-output keys (above) as an ordered
+         * transcript, intended to pair with the RemembersRunContext trait.
+         *
+         * 'include_run_memory' controls what else the policy shows alongside the
+         * transcript:
+         *   false (default) — transcript only: just the ordered step outputs,
+         *                     for a clean turn-by-turn conversation.
+         *   true            — transcript plus the rest of the Run-scoped view
+         *                     (last_output, user-written keys). Richer, noisier.
+         */
+        'conversation_view' => [
+            'include_run_memory' => filter_var(
+                env('SWARM_MEMORY_CONVERSATION_INCLUDE_RUN_MEMORY', false),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+        ],
+
+        /*
          * Configuration for the RemembersRunContext trait
          * (Concerns\RemembersRunContext). Agents using the trait render the
          * active swarm's propagation-policy memory view as laravel/ai messages;

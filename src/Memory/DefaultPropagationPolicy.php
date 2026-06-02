@@ -18,6 +18,13 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
  * policy reproduces that view: it drops every non-Run candidate and preserves
  * the order in which Run-scoped entries were gathered, so the frozen snapshot
  * is byte-identical to what live runners observed before propagation policy.
+ *
+ * It also drops the reserved `swarm:step.{n}.output` keys (see
+ * {@see SwarmMemoryKeys}). Those keys are written from v0.10 onward to record a
+ * run's step outputs, but they are surfaced only by an opt-in policy such as
+ * {@see ConversationPropagationPolicy}; excluding them here keeps the default
+ * agent view unchanged, so capturing step output never alters what a non-trait
+ * agent sees.
  */
 final class DefaultPropagationPolicy implements MemoryPropagationPolicy
 {
@@ -30,7 +37,8 @@ final class DefaultPropagationPolicy implements MemoryPropagationPolicy
     {
         return array_values(array_filter(
             $candidateEntries,
-            static fn (MemoryEntry $entry): bool => $entry->scope === MemoryScope::Run,
+            static fn (MemoryEntry $entry): bool => $entry->scope === MemoryScope::Run
+                && ! SwarmMemoryKeys::isStepOutput($entry->key),
         ));
     }
 }

@@ -59,6 +59,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\ConversationPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemorySnapshotRecorder;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultMemoryCapturePolicy;
@@ -153,6 +154,17 @@ class SwarmServiceProvider extends ServiceProvider
             $class = $app->make(ConfigRepository::class)->get('swarm.memory.propagation_policy', DefaultPropagationPolicy::class);
 
             return $app->make($class);
+        });
+        // Resolve ConversationPropagationPolicy with its configured transcript
+        // view. The container honours this binding whether the policy is the
+        // configured default (resolved via make($class) above) or selected per
+        // swarm with the #[PropagationPolicy] attribute (resolved via make()
+        // in AgentVisibleMemoryView::resolvePolicy()).
+        $this->app->bind(ConversationPropagationPolicy::class, function (Application $app): ConversationPropagationPolicy {
+            return new ConversationPropagationPolicy(
+                (bool) $app->make(ConfigRepository::class)
+                    ->get('swarm.memory.conversation_view.include_run_memory', false),
+            );
         });
         $this->app->singleton(MemoryCapturePolicy::class, function (Application $app): MemoryCapturePolicy {
             /** @var class-string $class */

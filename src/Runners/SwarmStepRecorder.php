@@ -7,12 +7,14 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
+use BuiltByBerry\LaravelSwarm\Memory\SwarmMemoryKeys;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\PayloadLimitResult;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 
 /**
  * @internal
@@ -23,6 +25,7 @@ class SwarmStepRecorder
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
         protected SwarmAuditDispatcher $audit,
+        protected ConfigRepository $config,
     ) {}
 
     public function started(SwarmExecutionState $state, int $index, string $agentClass, string $input): void
@@ -110,6 +113,20 @@ class SwarmStepRecorder
                     'steps' => $index + 1,
                 ])
                 ->mergeMetadata($contextMetadata);
+        }
+
+        // Persist this step's output to Run scope under a reserved key so the
+        // run accumulates a turn-by-turn record. Written unconditionally of
+        // $updateContext (the parallel runner records steps with
+        // updateContext: false, yet each branch's output must still be
+        // captured) and gated only by the capture-step-output config. The
+        // write flows through the same CapturePolicy / persistence / retention
+        // path as any Run-scoped entry; DefaultPropagationPolicy hides these
+        // keys, so non-trait agents observe no change.
+        if ($this->config->get('swarm.memory.capture_step_output', true)) {
+            $state->context->mergeData([
+                SwarmMemoryKeys::stepOutput($index) => $output,
+            ]);
         }
 
         if ($this->capture->capturesArtifacts()) {
