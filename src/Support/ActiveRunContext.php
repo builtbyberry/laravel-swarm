@@ -33,6 +33,17 @@ use Laravel\Ai\Contracts\Conversational;
  * The stack makes nested runs (an agent that synchronously drives a sub-swarm)
  * safe: each {@see enter()}/{@see exit()} pair manages its own frame.
  *
+ * Lifecycle: the stack is run-scoped and self-healing. Each invocation site
+ * pairs {@see enter()} with {@see exit()} in a finally, so under normal flow
+ * (including exceptions) the stack returns to empty. On a long-lived worker
+ * (queue, Octane) an abnormal termination that bypasses the finally — a hard
+ * timeout or fatal — can leave a stale frame, but it is never *read*:
+ * {@see current()} returns the top, and the next run's {@see enter()} pushes a
+ * fresh frame above it, so there is no correctness or cross-run-bleed concern.
+ * The only residue is a single retained {@see RunContext} reference until the
+ * worker recycles. If you want it cleared eagerly under Octane, reset it from a
+ * worker/operationTerminated hook with {@see flush()}.
+ *
  * @internal
  */
 final class ActiveRunContext
@@ -53,5 +64,15 @@ final class ActiveRunContext
     public static function current(): ?ActiveRunRecord
     {
         return self::$stack === [] ? null : self::$stack[array_key_last(self::$stack)];
+    }
+
+    /**
+     * Discard every frame. Intended for an Octane/worker-reset hook so a stale
+     * frame left by an abnormally-terminated run never outlives the request that
+     * produced it; also useful for deterministic test isolation.
+     */
+    public static function flush(): void
+    {
+        self::$stack = [];
     }
 }
