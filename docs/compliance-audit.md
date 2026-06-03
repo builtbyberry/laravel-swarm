@@ -1,18 +1,48 @@
 # Compliance & Audit
 
-> **Status:** stub. The full compliance guide is owned by
-> [#126 — compliance & audit guide](https://github.com/builtbyberry/laravel-swarm/issues/126)
-> and will land later in v0.10.0. This page exists today to host the memory
-> retention and capture-policy sections so operators have a stable doc anchor.
+This is the runbook for running Laravel Swarm in regulated workloads. It shows
+how five subsystems — the **memory capture policy**, the **propagation policy**,
+frozen **snapshots**, **retention** enforcement, and the **audit-packet export**
+— combine to satisfy the obligations auditors actually ask about: redact PII at
+the boundary, prove what an agent saw, replay a run deterministically, age data
+out on a committed schedule, and hand over a complete subject-access export.
+
+It is also the answer to the question a `laravel/ai` user asks first: *what does
+Swarm add that we don't already have?* A bare LLM call leaves no durable record
+of what context the model saw, no boundary to keep regulated data out of that
+context, and nothing to hand an auditor. Swarm makes each of those a first-class,
+testable control — summarized here, with the implementing detail in
+[docs/memory.md](memory.md).
+
+## How the controls fit together
+
+Each control answers one compliance question. They compose: redaction at write
+keeps PII out of the snapshot, the snapshot bounds what an agent can see, the
+inspector reads the snapshot back verbatim, retention ages the rest out, and the
+export packages it all for handoff.
+
+| Requirement | Control | Mechanism | Reference |
+| --- | --- | --- | --- |
+| PII never lands (data minimization) | Memory capture policy | `MemoryCapturePolicy` decides `Full` / `Redact` / `Skip` at the write boundary (#121) | [below](#memory-capture-policy) |
+| Bound what an agent is exposed to | Propagation policy + snapshot | `MemoryPropagationPolicy` filters the view; the frozen `MemorySnapshot` records exactly that view (#119) | [below](#what-an-agent-can-see) |
+| Prove what an agent saw / deterministic replay | Snapshot inspection | `swarm:memory:inspect` reads the frozen snapshot verbatim; durable retries replay from it (#122, #118/#127) | [below](#audit-replay-and-inspection) |
+| Age regulated data out on schedule | Retention | `swarm:memory:purge` enforces per-scope windows; `MemoryPurged` event is the proof (#124) | [below](#memory-retention) |
+| Data-subject access / portability export | Audit packet | `swarm:memory:dump` produces a self-describing, read-only export (#123) | [below](#exporting-an-audit-packet) |
+
+The two write-time controls share a single design rule: a policy is consulted
+with only the **address** of the data (scope and key), never its value, so the
+policy code itself can never become a leak path and can never couple to payload
+shape.
 
 ## Memory capture policy
 
-Retention (below) ages PII *out* after it lands. The **capture policy** is the
-complementary control that keeps PII from landing in the first place — the
-strongest form of data minimization (GDPR Art. 5(1)(c); HIPAA minimum-necessary,
-§164.502(b)). `MemoryCapturePolicy` is consulted at the write boundary and
-decides, per `(scope, key)`, whether each memory entry is written as-is
-(`Full`), structurally redacted (`Redact`), or dropped entirely (`Skip`).
+Retention ([below](#memory-retention)) ages PII *out* after it lands. The
+**capture policy** is the complementary control that keeps PII from landing in
+the first place — the strongest form of data minimization (GDPR Art. 5(1)(c);
+HIPAA minimum-necessary, §164.502(b)). `MemoryCapturePolicy` is consulted at the
+write boundary and decides, per `(scope, key)`, whether each memory entry is
+written as-is (`Full`), structurally redacted (`Redact`), or dropped entirely
+(`Skip`).
 
 Redaction is enforced by the `RedactingMemoryStore` decorator that wraps the
 memory driver (via `$app->extend(MemoryStore::class, …)`), so it is the single
@@ -39,7 +69,9 @@ The default preserves pre-v0.10 behavior (every write is `Full`, and no
 `MemoryRedacted`/`MemoryWriteSkipped` events fire). Opt in by binding a policy
 via `swarm.memory.capture_policy` (`SWARM_MEMORY_CAPTURE_POLICY`) or the
 container. See the worked example and `Redact`/`Skip` semantics in
-[docs/memory.md → Capture policy](memory.md#capture-policy-write-time-redaction).
+[docs/memory.md → Capture policy](memory.md#capture-policy-write-time-redaction),
+and the two regulated-app policies in
+[Worked configurations](#worked-configurations) below.
 
 Together the two controls form the memory compliance story: **capture policy**
 keeps disallowed data out at write, **retention** ages permitted data out on a
@@ -61,6 +93,62 @@ exceed what `swarm:memory:inspect <run-id>` displays for that step.** The frozen
 snapshot is the upper bound on agent-visible memory, and the inspector shows the
 snapshot verbatim. There is no back channel that bypasses the policy or the
 redaction sentinel.
+
+## Audit replay and inspection
+
+The frozen `MemorySnapshot` is the package's audit primitive: a point-in-time,
+read-only record of exactly the memory view an agent was given immediately
+before it ran. `swarm:memory:inspect` reads that record back without
+interpretation, and the durable runtime *replays* from the same record — so the
+artifact you inspect and the state a retry reconstructs are one and the same.
+
+### Inspect a frozen snapshot
+
+```bash
+# List every step recorded for a run.
+php artisan swarm:memory:inspect 9b2c0e7a-...
+
+# Show the full snapshot for one step.
+php artisan swarm:memory:inspect 9b2c0e7a-... --step=2
+
+# Machine-readable, single scope, for an audit pipeline.
+php artisan swarm:memory:inspect 9b2c0e7a-... --step=2 --format=json --scope=run
+```
+
+`--step=N` selects a step (omit to list all recorded steps); `--format=table|json`
+controls output (default `table`); `--scope=run|conversation|agent|swarm` filters
+the entries view. The command routes reads through the `SnapshotsMemory` contract,
+so it works uniformly across whatever store the application binds; under the
+`cache` persistence driver it surfaces a configuration hint rather than a
+misleadingly empty result. Each successful read dispatches a `MemoryInspected`
+event and emits a `command.memory.inspect` audit category recording the lookup
+parameters and snapshot count — so operator access to frozen memory views is
+itself auditable (failed reads do not dispatch).
+
+### Replay determinism is the evidence
+
+When a durable agent retries after a crash, `MemoryReplayCoordinator` swaps the
+live store for a frozen, read-only view of the snapshot recorded at the original
+invocation (`ReplayMode::FrozenView`, the default). The agent re-runs against the
+exact `Run`-scoped state it saw before — regardless of any writes that happened
+between the failed attempt and the retry. This is what makes a run *reproducible*
+for an auditor: the inspector shows the snapshot, and a replay is guaranteed to
+reconstruct from that same snapshot.
+
+That guarantee is backed by a regression suite, not just a design claim. The
+crash-resume replay-determinism tests (#118) assert byte-identical replay across
+every durable topology, and the scope-isolation + propagation suite (#127)
+asserts that concurrent runs never bleed across scopes and that each runner
+enforces its propagation policy. Cite these suites as your replay evidence; run
+them with `composer test`.
+
+> **Step outputs are not in the snapshot.** With per-step output capture enabled
+> (`swarm.memory.capture_step_output`, #163), each step's output is written to
+> Run scope under the reserved key `swarm:step.{n}.output`. The default
+> propagation policy **excludes** these reserved keys from the agent view and
+> therefore from snapshots and `swarm:memory:inspect`. They are still in raw Run
+> memory, so reach for [`swarm:memory:dump`](#exporting-an-audit-packet) — not
+> `inspect` — when you need a turn-by-turn transcript as audit evidence.
 
 ## Memory retention
 
@@ -141,7 +229,9 @@ persistence is active) capture the same payload.
 suppressed but the run stays visible to your audit pipeline: the
 `MemoryPurged` event still dispatches (with `criteria.prevent_prune = true`
 and zero counts), and the `command.memory.purge` audit category is emitted
-with `status=skipped`.
+with `status=skipped`. This is the switch to flip for a **legal hold** — it
+stops scheduled deletion without disabling the audit trail or requiring you to
+edit retention windows under time pressure.
 
 ## Exporting an audit packet
 
@@ -159,11 +249,16 @@ php artisan swarm:memory:dump 9b2c0e7a-... --include-snapshots --output=/tmp/run
 
 # DSAR-style conversation export (see the run-expansion note below).
 php artisan swarm:memory:dump 1f0a... --as=conversation --include-snapshots --output=/tmp/conv-1f0a.json
+
+# Record why the extraction happened — captured in the audit trail.
+php artisan swarm:memory:dump 9b2c0e7a-... --reason="DSAR #4821" --output=/tmp/dsar-4821.json
 ```
 
 The export is a stable envelope (`schema_version: "1.0"`) — pin that version in
-any downstream tooling. The full schema and NDJSON record shape are documented
-in [docs/memory.md → Exporting a full run](memory.md#exporting-a-full-run-with-swarmmemorydump).
+any downstream tooling. The `--output` file is created `0600` (owner-only)
+before any payload is written. The full schema and NDJSON record shape are
+documented in
+[docs/memory.md → Exporting a full run](memory.md#exporting-a-full-run-with-swarmmemorydump).
 
 **Self-describing for audit.** The envelope records `subject_type`/`subject_id`,
 `generated_at`, the `include_snapshots` flag, entry/snapshot counts, and a
@@ -204,3 +299,185 @@ listener, since an artisan command has no app session.)
 > Encryption of the dump output is out of scope for the command — wrap the
 > `--output` file (or the piped stdout) in your own encryption-at-rest /
 > transport controls when the packet contains regulated data.
+
+## Worked configurations
+
+Two illustrative postures. They are starting points, not certified
+configurations — your retention windows and redaction rules must come from your
+own legal and compliance review. Neither covers an industry framework end to
+end; each shows how the Swarm controls map onto a familiar regulatory shape.
+
+### Healthcare-style app (HIPAA-aware)
+
+The posture: minimize PHI aggressively, redact what must persist, and keep run
+memory short-lived while preserving the audit trail under legal hold.
+
+A capture policy that drops the highest-risk identifiers and structurally
+redacts the rest, leaving non-PHI keys untouched:
+
+```php
+<?php
+
+namespace App\Swarm\Compliance;
+
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Illuminate\Support\Str;
+
+final class PhiMinimizingCapturePolicy implements MemoryCapturePolicy
+{
+    /** Identifiers that must never be persisted, even redacted. */
+    private const SKIP = ['ssn', 'insurance.member_id'];
+
+    /** PHI that may persist only as the redaction sentinel. */
+    private const REDACT = ['patient.*', 'mrn', 'dob', 'diagnosis', 'note.*'];
+
+    public function memory(
+        MemoryScope $scope,
+        string $key,
+        ?RunContext $context = null,
+        ?Actor $actor = null,
+    ): CaptureDecision {
+        if (Str::is(self::SKIP, $key)) {
+            return CaptureDecision::Skip;
+        }
+
+        if (Str::is(self::REDACT, $key)) {
+            return CaptureDecision::Redact;
+        }
+
+        return CaptureDecision::Full;
+    }
+}
+```
+
+```php
+// config/swarm.php
+'memory' => [
+    'capture_policy' => App\Swarm\Compliance\PhiMinimizingCapturePolicy::class,
+
+    'retention' => [
+        'days' => [
+            'run' => 30,          // short-lived working memory
+            'conversation' => 90, // care-episode context
+            'agent' => null,      // no PHI in agent scope by policy
+            'swarm' => null,
+        ],
+        'prune_snapshots' => true, // snapshots age out with their memory
+    ],
+],
+```
+
+```dotenv
+# Stop scheduled deletion during an investigation or litigation hold.
+# MemoryPurged still fires (prevent_prune=true), so the audit trail is intact.
+SWARM_PREVENT_PRUNE=true
+```
+
+Why it satisfies the obligation: PHI is minimized at the boundary
+(§164.502(b)), what persists is redacted by construction so it never reaches a
+snapshot, run memory ages out on a committed schedule (§164.530(j)), and the
+legal-hold switch suspends deletion without blinding the audit pipeline.
+
+### Finance-style app (SOX-aware)
+
+The posture is the inverse of healthcare on retention: SOX §802 expects
+financial-control records to be **retained**, typically seven years, and the
+emphasis is on a complete, tamper-evident audit trail rather than minimization.
+So memory is kept long (or retention is disabled and governed by an external
+records system), capture stays `Full` for the transaction record, and only
+discrete PII fields embedded in that record are redacted.
+
+```php
+<?php
+
+namespace App\Swarm\Compliance;
+
+use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Illuminate\Support\Str;
+
+final class FinancialAuditCapturePolicy implements MemoryCapturePolicy
+{
+    /** Customer PII redacted; the surrounding transaction record is kept. */
+    private const REDACT = ['account.number', 'tax_id', 'card.*'];
+
+    public function memory(
+        MemoryScope $scope,
+        string $key,
+        ?RunContext $context = null,
+        ?Actor $actor = null,
+    ): CaptureDecision {
+        // Everything else — amounts, decisions, approvals — is the audit
+        // record and persists in full.
+        return Str::is(self::REDACT, $key)
+            ? CaptureDecision::Redact
+            : CaptureDecision::Full;
+    }
+}
+```
+
+```php
+// config/swarm.php
+'memory' => [
+    'capture_policy' => App\Swarm\Compliance\FinancialAuditCapturePolicy::class,
+
+    // Capture the full per-step decision trail automatically (#163).
+    // Stored full-fidelity; manage volume via retention, not truncation.
+    'capture_step_output' => true,
+
+    'retention' => [
+        'days' => [
+            'run' => 2557,          // ~7 years (SOX §802)
+            'conversation' => 2557,
+            'agent' => 2557,
+            'swarm' => null,        // governed externally
+        ],
+        'prune_snapshots' => true,
+    ],
+],
+```
+
+Why it satisfies the obligation: the decision trail is captured in full and
+retained for the statutory window, embedded customer PII is redacted without
+breaking the record, every export and purge is itself logged
+(`command.memory.dump` / `command.memory.purge`), and replay determinism (#118)
+lets an auditor reconstruct any run exactly as it executed.
+
+## Audit packet checklist
+
+When an auditor asks for evidence about a run, the complete packet is four
+artifacts. Each is produced by a command or config already covered above.
+
+- [ ] **Snapshot trail** — the frozen, per-step memory views.
+  `php artisan swarm:memory:dump <run-id> --include-snapshots --output=…`
+  (use `--reason=` to record why), plus
+  `swarm:memory:inspect <run-id> --step=N` for spot checks.
+- [ ] **Capture-policy configuration** — the `MemoryCapturePolicy`
+  implementation and its binding (`swarm.memory.capture_policy`), proving which
+  fields were redacted or skipped at write, backed by the `MemoryRedacted` /
+  `MemoryWriteSkipped` events your audit listener recorded.
+- [ ] **Retention proof** — the configured `swarm.memory.retention.days`
+  windows and the `MemoryPurged` events (with `criteria.dry_run === false`)
+  showing the schedule was enforced; or, under legal hold, the
+  `criteria.prevent_prune === true` records showing deletion was suspended.
+- [ ] **Replay evidence** — the passing crash-resume replay-determinism suite
+  (#118) and scope-isolation/propagation suite (#127) from `composer test`,
+  demonstrating that the snapshot trail reconstructs the run deterministically
+  and that scopes never cross-contaminated.
+
+## Further reading
+
+- [Swarm Memory](memory.md) — the full memory subsystem: scopes, read/write,
+  lifecycle events, snapshots, replay, and the `RunContext` bridge.
+- [Audit Evidence](audit-evidence-contract.md) — the package-wide capture and
+  audit-category contract that the memory events plug into.
+- [Operator Runbook: Audit Outbox Triage](operator-runbook-audit-outbox.md) —
+  keeping the durable audit pipeline healthy.
+- [Configuration](configuration.md) — every `swarm.memory.*` key in one place.

@@ -21,6 +21,10 @@ Propagation + operator surface — MemoryPropagationPolicy controlling what work
 - **`MemoryWritten` carries an optional `bytes` field (#125).** Approximate JSON byte size of the persisted `value` + `metadata`, populated at write time by the bundled stores. Defaults to `null` so listener-side construction and third-party drivers remain source-compatible.
 - **`MemorySnapshotted` carries optional `bytes` and `entryCount` fields (#125).** The bundled `DatabaseMemorySnapshotRecorder` populates both at persistence time. Both default to `null` for source-compatible third-party drivers.
 
+### Documentation
+
+- **Audit-grade memory + snapshot guide (#126).** [docs/compliance-audit.md](docs/compliance-audit.md) grows from a stub into the full runbook for regulated workloads: how the memory capture policy (#121), propagation policy (#119), frozen snapshots, retention (#124), and audit-packet export (#123) compose to satisfy PII redaction at the boundary, agent-visibility bounds, deterministic replay (#118/#127), retention enforcement, and DSAR-style export. Adds a controls-to-requirements map, a `swarm:memory:inspect` replay-and-inspection section, worked HIPAA-aware and SOX-aware example configurations (capture policy + retention + legal-hold), and an "audit packet" checklist of the four artifacts an auditor expects. Cross-linked from [docs/memory.md](docs/memory.md).
+
 ## v0.9.1 - 2026-05-24
 
 ### Changed
