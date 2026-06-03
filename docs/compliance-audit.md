@@ -137,10 +137,11 @@ reconstruct from that same snapshot.
 
 That guarantee is backed by a regression suite, not just a design claim. The
 crash-resume replay-determinism tests (#118) assert byte-identical replay across
-every durable topology, and the scope-isolation + propagation suite (#127)
-asserts that concurrent runs never bleed across scopes and that each runner
-enforces its propagation policy. Cite these suites as your replay evidence; run
-them with `composer test`.
+every durable topology — run them today with `composer test`. The
+scope-isolation + propagation suite (#127), shipping in this same v0.10.0
+release, adds assertions that concurrent runs never bleed across scopes and that
+each runner enforces its propagation policy. Together they are your replay
+evidence.
 
 > **Step outputs are not in the snapshot.** With per-step output capture enabled
 > (`swarm.memory.capture_step_output`, #163), each step's output is written to
@@ -309,11 +310,10 @@ end; each shows how the Swarm controls map onto a familiar regulatory shape.
 
 ### Healthcare-style app (HIPAA-aware)
 
-The posture: minimize PHI aggressively, redact what must persist, and keep run
-memory short-lived while preserving the audit trail under legal hold.
-
-A capture policy that drops the highest-risk identifiers and structurally
-redacts the rest, leaving non-PHI keys untouched:
+The posture: minimize PHI aggressively, keep run memory short-lived, and
+preserve the audit trail under legal hold. The defining choice is to **deny by
+default** — every key is redacted unless it is explicitly allow-listed as
+non-PHI, so a sensitive key nobody anticipated can never leak in full:
 
 ```php
 <?php
@@ -329,11 +329,11 @@ use Illuminate\Support\Str;
 
 final class PhiMinimizingCapturePolicy implements MemoryCapturePolicy
 {
-    /** Identifiers that must never be persisted, even redacted. */
-    private const SKIP = ['ssn', 'insurance.member_id'];
+    /** Keys that must never be persisted at all, not even redacted. */
+    private const SKIP = ['ssn', 'insurance*'];
 
-    /** PHI that may persist only as the redaction sentinel. */
-    private const REDACT = ['patient.*', 'mrn', 'dob', 'diagnosis', 'note.*'];
+    /** The only keys allowed to persist in full — everything else is redacted. */
+    private const ALLOW_FULL = ['run.status', 'step.*.outcome', 'audit.*'];
 
     public function memory(
         MemoryScope $scope,
@@ -345,19 +345,38 @@ final class PhiMinimizingCapturePolicy implements MemoryCapturePolicy
             return CaptureDecision::Skip;
         }
 
-        if (Str::is(self::REDACT, $key)) {
-            return CaptureDecision::Redact;
-        }
-
-        return CaptureDecision::Full;
+        // Deny by default: anything not explicitly allow-listed is redacted.
+        return Str::is(self::ALLOW_FULL, $key)
+            ? CaptureDecision::Full
+            : CaptureDecision::Redact;
     }
 }
 ```
 
+> **Match the patterns to your own key scheme.** `Str::is` patterns are globs
+> anchored to the whole key, with `*` as the only wildcard — they are **not**
+> regular expressions, and `.` is a literal dot. The most common footgun is
+> assuming dot-style patterns cover snake_case keys: `patient.*` matches
+> `patient.name` but **not** `patient_name`. Reach for `patient*` (no dot) to
+> cover both. The deny-by-default shape above is what makes this safe — a
+> mismatched allow-list pattern fails toward *more* redaction, never less.
+
+| Pattern | Matches | Does **not** match |
+| --- | --- | --- |
+| `patient.*` | `patient.name`, `patient.dob` | `patient_name`, `patient`, `patientId` |
+| `patient*` | `patient.name`, `patient_name`, `patientId` | `the_patient` |
+| `*patient*` | `patient.name`, `the_patient_id` | `note` |
+| `mrn` | `mrn` (exact only) | `mrn.value`, `patient_mrn` |
+
 ```php
 // config/swarm.php
 'memory' => [
-    'capture_policy' => App\Swarm\Compliance\PhiMinimizingCapturePolicy::class,
+    // Resolved via the same env key the package default uses, so the binding
+    // stays overridable per-environment.
+    'capture_policy' => env(
+        'SWARM_MEMORY_CAPTURE_POLICY',
+        App\Swarm\Compliance\PhiMinimizingCapturePolicy::class,
+    ),
 
     'retention' => [
         'days' => [
@@ -377,19 +396,25 @@ final class PhiMinimizingCapturePolicy implements MemoryCapturePolicy
 SWARM_PREVENT_PRUNE=true
 ```
 
-Why it satisfies the obligation: PHI is minimized at the boundary
-(§164.502(b)), what persists is redacted by construction so it never reaches a
-snapshot, run memory ages out on a committed schedule (§164.530(j)), and the
-legal-hold switch suspends deletion without blinding the audit pipeline.
+Why it satisfies the obligation: PHI is minimized at the boundary under the
+minimum-necessary standard (§164.502(b)), the deny-by-default policy redacts
+unanticipated keys rather than storing them in full, and run memory ages out on
+the schedule your privacy policy commits to. (HIPAA sets no fixed PHI-deletion
+clock — minimum-necessary and applicable state law drive the window, not
+§164.530(j), which is a six-year retention floor for *required documentation*,
+not a PHI-aging mandate.) The legal-hold switch suspends deletion without
+blinding the audit pipeline.
 
 ### Finance-style app (SOX-aware)
 
 The posture is the inverse of healthcare on retention: SOX §802 expects
-financial-control records to be **retained**, typically seven years, and the
-emphasis is on a complete, tamper-evident audit trail rather than minimization.
-So memory is kept long (or retention is disabled and governed by an external
-records system), capture stays `Full` for the transaction record, and only
-discrete PII fields embedded in that record are redacted.
+financial-control records to be **retained** — auditors' workpapers for seven
+years under 18 U.S.C. §1520, with most programs applying a comparable horizon to
+the records those audits rest on. The regulatory expectation is a complete,
+durable audit trail rather than minimization, so this policy is the deliberate
+opposite of the healthcare one: it **allows by default** and redacts only named
+PII fields, keeping the full transaction record intact. Memory is kept long (or
+retention is disabled and governed by an external records system).
 
 ```php
 <?php
@@ -426,7 +451,10 @@ final class FinancialAuditCapturePolicy implements MemoryCapturePolicy
 ```php
 // config/swarm.php
 'memory' => [
-    'capture_policy' => App\Swarm\Compliance\FinancialAuditCapturePolicy::class,
+    'capture_policy' => env(
+        'SWARM_MEMORY_CAPTURE_POLICY',
+        App\Swarm\Compliance\FinancialAuditCapturePolicy::class,
+    ),
 
     // Capture the full per-step decision trail automatically (#163).
     // Stored full-fidelity; manage volume via retention, not truncation.
@@ -450,6 +478,12 @@ breaking the record, every export and purge is itself logged
 (`command.memory.dump` / `command.memory.purge`), and replay determinism (#118)
 lets an auditor reconstruct any run exactly as it executed.
 
+> Swarm provides an **append-style, event-sourced** audit trail — each write,
+> redaction, purge, and export emits an event and an audit category — **not**
+> cryptographic tamper-evidence. If your controls require WORM storage or
+> hash-chained records, layer that on the sink your audit listener writes to;
+> the package surfaces the events, your infrastructure makes them immutable.
+
 ## Audit packet checklist
 
 When an auditor asks for evidence about a run, the complete packet is four
@@ -468,9 +502,10 @@ artifacts. Each is produced by a command or config already covered above.
   showing the schedule was enforced; or, under legal hold, the
   `criteria.prevent_prune === true` records showing deletion was suspended.
 - [ ] **Replay evidence** — the passing crash-resume replay-determinism suite
-  (#118) and scope-isolation/propagation suite (#127) from `composer test`,
-  demonstrating that the snapshot trail reconstructs the run deterministically
-  and that scopes never cross-contaminated.
+  (#118), plus the scope-isolation/propagation suite (#127) shipping in this
+  release, from `composer test` — demonstrating that the snapshot trail
+  reconstructs the run deterministically and that scopes never
+  cross-contaminated.
 
 ## Further reading
 
