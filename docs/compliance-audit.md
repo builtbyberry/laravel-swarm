@@ -430,8 +430,15 @@ use Illuminate\Support\Str;
 
 final class FinancialAuditCapturePolicy implements MemoryCapturePolicy
 {
-    /** Customer PII redacted; the surrounding transaction record is kept. */
-    private const REDACT = ['account.number', 'tax_id', 'card.*'];
+    // Customer PII redacted; the surrounding transaction record is kept.
+    // Allow-by-default means a missed pattern leaks in full, so cover BOTH
+    // dot.case and snake_case forms — see the pattern note in the healthcare
+    // example above (`card.*` matches `card.number`, not `card_number`).
+    private const REDACT = [
+        'account.number', 'account_number',
+        'tax_id',
+        'card.*', 'card_*',
+    ];
 
     public function memory(
         MemoryScope $scope,
