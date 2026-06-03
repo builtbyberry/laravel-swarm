@@ -16,6 +16,7 @@ use Laravel\Ai\Messages\Message;
  * under the default policy.
  */
 beforeEach(function () {
+    config()->set('swarm.memory.capture_step_output', true);
     RememberingWriter::resetCaptured();
     FakeResearcher::fake(['research-out']);
     RememberingWriter::fake(['writer-out']);

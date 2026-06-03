@@ -261,13 +261,25 @@ return [
          * a real turn-by-turn conversation, and what audit exports surface as
          * the per-step record.
          *
-         * Enabled by default. The keys are hidden from the default agent view
+         * **Disabled by default** — enabling it persists each agent's output to
+         * the memory store (and, when a surfacing policy is active, into frozen
+         * snapshots), so it expands what your application stores at rest. Before
+         * enabling, decide on:
+         *   - retention: Run-scoped rows are pruned by `swarm:memory:purge` per
+         *     `swarm.memory.retention.days.run` (null = never; see below), so set
+         *     a window if you don't want step outputs kept indefinitely;
+         *   - redaction: a `MemoryCapturePolicy` (capture_policy) can redact or
+         *     skip these keys at write time if outputs may contain PII.
+         *
+         * Captured values are stored full-fidelity (NOT truncated by
+         * `swarm.limits.max_output_bytes`, unlike artifacts/history/final output)
+         * so the audit record stays complete — manage volume via retention, not
+         * truncation. The keys are hidden from the default agent view
          * (DefaultPropagationPolicy excludes them), so enabling this never
-         * changes what a non-trait agent sees — it only adds Run-scoped rows
-         * (and snapshot bytes). Disable to opt out of the extra writes entirely.
+         * changes what a non-trait agent sees.
          */
         'capture_step_output' => filter_var(
-            env('SWARM_MEMORY_CAPTURE_STEP_OUTPUT', true),
+            env('SWARM_MEMORY_CAPTURE_STEP_OUTPUT', false),
             FILTER_VALIDATE_BOOLEAN,
         ),
 

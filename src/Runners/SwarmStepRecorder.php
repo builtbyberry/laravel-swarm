@@ -123,7 +123,7 @@ class SwarmStepRecorder
         // write flows through the same CapturePolicy / persistence / retention
         // path as any Run-scoped entry; DefaultPropagationPolicy hides these
         // keys, so non-trait agents observe no change.
-        if ($this->config->get('swarm.memory.capture_step_output', true)) {
+        if ($this->config->get('swarm.memory.capture_step_output', false)) {
             $state->context->mergeData([
                 SwarmMemoryKeys::stepOutput($index) => $output,
             ]);

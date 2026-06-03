@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
@@ -10,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Memory\ConversationPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Memory\SwarmMemoryKeys;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
@@ -19,6 +22,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Tests\Support\RedactingMemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingMemoryCapturePolicy;
 
 /**
  * Runners persist each step's output to Run scope under the reserved key
@@ -26,12 +31,24 @@ use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
  * against *raw* Run memory — the surface that always holds the keys — because
  * the default propagation policy deliberately hides them from the agent-visible
  * snapshot view.
+ *
+ * Capture is opt-in (off by default), so the tests that exercise it enable
+ * `swarm.memory.capture_step_output` explicitly.
  */
 beforeEach(function () {
+    config()->set('swarm.memory.capture_step_output', true);
     FakeResearcher::fake(['research-out']);
     FakeWriter::fake(['writer-out']);
     FakeEditor::fake(['editor-out']);
 });
+
+/** Install a MemoryCapturePolicy and rebuild the decorated store/facade. */
+function bindStepCapturePolicy(MemoryCapturePolicy $policy): void
+{
+    app()->instance(MemoryCapturePolicy::class, $policy);
+    app()->forgetInstance(MemoryStore::class);
+    app()->forgetInstance(SwarmMemory::class);
+}
 
 /**
  * @return array<int, string>
@@ -101,7 +118,9 @@ test('the streaming runner captures step outputs to raw Run memory', function ()
     ]);
 });
 
-test('disabling capture_step_output writes no reserved keys', function () {
+test('capture is off by default — no reserved keys unless enabled', function () {
+    // Simulate the shipped default (beforeEach turns capture on for the other
+    // specs); with it off, a run writes no step-output keys.
     config()->set('swarm.memory.capture_step_output', false);
 
     FakeSequentialSwarm::make()->run(RunContext::from('go', 'no-capture'));
@@ -109,6 +128,13 @@ test('disabling capture_step_output writes no reserved keys', function () {
     expect(rawStepOutputs('no-capture'))->toBe([]);
     // The pre-existing last_output key is unaffected by the flag.
     expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'no-capture', 'last_output'))->toBe('editor-out');
+});
+
+test('the shipped config default for capture_step_output is off', function () {
+    // Locks the opt-in default at the source, independent of any test override.
+    $config = require dirname(__DIR__, 3).'/config/swarm.php';
+
+    expect($config['memory']['capture_step_output'])->toBeFalse();
 });
 
 test('the default policy hides step-output keys from the agent view, but they persist in raw memory', function () {
@@ -150,4 +176,44 @@ test('under ConversationPropagationPolicy each step snapshot sees only prior ste
     expect($byStep[0])->toBe([]);
     expect($byStep[1])->toBe(['swarm:step.0.output']);
     expect($byStep[2])->toBe(['swarm:step.0.output', 'swarm:step.1.output']);
+});
+
+test('a MemoryCapturePolicy redacts a captured step-output key at the write boundary', function () {
+    bindStepCapturePolicy(new RedactingMemoryCapturePolicy([SwarmMemoryKeys::stepOutput(0)]));
+
+    FakeSequentialSwarm::make()->run(RunContext::from('go', 'redact-capture'));
+
+    $memory = app(SwarmMemory::class);
+    // The targeted step-0 key is redacted in memory (never stored in the clear)…
+    expect($memory->get(MemoryScope::Run, 'redact-capture', SwarmMemoryKeys::stepOutput(0)))
+        ->toBe(SwarmCapture::REDACTED);
+    // …while the untargeted step keys persist normally.
+    expect($memory->get(MemoryScope::Run, 'redact-capture', SwarmMemoryKeys::stepOutput(1)))
+        ->toBe('writer-out');
+});
+
+test('a MemoryCapturePolicy can skip a captured step-output key entirely', function () {
+    bindStepCapturePolicy(new SkippingMemoryCapturePolicy([SwarmMemoryKeys::stepOutput(0)]));
+
+    FakeSequentialSwarm::make()->run(RunContext::from('go', 'skip-capture'));
+
+    $memory = app(SwarmMemory::class);
+    expect($memory->get(MemoryScope::Run, 'skip-capture', SwarmMemoryKeys::stepOutput(0)))->toBeNull();
+    expect($memory->get(MemoryScope::Run, 'skip-capture', SwarmMemoryKeys::stepOutput(1)))->toBe('writer-out');
+});
+
+test('captured step output is stored full-fidelity, not truncated by the payload limiter', function () {
+    // An output well over the configured byte limit, with truncate-on-overflow
+    // so the run does not fail outright.
+    $long = str_repeat('x', 5000);
+    FakeResearcher::fake([$long]);
+    config()->set('swarm.limits.max_output_bytes', 100);
+    config()->set('swarm.limits.overflow', 'truncate');
+
+    FakeSequentialSwarm::make()->run(RunContext::from('go', 'fidelity-capture'));
+
+    // The step-output key keeps the COMPLETE output (audit fidelity) even though
+    // the artifact/history/final-output copies are truncated to the limit.
+    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'fidelity-capture', SwarmMemoryKeys::stepOutput(0)))
+        ->toBe($long);
 });

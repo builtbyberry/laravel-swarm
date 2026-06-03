@@ -36,6 +36,8 @@ beforeEach(function () {
 
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
 
+    config()->set('swarm.memory.capture_step_output', true);
+
     RememberingWriter::resetCaptured();
     RememberingWriter::fake(['writer-out']);
 });

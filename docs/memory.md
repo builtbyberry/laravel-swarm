@@ -68,6 +68,8 @@ $entries = $memory->all(MemoryScope::Run, $runId);
 
 All four methods are covered by the `SwarmMemory` contract. Custom drivers and test doubles can implement the contract without touching any other class.
 
+> **Reserved key prefix.** Keys beginning with `swarm:` are reserved for the package (e.g. `swarm:step.{n}.output`). The propagation policies treat them specially — `DefaultPropagationPolicy` hides them; `ConversationPropagationPolicy` surfaces them — so avoid writing your own keys under `swarm:` from application code.
+
 ### Scope-bounded query example
 
 Reading all Run-scoped entries for a completed run:
@@ -229,14 +231,21 @@ Because the view is built through the same `AgentVisibleMemoryView` the runners 
 
 ### Per-step output capture and the conversation transcript
 
-From v0.10.0 the runners persist **each step's output** to Run scope under the reserved key `swarm:step.{n}.output` (`n` is the step index). This is what lets a sequential pipeline render a true turn-by-turn transcript with no application wiring. Capture is on by default and flows through the same `MemoryCapturePolicy` → snapshot → retention path as any Run-scoped write; disable it with:
+From v0.10.0 the runners can persist **each step's output** to Run scope under the reserved key `swarm:step.{n}.output` (`n` is the step index). This is what lets a sequential pipeline render a true turn-by-turn transcript with no application wiring. It is **disabled by default** — enabling it persists each agent's output to your memory store — and flows through the same `MemoryCapturePolicy` → snapshot → retention path as any Run-scoped write. Enable it with:
 
 ```php
 // config/swarm.php
 'memory' => [
-    'capture_step_output' => env('SWARM_MEMORY_CAPTURE_STEP_OUTPUT', true),
+    'capture_step_output' => env('SWARM_MEMORY_CAPTURE_STEP_OUTPUT', false),
 ],
 ```
+
+Before enabling, decide on two governance levers, since this expands what you store at rest:
+
+- **Retention** — Run-scoped rows are pruned by [`swarm:memory:purge`](#retention) per `swarm.memory.retention.days.run` (default `null` = kept indefinitely). Set a window if you don't want step outputs retained forever; growth is managed here, not by truncation.
+- **Redaction** — a [`MemoryCapturePolicy`](#capture-policy-write-time-redaction) can redact or skip these keys at the write boundary if outputs may carry PII.
+
+Captured values are stored **full-fidelity**: unlike artifacts, history, and the final output, they are **not** truncated by `swarm.limits.max_output_bytes`, so the audit record stays complete.
 
 These keys are **reserved**. `DefaultPropagationPolicy` excludes them, so capturing step output never changes what a non-trait agent sees — the default view stays byte-for-byte what it was before. To surface them as a conversation, opt into `ConversationPropagationPolicy`, the policy designed to pair with `RemembersRunContext`:
 
