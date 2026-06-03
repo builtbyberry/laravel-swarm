@@ -68,6 +68,8 @@ $entries = $memory->all(MemoryScope::Run, $runId);
 
 All four methods are covered by the `SwarmMemory` contract. Custom drivers and test doubles can implement the contract without touching any other class.
 
+> **Reserved key prefix.** Keys beginning with `swarm:` are reserved for the package (e.g. `swarm:step.{n}.output`). The propagation policies treat them specially — `DefaultPropagationPolicy` hides them; `ConversationPropagationPolicy` surfaces them — so avoid writing your own keys under `swarm:` from application code.
+
 ### Scope-bounded query example
 
 Reading all Run-scoped entries for a completed run:
@@ -227,9 +229,46 @@ When the agent runs inside a swarm, `messages()` returns the active run's propag
 
 Because the view is built through the same `AgentVisibleMemoryView` the runners use, `messages()` is filtered by the swarm's `MemoryPropagationPolicy` and redacted by the `MemoryCapturePolicy` — it can never surface more than [`swarm:memory:inspect`](#exporting-a-full-run-with-swarmmemorydump) shows.
 
-### What gets rendered today
+### Per-step output capture and the conversation transcript
 
-No package code writes Run-scoped memory during a run — step outputs live on the `RunContext`, not in `SwarmMemory` (see [the RunContext bridge](#runcontext-bridge)). So under the default policy `messages()` renders only what **your application** writes to Run memory, e.g.:
+From v0.10.0 the runners can persist **each step's output** to Run scope under the reserved key `swarm:step.{n}.output` (`n` is the step index). This is what lets a sequential pipeline render a true turn-by-turn transcript with no application wiring. It is **disabled by default** — enabling it persists each agent's output to your memory store — and flows through the same `MemoryCapturePolicy` → snapshot → retention path as any Run-scoped write. Enable it with:
+
+```php
+// config/swarm.php
+'memory' => [
+    'capture_step_output' => env('SWARM_MEMORY_CAPTURE_STEP_OUTPUT', false),
+],
+```
+
+Before enabling, decide on two governance levers, since this expands what you store at rest:
+
+- **Retention** — Run-scoped rows are pruned by [`swarm:memory:purge`](#retention) per `swarm.memory.retention.days.run` (default `null` = kept indefinitely). Set a window if you don't want step outputs retained forever; growth is managed here, not by truncation.
+- **Redaction** — a [`MemoryCapturePolicy`](#capture-policy-write-time-redaction) can redact or skip these keys at the write boundary if outputs may carry PII.
+
+Captured values are stored **full-fidelity**: unlike artifacts, history, and the final output, they are **not** truncated by `swarm.limits.max_output_bytes`, so the audit record stays complete.
+
+These keys are **reserved**. `DefaultPropagationPolicy` excludes them, so capturing step output never changes what a non-trait agent sees — the default view stays byte-for-byte what it was before. To surface them as a conversation, opt into `ConversationPropagationPolicy`, the policy designed to pair with `RemembersRunContext`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Attributes\PropagationPolicy;
+use BuiltByBerry\LaravelSwarm\Memory\ConversationPropagationPolicy;
+
+#[PropagationPolicy(ConversationPropagationPolicy::class)]
+class WriterSwarm implements Swarm { /* ... */ }
+// or globally: 'propagation_policy' => ConversationPropagationPolicy::class
+```
+
+It presents the step outputs as an ordered transcript. By default it shows **only** the transcript; set `include_run_memory` to also append the rest of the Run-scoped view (`last_output`, your own keys):
+
+```php
+'memory' => [
+    'conversation_view' => [
+        'include_run_memory' => env('SWARM_MEMORY_CONVERSATION_INCLUDE_RUN_MEMORY', false),
+    ],
+],
+```
+
+You can still write your own Run-scoped keys for the agent to see — under either policy:
 
 ```php
 // In a tool, guardrail, or an earlier step:
@@ -238,7 +277,12 @@ Swarm::memory()->put(MemoryScope::Run, $runId, 'brief', 'Ship the v2 launch post
 $context['brief'] = 'Ship the v2 launch post.';
 ```
 
-Automatic per-step output capture (so a sequential pipeline renders a true turn-by-turn transcript with no app wiring) is tracked in [#163](https://github.com/builtbyberry/laravel-swarm/issues/163).
+**Where step outputs are visible.** A snapshot freezes the *propagation-policy view*, taken **before** each agent runs. Two consequences worth internalizing:
+
+- Under `DefaultPropagationPolicy` the step keys are excluded, so `swarm:memory:inspect` does **not** show them. They are always in raw Run memory, so `swarm:memory:dump`, `Swarm::memory()->get(...)`, and retention/purge all see them. For audit evidence of step outputs, reach for [`swarm:memory:dump`](#exporting-a-full-run-with-swarmmemorydump), not `inspect`.
+- A step never sees its own (not-yet-produced) output, only prior steps': step `k`'s view holds `swarm:step.0..k-1.output`. The final step's output is therefore in no in-run view — it lives in raw memory like every other.
+
+> `StaticHierarchicalStreamRunner` freezes no snapshot (a pre-existing v0.9 gap, [#159](https://github.com/builtbyberry/laravel-swarm/issues/159)), but it still records steps, so per-step capture to raw memory works there like everywhere else.
 
 ### Configuring the message role
 
