@@ -27,7 +27,12 @@ use BuiltByBerry\LaravelSwarm\Tests\Support\WideViewPropagationPolicy;
  * pre-v0.10 behaviour; a per-swarm or config-bound policy can widen it. Every
  * runner consults the policy at the shared snapshot chokepoint, so the frozen
  * view mirrors exactly what the policy returns.
+ *
+ * Tagged into the `compliance` group: the default-policy-on-live-runners cases
+ * here are part of the propagation evidence the #127 suite cross-references.
  */
+pest()->group('compliance');
+
 beforeEach(function () {
     FakeHierarchicalCoordinator::fake([
         HierarchicalTestPlan::make('writer_node', [

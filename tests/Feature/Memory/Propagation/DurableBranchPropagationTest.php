@@ -104,11 +104,16 @@ test('the restrictive policy keeps only the allow-listed key on the durable bran
     $manager = app(DurableSwarmManager::class);
 
     $memory = app(SwarmMemory::class);
-    // Candidates across all three gatherable scopes. The Agent-scoped entry is
-    // gathered because the branch advancer knows the concrete agent — then
-    // dropped because its key is not allow-listed.
+    // Candidates across all three gatherable scopes. Both halves of the
+    // Agent-scope behaviour are pinned: an allow-listed Agent entry (which
+    // exists ONLY in Agent scope) must surface — positively proving the branch
+    // advancer gathers the Agent scope because it resolves the concrete agent
+    // (parallel:0 is FakeResearcher) — while a disallowed Agent entry is dropped
+    // by the policy filter. If gathering regressed to skip Agent scope,
+    // 'agent-keep' would vanish and this test would fail.
     $memory->put(MemoryScope::Run, $response->runId, RestrictivePropagationPolicy::ALLOWED_KEY, 'keep-me');
     $memory->put(MemoryScope::Run, $response->runId, 'disallowed-note', 'drop-me-run');
+    $memory->put(MemoryScope::Agent, FakeResearcher::class, RestrictivePropagationPolicy::ALLOWED_KEY, 'agent-keep');
     $memory->put(MemoryScope::Agent, FakeResearcher::class, 'disallowed-agent-note', 'drop-me-agent');
     $memory->put(MemoryScope::Swarm, FakeRestrictiveParallelSwarm::class, 'shared-note', 'drop-me-swarm');
 
@@ -122,8 +127,9 @@ test('the restrictive policy keeps only the allow-listed key on the durable bran
         expect($entry['key'])->toBe(RestrictivePropagationPolicy::ALLOWED_KEY);
     }
     $values = array_map(static fn (array $entry): mixed => $entry['value'], $entries);
-    expect($values)->toContain('keep-me')
+    expect($values)->toContain('keep-me')        // Run scope, allow-listed
+        ->toContain('agent-keep')                // Agent scope gathered AND allow-listed
         ->not->toContain('drop-me-run')
-        ->not->toContain('drop-me-agent')
+        ->not->toContain('drop-me-agent')        // Agent scope gathered but filtered out
         ->not->toContain('drop-me-swarm');
 });

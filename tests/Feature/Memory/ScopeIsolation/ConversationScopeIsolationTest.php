@@ -7,8 +7,11 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
-use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeWideViewPropagationSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\ConversationDeclaringPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
 
 /**
@@ -24,6 +27,8 @@ pest()->group('compliance');
 
 beforeEach(function () {
     FakeResearcher::fake(fn (): string => 'research-out');
+    FakeWriter::fake(fn (): string => 'writer-out');
+    FakeEditor::fake(fn (): string => 'editor-out');
 
     $this->recorder = new RecordingSnapshotsMemory;
     $this->app->instance(SnapshotsMemory::class, $this->recorder);
@@ -46,20 +51,28 @@ test('conversation-scoped entries are addressed per conversation id', function (
     expect($values)->toBe(['concise']);
 });
 
-test('the agent-visible view never surfaces Conversation-scoped memory at runtime', function () {
-    // Seed a Conversation entry, then run a swarm whose policy gathers every
-    // *runtime-resolvable* scope. The Conversation scope has no scope_id to key
-    // on, so it can never reach an agent — documents the deliberate v0.10 gap.
+test('a policy that declares Conversation scope still receives nothing at runtime', function () {
+    // A policy that explicitly asks for Conversation scope is the real test of
+    // the skip: AgentVisibleMemoryView resolves the Conversation scope_id to null
+    // and never gathers it (src/Memory/AgentVisibleMemoryView.php:79), so no
+    // agent-visible view can surface Conversation memory — while the Run scope the
+    // same policy declares IS gathered. (End-to-end per-conversation surfacing is
+    // untestable until the runtime exposes a conversation handle — see #168.)
+    config()->set('swarm.memory.propagation_policy', ConversationDeclaringPropagationPolicy::class);
+
     app(SwarmMemory::class)->put(MemoryScope::Conversation, 'conv-1', 'preference', 'concise');
+    app(SwarmMemory::class)->put(MemoryScope::Run, 'conv-iso-run', 'run-note', 'visible');
 
-    FakeWideViewPropagationSwarm::make()->run(RunContext::from('task', 'conv-iso-run'));
+    FakeSequentialSwarm::make()->run(RunContext::from('task', 'conv-iso-run'));
 
-    $conversationScoped = array_filter(
-        capturedEntries($this->recorder),
-        static fn (MemoryEntry $entry): bool => $entry->scope === MemoryScope::Conversation,
-    );
+    $entries = capturedEntries($this->recorder);
+    $scopes = array_map(static fn (MemoryEntry $entry): MemoryScope => $entry->scope, $entries);
+    $values = array_map(static fn (MemoryEntry $entry): mixed => $entry->value, $entries);
 
-    // The entry exists in the store, but no agent-visible view contains it.
-    expect(app(SwarmMemory::class)->get(MemoryScope::Conversation, 'conv-1', 'preference'))->toBe('concise')
-        ->and($conversationScoped)->toBeEmpty();
+    // The declared-but-unresolvable Conversation scope is skipped; the declared
+    // Run scope is gathered (proving the policy ran); the entry still lives in the
+    // store — it just cannot be surfaced.
+    expect($scopes)->not->toContain(MemoryScope::Conversation)
+        ->and($values)->toContain('visible')
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Conversation, 'conv-1', 'preference'))->toBe('concise');
 });

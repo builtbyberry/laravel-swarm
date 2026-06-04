@@ -142,7 +142,10 @@ propagation suite (#127, `tests/Feature/Memory/ScopeIsolation/` and
 `tests/Feature/Memory/Propagation/`) adds assertions that concurrent runs never
 bleed across scopes and that each runner — sequential, parallel, hierarchical,
 and the durable branch advancer — enforces its propagation policy under both the
-default and a custom restrictive policy. Both are tagged into the `compliance`
+default and a custom restrictive policy. (The default-policy cases for the live
+sequential/parallel/hierarchical runners live alongside in
+`tests/Feature/Memory/PropagationPolicyTest.php`; the `Propagation/` directory
+adds the durable runner and the restrictive policy.) All are tagged into the `compliance`
 Pest group; run them together as the release compliance gate with
 `composer test:compliance` (they also run inside the standard `composer test`).
 Together they are your replay evidence.

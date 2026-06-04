@@ -35,7 +35,9 @@ composer analyse
 
 Continuous integration runs the same checks on **stable-latest** and **lowest**
 Composer resolutions: `composer test:coverage`, `composer test:process-concurrency:ci`,
-`composer analyse`, and `composer lint`. Install PCOV for PHP locally when you want to
+and `composer analyse`; plus `composer lint` and `composer test:compliance` (the
+scope-isolation/propagation + replay-determinism `compliance` Pest group, a discrete
+re-runnable evidence lane) on **stable-latest** only. Install PCOV for PHP locally when you want to
 match CI or debug coverage failures; otherwise `composer test` remains the default
 fast path without coverage. If workflow runtime becomes prohibitive, maintainers may
 split **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
