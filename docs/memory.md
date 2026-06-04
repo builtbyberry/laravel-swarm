@@ -515,13 +515,13 @@ php artisan swarm:memory:inspect r-abc123 --step=0
 # JSON output for pipelines, audit evidence, and jq.
 php artisan swarm:memory:inspect r-abc123 --step=0 --format=json
 
-# Filter the entries view to a single scope. v0.9.0 snapshots freeze
-# MemoryScope::Run only, so non-Run scopes will return empty entries
-# until the propagation policy lands a wider snapshot.
+# Filter the entries view to a single scope. Under the default propagation
+# policy a snapshot carries MemoryScope::Run only, so non-Run scopes return
+# empty entries unless a custom policy presented that scope.
 php artisan swarm:memory:inspect r-abc123 --step=0 --scope=run
 ```
 
-The command reads the `swarm_memory_snapshots` table directly and works uniformly across all four runners (sequential, parallel, hierarchical, durable branch). Pair it with `swarm:memory:dump` for full-run exports. See the [compliance audit guide](compliance-audit.md) for the broader operator workflow.
+The command reads frozen snapshots through the `SnapshotsMemory` contract and works uniformly across all four runners (sequential, parallel, hierarchical, durable branch). Pair it with `swarm:memory:dump` for full-run exports. See the [compliance audit guide](compliance-audit.md) for the broader operator workflow.
 
 ### Exporting a full run with `swarm:memory:dump`
 

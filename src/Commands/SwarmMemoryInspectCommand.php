@@ -67,10 +67,12 @@ class SwarmMemoryInspectCommand extends Command
         visible memory entries plus every tool-call input/output pair the
         runner recorded during the invocation.
 
-        --scope filters the entries view to a single MemoryScope. Note that
-        v0.9.0 snapshots freeze MemoryScope::Run only; other scopes are
-        accepted as filters but will return empty entry lists for snapshots
-        captured under that contract.
+        --scope filters the entries view to a single MemoryScope. A snapshot
+        mirrors exactly what the swarm's MemoryPropagationPolicy presented at
+        invocation, so which scopes carry entries depends on that policy. The
+        default policy (DefaultPropagationPolicy) presents MemoryScope::Run
+        only, so a non-run --scope returns an empty entry list unless a custom
+        propagation policy presented that scope.
 
         --format=json emits a machine-readable envelope suitable for piping
         into jq or storing as evidence.
