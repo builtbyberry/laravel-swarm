@@ -314,6 +314,129 @@ The runner publishes the active run around every agent invocation across all fou
 
 ---
 
+## Recall and Remember tools
+
+Where `RemembersRunContext` injects the run's memory as conversation *before* the
+agent thinks, the **`Recall` and `Remember` tools** let the agent read and write
+memory *while* it thinks — as ordinary `laravel/ai` tool calls mid-prompt. Both
+implement `Laravel\Ai\Contracts\Tool`, so they drop into any agent's `tools()`
+array with no Swarm-specific code in the agent.
+
+```php
+use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\HasTools;
+use Laravel\Ai\Promptable;
+use BuiltByBerry\LaravelSwarm\Tools\Recall;
+use BuiltByBerry\LaravelSwarm\Tools\Remember;
+
+class Researcher implements Agent, HasTools
+{
+    use Promptable;
+
+    public function instructions(): string
+    {
+        return 'Research the topic. Use the remember tool to save findings for '
+            .'later agents, and the recall tool to read what earlier agents found.';
+    }
+
+    public function tools(): iterable
+    {
+        return [new Recall, new Remember];
+    }
+}
+```
+
+- **`Recall`** reads memory. The model calls it with a single `key`, a `prefix`
+  (every key starting with it), or neither (the whole `scope`). `scope` defaults
+  to `run`.
+- **`Remember`** writes memory. The model calls it with a `key` and a `value`,
+  optionally naming a `scope` (default `run`).
+
+### Scopes and addressing
+
+Both tools take a `scope` *name* from the model but never a scope *id* — the id
+is framework-owned and resolved from the active run, so an agent can never
+address another run's, swarm's, or agent's memory by guessing an id:
+
+| Scope          | Resolves to                          |
+| -------------- | ------------------------------------ |
+| `run` (default) | the active run id                   |
+| `swarm`        | the active swarm class               |
+| `agent`        | only when the tool is bound to a specific agent (see below) |
+| `conversation` | not addressable yet (no runtime conversation handle) |
+
+`run` is the safe default: memory scoped to the current task, cleared with it.
+Use `swarm` for state shared across the whole swarm class.
+
+### Policy interaction
+
+Neither tool bypasses Swarm's memory policies:
+
+- **`Recall` respects the propagation policy.** It reads through the same
+  agent-visible view the runners freeze into snapshots, so it can only ever
+  surface entries the active swarm's `MemoryPropagationPolicy` already permits
+  this agent to see. Under the default policy that is the Run-scoped view;
+  entries the policy withholds (other scopes, filtered keys) are invisible to
+  `Recall` exactly as they are to the agent's input.
+- **`Remember` respects the capture policy.** Writes go through
+  `SwarmMemory::put()`, which is decorated by the `RedactingMemoryStore`, so the
+  `MemoryCapturePolicy` redacts (`[redacted]`) or drops (`Skip`) the entry at the
+  write boundary — the same enforcement any other write gets. PII an agent tries
+  to persist never enters memory if your policy redacts it.
+
+`Remember` also rejects the package-reserved `swarm:` key prefix, so an agent
+cannot overwrite framework-owned entries such as step outputs.
+
+### Behaviour inside and outside a swarm
+
+Both tools work inside all four topologies (sequential, parallel,
+hierarchical/static-hierarchical) and across nested runs — each run frame
+addresses its own scope. Invoked **outside** a swarm run (no active run), they
+degrade gracefully: instead of throwing, they return a short "memory is not
+available" string, so an agent wired with the tools still works standalone.
+
+### Optional default-on registration
+
+Rather than wiring the tools into every agent by hand, add the
+`HasSwarmMemoryTools` concern and merge `swarmMemoryTools()` into `tools()`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Concerns\HasSwarmMemoryTools;
+
+class Researcher implements Agent, HasTools
+{
+    use HasSwarmMemoryTools, Promptable;
+
+    public function tools(): iterable
+    {
+        return [...$this->swarmMemoryTools(), new MyOtherTool];
+    }
+}
+```
+
+`swarmMemoryTools()` returns the tools only when `swarm.memory.tools.enabled` is
+true, so adding the trait is inert until you opt in app-wide:
+
+```php
+// config/swarm.php — disabled by default; granting an LLM read/write access to
+// shared run memory is an explicit decision. Review your propagation and capture
+// policies first.
+'memory' => [
+    'tools' => [
+        'enabled'  => env('SWARM_MEMORY_TOOLS_ENABLED', false),
+        'recall'   => env('SWARM_MEMORY_TOOLS_RECALL', true),
+        'remember' => env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+    ],
+],
+```
+
+The `recall` / `remember` toggles enable each tool individually. The tool
+classes are resolved from the container, so you can bind a subclass — for
+example to override a tool's `description()`, or to bind it to a specific agent
+so the `agent` scope resolves to that agent's class.
+
+---
+
 ## Capture policy (write-time redaction)
 
 Where the propagation policy decides what an agent *reads*, the **capture policy** decides what gets *written*. `MemoryCapturePolicy` is consulted at the write boundary and returns a `CaptureDecision` per `(scope, key)`:
