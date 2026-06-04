@@ -77,6 +77,7 @@
         "test:process-concurrency:real-db": "vendor/bin/pest tests/ProcessConcurrency --group=skip-locked-real-db --fail-on-skipped",
         "test:coverage": "vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage",
         "test:coverage:ci": "vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=80",
+        "test:compliance": "vendor/bin/pest tests/Feature tests/Unit --group=compliance --fail-on-skipped",
         "test:mutation": "vendor/bin/pest --mutate --coverage --parallel --covered-only",
         "hooks:install": "ln -sfv ../../tools/git-hooks/commit-msg .git/hooks/commit-msg"
     },

@@ -42,6 +42,8 @@ use Illuminate\Support\Facades\Artisan;
  * A final test verifies the FreshExecution opt-out: with replay mode overridden
  * to FreshExecution the agent sees the live 'mutated-value' on retry.
  */
+pest()->group('compliance');
+
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');
     config()->set('queue.connections.durable-test', ['driver' => 'null']);

@@ -58,6 +58,15 @@ jobs:
       - name: Execute static analysis
         run: composer analyse
 
+      # Named compliance gate: re-runs the scope-isolation / propagation and
+      # replay-determinism suites (the `compliance` Pest group) as the release
+      # compliance evidence. They also run inside test:coverage:ci above; this
+      # step exists so the gate is a discrete, re-runnable lane. stable-latest
+      # only, to avoid duplicating the work on the lowest matrix.
+      - name: Execute compliance gate
+        if: matrix.dependencies == 'stable-latest'
+        run: composer test:compliance
+
       # Pint's ruleset on the --prefer-lowest matrix is pinned to an older
       # version that disagrees with the current code style, so style is only
       # gated on stable-latest.

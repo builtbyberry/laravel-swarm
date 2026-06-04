@@ -46,24 +46,8 @@ beforeEach(function () {
     $this->app->instance(SnapshotsMemory::class, $this->recorder);
 });
 
-/**
- * Flatten every MemoryEntry the runners handed to the recorder across all
- * snapshot calls.
- *
- * @return array<int, MemoryEntry>
- */
-function capturedEntries(RecordingSnapshotsMemory $recorder): array
-{
-    $entries = [];
-
-    foreach ($recorder->snapshotCalls as $call) {
-        foreach ($call['entries'] ?? [] as $entry) {
-            $entries[] = $entry;
-        }
-    }
-
-    return $entries;
-}
+// capturedEntries() is shared across the propagation + scope-isolation suites;
+// it lives in tests/Pest.php.
 
 test('default policy presents the Run-scoped view only across runners', function (string $swarmClass) {
     // Seed a Swarm-scoped entry the view will gather as a candidate. The
