@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesOperatorIdentity;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
@@ -37,6 +38,7 @@ use ValueError;
 #[AsCommand(name: 'swarm:memory:inspect')]
 class SwarmMemoryInspectCommand extends Command
 {
+    use ResolvesOperatorIdentity;
     use ResolvesStringConsoleInput;
 
     /**
@@ -159,6 +161,11 @@ class SwarmMemoryInspectCommand extends Command
             'scope_filter' => $scope?->value,
             'format' => $format,
             'snapshot_count' => count($projected),
+            // "who viewed the snapshot": inspect can surface unredacted
+            // Run-scoped values, so the read is attributed to a human where the
+            // environment allows, the same best-effort identity swarm:memory:dump
+            // records for an export.
+            'requested_by' => $this->resolveRequestedBy(),
             ...$audit->metadata(['actor' => Actor::system('artisan')->toArray()]),
         ]);
 

@@ -498,15 +498,19 @@ Event::listen(SwarmChildFailed::class, function (SwarmChildFailed $event): void 
 
 ## Memory Events
 
-Swarm Memory dispatches five events through Laravel's event system when memory operations occur. All five are dispatched at the **store layer** — they fire from `DatabaseMemoryStore` and `CacheMemoryStore` directly, so custom `MemoryStore` drivers must dispatch them from their own `put()`, `get()`, and `forget()` implementations to keep the listener contract uniform.
+Swarm Memory dispatches events through Laravel's event system when memory operations occur. The events below are dispatched at the **store layer**: `MemoryWritten` / `MemoryRead` / `MemoryForgotten` fire from `DatabaseMemoryStore` and `CacheMemoryStore` directly (custom `MemoryStore` drivers must dispatch them from their own `put()`, `get()`, and `forget()` implementations to keep the listener contract uniform), `MemorySnapshotted` fires from the snapshot recorder, and the write-time redaction events `MemoryRedacted` / `MemoryWriteSkipped` fire from the `RedactingMemoryStore` decorator (v0.10.0+). The operator commands dispatch a separate set of events — see [Memory operator-command events](#memory-operator-command-events).
 
 | Event | Full class | When | Key properties |
 | --- | --- | --- | --- |
 | `MemoryWritten` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten` | After a successful `put()` | `scope`, `scopeId`, `key`, `metadata`, `bytes` |
+| `MemoryRedacted` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRedacted` | After a `MemoryCapturePolicy` `Redact` decision rewrites a write (v0.10.0+) | `scope`, `scopeId`, `key` (address only — no value) |
+| `MemoryWriteSkipped` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWriteSkipped` | After a `MemoryCapturePolicy` `Skip` decision drops a write (v0.10.0+) | `scope`, `scopeId`, `key` (address only — no value) |
 | `MemoryRead` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRead` | After every `get()`, hit or miss | `scope`, `scopeId`, `key`, `hit` |
 | `MemoryForgotten` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryForgotten` | After every `forget()` | `scope`, `scopeId`, `key`, `existed` |
 | `MemorySnapshotted` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemorySnapshotted` | After a per-step snapshot is captured | `runId`, `stepIndex`, `snapshotId`, `bytes`, `entryCount` |
 | `MemoryScopeOutOfSnapshot` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryScopeOutOfSnapshot` | During replay when a read targets a non-Run scope | `runId`, `stepIndex`, `scope`, `scopeId`, `key`, `operation` |
+
+`MemoryRedacted` and `MemoryWriteSkipped` carry the entry **address only** (`scope`, `scopeId`, `key`) and never the value, so an audit listener gets positive proof that redaction or a skip happened without re-exposing the data the policy just removed. A `Skip` writes no row and fires no `MemoryWritten`; the default `DefaultMemoryCapturePolicy` (`Full` for every write) fires neither event. See [Capture policy](memory.md#capture-policy-write-time-redaction).
 
 `MemoryRead` intentionally does not expose the entry value. Listeners that need the value should re-read through the store under their own access controls — this keeps the event surface compatible with capture-policy redaction in v0.10. The `hit` boolean reports whether the underlying lookup returned a stored entry (`true`) or missed (`false`); the bundled stores set it from the store result. Third-party drivers that have not been updated leave it at the conservative default `false` — listeners should treat the field as advisory in that case.
 
@@ -517,6 +521,18 @@ Swarm Memory dispatches five events through Laravel's event system when memory o
 `MemoryForgotten` includes an `existed` boolean so listeners can distinguish a real deletion from a no-op probe (a `forget()` call on a key that was never set).
 
 `MemoryScopeOutOfSnapshot` fires during `frozen_view` replay when a read targets a Conversation, Agent, or Swarm scoped entry (only Run scope is snapshotted in v0.9.0). Without a listener the read falls through to the live store; no persistent record is created by default. Wire a listener for compliance postures that require a record of every cross-scope read during replay.
+
+### Memory operator-command events
+
+The memory operator commands (v0.10.0+) dispatch their own events when an operator inspects, exports, or purges memory. Unlike the store-layer events above, these fire from the Artisan commands and pair with the `command.memory.*` audit categories the same commands emit. Each is dispatched on a **successful** invocation only.
+
+| Event | Full class | When | Key properties |
+| --- | --- | --- | --- |
+| `MemoryInspected` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryInspected` | After `swarm:memory:inspect` reads snapshots | `runId`, `stepIndex`, `scopeFilter`, `format`, `snapshotCount` |
+| `MemoryDumped` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryDumped` | After `swarm:memory:dump` exports a run/conversation | `subjectType`, `subjectId`, `format`, `includeSnapshots`, `entryCount`, `snapshotCount`, `runsExpanded` |
+| `MemoryPurged` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryPurged` | After `swarm:memory:purge` runs (including dry-run and `prevent_prune` skips) | `counts` (per-scope), `criteria` (retention windows, scope filter, flags, cutoffs) |
+
+`MemoryInspected` and `MemoryDumped` are read/export events: they record that an operator viewed or extracted frozen memory, complementing the `command.memory.inspect` / `command.memory.dump` audit egress records. `MemoryPurged` fires on every purge outcome — a real delete, a `--dry-run` preview, or a `prevent_prune` suppression (with `criteria.prevent_prune = true` and zeroed `counts`) — so a retention pipeline sees each scheduled run. See [Compliance & Audit](compliance-audit.md).
 
 For full listener examples and the compliance hard-fail pattern, see [Swarm Memory](memory.md#lifecycle-events).
 

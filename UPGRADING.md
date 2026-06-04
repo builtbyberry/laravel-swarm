@@ -390,6 +390,27 @@ dispatches a new `MemoryRedacted` event and a `Skip` a new `MemoryWriteSkipped`
 event (address only, no value) for audit listeners; the default `Full` policy
 fires neither. See [docs/memory.md](docs/memory.md#capture-policy-write-time-redaction).
 
+### New: retention purge command and `(scope, created_at)` index migration
+
+v0.10.0 adds the `swarm:memory:purge` retention command and a migration that
+adds a `(scope, created_at)` index to `swarm_memories`. Two operational notes:
+
+- **Large-table index build (action may be required).** The migration builds the
+  index **inline**, which takes a write lock (MySQL/InnoDB) or an exclusive lock
+  (Postgres) for the build duration. On a large `swarm_memories` table — exactly
+  the population this index serves — running it during `php artisan migrate` can
+  stall the deploy and block writes for minutes. If your table is large, build
+  the index **out of band** before (or instead of) the inline migration —
+  Postgres `CREATE INDEX CONCURRENTLY swarm_memories_scope_created_at_index ON
+  swarm_memories (scope, created_at);`, MySQL online DDL or
+  `pt-online-schema-change` — then mark the migration as run. On a small table
+  the inline build is fine and needs no action.
+- **Throttling the purge sweep.** `swarm:memory:purge` deletes in bounded
+  batches. On large tables a flat-out scheduled sweep can pressure the database
+  or a read replica; pass `--pause=<ms>` to sleep between batches (e.g.
+  `--pause=100`) and schedule it off-peak. The default is no pause, preserving
+  prior behavior. See [docs/compliance-audit.md](docs/compliance-audit.md#memory-retention).
+
 ## Upgrading to v0.9.0
 
 v0.9.0 is **non-breaking** on public-surface contracts but ships two new database

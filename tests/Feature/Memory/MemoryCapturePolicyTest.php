@@ -34,7 +34,14 @@ use Illuminate\Support\Facades\Event;
  * propagation view and frozen snapshots read back through the same store, PII
  * redacted at write never reaches a snapshot. The default policy is a no-op,
  * preserving pre-v0.10 behaviour.
+ *
+ * Tagged into the `compliance` group: these cases are the core write-time
+ * redaction guarantee, so they belong in the discrete compliance gate
+ * (`composer test:compliance`) alongside the propagation and scope-isolation
+ * suites, not just the general run.
  */
+pest()->group('compliance');
+
 beforeEach(function () {
     /** @var Factory $cacheFactory */
     $cacheFactory = $this->app->make('cache');
