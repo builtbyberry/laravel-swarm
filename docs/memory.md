@@ -404,6 +404,46 @@ addresses its own scope. Invoked **outside** a swarm run (no active run), they
 degrade gracefully: instead of throwing, they return a short "memory is not
 available" string, so an agent wired with the tools still works standalone.
 
+### Memory tools with streaming
+
+`Recall` and `Remember` work transparently inside `$agent->stream(...)`. Because
+both implement `Laravel\Ai\Contracts\Tool`, `laravel/ai` already handles their
+invocation during a streamed turn — the package adds no streaming-specific tool
+code. When the model calls a memory tool mid-stream:
+
+- The tool call and its result appear in the `StreamableSwarmResponse` as
+  ordinary `swarm_tool_call` / `swarm_tool_result` events, in order, exactly as
+  any other `laravel/ai` tool would surface. The memory side-effect (a
+  `Remember` write, a `Recall` read) happens at the point of the call, before
+  the result event is yielded.
+- The sequential stream runner publishes the active run *before* it invokes the
+  final agent's `stream()`, so a memory tool resolves its scope id from the
+  ambient run identically to a `prompt()` run. A streamed `Recall` therefore
+  sees what earlier steps wrote, and a streamed `Remember` write is visible to
+  later steps.
+
+```php
+$stream = $swarm->stream('Summarise what the team found.');
+
+foreach ($stream as $event) {
+    // swarm_tool_call → swarm_tool_result for each Recall/Remember the model made,
+    // interleaved with the usual text deltas.
+}
+```
+
+**Snapshot capture and replay.** The [snapshot mechanism](#snapshot-mechanism)
+captures both the tool-call input and the tool result for every memory-tool call
+made inside a streamed run. The runner holds each `ToolCall` until its matching
+`ToolResult` arrives, then appends a single paired entry to the step snapshot, so
+the snapshot row's write count stays proportional to tool *results*, not raw
+stream events. A call left unmatched by stream end is still recorded with a null
+result so replay can detect a partial run.
+
+Combined with [persisted stream replay](../docs/streaming.md), a streamed run
+that used the memory tools replays byte-identically: re-running
+`SwarmHistory::replay($runId)` yields the same ordered tool-call and tool-result
+events the original stream produced.
+
 ### Optional default-on registration
 
 Rather than wiring the tools into every agent by hand, add the
