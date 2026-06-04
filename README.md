@@ -348,7 +348,13 @@ $approved = $memory->get(MemoryScope::Run, $runId, 'draft_approved');
 
 `RunContext` writes through to `MemoryScope::Run` automatically via its `ArrayAccess` interface — `$context['key'] = $value` mirrors to memory without any code change.
 
-See [Swarm Memory](docs/memory.md) for the full reference: scope hierarchy, store drivers, lifecycle events, snapshot inspection, replay semantics (`frozen_view` vs `fresh_execution`), and the `#[MemoryReplay]` attribute. Vector-backed recall ships as the [laravel-swarm-memory-vector](https://github.com/builtbyberry/laravel-swarm-memory-vector) companion package.
+**Propagation, redaction, and an operator surface (v0.10.0+).** Memory now ships the controls a regulated workload needs:
+
+- **`MemoryPropagationPolicy`** decides which memory entries a worker agent sees at invocation (default: the Run-scoped view, byte-identical to v0.9).
+- **`MemoryCapturePolicy`** redacts or drops entries at the write boundary, so PII never reaches a snapshot (default: a no-op).
+- **Operator CLI** — `swarm:memory:inspect` (view a run's frozen snapshots), `swarm:memory:dump` (export the full memory + snapshot trail for an audit packet / DSAR), and `swarm:memory:purge` (enforce per-scope retention windows).
+
+See [Swarm Memory](docs/memory.md) for the full reference: scope hierarchy, store drivers, lifecycle events, propagation and capture policies, snapshot inspection, replay semantics (`frozen_view` vs `fresh_execution`), and the `#[MemoryReplay]` / `#[PropagationPolicy]` attributes; and [Compliance & Audit](docs/compliance-audit.md) for the regulated-workload runbook (redaction, retention, audit-packet export). Vector-backed recall ships as the [laravel-swarm-memory-vector](https://github.com/builtbyberry/laravel-swarm-memory-vector) companion package.
 
 ## Topologies
 
