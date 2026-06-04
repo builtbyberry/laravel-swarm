@@ -67,6 +67,17 @@ test('it writes to run scope by default and confirms', function () {
     expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'topic'))->toBe('launch plan');
 });
 
+test('it attributes tool writes with a tool:remember origin in metadata', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    remember(['key' => 'topic', 'value' => 'launch plan']);
+
+    $entry = app(SwarmMemory::class)->entry(MemoryScope::Run, 'run-1', 'topic');
+
+    expect($entry->metadata)->toHaveKey('origin')
+        ->and($entry->metadata['origin'])->toBe('tool:remember');
+});
+
 test('it writes to the swarm scope when asked, keyed by the active swarm class', function () {
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 

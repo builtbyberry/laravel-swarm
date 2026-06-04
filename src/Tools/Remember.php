@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryToolScopeResolver;
 use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\SwarmMemoryKeys;
@@ -106,9 +107,29 @@ class Remember implements Tool
             $resolved->scopeId,
             $key,
             $request->has('value') ? $request['value'] : null,
+            $this->writeMetadata(),
         );
 
         return 'Stored ['.$key.'] in '.$scope->value.' memory.';
+    }
+
+    /**
+     * Attribution attached to every tool-driven write, so audit listeners on
+     * {@see MemoryWritten} can tell a
+     * model-initiated `Remember` apart from a framework write. The bound agent
+     * class is included when the tool was constructed for a specific agent.
+     *
+     * @return array<string, mixed>
+     */
+    protected function writeMetadata(): array
+    {
+        $metadata = ['origin' => 'tool:remember'];
+
+        if (($agent = $this->agent()) !== null) {
+            $metadata['agent'] = $agent::class;
+        }
+
+        return $metadata;
     }
 
     /**
