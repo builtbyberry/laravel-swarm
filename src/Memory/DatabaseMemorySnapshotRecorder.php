@@ -7,10 +7,12 @@ namespace BuiltByBerry\LaravelSwarm\Memory;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemorySnapshotted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SnapshotFrozenException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Schema;
@@ -52,10 +54,26 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         protected ConfigRepository $config,
         protected SwarmMemory $memory,
         protected LoggerInterface $logger,
+        protected Dispatcher $events,
     ) {}
 
-    public function snapshot(string $runId, int $stepIndex): MemorySnapshot
+    /**
+     * @param  array<int, MemoryEntry>|null  $entries
+     */
+    public function snapshot(string $runId, int $stepIndex, ?array $entries = null): MemorySnapshot
     {
+        // When the runner resolved the agent-visible view through the
+        // propagation policy it passes it in `$entries`; freeze exactly those.
+        // Otherwise fall back to gathering the Run-scoped view ourselves — the
+        // back-compat path for callers that predate the parameter, which
+        // preserves pre-v0.10 behaviour byte-for-byte.
+        //
+        // Note: the `ensureMemoryTableExists()` precheck below only guards this
+        // internal fallback gather. On the runner path (`$entries` supplied) the
+        // table-missing tolerance lives wherever the runner read memory — and in
+        // practice a missing `swarm_memories` table fails the run at the first
+        // memory access regardless, so nothing relied on this guard there.
+        //
         // The companion `swarm_memories` table (issue #109) is required for
         // the Run-scoped read below. We probe its existence exactly once per
         // recorder instance via `Schema::hasTable()` and cache the result on
@@ -66,10 +84,10 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         // drop, permission revocation, schema corruption, deadlock, …)
         // propagate — silently swallowing those would corrupt the audit
         // trail without surfacing the failure to the operator.
-        if (! $this->ensureMemoryTableExists()) {
-            $entries = [];
-        } else {
-            $entries = $this->memory->all(MemoryScope::Run, $runId);
+        if ($entries === null) {
+            $entries = $this->ensureMemoryTableExists()
+                ? $this->memory->all(MemoryScope::Run, $runId)
+                : [];
         }
 
         $snapshot = MemorySnapshot::fromEntries($runId, $stepIndex, $entries, []);
@@ -126,6 +144,27 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
             return null;
         }
 
+        return $this->hydrate($record);
+    }
+
+    public function allForRun(string $runId): array
+    {
+        $records = $this->table()
+            ->where('run_id', $runId)
+            ->orderBy('step_index')
+            ->get();
+
+        $snapshots = [];
+
+        foreach ($records as $record) {
+            $snapshots[] = $this->hydrate($record);
+        }
+
+        return $snapshots;
+    }
+
+    protected function hydrate(object $record): MemorySnapshot
+    {
         $rawPayload = $record->payload ?? null;
         $rawToolCalls = $record->tool_calls ?? null;
 
@@ -134,25 +173,62 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         /** @var array<int, array<string, mixed>> $toolCalls */
         $toolCalls = $this->decodeJson(is_string($rawToolCalls) ? $rawToolCalls : null, []);
 
-        return MemorySnapshot::fromPersisted($payload, $toolCalls);
+        return MemorySnapshot::fromPersisted(
+            $payload,
+            $toolCalls,
+            recordedAt: $this->normalizeTimestamp($record->created_at ?? null),
+            updatedAt: $this->normalizeTimestamp($record->updated_at ?? null),
+        );
+    }
+
+    /**
+     * Normalize a persisted row timestamp into an ISO-8601 string in UTC so
+     * the inspector renders the same shape as the per-entry timestamps. The
+     * raw value arrives as a datetime string from the query builder; tolerate
+     * a `DateTimeInterface` too in case a driver casts the column.
+     */
+    protected function normalizeTimestamp(mixed $value): ?string
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return CarbonImmutable::instance($value)->toIso8601String();
+        }
+
+        if (is_string($value) && $value !== '') {
+            return CarbonImmutable::parse($value, 'UTC')->toIso8601String();
+        }
+
+        return null;
     }
 
     protected function persist(MemorySnapshot $snapshot): void
     {
         $now = CarbonImmutable::now('UTC');
 
+        $encodedPayload = $this->encodeJson($snapshot->toPayloadArray());
+        $encodedToolCalls = $this->encodeJson($snapshot->toolCalls);
+
         $this->table()->upsert(
             [[
                 'run_id' => $snapshot->runId,
                 'step_index' => $snapshot->stepIndex,
-                'payload' => $this->encodeJson($snapshot->toPayloadArray()),
-                'tool_calls' => $this->encodeJson($snapshot->toolCalls),
+                'payload' => $encodedPayload,
+                'tool_calls' => $encodedToolCalls,
                 'created_at' => $now,
                 'updated_at' => $now,
             ]],
             ['run_id', 'step_index'],
             ['payload', 'tool_calls', 'updated_at'],
         );
+
+        // Dispatch after a successful upsert so listeners do not record bytes
+        // for a snapshot that never landed.
+        $this->events->dispatch(new MemorySnapshotted(
+            runId: $snapshot->runId,
+            stepIndex: $snapshot->stepIndex,
+            snapshotId: $snapshot->runId.':'.$snapshot->stepIndex,
+            bytes: strlen((string) $encodedPayload) + strlen((string) $encodedToolCalls),
+            entryCount: count($snapshot->entries),
+        ));
     }
 
     protected function table(): Builder

@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
+use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use Illuminate\Contracts\Cache\Factory;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -39,7 +40,9 @@ test('cache store dispatches MemoryWritten on put with scope, scope_id, key, met
 
     /** @var MemoryStore $store */
     $store = $this->app->make(MemoryStore::class);
-    expect($store)->toBeInstanceOf(CacheMemoryStore::class);
+    expect($store)->toBeInstanceOf(RedactingMemoryStore::class);
+    $inner = $store instanceof RedactingMemoryStore ? $store->inner() : null;
+    expect($inner)->toBeInstanceOf(CacheMemoryStore::class);
 
     $store->put(new MemoryEntry(
         scope: MemoryScope::Run,
@@ -218,7 +221,9 @@ test('database store dispatches MemoryWritten on put with metadata payload', fun
 
     /** @var MemoryStore $store */
     $store = $this->app->make(MemoryStore::class);
-    expect($store)->toBeInstanceOf(DatabaseMemoryStore::class);
+    expect($store)->toBeInstanceOf(RedactingMemoryStore::class);
+    $inner = $store instanceof RedactingMemoryStore ? $store->inner() : null;
+    expect($inner)->toBeInstanceOf(DatabaseMemoryStore::class);
 
     $store->put(new MemoryEntry(
         scope: MemoryScope::Agent,

@@ -268,6 +268,149 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.10.0
+
+v0.10.0 is **non-breaking for applications** that only consume the documented
+public surface, and the **default behavior is identical to v0.9** — see the
+memory propagation policy note below for the one semantic change and why it does
+not affect unmodified swarms. It is **breaking for code that implements the
+`SnapshotsMemory` contract directly** — almost always a custom or companion
+persistence driver (for example, the `laravel-swarm-memory-vector` package). If
+you have never implemented `SnapshotsMemory` yourself, no action is required.
+
+### Breaking for custom drivers: `SnapshotsMemory::allForRun()`
+
+The `BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory` contract gains one new
+required method:
+
+```php
+/**
+ * Return every persisted snapshot for $runId, ordered by step_index ascending.
+ * Returns an empty array when no snapshots were recorded.
+ *
+ * @return array<int, \BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot>
+ */
+public function allForRun(string $runId): array;
+```
+
+It backs the new `swarm:memory:inspect` operator command, which lists every step
+recorded for a run without reaching past the contract into the underlying table.
+
+The package's own drivers — `DatabaseMemorySnapshotRecorder` and
+`NullSnapshotsMemory` — already implement it. **If you ship your own
+`SnapshotsMemory` implementation, add the method or your container binding will
+fatal with `Class … must implement method allForRun`.** A minimal database-style
+implementation orders by `step_index` and hydrates each row the same way `find()`
+does; a no-op store may simply `return [];`.
+
+### New: `swarm:memory:inspect` command
+
+No action required — additive. `php artisan swarm:memory:inspect <run-id>` renders
+the frozen `MemorySnapshot` rows for a run (the database persistence driver only;
+under the cache driver it surfaces a configuration hint). See
+[docs/memory.md](docs/memory.md) for usage.
+
+### New: memory propagation policy (semantic change, default preserves v0.9)
+
+A new `BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy` now decides
+which memory entries a worker agent sees at invocation. **The default
+(`DefaultPropagationPolicy`) presents the Run-scoped view only — byte-identical
+to what runners froze and agents saw before v0.10.** No package code writes to
+the Conversation / Agent / Swarm scopes during a run, so unmodified swarms are
+unaffected.
+
+This is a **semantic** seam, not an API change: if you bind a custom policy
+(globally via `swarm.memory.propagation_policy`, or per swarm with
+`#[PropagationPolicy(MyPolicy::class)]`), downstream agents may see different
+memory than they did before — by design. No action is required to keep the
+v0.9 behavior; it is the default.
+
+**Breaking for custom `SnapshotsMemory` drivers:** `snapshot()` gains a third
+parameter:
+
+```php
+public function snapshot(string $runId, int $stepIndex, ?array $entries = null): MemorySnapshot;
+```
+
+This is a **required signature change for implementors**, in the same class as
+the `allForRun()` addition above. A driver that keeps the two-argument
+`snapshot(string $runId, int $stepIndex)` signature does **not** keep working —
+PHP rejects it at class declaration with `Declaration of …::snapshot() must be
+compatible with …`, so the container binding fatals on the first swarm run. You
+must add the third parameter. *Callers* are unaffected: existing two-argument
+calls to `snapshot()` still bind to the optional parameter and behave exactly as
+before — only classes that **implement** the contract must update.
+
+To honor propagation policy once you've updated the signature: when `$entries`
+is non-null, freeze exactly those entries (the runner has already applied the
+policy); when it is null, fall back to your existing Run-scope gather — that is
+the back-compat path for any caller that hasn't adopted the parameter.
+
+### New: memory capture policy (default preserves v0.9, no action required)
+
+A new `BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy` governs whether a
+memory entry is written as-is, redacted, or dropped at the write boundary — the
+write-side counterpart to the audit `CapturePolicy`. **The default
+(`DefaultMemoryCapturePolicy`) writes every entry as-is, byte-identical to v0.9.**
+
+This is a **sibling contract, not a change to `CapturePolicy`** — nothing is
+added to the existing interface, so **no third-party `CapturePolicy`
+implementation breaks** and there is no required signature change. Enforcement
+lives in a new `RedactingMemoryStore` decorator applied with
+`$this->app->extend(MemoryStore::class, …)`; if you resolve `MemoryStore` you now
+receive the decorator (call `->inner()` for the wrapped driver). Because it is an
+extender, it wraps **whatever** `MemoryStore` is bound — including a custom or
+companion driver you register yourself — so redaction can't be bypassed by
+rebinding the store. One caveat: bind a custom store with `bind()`/`singleton()`,
+**not** `Container::instance()` — a pre-built instance registered via `instance()`
+sidesteps container extenders and would not be wrapped.
+
+To opt in to redaction, bind a policy:
+
+```php
+// config/swarm.php → 'memory' => ['capture_policy' => App\Memory\RedactSsnPolicy::class]
+// or SWARM_MEMORY_CAPTURE_POLICY=App\Memory\RedactSsnPolicy
+
+final class RedactSsnPolicy implements MemoryCapturePolicy
+{
+    public function memory(MemoryScope $scope, string $key, ?RunContext $context = null, ?Actor $actor = null): CaptureDecision
+    {
+        return $key === 'ssn' ? CaptureDecision::Redact : CaptureDecision::Full;
+    }
+}
+```
+
+`Redact` replaces scalar **values** with the `SwarmCapture::REDACTED` sentinel
+(preserving array shape and keys, the same convention the audit path uses; entry
+`metadata` and keys are not redacted — keep PII out of those); `Skip` drops the
+entry entirely (no row, no `MemoryWritten` event) and leaves any pre-existing
+entry at the address untouched. Because redaction happens at the store, the
+propagation view and frozen `MemorySnapshot` honor it automatically. A `Redact`
+dispatches a new `MemoryRedacted` event and a `Skip` a new `MemoryWriteSkipped`
+event (address only, no value) for audit listeners; the default `Full` policy
+fires neither. See [docs/memory.md](docs/memory.md#capture-policy-write-time-redaction).
+
+### New: retention purge command and `(scope, created_at)` index migration
+
+v0.10.0 adds the `swarm:memory:purge` retention command and a migration that
+adds a `(scope, created_at)` index to `swarm_memories`. Two operational notes:
+
+- **Large-table index build (action may be required).** The migration builds the
+  index **inline**, which takes a write lock (MySQL/InnoDB) or an exclusive lock
+  (Postgres) for the build duration. On a large `swarm_memories` table — exactly
+  the population this index serves — running it during `php artisan migrate` can
+  stall the deploy and block writes for minutes. If your table is large, build
+  the index **out of band** before (or instead of) the inline migration —
+  Postgres `CREATE INDEX CONCURRENTLY swarm_memories_scope_created_at_index ON
+  swarm_memories (scope, created_at);`, MySQL online DDL or
+  `pt-online-schema-change` — then mark the migration as run. On a small table
+  the inline build is fine and needs no action.
+- **Throttling the purge sweep.** `swarm:memory:purge` deletes in bounded
+  batches. On large tables a flat-out scheduled sweep can pressure the database
+  or a read replica; pass `--pause=<ms>` to sleep between batches (e.g.
+  `--pause=100`) and schedule it off-peak. The default is no pause, preserving
+  prior behavior. See [docs/compliance-audit.md](docs/compliance-audit.md#memory-retention).
+
 ## Upgrading to v0.9.0
 
 v0.9.0 is **non-breaking** on public-surface contracts but ships two new database

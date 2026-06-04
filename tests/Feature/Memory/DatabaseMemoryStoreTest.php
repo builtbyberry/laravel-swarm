@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
+use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -45,7 +46,11 @@ beforeEach(function () {
 test('the database store is bound as the default MemoryStore when persistence is database', function () {
     $store = $this->app->make(MemoryStore::class);
 
-    expect($store)->toBeInstanceOf(DatabaseMemoryStore::class);
+    // The container wraps the driver in the redaction decorator; the database
+    // driver is the wrapped inner store.
+    expect($store)->toBeInstanceOf(RedactingMemoryStore::class);
+    $inner = $store instanceof RedactingMemoryStore ? $store->inner() : null;
+    expect($inner)->toBeInstanceOf(DatabaseMemoryStore::class);
 });
 
 test('put persists an entry and stamps timestamps', function () {

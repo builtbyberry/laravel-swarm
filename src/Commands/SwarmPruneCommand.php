@@ -63,7 +63,10 @@ class SwarmPruneCommand extends Command
             'audit_outbox' => (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox'),
         ];
 
-        $counts = [];
+        // Seed every table key to zero so the count shape is fully known: the
+        // loop below assigns each key, but pre-filling lets static analysis
+        // prove the summary accesses below are present.
+        $counts = array_fill_keys(array_keys($tables), 0);
         $schema = $connection->getSchemaBuilder();
 
         if (! $schema->hasTable($tables['history'])) {

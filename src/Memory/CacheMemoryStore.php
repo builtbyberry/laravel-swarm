@@ -60,6 +60,7 @@ final class CacheMemoryStore implements MemoryStore
             scopeId: $persisted->scopeId,
             key: $persisted->key,
             metadata: $persisted->metadata,
+            bytes: $this->measureEntryBytes($persisted),
         ));
 
         return $persisted;
@@ -74,6 +75,7 @@ final class CacheMemoryStore implements MemoryStore
             scope: $scope,
             scopeId: $scopeId,
             key: $key,
+            hit: $payload !== null,
         ));
 
         return $payload === null ? null : $this->decode($payload);
@@ -184,6 +186,24 @@ final class CacheMemoryStore implements MemoryStore
             'created_at' => $entry->createdAt?->toIso8601String(),
             'updated_at' => $entry->updatedAt?->toIso8601String(),
         ];
+    }
+
+    /**
+     * Approximate JSON-encoded byte size of an entry's value + metadata, for
+     * write-byte sampling. Returns `null` when either payload is not safely
+     * JSON-encodable (e.g. resources, malformed nested data) so sampling can
+     * skip the row without poisoning downstream aggregates.
+     */
+    protected function measureEntryBytes(MemoryEntry $entry): ?int
+    {
+        $value = json_encode($entry->value);
+        $metadata = json_encode($entry->metadata);
+
+        if ($value === false || $metadata === false) {
+            return null;
+        }
+
+        return strlen($value) + strlen($metadata);
     }
 
     /**

@@ -33,11 +33,21 @@ final class MemoryWritten
 {
     /**
      * @param  array<string, mixed>  $metadata
+     * @param  int|null  $bytes  Optional approximate JSON-encoded byte size of
+     *                           the persisted `value` + `metadata` payload, as
+     *                           measured at write time by the dispatching
+     *                           {@see MemoryStore}. Drivers that do not measure
+     *                           the encoded payload (or third-party drivers
+     *                           that have not been updated) leave this `null`.
+     *                           Treat the value as a sampling input only — it
+     *                           is the wire-shape JSON length, not the
+     *                           database row footprint.
      */
     public function __construct(
         public readonly MemoryScope $scope,
         public readonly string $scopeId,
         public readonly string $key,
         public readonly array $metadata = [],
+        public readonly ?int $bytes = null,
     ) {}
 }

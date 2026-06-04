@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -22,8 +23,10 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\AlignsQueuedHierarchicalParallelCursor;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
@@ -48,6 +51,7 @@ class HierarchicalRunner
         protected SwarmGuardrailRunner $guardrails,
         protected ConfigRepository $config,
         protected SnapshotsMemory $snapshots,
+        protected AgentVisibleMemoryView $view,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -780,7 +784,16 @@ class HierarchicalRunner
 
                         $branchIndex = $nextIndex + count($branchDefinitions);
                         $this->stepsRecorder->started($state, $branchIndex, $branch->agentClass, $input);
-                        $branchSnapshots[$branchNodeId] = $this->snapshots->snapshot($state->context->runId, $branchIndex);
+                        // The worker instance is resolved lazily inside the
+                        // concurrency callback below, so only the class-string is
+                        // in hand here; pass a null agent to the view. The default
+                        // policy ignores the agent, and Agent-scope candidates are
+                        // unpopulated by package code today.
+                        $branchSnapshots[$branchNodeId] = $this->snapshots->snapshot(
+                            $state->context->runId,
+                            $branchIndex,
+                            $this->view->present($state->swarm, $state->context, null),
+                        );
 
                         $branchDefinitions[$branchNodeId] = [
                             'node' => $branch,
@@ -789,22 +802,31 @@ class HierarchicalRunner
                         ];
 
                         $agentClass = $branch->agentClass;
-                        $callbacks[$branchNodeId] = function () use ($agentClass, $input): array {
+                        $branchRunId = $state->context->runId;
+                        $branchSwarmClass = $state->swarm::class;
+                        $branchContextPayload = $state->context->toQueuePayload();
+                        $callbacks[$branchNodeId] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload): array {
                             $worker = Container::getInstance()->make($agentClass);
 
                             if (! $worker instanceof Agent) {
                                 throw new SwarmException("Hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
                             }
 
-                            $startedAt = MonotonicTime::now();
-                            $response = $worker->prompt($input);
+                            ActiveRunContext::enter($branchRunId, $branchSwarmClass, RunContext::fromPayload($branchContextPayload, $branchRunId));
 
-                            return [
-                                'output' => (string) $response,
-                                'usage' => $response->usage->toArray(),
-                                'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
-                                'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
-                            ];
+                            try {
+                                $startedAt = MonotonicTime::now();
+                                $response = $worker->prompt($input);
+
+                                return [
+                                    'output' => (string) $response,
+                                    'usage' => $response->usage->toArray(),
+                                    'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                                    'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
+                                ];
+                            } finally {
+                                ActiveRunContext::exit();
+                            }
                         };
                     }
 
@@ -1310,10 +1332,20 @@ class HierarchicalRunner
         }
 
         $this->stepsRecorder->started($state, $index, $agent::class, $input);
-        $snapshot = $this->snapshots->snapshot($state->context->runId, $index);
+        $snapshot = $this->snapshots->snapshot(
+            $state->context->runId,
+            $index,
+            $this->view->present($state->swarm, $state->context, $agent),
+        );
 
         $startedAt = MonotonicTime::now();
-        $response = $agent->prompt($input);
+        ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
+
+        try {
+            $response = $agent->prompt($input);
+        } finally {
+            ActiveRunContext::exit();
+        }
         $output = (string) $response;
         $usage = $this->usageFromResponse($response);
 

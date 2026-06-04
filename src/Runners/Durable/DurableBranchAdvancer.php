@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
@@ -24,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -61,6 +63,7 @@ class DurableBranchAdvancer
         protected LoggerInterface $logger,
         protected SnapshotsMemory $snapshots,
         protected MemoryReplayCoordinator $coordinator,
+        protected AgentVisibleMemoryView $view,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId): void
@@ -148,9 +151,19 @@ class DurableBranchAdvancer
                     /** @var MemorySnapshot $snapshot */
                     $snapshot = $existing !== null
                         ? $this->snapshots->resetToolCalls($existing)
-                        : $this->snapshots->snapshot($runId, (int) $branch['step_index']);
+                        : $this->snapshots->snapshot(
+                            $runId,
+                            (int) $branch['step_index'],
+                            $this->view->present($swarm, $context, $agent),
+                        );
 
-                    $response = $agent->prompt($branch['input']);
+                    ActiveRunContext::enter($runId, $swarm::class, $context);
+
+                    try {
+                        $response = $agent->prompt($branch['input']);
+                    } finally {
+                        ActiveRunContext::exit();
+                    }
                     $output = (string) $response;
                     $usage = $response->usage->toArray();
                     $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);

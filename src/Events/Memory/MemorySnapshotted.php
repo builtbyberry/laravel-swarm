@@ -23,6 +23,14 @@ namespace BuiltByBerry\LaravelSwarm\Events\Memory;
  * - `runId`      — the swarm run whose memory was snapshotted.
  * - `stepIndex`  — the zero-based step index the snapshot was taken at.
  * - `snapshotId` — opaque identifier for the persisted snapshot row.
+ * - `bytes`      — optional approximate JSON byte size of the persisted
+ *                  snapshot payload (entries + tool calls) measured at write
+ *                  time by the dispatching {@see SnapshotsMemory}. `null`
+ *                  when the driver does not measure the encoded payload.
+ *                  Treat as a sampling input only.
+ * - `entryCount` — optional count of memory entries frozen into the snapshot
+ *                  at dispatch time. `null` when the driver does not report
+ *                  the entry count.
  */
 final class MemorySnapshotted
 {
@@ -30,5 +38,7 @@ final class MemorySnapshotted
         public readonly string $runId,
         public readonly int $stepIndex,
         public readonly string $snapshotId,
+        public readonly ?int $bytes = null,
+        public readonly ?int $entryCount = null,
     ) {}
 }

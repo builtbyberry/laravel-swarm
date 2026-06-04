@@ -32,9 +32,18 @@ use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
  */
 final class MemoryRead
 {
+    /**
+     * @param  bool  $hit  `true` when the read returned a stored entry, `false`
+     *                     when the lookup missed. Defaults to `false` so older
+     *                     listeners constructing the event by hand keep working
+     *                     and so any third-party driver that hasn't been
+     *                     updated reports a conservative miss instead of an
+     *                     accidental hit.
+     */
     public function __construct(
         public readonly MemoryScope $scope,
         public readonly string $scopeId,
         public readonly string $key,
+        public readonly bool $hit = false,
     ) {}
 }

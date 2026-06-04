@@ -65,14 +65,17 @@ final class DatabaseMemoryStore implements MemoryStore
             ? CarbonImmutable::parse((string) $existing->created_at)
             : ($entry->createdAt ?? $now);
 
+        $encodedValue = $this->encodeJson($entry->value);
+        $encodedMetadata = $this->encodeJson($entry->metadata);
+
         $this->table()->upsert(
             [[
                 'scope' => $entry->scope->value,
                 'scope_id' => $entry->scopeId,
                 'run_id' => $entry->scope === MemoryScope::Run ? $entry->scopeId : null,
                 'key' => $entry->key,
-                'value' => $this->encodeJson($entry->value),
-                'metadata' => $this->encodeJson($entry->metadata),
+                'value' => $encodedValue,
+                'metadata' => $encodedMetadata,
                 'created_at' => $createdAt,
                 'updated_at' => $now,
             ]],
@@ -87,6 +90,7 @@ final class DatabaseMemoryStore implements MemoryStore
             scopeId: $persisted->scopeId,
             key: $persisted->key,
             metadata: $persisted->metadata,
+            bytes: strlen((string) $encodedValue) + strlen((string) $encodedMetadata),
         ));
 
         return $persisted;
@@ -105,6 +109,7 @@ final class DatabaseMemoryStore implements MemoryStore
             scope: $scope,
             scopeId: $scopeId,
             key: $key,
+            hit: $record !== null,
         ));
 
         return $record === null ? null : $this->hydrate($record);

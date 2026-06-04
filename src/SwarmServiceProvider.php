@@ -26,6 +26,9 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmInspectCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmMemoryDumpCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmMemoryInspectCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmMemoryPurgeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPauseCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmProgressCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPruneCommand;
@@ -40,8 +43,11 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
@@ -51,11 +57,18 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\ConversationPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemorySnapshotRecorder;
 use BuiltByBerry\LaravelSwarm\Memory\DatabaseMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultMemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
+use BuiltByBerry\LaravelSwarm\Memory\NullConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Memory\NullSnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
+use BuiltByBerry\LaravelSwarm\Memory\RunContextMemoryReader;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -69,6 +82,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\AuditOutbox as AuditOutboxCard;
+use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmMemory as SwarmMemoryCard;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmSteps;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
@@ -112,6 +126,7 @@ use BuiltByBerry\LaravelSwarm\Telemetry\PackageJobTelemetryState;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryEventListener;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -134,6 +149,38 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(SwarmAuditSink::class, NoOpSwarmAuditSink::class);
         $this->app->singleton(ActorResolver::class, DefaultActorResolver::class);
         $this->app->singleton(CapturePolicy::class, BooleanCapturePolicy::class);
+        $this->app->singleton(MemoryPropagationPolicy::class, function (Application $app): MemoryPropagationPolicy {
+            /** @var class-string<MemoryPropagationPolicy> $class */
+            $class = $app->make(ConfigRepository::class)->get('swarm.memory.propagation_policy', DefaultPropagationPolicy::class);
+
+            return $app->make($class);
+        });
+        // Resolve ConversationPropagationPolicy with its configured transcript
+        // view. The container honours this binding whether the policy is the
+        // configured default (resolved via make($class) above) or selected per
+        // swarm with the #[PropagationPolicy] attribute (resolved via make()
+        // in AgentVisibleMemoryView::resolvePolicy()).
+        $this->app->bind(ConversationPropagationPolicy::class, function (Application $app): ConversationPropagationPolicy {
+            return new ConversationPropagationPolicy(
+                (bool) $app->make(ConfigRepository::class)
+                    ->get('swarm.memory.conversation_view.include_run_memory', false),
+            );
+        });
+        $this->app->singleton(MemoryCapturePolicy::class, function (Application $app): MemoryCapturePolicy {
+            /** @var class-string $class */
+            $class = $app->make(ConfigRepository::class)->get('swarm.memory.capture_policy', DefaultMemoryCapturePolicy::class);
+
+            $policy = $app->make($class);
+
+            if (! $policy instanceof MemoryCapturePolicy) {
+                throw new SwarmException(
+                    "Memory capture policy [{$class}] must implement ".MemoryCapturePolicy::class.'.',
+                );
+            }
+
+            return $policy;
+        });
+        $this->app->singleton(RunContextMemoryReader::class);
         $this->app->singleton(SinkFailureHandler::class, ConfiguredSinkFailureHandler::class);
         $this->app->singleton(AuditOutbox::class, function (Application $app): AuditOutbox {
             $driver = $app->make(ConfigRepository::class)->get('swarm.persistence.driver');
@@ -259,7 +306,26 @@ class SwarmServiceProvider extends ServiceProvider
             CacheMemoryStore::class,
             DatabaseMemoryStore::class,
         ));
+
+        // Wrap whatever MemoryStore is bound — the bundled drivers OR a
+        // consumer/companion driver re-bound later — in the redaction decorator,
+        // so the capture policy governs every write at a single chokepoint that
+        // cannot be bypassed by rebinding the store. Reads pass through, so the
+        // propagation view and frozen snapshots inherit redaction for free.
+        // (A store registered via Container::instance() bypasses extenders; bind
+        // custom drivers, don't instance() them — see UPGRADING.md.)
+        $this->app->extend(MemoryStore::class, fn (MemoryStore $store, Application $app): MemoryStore => new RedactingMemoryStore(
+            inner: $store,
+            policy: $app->make(MemoryCapturePolicy::class),
+            events: $app->make(Dispatcher::class),
+        ));
         $this->app->singleton(SwarmMemory::class, DefaultSwarmMemory::class);
+
+        // Default conversation→runs resolver is the honest no-op: Swarm records
+        // no run/conversation link in v0.10, so `swarm:memory:dump` of a
+        // conversation expands to no runs unless an application binds its own
+        // resolver in place of this one.
+        $this->app->singleton(ConversationRunResolver::class, NullConversationRunResolver::class);
 
         // Snapshot recording requires the `swarm_memory_snapshots` table from
         // migration #110. When persistence runs in `cache` mode (default for
@@ -295,6 +361,7 @@ class SwarmServiceProvider extends ServiceProvider
                 $livewire->component('swarm.runs', SwarmRuns::class);
                 $livewire->component('swarm.steps', SwarmSteps::class);
                 $livewire->component('swarm.audit-outbox', AuditOutboxCard::class);
+                $livewire->component('swarm.memory', SwarmMemoryCard::class);
             });
         }
 
@@ -317,6 +384,7 @@ class SwarmServiceProvider extends ServiceProvider
                 MakeSwarmAgentCommand::class,
                 SwarmHealthCommand::class,
                 SwarmPruneCommand::class,
+                SwarmMemoryPurgeCommand::class,
                 SwarmStatusCommand::class,
                 SwarmHistoryCommand::class,
                 SwarmPauseCommand::class,
@@ -328,6 +396,8 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmAuditReconcileCommand::class,
                 SwarmSignalCommand::class,
                 SwarmInspectCommand::class,
+                SwarmMemoryInspectCommand::class,
+                SwarmMemoryDumpCommand::class,
                 SwarmProgressCommand::class,
                 SwarmTraceCommand::class,
                 InstallCommand::class,

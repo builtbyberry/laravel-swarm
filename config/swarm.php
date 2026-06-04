@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultMemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 
 $swarmPersistenceDriver = env('SWARM_PERSISTENCE_DRIVER', 'cache');
 $swarmContextDriver = env('SWARM_CONTEXT_DRIVER');
@@ -237,6 +239,170 @@ return [
          * Override per swarm with the #[MemoryReplay(mode: ReplayMode::...)] attribute.
          */
         'replay_mode' => env('SWARM_MEMORY_REPLAY_MODE', 'frozen_view'),
+
+        /*
+         * The memory propagation policy: decides which memory entries an agent
+         * sees when it is invoked, across scopes (run / conversation / agent /
+         * swarm). The frozen MemorySnapshot mirrors exactly what this policy
+         * returns, so it governs both what the agent reads and the audit record.
+         *
+         * The default (DefaultPropagationPolicy) presents the Run-scoped view
+         * only, preserving pre-v0.10 behaviour. Bind a class implementing
+         * BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy to widen
+         * or reshape the view globally, or override per swarm with the
+         * #[PropagationPolicy(MyPolicy::class)] attribute.
+         */
+        'propagation_policy' => env('SWARM_MEMORY_PROPAGATION_POLICY', DefaultPropagationPolicy::class),
+
+        /*
+         * Whether runners persist each step's output to Run scope under the
+         * reserved key `swarm:step.{n}.output`. This is what lets the
+         * RemembersRunContext trait (with ConversationPropagationPolicy) render
+         * a real turn-by-turn conversation, and what audit exports surface as
+         * the per-step record.
+         *
+         * **Disabled by default** — enabling it persists each agent's output to
+         * the memory store (and, when a surfacing policy is active, into frozen
+         * snapshots), so it expands what your application stores at rest. Before
+         * enabling, decide on:
+         *   - retention: Run-scoped rows are pruned by `swarm:memory:purge` per
+         *     `swarm.memory.retention.days.run` (null = never; see below), so set
+         *     a window if you don't want step outputs kept indefinitely;
+         *   - redaction: a `MemoryCapturePolicy` (capture_policy) can redact or
+         *     skip these keys at write time if outputs may contain PII.
+         *
+         * Captured values are stored full-fidelity (NOT truncated by
+         * `swarm.limits.max_output_bytes`, unlike artifacts/history/final output)
+         * so the audit record stays complete — manage volume via retention, not
+         * truncation. The keys are hidden from the default agent view
+         * (DefaultPropagationPolicy excludes them), so enabling this never
+         * changes what a non-trait agent sees.
+         */
+        'capture_step_output' => filter_var(
+            env('SWARM_MEMORY_CAPTURE_STEP_OUTPUT', false),
+            FILTER_VALIDATE_BOOLEAN,
+        ),
+
+        /*
+         * Tuning for ConversationPropagationPolicy — the opt-in policy that
+         * surfaces the reserved step-output keys (above) as an ordered
+         * transcript, intended to pair with the RemembersRunContext trait.
+         *
+         * 'include_run_memory' controls what else the policy shows alongside the
+         * transcript:
+         *   false (default) — transcript only: just the ordered step outputs,
+         *                     for a clean turn-by-turn conversation.
+         *   true            — transcript plus the rest of the Run-scoped view
+         *                     (last_output, user-written keys). Richer, noisier.
+         */
+        'conversation_view' => [
+            'include_run_memory' => filter_var(
+                env('SWARM_MEMORY_CONVERSATION_INCLUDE_RUN_MEMORY', false),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+        ],
+
+        /*
+         * Configuration for the RemembersRunContext trait
+         * (Concerns\RemembersRunContext). Agents using the trait render the
+         * active swarm's propagation-policy memory view as laravel/ai messages;
+         * laravel/ai prepends them before the agent's new user turn.
+         *
+         * 'role' is the Laravel\Ai\Messages\MessageRole each rendered entry
+         * carries: 'assistant' (default), 'user', or 'tool_result'. Override per
+         * agent by overriding RemembersRunContext::runContextMessageRole().
+         */
+        'run_context_messages' => [
+            'role' => env('SWARM_MEMORY_RUN_CONTEXT_ROLE', 'assistant'),
+        ],
+
+        /*
+         * The memory capture policy: decides, at the write boundary, whether
+         * each memory entry is persisted as-is, redacted, or dropped entirely —
+         * by scope and key. This is the write-side counterpart to the audit
+         * CapturePolicy (swarm.capture.*): redaction here keeps PII out of
+         * memory entirely, so it never reaches a frozen MemorySnapshot.
+         *
+         * Decisions: CaptureDecision::Full persists the value unchanged;
+         * ::Redact structurally redacts scalars to '[redacted]' (preserving
+         * array shape); ::Skip drops the entry (no row, no MemoryWritten event).
+         *
+         * The default (DefaultMemoryCapturePolicy) returns Full for every write,
+         * preserving pre-v0.10 behaviour exactly. Bind a class implementing
+         * BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy to redact or
+         * drop sensitive entries globally.
+         */
+        'capture_policy' => env('SWARM_MEMORY_CAPTURE_POLICY', DefaultMemoryCapturePolicy::class),
+
+        /*
+         * Per-scope retention windows for `swarm:memory:purge`.
+         *
+         * Each value is the maximum age in days for entries in that scope —
+         * rows whose `created_at` is older than `now() - N days` are eligible
+         * for purge. `null` disables retention enforcement for that scope
+         * (the default for every scope, so existing applications never lose
+         * data without an explicit policy decision). The minimum enforceable
+         * window is 1 day: a value below 1 (e.g. `0`) is treated as `null`
+         * (disabled) and the command warns rather than purging everything.
+         *
+         * Scope hint:
+         *   run          — bounded to a single swarm run; usually the shortest
+         *                  window (PII-heavy step I/O via memory writes).
+         *   conversation — multi-run conversation thread state.
+         *   agent        — per-agent-class persistent state (preferences,
+         *                  remembered knowledge); typically the longest window.
+         *   swarm        — package- or workflow-wide shared state.
+         *
+         * The `swarm:memory:purge` Artisan command reads this map. Schedule it
+         * via Laravel's scheduler once you have set windows that match your
+         * compliance commitments — see docs/advanced-setup.md.
+         */
+        'retention' => [
+            'days' => [
+                'run' => env('SWARM_MEMORY_RETENTION_RUN_DAYS') !== null
+                    ? (int) env('SWARM_MEMORY_RETENTION_RUN_DAYS')
+                    : null,
+                'conversation' => env('SWARM_MEMORY_RETENTION_CONVERSATION_DAYS') !== null
+                    ? (int) env('SWARM_MEMORY_RETENTION_CONVERSATION_DAYS')
+                    : null,
+                'agent' => env('SWARM_MEMORY_RETENTION_AGENT_DAYS') !== null
+                    ? (int) env('SWARM_MEMORY_RETENTION_AGENT_DAYS')
+                    : null,
+                'swarm' => env('SWARM_MEMORY_RETENTION_SWARM_DAYS') !== null
+                    ? (int) env('SWARM_MEMORY_RETENTION_SWARM_DAYS')
+                    : null,
+            ],
+            /*
+             * When true (default), `swarm_memory_snapshots` rows owned by a
+             * purged Run-scoped memory are removed in the same purge run.
+             * Override per invocation with `--keep-snapshots`. Snapshot rows
+             * are addressed by `run_id`; non-Run scopes never own snapshots,
+             * so this flag only affects the Run scope's cascade.
+             */
+            'prune_snapshots' => filter_var(
+                env('SWARM_MEMORY_RETENTION_PRUNE_SNAPSHOTS', true),
+                FILTER_VALIDATE_BOOLEAN
+            ),
+        ],
+    ],
+
+    'pulse' => [
+        'memory' => [
+            /*
+             * Sample rate applied to the SwarmMemoryMetrics Pulse recorder
+             * (entries per scope, write bytes, recall hit/miss, snapshot
+             * bytes + entry counts). Values are clamped to [0.0, 1.0]:
+             *
+             *   1.0 — record every event (default; safe for low/moderate volume)
+             *   0.1 — record ~10% of events (recommended for high-volume apps)
+             *   0.0 — disable sampling entirely (recorder runs as a no-op)
+             *
+             * Sampling is uniform across writes, reads, and snapshots so the
+             * averages stay statistically meaningful — they are the average of
+             * a uniform random sample.
+             */
+            'sample_rate' => (float) env('SWARM_PULSE_MEMORY_SAMPLE_RATE', 1.0),
+        ],
     ],
 
     'streaming' => [

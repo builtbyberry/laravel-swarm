@@ -10,10 +10,13 @@ use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
@@ -35,6 +38,7 @@ class ParallelRunner
         protected SwarmGuardrailRunner $guardrails,
         protected ConfigRepository $config,
         protected SnapshotsMemory $snapshots,
+        protected AgentVisibleMemoryView $view,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -49,28 +53,44 @@ class ParallelRunner
 
         $callbacks = [];
         $snapshots = [];
+        // Constant for the run; forwarded into each worker closure so the
+        // ambient run context is reconstructable even when the concurrency
+        // driver runs the closure in a separate process.
+        $runId = $state->context->runId;
+        $swarmClass = $state->swarm::class;
+        $contextPayload = $state->context->toQueuePayload();
         foreach ($agents as $index => $agent) {
             $agentClass = $agent::class;
             $this->stepsRecorder->started($state, $index, $agentClass, $input);
-            $snapshots[$index] = $this->snapshots->snapshot($state->context->runId, $index);
+            $snapshots[$index] = $this->snapshots->snapshot(
+                $state->context->runId,
+                $index,
+                $this->view->present($state->swarm, $state->context, $agent),
+            );
 
-            $callbacks[$index] = function () use ($agentClass, $input): array {
+            $callbacks[$index] = function () use ($agentClass, $input, $runId, $swarmClass, $contextPayload): array {
                 $agent = Container::getInstance()->make($agentClass);
 
                 if (! $agent instanceof Agent) {
                     throw new SwarmException("Parallel swarm agent [{$agentClass}] must resolve to a Laravel AI agent.");
                 }
 
-                $startedAt = MonotonicTime::now();
-                $response = $agent->prompt($input);
+                ActiveRunContext::enter($runId, $swarmClass, RunContext::fromPayload($contextPayload, $runId));
 
-                return [
-                    'output' => (string) $response,
-                    'usage' => $response->usage->toArray(),
-                    'class' => $agentClass,
-                    'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
-                    'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
-                ];
+                try {
+                    $startedAt = MonotonicTime::now();
+                    $response = $agent->prompt($input);
+
+                    return [
+                        'output' => (string) $response,
+                        'usage' => $response->usage->toArray(),
+                        'class' => $agentClass,
+                        'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
+                        'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
+                    ];
+                } finally {
+                    ActiveRunContext::exit();
+                }
             };
         }
 
