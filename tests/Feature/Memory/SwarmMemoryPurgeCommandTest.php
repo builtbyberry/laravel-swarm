@@ -338,7 +338,10 @@ test('swarm:memory:purge is a no-op (warning) when no scopes have retention conf
 test('the scheduler example in docs/advanced-setup.md references swarm:memory:purge', function (): void {
     $docs = file_get_contents(__DIR__.'/../../../docs/advanced-setup.md');
 
-    expect($docs)->toContain("Schedule::command('swarm:memory:purge')");
+    // Match the scheduled command without pinning its flags, so the docs can
+    // show a throttled/off-peak variant (e.g. --pause) without breaking this
+    // documentation-reference assertion.
+    expect($docs)->toContain("Schedule::command('swarm:memory:purge");
 });
 
 test('swarm:memory:purge is registered with the package', function (): void {
