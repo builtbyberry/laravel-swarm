@@ -16,12 +16,18 @@ use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
 
 /**
  * Conversation scope is shared across runs in the same conversation thread and
- * addressed by conversation id, so two conversations never share an entry. It is
- * asserted at the store boundary because the runtime exposes no conversation
- * handle yet — `AgentVisibleMemoryView` resolves the Conversation scope_id to
- * null and skips it even when a policy declares it, so no agent-visible view can
- * surface Conversation-scoped memory. Both halves of that contract are pinned
- * here.
+ * addressed by conversation id, so two conversations never share an entry. Two
+ * halves of that contract are pinned here:
+ *
+ * 1. Per-conversation addressing, asserted at the store boundary — entries keyed
+ *    by one conversation id never collide with another's.
+ * 2. The runtime skip, asserted at the agent-visible-view boundary — even a
+ *    propagation policy that explicitly declares Conversation scope surfaces
+ *    nothing, because `AgentVisibleMemoryView` resolves the Conversation scope_id
+ *    to null (the v0.10 runtime exposes no conversation handle).
+ *
+ * End-to-end per-conversation *surfacing* is therefore untestable until that
+ * handle exists — tracked in #168.
  */
 pest()->group('compliance');
 
