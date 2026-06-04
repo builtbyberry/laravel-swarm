@@ -238,5 +238,33 @@ class InstallMemoryCommand extends Command
         $this->line('  • Full memory reference: <comment>docs/memory.md</comment>');
         $this->line('  • Per-swarm replay tuning: <comment>#[MemoryReplay(mode: ReplayMode::FreshExecution)]</comment>');
         $this->line('  • Per-swarm worker visibility: <comment>#[PropagationPolicy(MyPolicy::class)]</comment>');
+
+        $this->printOctaneNote();
+    }
+
+    /**
+     * When running under Laravel Octane, Swarm flushes the process-local active
+     * run context on every worker reset automatically (a wired
+     * `OperationTerminated` listener). Surface this only when Octane is present
+     * so the note stays out of the way for everyone else, and document the
+     * manual `flush()` equivalent for operators who want it in `octane.php`.
+     */
+    private function printOctaneNote(): void
+    {
+        if (! interface_exists('Laravel\Octane\Contracts\OperationTerminated')) {
+            return;
+        }
+
+        $this->newLine();
+        $this->components->info('Laravel Octane detected');
+        $this->line(
+            '  Swarm flushes its process-local active run context on every Octane '
+            .'worker reset automatically — no configuration needed.',
+        );
+        $this->line(
+            '  To flush it yourself instead, add to <comment>config/octane.php</comment> under each '
+            .'<comment>*Terminated</comment> listener:',
+        );
+        $this->line('    <comment>\BuiltByBerry\LaravelSwarm\Support\ActiveRunContext::flush(...),</comment>');
     }
 }

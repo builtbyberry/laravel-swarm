@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
 use Illuminate\Support\Facades\Context;
 use Laravel\Ai\Contracts\Conversational;
+use Laravel\Octane\Contracts\OperationTerminated;
 
 /**
  * Process-local handle to the swarm run currently executing an agent.
@@ -41,8 +42,11 @@ use Laravel\Ai\Contracts\Conversational;
  * {@see current()} returns the top, and the next run's {@see enter()} pushes a
  * fresh frame above it, so there is no correctness or cross-run-bleed concern.
  * The only residue is a single retained {@see RunContext} reference until the
- * worker recycles. If you want it cleared eagerly under Octane, reset it from a
- * worker/operationTerminated hook with {@see flush()}.
+ * worker recycles. Under Laravel Octane this residue is cleared eagerly: when
+ * the package detects Octane is installed, {@see SwarmServiceProvider} wires an
+ * {@see OperationTerminated} listener that calls
+ * {@see flush()} on every worker reset (request, task, and tick). Non-Octane
+ * apps rely on the self-healing shadowing described above.
  *
  * @internal
  */

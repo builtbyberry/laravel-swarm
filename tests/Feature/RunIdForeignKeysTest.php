@@ -45,28 +45,46 @@ test('run_id FK migration adds all expected foreign key constraints', function (
 });
 
 test('FK migration rolls back cleanly', function () {
-    // Step 8 rolls back, top of stack first: memories (scope, created_at)
-    // retention-sweep index (v0.10), memories.run_id FK column (v0.9 review
-    // follow-up), memories (v0.9), memory-snapshots (v0.9), audit-outbox,
-    // durable-outbox-indexes, durable-outbox-table, and the FK migration
-    // itself. The FK migration is the eighth-most-recent now that v0.10 added
-    // the (scope, created_at) index on top of the v0.9 memory stack.
-    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 8]);
+    // Roll back one step at a time until the run_id FK constraints are gone, rather
+    // than hard-coding how many migrations currently sit above the FK migration.
+    // This keeps the test self-locating so adding an unrelated migration on top of
+    // the stack does not silently shift a step count. The FK migration does not own
+    // a table, so we probe its effect directly: once an orphan child insert succeeds
+    // the constraints have been dropped. The cap guards against an endless loop.
+    $orphanInsertSucceeds = function (): bool {
+        try {
+            DB::table('swarm_contexts')->insert([
+                'run_id' => 'rollback-check-id',
+                'input' => 'test',
+                'data' => json_encode([]),
+                'metadata' => json_encode([]),
+                'artifacts' => json_encode([]),
+                'expires_at' => now()->addHour(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
 
-    // Tables still exist; FK constraints are just removed. Insert into a child
-    // table without a parent row — should succeed now that FKs are dropped.
-    DB::table('swarm_contexts')->insert([
-        'run_id' => 'rollback-check-id',
-        'input' => 'test',
-        'data' => json_encode([]),
-        'metadata' => json_encode([]),
-        'artifacts' => json_encode([]),
-        'expires_at' => now()->addHour(),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
+            return true;
+        } catch (QueryException) {
+            return false;
+        }
+    };
 
-    expect(DB::table('swarm_contexts')->where('run_id', 'rollback-check-id')->exists())->toBeTrue();
+    // Guard against a vacuous pass: with the FK migration still applied, the
+    // orphan insert must be rejected. If foreign keys were not enforced the
+    // probe below would succeed on the first call, the loop would never roll
+    // back, and the test would pass without exercising the rollback at all.
+    expect($orphanInsertSucceeds())->toBeFalse();
+
+    $cap = 50;
+    while (Schema::hasTable('swarm_contexts') && ! $orphanInsertSucceeds() && $cap-- > 0) {
+        Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 1]);
+    }
+
+    // Tables still exist; the FK constraints are just removed, so the orphan insert
+    // above now persists a row.
+    expect(Schema::hasTable('swarm_contexts'))->toBeTrue()
+        ->and(DB::table('swarm_contexts')->where('run_id', 'rollback-check-id')->exists())->toBeTrue();
 });
 
 // ---------------------------------------------------------------------------
