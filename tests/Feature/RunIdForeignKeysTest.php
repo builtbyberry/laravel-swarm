@@ -70,6 +70,12 @@ test('FK migration rolls back cleanly', function () {
         }
     };
 
+    // Guard against a vacuous pass: with the FK migration still applied, the
+    // orphan insert must be rejected. If foreign keys were not enforced the
+    // probe below would succeed on the first call, the loop would never roll
+    // back, and the test would pass without exercising the rollback at all.
+    expect($orphanInsertSucceeds())->toBeFalse();
+
     $cap = 50;
     while (Schema::hasTable('swarm_contexts') && ! $orphanInsertSucceeds() && $cap-- > 0) {
         Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 1]);
