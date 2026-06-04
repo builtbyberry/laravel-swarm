@@ -26,12 +26,24 @@ use Illuminate\Support\Facades\Schema;
  *
  * Applications publishing migrations under custom table names must add the
  * equivalent index to their published copy.
+ *
+ * Large-table caveat: this builds the index inline, which takes a write lock
+ * (MySQL/InnoDB) or an exclusive lock (Postgres) for the duration of the
+ * build — on the very large `swarm_memories` tables this index targets, that
+ * can stall `php artisan migrate` and block writes for minutes. Operators with
+ * a large table should build it out-of-band (Postgres `CREATE INDEX
+ * CONCURRENTLY`, MySQL online DDL / `pt-online-schema-change`) and then mark
+ * this migration as run, rather than letting it lock the table during deploy.
+ * See UPGRADING.md (v0.10.0).
  */
 return new class extends Migration
 {
     public function up(): void
     {
         Schema::table('swarm_memories', function (Blueprint $table): void {
+            // Inline build — takes a table lock for the build duration. On a
+            // large table, prefer an out-of-band concurrent/online index build
+            // (see the class docblock and UPGRADING.md).
             $table->index(['scope', 'created_at'], 'swarm_memories_scope_created_at_index');
         });
     }
