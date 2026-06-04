@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.11.0 - unreleased
+
+Memory-as-tool DX. First-class Recall/Remember tools agents can use mid-prompt, streaming-compatible. make:memory-tool generator and recipe book for common patterns.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.10.0 - 2026-06-04
 
 Propagation + operator surface — MemoryPropagationPolicy controlling what workers see, CapturePolicy redaction at memory-write, CLI operator commands (inspect/dump/purge), Pulse memory metrics, and the compliance audit guide. Builds on the v0.9.0 memory foundation.
