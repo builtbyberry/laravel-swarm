@@ -178,8 +178,13 @@ use Illuminate\Support\Facades\Schedule;
 Schedule::command('swarm:relay')->everyMinute();        // drains the outbox after each checkpoint
 Schedule::command('swarm:recover')->everyFiveMinutes(); // safety net: redispatches stranded runs
 Schedule::command('swarm:prune')->daily();              // retention: removes expired persistence rows
-Schedule::command('swarm:memory:purge')->daily();       // memory retention: enforces per-scope windows
+Schedule::command('swarm:memory:purge --pause=100')->dailyAt('03:00'); // memory retention: off-peak, throttled between batches
 ```
+
+On large `swarm_memories` tables, run the purge **off-peak** and **throttled** (as
+above) so a flat-out sweep does not pressure the database or a read replica —
+`--pause=<ms>` sleeps between delete batches. On small tables a bare
+`->daily()` is fine.
 
 `swarm:memory:purge` is opt-in retention enforcement for the SwarmMemory
 subsystem. Configure per-scope windows in `config/swarm.php` under
@@ -188,7 +193,8 @@ disables enforcement for that scope. The command dispatches a
 `MemoryPurged` event with per-scope counts and the criteria it ran with so
 app-level audit listeners can record deletions before they happen. Use
 `--dry-run` to preview, `--scope=<value>` to limit a run to a single scope,
-and `--keep-snapshots` to skip the `swarm_memory_snapshots` cascade. See
+`--keep-snapshots` to skip the `swarm_memory_snapshots` cascade, and
+`--pause=<ms>` to throttle between delete batches on large tables. See
 [Compliance & Audit](./compliance-audit.md) for how memory retention fits
 into the wider compliance evidence chain.
 
