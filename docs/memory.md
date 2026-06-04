@@ -368,6 +368,15 @@ address another run's, swarm's, or agent's memory by guessing an id:
 `run` is the safe default: memory scoped to the current task, cleared with it.
 Use `swarm` for state shared across the whole swarm class.
 
+> **Multi-tenant note.** A `swarm`-scope write is addressed by the swarm
+> *class*, so it is shared across **every run — and every tenant — of that swarm
+> class**, not just the current task. An agent that `Remember`s into `swarm`
+> scope can therefore influence what later runs `Recall` (subject to their
+> propagation policy). The capture policy gates *what value* is written, not
+> *which* tenant or agent may write it. If you enable `remember` in a
+> multi-tenant app, either keep agents to `run` scope, partition tenants into
+> distinct swarm classes, or enforce the boundary in your capture policy.
+
 ### Policy interaction
 
 Neither tool bypasses Swarm's memory policies:

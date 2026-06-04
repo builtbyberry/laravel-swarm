@@ -121,3 +121,12 @@ test('it degrades gracefully outside a swarm run', function () {
     expect(remember(['key' => 'topic', 'value' => 'x']))
         ->toBe('Memory is not available outside an active swarm run.');
 });
+
+test('it reports an unaddressable scope distinctly while in a run', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    // The conversation scope is never addressable yet, but the run is active —
+    // so the message must not claim there is no run.
+    expect(remember(['key' => 'topic', 'value' => 'x', 'scope' => 'conversation']))
+        ->toBe('The [conversation] scope is not addressable in this run.');
+});

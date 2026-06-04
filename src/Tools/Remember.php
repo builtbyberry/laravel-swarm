@@ -90,7 +90,15 @@ class Remember implements Tool
         $resolved = $this->scopeResolver()->resolve($scope);
 
         if ($resolved === null) {
-            return 'Memory is not available outside an active swarm run.';
+            // Distinguish "no run at all" from "in a run, but this scope has no
+            // addressable id here" (conversation is never addressable yet; agent
+            // only when the tool is bound to one). Reporting the run as missing
+            // when it is active would wrongly tell the model memory is unusable.
+            if (ActiveRunContext::current() === null) {
+                return 'Memory is not available outside an active swarm run.';
+            }
+
+            return 'The ['.$scope->value.'] scope is not addressable in this run.';
         }
 
         $this->memory()->put(
