@@ -6,7 +6,7 @@ Memory-as-tool DX. First-class Recall/Remember tools agents can use mid-prompt, 
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **Octane worker-reset flush for `ActiveRunContext` (#171).** When `laravel/octane` is installed, `SwarmServiceProvider` now wires a listener on Octane's `OperationTerminated` contract that calls `ActiveRunContext::flush()` on every worker reset (request, task, and tick), so a stale run frame left by an abnormally-terminated run — a hard timeout or fatal that bypasses the `enter()`/`exit()` finally — is cleared eagerly instead of relying on the next run to shadow it. Opt-in by presence: the listener is registered only when Octane's contract is loadable, so non-Octane apps see zero behaviour change and the package never hard-depends on Octane. `swarm:install:memory` now surfaces a confirmation note (and the manual `config/octane.php` equivalent) when it detects Octane.
 
 ### Changed
 

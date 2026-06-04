@@ -119,6 +119,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Telemetry\NoOpSwarmTelemetrySink;
@@ -130,6 +131,7 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Octane\Contracts\OperationTerminated;
 use Laravel\Pulse\Pulse;
 use Livewire\LivewireManager;
 use Psr\Log\LoggerInterface;
@@ -354,6 +356,8 @@ class SwarmServiceProvider extends ServiceProvider
             Event::subscribe(SwarmTelemetryEventListener::class);
         }
 
+        $this->registerOctaneStateReset();
+
         if (class_exists(Pulse::class)) {
             $this->loadViewsFrom(__DIR__.'/../resources/views', 'swarm');
 
@@ -409,6 +413,30 @@ class SwarmServiceProvider extends ServiceProvider
             ]);
         }
 
+    }
+
+    /**
+     * Flush the process-local {@see ActiveRunContext} stack on every Octane
+     * worker reset, so a stale frame left by an abnormally-terminated run
+     * (hard timeout, fatal) never outlives the operation that produced it.
+     *
+     * Opt-in by presence: the listener is wired only when `laravel/octane`'s
+     * {@see OperationTerminated} contract is loadable,
+     * so non-Octane apps see zero behaviour change and we never hard-depend on
+     * the package. The contract is implemented by every terminated event
+     * (request, task, tick), so one binding covers all three reset points.
+     */
+    protected function registerOctaneStateReset(): void
+    {
+        $operationTerminated = 'Laravel\Octane\Contracts\OperationTerminated';
+
+        if (! interface_exists($operationTerminated)) {
+            return;
+        }
+
+        Event::listen($operationTerminated, static function (): void {
+            ActiveRunContext::flush();
+        });
     }
 
     /**
