@@ -56,7 +56,14 @@ and key), so the policy code itself cannot become a leak path.
 
 **Scope.** Redaction covers the entry **value** only. The entry's `metadata`
 (functional annotations such as `source`/`usage`) and the entry **key** are
-persisted unchanged — do not place PII in memory metadata or keys.
+persisted unchanged — do not place PII in memory metadata or keys. This is a
+deliberate boundary, not an oversight: metadata and keys drive functional
+behavior (indexing, filtering, routing), so structurally redacting them would
+break lookups and ordering — and, as with the audit `CapturePolicy`, the policy
+never receives the value, so it cannot couple to payload shape. Keep PII in the
+entry value, where the policy can redact it; the value is also what flows into
+the propagation view, frozen snapshots, and `swarm:memory:dump`, so redacting it
+covers every downstream surface at once.
 
 **Audit evidence.** Each capture decision is observable: a `Redact` write
 dispatches a `MemoryRedacted` event and a `Skip` dispatches `MemoryWriteSkipped`
@@ -166,7 +173,13 @@ table when the database driver is active. The `swarm:memory:purge` Artisan
 command enforces per-scope retention windows so PII-bearing entries do not
 outlive the windows committed to in your privacy policy or regulatory
 filings (GDPR Art. 5(1)(e), HIPAA §164.530(j), SOC 2 CC6.5, FDA 21 CFR
-Part 11 §11.10(c) for record retention).
+Part 11 §11.10(c) for record retention). These citations map a control to the
+expectation it helps satisfy; they are illustrative, not a certification. Part 11
+in particular also expects the audit trail *itself* to be secure and
+tamper-resistant (§11.10(e)) — Swarm's trail is append-style and event-sourced,
+so meeting that clause requires the WORM / hash-chain layer described under
+[Exporting an audit packet](#exporting-an-audit-packet): the package surfaces the
+events, your infrastructure makes them immutable.
 
 ### Configure per-scope windows
 
@@ -300,9 +313,24 @@ what left the system (subject, format, counts, output target), the requesting OS
 user (`requested_by`), and an optional operator `--reason`. Subscribe an audit
 listener (or rely on the audit outbox under database persistence) to keep a
 positive record of every export — when it happened, what left, who ran it, and
-why. (`requested_by` is the OS process owner — the shell user for an interactive
-`artisan` run; for an authenticated end-user identity, capture it in your own
-listener, since an artisan command has no app session.)
+why. (`requested_by` is resolved best-effort from the invoking environment —
+`SUDO_USER`, then `USER`/`LOGNAME`, then the POSIX process owner — so an
+interactive `artisan` run usually records the shell user. Under a queue worker or
+php-fpm it is the daemon's user, not the person who triggered the work; for an
+authoritative end-user identity, pass `--reason` and/or capture the app session
+in your own listener, since an artisan command has no app session.)
+
+By design, the audit category records **completed** exports only. A dump that
+fails — an ambiguous run/conversation id, an unwritable or already-existing
+`--output` path, or the cache driver with no snapshot store — emits no
+`command.memory.dump` record; it surfaces a non-zero exit and an `ok: false`
+error to the operator instead. This keeps the category unambiguous: a
+`command.memory.dump` entry always means data actually left the system, never an
+attempt. The same applies to `swarm:memory:purge`, which audits real deletes,
+dry runs, and `prevent_prune` suppressions, but treats a misconfigured store
+(cache driver, missing table) as a console-surfaced setup error rather than an
+audit event. If your posture requires logging *attempted* extractions or purges,
+wrap the command or capture the console invocation upstream.
 
 > Encryption of the dump output is out of scope for the command — wrap the
 > `--output` file (or the piped stdout) in your own encryption-at-rest /
