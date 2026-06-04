@@ -2,8 +2,11 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryPurged;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -343,4 +346,120 @@ test('swarm:memory:purge is registered with the package', function (): void {
     $kernel = $this->app->make(Kernel::class);
 
     expect(array_key_exists('swarm:memory:purge', $kernel->all()))->toBeTrue();
+});
+
+// ---------------------------------------------------------------------------
+// Audit category — `command.memory.purge` is the load-bearing compliance
+// artifact for retention enforcement: the positive record of *what was removed
+// (or would be), under what criteria, and when*. The tests above assert the
+// in-process `MemoryPurged` event; these assert the audit-sink category the
+// dispatcher enriches and forwards. The prevent_prune path is the one most at
+// risk of regression — a disabled purge must still leave an audit trail showing
+// the scheduled run happened and was skipped. Mirrors the `command.memory.dump`
+// coverage via the shared RecordingSwarmAuditSink.
+// ---------------------------------------------------------------------------
+
+function purgeBindRecordingAuditSink(): RecordingSwarmAuditSink
+{
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    return $sink;
+}
+
+test('emits the command.memory.purge audit category with per-scope counts and criteria on a real prune', function (): void {
+    config()->set('swarm.memory.retention.days', [
+        'run' => 5,
+        'conversation' => null,
+        'agent' => null,
+        'swarm' => null,
+    ]);
+
+    seedMemoryRow(MemoryScope::Run, 'run-old-1', 'k', Carbon::now('UTC')->subDays(10));
+    seedMemoryRow(MemoryScope::Run, 'run-old-2', 'k', Carbon::now('UTC')->subDays(12));
+
+    $sink = purgeBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:purge');
+
+    expect($exit)->toBe(0)
+        ->and($sink->hasCategory('command.memory.purge'))->toBeTrue()
+        ->and($sink->recordsForCategory('command.memory.purge'))->toHaveCount(1);
+
+    $record = $sink->recordsForCategory('command.memory.purge')[0];
+
+    expect($record['category'])->toBe('command.memory.purge')
+        ->and($record['status'])->toBe('purged')
+        ->and($record['dry_run'])->toBeFalse()
+        ->and($record['prevent_prune'])->toBeFalse()
+        // Per-scope counts — what was removed.
+        ->and($record['counts']['run'])->toBe(2)
+        // Criteria — the parameters the operator ran with.
+        ->and($record['criteria']['retention_days']['run'])->toBe(5)
+        ->and($record['criteria']['scope_filter'])->toBeNull()
+        ->and($record['criteria']['prune_snapshots'])->toBeTrue()
+        ->and($record['criteria']['cutoffs'])->toHaveKey('run')
+        // Actor identity — the "who" — is carried in reserved metadata.
+        ->and($record['metadata_keys'])->toContain('actor')
+        ->and($record['metadata'])->toHaveKey('actor');
+});
+
+test('emits the command.memory.purge audit category with status=skipped on the prevent_prune path', function (): void {
+    config()->set('swarm.memory.retention.days.run', 1);
+    config()->set('swarm.retention.prevent_prune', true);
+
+    seedMemoryRow(MemoryScope::Run, 'run-old', 'k', Carbon::now('UTC')->subDays(30));
+
+    $sink = purgeBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:purge');
+
+    // Destructive delete suppressed, but the audit trail must still record the run.
+    expect($exit)->toBe(0)
+        ->and(DB::table('swarm_memories')->count())->toBe(1)
+        ->and($sink->hasCategory('command.memory.purge'))->toBeTrue();
+
+    $record = $sink->recordsForCategory('command.memory.purge')[0];
+
+    expect($record['status'])->toBe('skipped')
+        ->and($record['prevent_prune'])->toBeTrue()
+        ->and($record['dry_run'])->toBeFalse()
+        // Counts are zeroed because nothing was deleted.
+        ->and($record['counts']['run'])->toBe(0)
+        ->and($record['criteria']['prevent_prune'])->toBeTrue();
+});
+
+test('emits the command.memory.purge audit category with status=dry_run on a --dry-run preview', function (): void {
+    config()->set('swarm.memory.retention.days.run', 7);
+
+    seedMemoryRow(MemoryScope::Run, 'run-old-a', 'k', Carbon::now('UTC')->subDays(10));
+    seedMemoryRow(MemoryScope::Run, 'run-old-b', 'k', Carbon::now('UTC')->subDays(20));
+
+    $sink = purgeBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:purge', ['--dry-run' => true]);
+
+    expect($exit)->toBe(0)
+        // Nothing deleted on a dry run, but the access is still recorded.
+        ->and(DB::table('swarm_memories')->count())->toBe(2);
+
+    $record = $sink->recordsForCategory('command.memory.purge')[0];
+
+    expect($record['status'])->toBe('dry_run')
+        ->and($record['dry_run'])->toBeTrue()
+        ->and($record['counts']['run'])->toBe(2);
+});
+
+test('does not emit the command.memory.purge audit category when the persistence driver is not database', function (): void {
+    config()->set('swarm.persistence.driver', 'cache');
+    config()->set('swarm.memory.retention.days.run', 1);
+
+    $sink = purgeBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:purge');
+
+    // The command no-ops before any retention work, so there is nothing to audit.
+    expect($exit)->toBe(0)
+        ->and($sink->hasCategory('command.memory.purge'))->toBeFalse();
 });

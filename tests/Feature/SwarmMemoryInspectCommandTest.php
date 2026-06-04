@@ -2,8 +2,11 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryInspected;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -537,4 +540,104 @@ test('table mode hints at --format=json when a tool-call cell truncates', functi
     $output = Artisan::output();
     expect($output)->toContain('--format=json');
     expect($output)->toContain('truncated');
+});
+
+// ---------------------------------------------------------------------------
+// Audit category — `command.memory.inspect` is the load-bearing compliance
+// artifact: the positive record of *who inspected what, and when*. The event
+// tests above assert the in-process `MemoryInspected` event; these assert the
+// audit-sink category the dispatcher enriches and forwards. A refactor that
+// drops or mis-shapes the category would ship green on the event tests alone —
+// this section guards the category itself. Mirrors the `command.memory.dump`
+// coverage in SwarmMemoryDumpCommandTest via the shared RecordingSwarmAuditSink.
+// ---------------------------------------------------------------------------
+
+function inspectBindRecordingAuditSink(): RecordingSwarmAuditSink
+{
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    return $sink;
+}
+
+test('emits the command.memory.inspect audit category once on a successful list read', function (): void {
+    seedMemorySnapshotRow('run-audit', 0, runEntries('run-audit'));
+    seedMemorySnapshotRow('run-audit', 1, runEntries('run-audit'));
+
+    $sink = inspectBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:inspect', ['run_id' => 'run-audit', '--format' => 'json']);
+
+    expect($exit)->toBe(0)
+        ->and($sink->hasCategory('command.memory.inspect'))->toBeTrue()
+        ->and($sink->recordsForCategory('command.memory.inspect'))->toHaveCount(1);
+
+    $record = $sink->recordsForCategory('command.memory.inspect')[0];
+
+    // Lookup parameters + snapshot count — the "what was inspected" record.
+    expect($record['category'])->toBe('command.memory.inspect')
+        ->and($record['run_id'])->toBe('run-audit')
+        ->and($record['step_index'])->toBeNull()
+        ->and($record['scope_filter'])->toBeNull()
+        ->and($record['format'])->toBe('json')
+        ->and($record['snapshot_count'])->toBe(2)
+        // Actor identity — the "who" — is carried in reserved metadata.
+        ->and($record['metadata_keys'])->toContain('actor')
+        ->and($record['metadata'])->toHaveKey('actor');
+});
+
+test('the command.memory.inspect audit category carries the step and scope filters', function (): void {
+    seedMemorySnapshotRow('run-audit-fil', 0, mixedScopeEntries('run-audit-fil'));
+
+    $sink = inspectBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:inspect', [
+        'run_id' => 'run-audit-fil',
+        '--step' => 0,
+        '--scope' => 'agent',
+        '--format' => 'json',
+    ]);
+
+    expect($exit)->toBe(0);
+
+    $record = $sink->recordsForCategory('command.memory.inspect')[0];
+
+    expect($record['step_index'])->toBe(0)
+        ->and($record['scope_filter'])->toBe('agent')
+        ->and($record['snapshot_count'])->toBe(1);
+});
+
+test('does not emit the command.memory.inspect audit category when the run has no snapshots', function (): void {
+    $sink = inspectBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:inspect', ['run_id' => 'never-existed', '--format' => 'json']);
+
+    expect($exit)->toBe(1)
+        ->and($sink->hasCategory('command.memory.inspect'))->toBeFalse();
+});
+
+test('does not emit the command.memory.inspect audit category when a known run lacks the requested step', function (): void {
+    seedMemorySnapshotRow('run-audit-miss', 0, runEntries('run-audit-miss'));
+
+    $sink = inspectBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:inspect', ['run_id' => 'run-audit-miss', '--step' => 99, '--format' => 'json']);
+
+    expect($exit)->toBe(1)
+        ->and($sink->hasCategory('command.memory.inspect'))->toBeFalse();
+});
+
+test('does not emit the command.memory.inspect audit category under the cache persistence driver', function (): void {
+    // The cache driver resolves SnapshotsMemory to NullSnapshotsMemory; the
+    // command fails with a configuration hint before reaching the audit emit.
+    config()->set('swarm.persistence.driver', 'cache');
+    app()->forgetInstance(SnapshotsMemory::class);
+
+    $sink = inspectBindRecordingAuditSink();
+
+    $exit = Artisan::call('swarm:memory:inspect', ['run_id' => 'r-cache', '--format' => 'json']);
+
+    expect($exit)->toBe(1)
+        ->and($sink->hasCategory('command.memory.inspect'))->toBeFalse();
 });
