@@ -1,0 +1,32 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms;
+
+use BuiltByBerry\LaravelSwarm\Attributes\PropagationPolicy;
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RememberingWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Support\RestrictivePropagationPolicy;
+
+/**
+ * A single-agent sequential swarm pairing the RemembersRunContext trait agent
+ * with the restrictive policy, so a test can prove the trait renders only the
+ * policy-permitted (allow-listed) entry rather than the conversation transcript.
+ */
+#[Topology(TopologyEnum::Sequential)]
+#[PropagationPolicy(RestrictivePropagationPolicy::class)]
+class RememberingRestrictiveSwarm implements Swarm
+{
+    use Runnable;
+
+    public function agents(): array
+    {
+        return [
+            new RememberingWriter,
+        ];
+    }
+}

@@ -136,12 +136,19 @@ for an auditor: the inspector shows the snapshot, and a replay is guaranteed to
 reconstruct from that same snapshot.
 
 That guarantee is backed by a regression suite, not just a design claim. The
-crash-resume replay-determinism tests (#118) assert byte-identical replay across
-every durable topology — run them today with `composer test`. The
-scope-isolation + propagation suite (#127), shipping in this same v0.10.0
-release, adds assertions that concurrent runs never bleed across scopes and that
-each runner enforces its propagation policy. Together they are your replay
-evidence.
+crash-resume replay-determinism tests (#118, `tests/Feature/Memory/ReplayDeterminismTest.php`)
+assert byte-identical replay across every durable topology. The scope-isolation +
+propagation suite (#127, `tests/Feature/Memory/ScopeIsolation/` and
+`tests/Feature/Memory/Propagation/`) adds assertions that concurrent runs never
+bleed across scopes and that each runner — sequential, parallel, hierarchical,
+and the durable branch advancer — enforces its propagation policy under both the
+default and a custom restrictive policy. (The default-policy cases for the live
+sequential/parallel/hierarchical runners live alongside in
+`tests/Feature/Memory/PropagationPolicyTest.php`; the `Propagation/` directory
+adds the durable runner and the restrictive policy.) All are tagged into the `compliance`
+Pest group; run them together as the release compliance gate with
+`composer test:compliance` (they also run inside the standard `composer test`).
+Together they are your replay evidence.
 
 > **Step outputs are not in the snapshot.** With per-step output capture enabled
 > (`swarm.memory.capture_step_output`, #163), each step's output is written to
@@ -509,10 +516,11 @@ artifacts. Each is produced by a command or config already covered above.
   showing the schedule was enforced; or, under legal hold, the
   `criteria.prevent_prune === true` records showing deletion was suspended.
 - [ ] **Replay evidence** — the passing crash-resume replay-determinism suite
-  (#118), plus the scope-isolation/propagation suite (#127) shipping in this
-  release, from `composer test` — demonstrating that the snapshot trail
-  reconstructs the run deterministically and that scopes never
-  cross-contaminated.
+  (#118) plus the scope-isolation/propagation suite (#127,
+  `tests/Feature/Memory/ScopeIsolation/` and `tests/Feature/Memory/Propagation/`),
+  runnable together as the `compliance` Pest group via `composer test:compliance`
+  — demonstrating that the snapshot trail reconstructs the run deterministically
+  and that scopes never cross-contaminated.
 
 ## Further reading
 

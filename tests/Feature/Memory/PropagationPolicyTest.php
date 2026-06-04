@@ -27,7 +27,12 @@ use BuiltByBerry\LaravelSwarm\Tests\Support\WideViewPropagationPolicy;
  * pre-v0.10 behaviour; a per-swarm or config-bound policy can widen it. Every
  * runner consults the policy at the shared snapshot chokepoint, so the frozen
  * view mirrors exactly what the policy returns.
+ *
+ * Tagged into the `compliance` group: the default-policy-on-live-runners cases
+ * here are part of the propagation evidence the #127 suite cross-references.
  */
+pest()->group('compliance');
+
 beforeEach(function () {
     FakeHierarchicalCoordinator::fake([
         HierarchicalTestPlan::make('writer_node', [
@@ -46,24 +51,8 @@ beforeEach(function () {
     $this->app->instance(SnapshotsMemory::class, $this->recorder);
 });
 
-/**
- * Flatten every MemoryEntry the runners handed to the recorder across all
- * snapshot calls.
- *
- * @return array<int, MemoryEntry>
- */
-function capturedEntries(RecordingSnapshotsMemory $recorder): array
-{
-    $entries = [];
-
-    foreach ($recorder->snapshotCalls as $call) {
-        foreach ($call['entries'] ?? [] as $entry) {
-            $entries[] = $entry;
-        }
-    }
-
-    return $entries;
-}
+// capturedEntries() is shared across the propagation + scope-isolation suites;
+// it lives in tests/Pest.php.
 
 test('default policy presents the Run-scoped view only across runners', function (string $swarmClass) {
     // Seed a Swarm-scoped entry the view will gather as a candidate. The
