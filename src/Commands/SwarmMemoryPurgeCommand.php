@@ -44,7 +44,8 @@ class SwarmMemoryPurgeCommand extends Command
     protected $signature = 'swarm:memory:purge
         {--dry-run : Report rows that would be pruned without deleting}
         {--scope= : Limit purge to a single scope (run|conversation|agent|swarm)}
-        {--keep-snapshots : Skip the swarm_memory_snapshots cascade for Run-scoped purges}';
+        {--keep-snapshots : Skip the swarm_memory_snapshots cascade for Run-scoped purges}
+        {--pause=0 : Milliseconds to sleep between delete batches; throttles DB/replication load on large tables (default 0 = no pause)}';
 
     protected $description = 'Enforce configured per-scope memory retention windows (use --dry-run to preview)';
 
@@ -96,6 +97,8 @@ class SwarmMemoryPurgeCommand extends Command
         $pruneSnapshots = ! $keepSnapshots
             && (bool) $config->get('swarm.memory.retention.prune_snapshots', true)
             && $schema->hasTable($snapshotsTable);
+
+        $pauseMs = $this->resolvePauseMs();
 
         $preventPrune = $config->get('swarm.retention.prevent_prune', false) === true;
 
@@ -165,10 +168,11 @@ class SwarmMemoryPurgeCommand extends Command
                     $memoriesTable,
                     $snapshotsTable,
                     $cutoff,
+                    $pauseMs,
                 );
             }
 
-            $counts[$scopeValue] = $this->deleteScope($connection, $memoriesTable, $scopeValue, $cutoff);
+            $counts[$scopeValue] = $this->deleteScope($connection, $memoriesTable, $scopeValue, $cutoff, $pauseMs);
         }
 
         if ($pruneSnapshots) {
@@ -364,7 +368,7 @@ class SwarmMemoryPurgeCommand extends Command
         return (int) $this->scopedQuery($connection, $table, $scope, $cutoff)->count();
     }
 
-    protected function deleteScope(Connection $connection, string $table, string $scope, CarbonImmutable $cutoff): int
+    protected function deleteScope(Connection $connection, string $table, string $scope, CarbonImmutable $cutoff, int $pauseMs = 0): int
     {
         $deleted = 0;
 
@@ -385,6 +389,8 @@ class SwarmMemoryPurgeCommand extends Command
             $deleted += (int) $connection->table($table)
                 ->whereIn('id', $ids)
                 ->delete();
+
+            $this->pauseBetweenBatches($pauseMs);
         }
     }
 
@@ -430,6 +436,7 @@ class SwarmMemoryPurgeCommand extends Command
         string $memoriesTable,
         string $snapshotsTable,
         CarbonImmutable $cutoff,
+        int $pauseMs = 0,
     ): int {
         $deleted = 0;
 
@@ -447,6 +454,39 @@ class SwarmMemoryPurgeCommand extends Command
             $deleted += (int) $connection->table($snapshotsTable)
                 ->whereIn('id', $ids)
                 ->delete();
+
+            $this->pauseBetweenBatches($pauseMs);
+        }
+    }
+
+    /**
+     * Resolve the `--pause=<ms>` throttle. Returns a non-negative millisecond
+     * count; an unparsable or negative value is clamped to 0 (no pause).
+     */
+    protected function resolvePauseMs(): int
+    {
+        $raw = $this->option('pause');
+
+        if (is_int($raw)) {
+            return max(0, $raw);
+        }
+
+        if (is_string($raw) && is_numeric($raw)) {
+            return max(0, (int) $raw);
+        }
+
+        return 0;
+    }
+
+    /**
+     * Sleep between delete batches when a throttle is configured. Lets an
+     * unattended scheduled sweep on a large table shed DB / replication
+     * pressure instead of deleting flat-out. A zero pause is a no-op.
+     */
+    protected function pauseBetweenBatches(int $pauseMs): void
+    {
+        if ($pauseMs > 0) {
+            usleep($pauseMs * 1000);
         }
     }
 

@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesOperatorIdentity;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
@@ -56,6 +57,7 @@ use Symfony\Component\Console\Attribute\AsCommand;
 #[AsCommand(name: 'swarm:memory:dump')]
 class SwarmMemoryDumpCommand extends Command
 {
+    use ResolvesOperatorIdentity;
     use ResolvesStringConsoleInput;
 
     /**
@@ -177,7 +179,7 @@ class SwarmMemoryDumpCommand extends Command
             $written = $this->writeToFile(trim($outputPath), $rendered);
 
             if ($written === false) {
-                return $this->failWith(sprintf('Could not write export to [%s]. Check the path and permissions.', trim($outputPath)));
+                return $this->failWith(sprintf('Could not write export to [%s]. Check the path and permissions, and ensure the file does not already exist (exports never overwrite).', trim($outputPath)));
             }
 
             $this->components->info(sprintf('Wrote %d bytes to %s', $written, trim($outputPath)));
@@ -462,10 +464,13 @@ class SwarmMemoryDumpCommand extends Command
      * Write the rendered export to a file. Returns the byte count on success,
      * or false when the path is not writable.
      *
-     * The file is created empty and locked to owner-only (0600) BEFORE the
-     * payload is written: an audit export can carry unredacted memory values,
-     * so it must never exist world-readable on a shared host, even briefly.
-     * The payload only lands after the mode is tightened.
+     * Opened with exclusive create (`x`): the command refuses to follow a
+     * symlink or clobber an existing file. An audit export can carry unredacted
+     * memory values, so it must never overwrite an unrelated file or be written
+     * through a planted symlink to a world-readable location — `fopen($path,
+     * 'xb')` fails outright if the path already exists. The handle is locked to
+     * owner-only (0600) BEFORE the payload is written, so the export is never
+     * even briefly readable by other users on a shared host.
      */
     protected function writeToFile(string $path, string $contents): int|false
     {
@@ -475,26 +480,18 @@ class SwarmMemoryDumpCommand extends Command
             return false;
         }
 
-        if (@file_put_contents($path, '') === false) {
+        $handle = @fopen($path, 'xb');
+
+        if ($handle === false) {
             return false;
         }
 
         @chmod($path, 0600);
 
-        return @file_put_contents($path, $contents);
-    }
+        $written = @fwrite($handle, $contents);
+        @fclose($handle);
 
-    /**
-     * Best-effort identity of the operator who ran the export, for the audit
-     * trail's "who took a copy" record. Returns the OS process owner — for an
-     * interactive `artisan` invocation this is the shell user; under a queued
-     * worker it is the worker's user, not an authenticated app identity.
-     */
-    protected function resolveRequestedBy(): string
-    {
-        $user = get_current_user();
-
-        return $user !== '' ? $user : 'unknown';
+        return $written;
     }
 
     /**
