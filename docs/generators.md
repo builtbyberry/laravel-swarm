@@ -1,11 +1,12 @@
 # Generators
 
-Laravel Swarm ships two Artisan generator commands that scaffold the two
-classes you write to build a swarm: the **swarm** (the orchestration shell)
-and the **agents** that compose it. Both produce code that matches the
-shape of the runnable starter examples shipped under `stubs/examples/` — so
-what you generate looks like what `swarm:install:examples` lands in your
-app.
+Laravel Swarm ships Artisan generator commands that scaffold the classes
+you write to build a swarm: the **swarm** (the orchestration shell), the
+**agents** that compose it, and custom **memory tools** an agent can call
+mid-prompt. They produce code that matches the shape of the runnable
+starter examples shipped under `stubs/examples/` and the shipped `Recall` /
+`Remember` tools — so what you generate looks like what the framework
+ships.
 
 If you already have a Laravel AI app, this is the same generator
 ergonomics as `php artisan make:agent` — same Laravel conventions, same
@@ -17,6 +18,7 @@ ergonomics as `php artisan make:agent` — same Laravel conventions, same
 |---|---|---|---|
 | `php artisan make:swarm:swarm <Name>` | `app/Ai/Swarms/<Name>.php` | `swarm.stub` (plus topology variants) | You're building a new swarm. |
 | `php artisan make:swarm:agent <Name>` | `app/Ai/Agents/<Name>.php` | `swarm.agent.stub` | You're adding a new agent to a swarm. |
+| `php artisan make:memory-tool <Name>` | `app/Ai/Tools/<Name>.php` | `swarm.memory-tool.stub` (plus a `--vector` variant) | You're building a custom `Recall`/`Remember` memory tool. |
 | `php artisan make:swarm <Name>` | `app/Ai/Swarms/<Name>.php` | (delegates to `make:swarm:swarm`) | **Deprecated** — prints a migration hint and delegates to `make:swarm:swarm`. Will be removed in a future major release. |
 
 ## `make:swarm:swarm`
@@ -82,6 +84,61 @@ API credit. When you want a real model:
 
 The rest of the swarm wiring stays identical. Drop-in.
 
+## `make:memory-tool`
+
+Scaffolds a custom memory tool under `app/Ai/Tools/`. The generated class
+extends one of the shipped memory tools — `Recall` or `Remember` (see
+[Swarm Memory](memory.md#recall-and-remember-tools)) — so a custom tool has
+the exact same shape and safety guarantees as the framework's own: scope
+ids resolve from the active run (never from the model), reads honour the
+propagation policy, and writes flow through the capture policy.
+
+```bash
+php artisan make:memory-tool TenantRecall
+php artisan make:memory-tool DomainRemember --base=remember
+php artisan make:memory-tool SwarmNotes --scope=swarm
+php artisan make:memory-tool SemanticRecall --vector
+```
+
+Drop the generated tool into any `laravel/ai` agent's `tools()` array, or
+expose it through the `HasSwarmMemoryTools` trait by binding your subclass
+in the container.
+
+### Options
+
+| Option | Values | Default | Effect |
+|---|---|---|---|
+| `--scope` | `run`, `conversation`, `agent`, `swarm` | `run` | Seeds the tool's default `MemoryScope`. |
+| `--base` | `recall`, `remember` | `recall` | Chooses whether the tool extends the read tool (`Recall`) or the write tool (`Remember`). |
+| `--vector` | flag | off | Scaffolds a semantic, vector-aware variant. **Requires** the `builtbyberry/laravel-swarm-memory-vector` companion. |
+| `--force` | flag | off | Overwrites an existing tool file. |
+
+Pass an unknown `--scope` or `--base` value and the command exits 1 with a
+clear error listing the valid options.
+
+Slash-separated names produce nested namespaces
+(`App\Ai\Tools\Memory\ScopedRecall`), the same convention as the other
+generators.
+
+### The `--vector` flag
+
+`--vector` scaffolds a tool that answers a free-text `query` by semantic
+similarity (falling back to exact key/prefix reads) instead of the base
+tool's exact lookups. It is only available when the
+[`laravel-swarm-memory-vector`](https://github.com/builtbyberry/laravel-swarm-memory-vector)
+companion package is installed — the command detects it via Composer and
+exits 1 with an install hint when it is absent:
+
+```
+The --vector flag requires the builtbyberry/laravel-swarm-memory-vector
+companion package, which is not installed. Install it with:
+composer require builtbyberry/laravel-swarm-memory-vector
+```
+
+The generated vector tool ships a clearly-marked `TODO` in `semanticRecall()`
+where you wire the companion's vector reader — consult that package's README
+for its exact public surface.
+
 ## Customizing the stubs
 
 Publish the shipped stubs into your application to customize them:
@@ -90,11 +147,12 @@ Publish the shipped stubs into your application to customize them:
 php artisan vendor:publish --tag=swarm-stubs
 ```
 
-This drops the five stub files (`swarm.stub`, `swarm.parallel.stub`,
+This drops the stub files (`swarm.stub`, `swarm.parallel.stub`,
 `swarm.hierarchical.stub`, `swarm.static-hierarchical.stub`,
-`swarm.agent.stub`) into your project's `stubs/` directory. Both
-generators check for a published copy first and fall back to the shipped
-stub if none is present.
+`swarm.agent.stub`, `swarm.memory-tool.stub`,
+`swarm.memory-tool.vector.stub`) into your project's `stubs/` directory.
+Every generator checks for a published copy first and falls back to the
+shipped stub if none is present.
 
 ## Migration from `make:swarm`
 
