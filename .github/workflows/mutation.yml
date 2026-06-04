@@ -31,7 +31,7 @@ jobs:
           php-version: '8.5'
           tools: composer:v2
           coverage: pcov
-          ini-values: memory_limit=512M
+          ini-values: memory_limit=1G
 
       - name: Install dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
