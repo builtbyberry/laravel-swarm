@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
 use BuiltByBerry\LaravelSwarm\Memory\NullConversationRunResolver;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
 /**
  * Resolves the set of run ids that belong to a conversation.
@@ -14,11 +15,14 @@ use BuiltByBerry\LaravelSwarm\Memory\NullConversationRunResolver;
  * memory entry and snapshot recorded under that conversation — not just the
  * Conversation-scoped entries.
  *
- * The package itself cannot do that expansion: as of v0.10 the runtime exposes
- * no conversation handle (see {@see MemoryPropagationPolicy}), `swarm_memories`
- * Conversation rows carry `run_id = NULL`, and `swarm_run_histories` has no
- * `conversation_id` column. There is therefore no data linking a run to a
- * conversation inside Swarm's own tables.
+ * The package itself cannot do that expansion generically. A run now carries a
+ * first-class conversation handle
+ * ({@see RunContext::withConversationId()},
+ * as of v0.12), but that id lives in the run's metadata map, not an indexed
+ * column: `swarm_memories` Conversation rows carry `run_id = NULL`, and
+ * `swarm_run_histories` exposes no queryable `conversation_id` column. There is
+ * therefore still no first-class, queryable link from a conversation to its
+ * runs inside Swarm's own tables.
  *
  * This contract is the seam that lets an application — which DOES know its
  * own conversation/run topology — teach the dump command how to expand a
@@ -32,9 +36,8 @@ use BuiltByBerry\LaravelSwarm\Memory\NullConversationRunResolver;
  *         AppConversationRunResolver::class,
  *     );
  *
- * @experimental The shape may firm up once the runtime exposes a first-class
- * conversation handle; the `string -> list<string>` signature is intended to
- * remain stable across that change.
+ * The `string -> list<string>` signature is stable: a conversation id maps to
+ * the ordered run ids recorded under it.
  */
 interface ConversationRunResolver
 {

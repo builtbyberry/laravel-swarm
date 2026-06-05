@@ -9,8 +9,11 @@ use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Responses\DurableWaitOutcome;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
+use BuiltByBerry\LaravelSwarm\Tools\Recall;
+use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Auth\Authenticatable;
 use JsonException;
@@ -28,7 +31,8 @@ use JsonException;
  * duration of the run; persistence happens on the documented mutation paths.
  *
  * `$metadata` and `$artifacts` are framework-operational state — durable
- * labels, actor binding, signal payloads, wait outcomes, captured artifacts.
+ * labels, actor binding, conversation binding, signal payloads, wait outcomes,
+ * captured artifacts.
  * Those intentionally do not write through to SwarmMemory: they're not
  * agent-readable knowledge, just plumbing.
  *
@@ -130,7 +134,7 @@ class RunContext implements ArrayAccess
      *
      * This is a test helper. Do not use it in production code paths.
      *
-     * @param  array{run_id?: string, input?: string, data?: array<string, mixed>, metadata?: array<string, mixed>, artifacts?: array<int, SwarmArtifact>, actor?: Actor|Authenticatable|string|null}  $overrides
+     * @param  array{run_id?: string, input?: string, data?: array<string, mixed>, metadata?: array<string, mixed>, artifacts?: array<int, SwarmArtifact>, actor?: Actor|Authenticatable|string|null, conversation_id?: string|null}  $overrides
      */
     public static function fake(array $overrides = []): self
     {
@@ -148,6 +152,10 @@ class RunContext implements ArrayAccess
             // immutability would silently break the fake helper otherwise; the
             // reassignment costs nothing and futureproofs the call.
             $context = $context->withActor($overrides['actor']);
+        }
+
+        if (array_key_exists('conversation_id', $overrides)) {
+            $context = $context->withConversationId($overrides['conversation_id']);
         }
 
         return $context;
@@ -211,6 +219,50 @@ class RunContext implements ArrayAccess
         }
 
         return Actor::fromArray($payload);
+    }
+
+    /**
+     * Bind the conversation this run belongs to. Accepts an opaque conversation
+     * id string, or null (or empty/whitespace) to clear.
+     *
+     * The id is stored under the reserved metadata key "conversation_id" rather
+     * than a dedicated column — the same mechanism {@see withActor()} uses — so
+     * it threads through every queue, cache, and durable persistence path, all
+     * of which carry the metadata map wholesale.
+     *
+     * Once set, the {@see MemoryScope::Conversation} scope becomes addressable:
+     * {@see AgentVisibleMemoryView} gathers
+     * Conversation-scoped entries under this id, and the
+     * {@see Recall}/
+     * {@see Remember} tools read and write it.
+     * With no conversation id bound the scope stays unaddressable and those
+     * call sites skip or decline it gracefully, exactly as before.
+     */
+    public function withConversationId(?string $conversationId): self
+    {
+        $conversationId = $conversationId !== null ? trim($conversationId) : null;
+
+        if ($conversationId === null || $conversationId === '') {
+            unset($this->metadata['conversation_id']);
+
+            return $this;
+        }
+
+        $this->metadata['conversation_id'] = $conversationId;
+
+        return $this;
+    }
+
+    /**
+     * The conversation id bound to this run, or null when the run does not
+     * belong to a conversation. Reads back the reserved metadata slot set by
+     * {@see withConversationId()}.
+     */
+    public function conversationId(): ?string
+    {
+        $id = $this->metadata['conversation_id'] ?? null;
+
+        return is_string($id) && $id !== '' ? $id : null;
     }
 
     public function addArtifact(SwarmArtifact $artifact): self

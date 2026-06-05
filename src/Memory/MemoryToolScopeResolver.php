@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunRecord;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
 /**
  * Resolves the concrete `(scope, scopeId)` address a memory tool should read or
@@ -26,9 +27,10 @@ use BuiltByBerry\LaravelSwarm\Support\ActiveRunRecord;
  *  - {@see MemoryScope::Agent}        — the bound agent's class-string, when the
  *                                       tool was constructed for a specific
  *                                       agent; otherwise unresolvable.
- *  - {@see MemoryScope::Conversation} — never resolvable yet (the runtime
- *                                       exposes no conversation handle, the same
- *                                       gap the view documents).
+ *  - {@see MemoryScope::Conversation} — the conversation id bound to the active
+ *                                       run via
+ *                                       {@see RunContext::withConversationId()},
+ *                                       when present; otherwise unresolvable.
  *
  * Returns null when the requested scope cannot be addressed in the current
  * context (no active run, or a scope whose id is not in hand). Callers treat
@@ -70,7 +72,7 @@ final class MemoryToolScopeResolver
             MemoryScope::Run => $record->runId,
             MemoryScope::Swarm => $record->swarmClass,
             MemoryScope::Agent => $this->agent !== null ? $this->agent::class : null,
-            MemoryScope::Conversation => null,
+            MemoryScope::Conversation => $record->context->conversationId(),
         };
     }
 }

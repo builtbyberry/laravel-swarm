@@ -61,8 +61,9 @@ final class AgentVisibleMemoryView
      * The Agent scope is gathered only when the concrete agent instance is
      * known; on the durable and hierarchical-parallel paths only the
      * class-string is in hand, so a declared Agent scope is skipped there. The
-     * Conversation scope has no scope-id to key on yet (the runtime exposes no
-     * conversation handle), so it is skipped if declared.
+     * Conversation scope keys on the conversation id bound to the run via
+     * {@see RunContext::withConversationId()}; when no conversation id is bound
+     * the scope has no id to key on and is skipped if declared.
      *
      * @param  array<int, MemoryScope>  $scopes
      * @return array<int, MemoryEntry>
@@ -76,7 +77,7 @@ final class AgentVisibleMemoryView
                 MemoryScope::Run => $context->runId,
                 MemoryScope::Swarm => $swarm::class,
                 MemoryScope::Agent => $agent !== null ? $agent::class : null,
-                MemoryScope::Conversation => null,
+                MemoryScope::Conversation => $context->conversationId(),
             };
 
             if ($scopeId === null) {

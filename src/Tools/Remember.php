@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemoryToolScopeResolver;
 use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\SwarmMemoryKeys;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
@@ -33,8 +34,11 @@ use Stringable;
  *
  * The scope id is never accepted from the model; it is resolved from the
  * ambient {@see ActiveRunContext} via
- * {@see MemoryToolScopeResolver}, so an agent cannot write into another run's or
- * swarm's memory. Package-reserved keys (the `swarm:` prefix) are rejected so an
+ * {@see MemoryToolScopeResolver}, so an agent cannot write into another run's,
+ * swarm's, or conversation's memory. The Conversation scope is addressable only
+ * when a conversation id is bound to the run via
+ * {@see RunContext::withConversationId()};
+ * without one, a Conversation-scoped write declines gracefully. Package-reserved keys (the `swarm:` prefix) are rejected so an
  * agent cannot overwrite framework-owned entries such as step outputs.
  *
  * Outside a swarm run (no active context) the tool degrades gracefully: it
@@ -92,9 +96,10 @@ class Remember implements Tool
 
         if ($resolved === null) {
             // Distinguish "no run at all" from "in a run, but this scope has no
-            // addressable id here" (conversation is never addressable yet; agent
-            // only when the tool is bound to one). Reporting the run as missing
-            // when it is active would wrongly tell the model memory is unusable.
+            // addressable id here" (conversation only when the run is bound to
+            // one; agent only when the tool is bound to one). Reporting the run
+            // as missing when it is active would wrongly tell the model memory
+            // is unusable.
             if (ActiveRunContext::current() === null) {
                 return 'Memory is not available outside an active swarm run.';
             }
