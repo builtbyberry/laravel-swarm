@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRecallSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRememberSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingUnpairedToolCallSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
 use Illuminate\Support\Facades\Artisan;
 
@@ -138,4 +139,39 @@ test('persisted replay re-yields a streamed Recall run byte-identically', functi
     );
 
     expect($serialize($replayEvents))->toBe($serialize($originalEvents));
+});
+
+test('an unmatched streamed tool call is snapshotted with a null result so replay can detect a partial run', function () {
+    $recorder = new RecordingSnapshotsMemory;
+    $this->app->instance(SnapshotsMemory::class, $recorder);
+
+    $events = iterator_to_array(StreamingUnpairedToolCallSwarm::make()->stream('unpaired-task'));
+
+    // The call surfaced in the stream, but no result event followed it.
+    expect(collect($events)->whereInstanceOf(SwarmToolCall::class)->first())->not->toBeNull();
+    expect(collect($events)->whereInstanceOf(SwarmToolResult::class)->first())->toBeNull();
+
+    // The runner flushes the still-pending call into the snapshot at stream end
+    // with result=null — exactly one append, result absent.
+    expect($recorder->toolCallAppends)->toHaveCount(1);
+
+    $append = $recorder->toolCallAppends[0]['tool_call'];
+    expect($append['name'])->toBe('remember');
+    expect($append['arguments'])->toBe(['key' => 'finding', 'value' => 'streamed-answer', 'scope' => 'run']);
+    expect($append['result'])->toBeNull();
+});
+
+test('the unmatched streamed tool call persists with a null result in the database', function () {
+    $stream = StreamingUnpairedToolCallSwarm::make()->stream('unpaired-db-task');
+    iterator_to_array($stream);
+
+    // Read back from the default database-backed recorder (driver=database).
+    /** @var SnapshotsMemory $recorder */
+    $recorder = app(SnapshotsMemory::class);
+    $snapshot = $recorder->find($stream->runId, 0);
+
+    expect($snapshot)->not->toBeNull();
+    expect($snapshot->toolCalls)->toHaveCount(1);
+    expect($snapshot->toolCalls[0]['name'])->toBe('remember');
+    expect($snapshot->toolCalls[0]['result'])->toBeNull();
 });
