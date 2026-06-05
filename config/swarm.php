@@ -335,6 +335,44 @@ return [
         'capture_policy' => env('SWARM_MEMORY_CAPTURE_POLICY', DefaultMemoryCapturePolicy::class),
 
         /*
+         * The agent-facing Recall and Remember memory tools (Tools\Recall,
+         * Tools\Remember). Both implement Laravel AI's Tool contract and drop
+         * into any agent's tools() array. Recall reads through the active
+         * propagation policy (it can only surface what the policy permits);
+         * Remember writes through the capture policy (redaction is applied at
+         * the write boundary). Scope ids are resolved from the active run, never
+         * taken from the model, and the reserved `swarm:` key prefix is rejected.
+         *
+         * 'enabled' is the master switch for the HasSwarmMemoryTools concern:
+         * agents using that trait expose the tools only when this is true, so
+         * adding the trait is inert until you opt in app-wide. It does NOT force
+         * the tools onto agents that attach them directly. **Disabled by
+         * default** — granting an LLM read/write access to shared run memory is
+         * an explicit decision: review your propagation and capture policies
+         * first so an agent cannot read or persist anything you would not want
+         * it to.
+         *
+         * 'recall' / 'remember' toggle each tool individually (both default on
+         * once 'enabled' is true). The class names are resolved from the
+         * container, so bind a subclass to customise a tool's description or
+         * bind it to a specific agent for Agent-scope addressing.
+         */
+        'tools' => [
+            'enabled' => filter_var(
+                env('SWARM_MEMORY_TOOLS_ENABLED', false),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'recall' => filter_var(
+                env('SWARM_MEMORY_TOOLS_RECALL', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'remember' => filter_var(
+                env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+        ],
+
+        /*
          * Per-scope retention windows for `swarm:memory:purge`.
          *
          * Each value is the maximum age in days for entries in that scope —

@@ -314,6 +314,182 @@ The runner publishes the active run around every agent invocation across all fou
 
 ---
 
+## Recall and Remember tools
+
+Where `RemembersRunContext` injects the run's memory as conversation *before* the
+agent thinks, the **`Recall` and `Remember` tools** let the agent read and write
+memory *while* it thinks — as ordinary `laravel/ai` tool calls mid-prompt. Both
+implement `Laravel\Ai\Contracts\Tool`, so they drop into any agent's `tools()`
+array with no Swarm-specific code in the agent.
+
+```php
+use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\HasTools;
+use Laravel\Ai\Promptable;
+use BuiltByBerry\LaravelSwarm\Tools\Recall;
+use BuiltByBerry\LaravelSwarm\Tools\Remember;
+
+class Researcher implements Agent, HasTools
+{
+    use Promptable;
+
+    public function instructions(): string
+    {
+        return 'Research the topic. Use the remember tool to save findings for '
+            .'later agents, and the recall tool to read what earlier agents found.';
+    }
+
+    public function tools(): iterable
+    {
+        return [new Recall, new Remember];
+    }
+}
+```
+
+- **`Recall`** reads memory. The model calls it with a single `key`, a `prefix`
+  (every key starting with it), or neither (the whole `scope`). `scope` defaults
+  to `run`.
+- **`Remember`** writes memory. The model calls it with a `key` and a `value`,
+  optionally naming a `scope` (default `run`).
+
+### Scopes and addressing
+
+Both tools take a `scope` *name* from the model but never a scope *id* — the id
+is framework-owned and resolved from the active run, so an agent can never
+address another run's, swarm's, or agent's memory by guessing an id:
+
+| Scope          | Resolves to                          |
+| -------------- | ------------------------------------ |
+| `run` (default) | the active run id                   |
+| `swarm`        | the active swarm class               |
+| `agent`        | only when the tool is bound to a specific agent (see below) |
+| `conversation` | not addressable yet (no runtime conversation handle) |
+
+`run` is the safe default: memory scoped to the current task, cleared with it.
+Use `swarm` for state shared across the whole swarm class.
+
+> **Multi-tenant note.** A `swarm`-scope write is addressed by the swarm
+> *class*, so it is shared across **every run — and every tenant — of that swarm
+> class**, not just the current task. An agent that `Remember`s into `swarm`
+> scope can therefore influence what later runs `Recall` (subject to their
+> propagation policy). The capture policy gates *what value* is written, not
+> *which* tenant or agent may write it. If you enable `remember` in a
+> multi-tenant app, either keep agents to `run` scope, partition tenants into
+> distinct swarm classes, or enforce the boundary in your capture policy.
+
+### Policy interaction
+
+Neither tool bypasses Swarm's memory policies:
+
+- **`Recall` respects the propagation policy.** It reads through the same
+  agent-visible view the runners freeze into snapshots, so it can only ever
+  surface entries the active swarm's `MemoryPropagationPolicy` already permits
+  this agent to see. Under the default policy that is the Run-scoped view;
+  entries the policy withholds (other scopes, filtered keys) are invisible to
+  `Recall` exactly as they are to the agent's input.
+- **`Remember` respects the capture policy.** Writes go through
+  `SwarmMemory::put()`, which is decorated by the `RedactingMemoryStore`, so the
+  `MemoryCapturePolicy` redacts (`[redacted]`) or drops (`Skip`) the entry at the
+  write boundary — the same enforcement any other write gets. PII an agent tries
+  to persist never enters memory if your policy redacts it.
+
+`Remember` also rejects the package-reserved `swarm:` key prefix, so an agent
+cannot overwrite framework-owned entries such as step outputs.
+
+### Behaviour inside and outside a swarm
+
+Both tools work inside all four topologies (sequential, parallel,
+hierarchical/static-hierarchical) and across nested runs — each run frame
+addresses its own scope. Invoked **outside** a swarm run (no active run), they
+degrade gracefully: instead of throwing, they return a short "memory is not
+available" string, so an agent wired with the tools still works standalone.
+
+### Memory tools with streaming
+
+`Recall` and `Remember` work transparently inside `$agent->stream(...)`. Because
+both implement `Laravel\Ai\Contracts\Tool`, `laravel/ai` already handles their
+invocation during a streamed turn — the package adds no streaming-specific tool
+code. When the model calls a memory tool mid-stream:
+
+- The tool call and its result appear in the `StreamableSwarmResponse` as
+  ordinary `swarm_tool_call` / `swarm_tool_result` events, in order, exactly as
+  any other `laravel/ai` tool would surface. The memory side-effect (a
+  `Remember` write, a `Recall` read) happens at the point of the call, before
+  the result event is yielded.
+- The sequential stream runner publishes the active run *before* it invokes the
+  final agent's `stream()`, so a memory tool resolves its scope id from the
+  ambient run identically to a `prompt()` run. A streamed `Recall` therefore
+  sees what earlier steps wrote, and a streamed `Remember` write is visible to
+  later steps.
+
+```php
+$stream = $swarm->stream('Summarise what the team found.');
+
+foreach ($stream as $event) {
+    // swarm_tool_call → swarm_tool_result for each Recall/Remember the model made,
+    // interleaved with the usual text deltas.
+}
+```
+
+**Snapshot capture and replay.** The [snapshot mechanism](#snapshot-mechanism)
+captures both the tool-call input and the tool result for every memory-tool call
+made inside a streamed run. The runner holds each `ToolCall` until its matching
+`ToolResult` arrives, then appends a single paired entry to the step snapshot, so
+the snapshot row's write count stays proportional to tool *results*, not raw
+stream events. A call left unmatched by stream end is still recorded with a null
+result so replay can detect a partial run.
+
+Combined with [persisted stream replay](../docs/streaming.md), a streamed run
+that used the memory tools replays byte-identically: re-running
+`SwarmHistory::replay($runId)` yields the same ordered tool-call and tool-result
+events the original stream produced.
+
+### Optional default-on registration
+
+Rather than wiring the tools into every agent by hand, add the
+`HasSwarmMemoryTools` concern and merge `swarmMemoryTools()` into `tools()`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Concerns\HasSwarmMemoryTools;
+
+class Researcher implements Agent, HasTools
+{
+    use HasSwarmMemoryTools, Promptable;
+
+    public function tools(): iterable
+    {
+        return [...$this->swarmMemoryTools(), new MyOtherTool];
+    }
+}
+```
+
+`swarmMemoryTools()` returns the tools only when `swarm.memory.tools.enabled` is
+true, so adding the trait is inert until you opt in app-wide:
+
+```php
+// config/swarm.php — disabled by default; granting an LLM read/write access to
+// shared run memory is an explicit decision. Review your propagation and capture
+// policies first.
+'memory' => [
+    'tools' => [
+        'enabled'  => env('SWARM_MEMORY_TOOLS_ENABLED', false),
+        'recall'   => env('SWARM_MEMORY_TOOLS_RECALL', true),
+        'remember' => env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+    ],
+],
+```
+
+The `recall` / `remember` toggles enable each tool individually. The tool
+classes are resolved from the container, so you can bind a subclass — for
+example to override a tool's `description()`, or to bind it to a specific agent
+so the `agent` scope resolves to that agent's class.
+
+For worked, copy-paste patterns built on these hooks — per-user and tenant-scoped
+recall, a policy-enforced custom `Recall`, recall + redact, and sub-agent memory
+continuity — see [Memory recipes](memory-recipes.md).
+
+---
+
 ## Capture policy (write-time redaction)
 
 Where the propagation policy decides what an agent *reads*, the **capture policy** decides what gets *written*. `MemoryCapturePolicy` is consulted at the write boundary and returns a `CaptureDecision` per `(scope, key)`:
@@ -791,6 +967,7 @@ For aggregate Pulse internals — period selectors, recorder enable flag, troubl
 
 ## See Also
 
+- [Memory Recipes](memory-recipes.md) — worked patterns for the Recall/Remember tools: per-user and tenant-scoped recall, policy-enforced custom tools, recall + redact, and sub-agent memory continuity
 - [RunContext](run-context.md) — the envelope that carries input, identity, and carry-forward data through a run; includes ArrayAccess reference
 - [Lifecycle Events](events.md) — every swarm lifecycle event, including memory events
 - [Durable Execution](durable-execution.md) — checkpointing, crash-resume, and replay

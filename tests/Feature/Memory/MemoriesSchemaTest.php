@@ -39,10 +39,15 @@ test('the swarm_memories table exists with the expected columns', function () {
 });
 
 test('migration up/down is idempotent', function () {
-    // Stack from the top: (1) memories (scope, created_at) retention-sweep index
-    // (v0.10.0), (2) memories.run_id FK column (review follow-up), (3) memories
-    // table itself. Step=3 drops the index, then the run_id FK, then the table.
-    Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 3]);
+    // Roll back one step at a time until the swarm_memories table is gone, rather
+    // than hard-coding how many migrations currently sit above it. This keeps the
+    // test self-locating so adding an unrelated migration on top of the stack does
+    // not silently shift a step count. The cap guards against an endless loop.
+    $cap = 50;
+    while (Schema::hasTable('swarm_memories') && $cap-- > 0) {
+        Artisan::call('migrate:rollback', ['--database' => 'testing', '--step' => 1]);
+    }
+
     expect(Schema::hasTable('swarm_memories'))->toBeFalse();
 
     // And re-running migrate brings it back cleanly.

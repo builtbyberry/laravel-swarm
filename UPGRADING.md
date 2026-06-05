@@ -268,6 +268,29 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.11.0
+
+**No required action.** v0.11.0 is purely additive — there are no breaking
+changes for applications *or* for code that implements a Swarm contract or
+extends a Swarm class. Everything new is opt-in:
+
+- The `Recall` / `Remember` agent memory tools and the `HasSwarmMemoryTools`
+  trait are **disabled by default**. They do nothing until you set
+  `swarm.memory.tools.enabled` (`SWARM_MEMORY_TOOLS_ENABLED`) to `true` and
+  attach the tools to an agent. Granting an LLM read/write access to shared run
+  memory is an explicit decision — review your `MemoryPropagationPolicy` and
+  `MemoryCapturePolicy` before enabling. See
+  [docs/memory-recipes.md](docs/memory-recipes.md) for the safe patterns.
+- The `make:memory-tool` generator is a new command; it changes nothing about
+  existing tools.
+- The Octane worker-reset listener (#171) is wired only when `laravel/octane`
+  is installed and is behaviourally invisible otherwise.
+
+If you publish `config/swarm.php`, re-publish (or merge) it with
+`php artisan vendor:publish --tag=swarm-config --force` to pick up the new
+`memory.tools` block — optional, since the package falls back to the shipped
+defaults for any key you don't override.
+
 ## Upgrading to v0.10.0
 
 v0.10.0 is **non-breaking for applications** that only consume the documented
