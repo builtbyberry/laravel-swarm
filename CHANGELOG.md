@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.11.0 - unreleased
+## v0.11.0 - 2026-06-05
 
-Memory-as-tool DX. First-class Recall/Remember tools agents can use mid-prompt, streaming-compatible. make:memory-tool generator and recipe book for common patterns.
+Memory-as-tool DX. First-class Recall/Remember tools agents can use mid-prompt, streaming-compatible. make:memory-tool generator and recipe book for common patterns. Purely additive — no breaking changes; existing apps upgrade with no required action.
 
 ### Added
 
@@ -11,13 +11,14 @@ Memory-as-tool DX. First-class Recall/Remember tools agents can use mid-prompt, 
 - **`make:memory-tool` generator (#130).** New `php artisan make:memory-tool {name}` Artisan command scaffolds a custom Swarm memory tool under `app/Ai/Tools/`, following the v0.8 `make:swarm:*` generator pattern (#101 / #91) and the `app/Ai/` starter-example conventions (#89). The generated class extends one of the shipped `Recall` / `Remember` tools (#128), so a custom tool inherits the same shape and safety guarantees — scope ids resolve from the active run (never from the model), reads honour the propagation policy, and writes flow through the capture policy. `--scope=run|conversation|agent|swarm` seeds the tool's default `MemoryScope`; `--base=recall|remember` chooses the read- or write-tool shape (default `recall`); `--vector` scaffolds a semantic, vector-aware variant but only when the `builtbyberry/laravel-swarm-memory-vector` companion is installed (detected via Composer's `InstalledVersions`), erroring with an install hint otherwise; `--force` overwrites an existing file. Unknown `--scope` / `--base` values exit 1 with the valid options. Stubs are publishable via `vendor:publish --tag=swarm-stubs` (`swarm.memory-tool.stub`, `swarm.memory-tool.vector.stub`). See [Generators](docs/generators.md#make-memory-tool).
 - **Octane worker-reset flush for `ActiveRunContext` (#171).** When `laravel/octane` is installed, `SwarmServiceProvider` now wires a listener on Octane's `OperationTerminated` contract that calls `ActiveRunContext::flush()` on every worker reset (request, task, and tick), so a stale run frame left by an abnormally-terminated run — a hard timeout or fatal that bypasses the `enter()`/`exit()` finally — is cleared eagerly instead of relying on the next run to shadow it. Opt-in by presence: the listener is registered only when Octane's contract is loadable, so non-Octane apps see zero behaviour change and the package never hard-depends on Octane. `swarm:install:memory` now surfaces a confirmation note (and the manual `config/octane.php` equivalent) when it detects Octane.
 
-### Changed
-
-_To be filled in during release wrap-up._
-
 ### Documentation
 
 - **Memory-as-tool recipe book (#131).** New [docs/memory-recipes.md](docs/memory-recipes.md) is the pattern companion to the [Recall and Remember tools](docs/memory.md#recall-and-remember-tools) reference — the "here's how people actually use this" cookbook that anchors the memory contracts to real, copy-paste shipping patterns. Five worked recipes, each built on the tools' real extension hooks (so each is a `make:memory-tool`-scaffoldable subclass) and stating a problem, code, and when-to-use guidance: **per-user scoped recall** (override `Recall::visibleEntries()` to filter to `auth()->id()`'s keys, so the model can't read across users), **tenant-isolated memory** (the honest mechanism — partition by swarm class or enforce a tenant-aware `MemoryPropagationPolicy` — reinforcing the existing warning that `swarm` scope is shared across every tenant of a class), **policy-enforced custom Recall** (bake a scope/key allow-list into the tool via `resolveScope()` + `visibleEntries()` so the read boundary survives prompt injection), **recall + redact for compliance** (bind a `MemoryCapturePolicy` returning `CaptureDecision::Redact` so PII an agent `Remember`s never lands unredacted and later `Recall`s read back `[redacted]`), and **sub-agent with memory continuity** (make the `agent` scope addressable by overriding `agent()`, giving a reusable sub-agent state that persists across runs). Cross-links the tool reference ([docs/memory.md](docs/memory.md#recall-and-remember-tools)), the generator ([docs/generators.md](docs/generators.md#make-memory-tool)), and the capture-policy and compliance guides; registered in the docs index and cross-linked from [docs/memory.md](docs/memory.md#see-also).
+
+### Testing
+
+- **Rollback schema tests assert table presence instead of `--step` counts (#157).** `MemoriesSchemaTest`, `MemorySnapshotsSchemaTest`, and `RunIdForeignKeysTest` no longer hard-code `migrate:rollback --step N` counts — they roll back by locating each migration and asserting the table is actually gone, so adding a new migration no longer silently breaks an unrelated rollback assertion. Test-only change — no `src/` behavior change.
+- **Coverage and mutation CI memory limit raised to 1G (#179).** The `tests`, `nightly`, and `mutation` workflows run their coverage/mutation passes with `memory_limit=1G` so the growing suite — the v0.11 memory-tool topology matrix and streaming fixtures — no longer risks OOM under coverage instrumentation. CI-only change.
 
 ## v0.10.0 - 2026-06-04
 
