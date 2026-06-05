@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.12.0 - unreleased
+
+Close every open-ended / half-built feature surfaced by the v0.11.0 audit: memory completeness, audit fidelity, durable/streaming execution, and contract surface.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.11.0 - 2026-06-05
 
 Memory-as-tool DX. First-class Recall/Remember tools agents can use mid-prompt, streaming-compatible. make:memory-tool generator and recipe book for common patterns. Purely additive — no breaking changes; existing apps upgrade with no required action.
