@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
@@ -9,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\MemoryToolAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RedactingMemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingMemoryCapturePolicy;
@@ -49,13 +51,21 @@ test('it implements the Laravel AI Tool contract', function () {
     expect(new Remember)->toBeInstanceOf(Tool::class);
 });
 
-test('its schema requires key and value and offers scope', function () {
+test('its schema requires key and value and offers the four scopes', function () {
     $schema = (new Remember)->schema(new JsonSchemaTypeFactory);
 
     expect($schema)->toHaveKeys(['key', 'value', 'scope']);
-    expect($schema['key'])->toBeInstanceOf(Type::class);
-    expect($schema['value'])->toBeInstanceOf(Type::class);
-    expect($schema['scope'])->toBeInstanceOf(Type::class);
+
+    // `required` is a protected flag the serializer collapses into the parent
+    // object, so read it directly to prove the contract the tool name promises.
+    $required = fn (Type $type): bool => (new ReflectionProperty(Type::class, 'required'))->getValue($type) === true;
+
+    expect($required($schema['key']))->toBeTrue();
+    expect($required($schema['value']))->toBeTrue();
+    expect($required($schema['scope']))->toBeFalse();
+
+    expect($schema['scope']->toArray()['enum'] ?? null)
+        ->toBe(array_map(static fn (MemoryScope $scope): string => $scope->value, MemoryScope::cases()));
 });
 
 test('it writes to run scope by default and confirms', function () {
@@ -67,6 +77,19 @@ test('it writes to run scope by default and confirms', function () {
     expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'topic'))->toBe('launch plan');
 });
 
+test('it stores a null value when value is omitted', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    $result = remember(['key' => 'noted']);
+
+    expect($result)->toBe('Stored [noted] in run memory.');
+
+    // A row is written with a null value — distinct from "nothing was stored".
+    $entry = app(SwarmMemory::class)->entry(MemoryScope::Run, 'run-1', 'noted');
+    expect($entry)->not->toBeNull()
+        ->and($entry->value)->toBeNull();
+});
+
 test('it attributes tool writes with a tool:remember origin in metadata', function () {
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 
@@ -76,6 +99,28 @@ test('it attributes tool writes with a tool:remember origin in metadata', functi
 
     expect($entry->metadata)->toHaveKey('origin')
         ->and($entry->metadata['origin'])->toBe('tool:remember');
+});
+
+test('it records the bound agent class in metadata when agent-bound', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    // A tool bound to a specific agent (as make:memory-tool --scope=agent
+    // scaffolds) attributes its writes to that agent class, so MemoryWritten
+    // audit listeners can tell which agent persisted the entry.
+    $tool = new class extends Remember
+    {
+        protected function agent(): ?Agent
+        {
+            return new MemoryToolAgent;
+        }
+    };
+
+    $tool->handle(new Request(['key' => 'topic', 'value' => 'launch plan']));
+
+    $entry = app(SwarmMemory::class)->entry(MemoryScope::Run, 'run-1', 'topic');
+
+    expect($entry->metadata)->toHaveKey('agent')
+        ->and($entry->metadata['agent'])->toBe(MemoryToolAgent::class);
 });
 
 test('it writes to the swarm scope when asked, keyed by the active swarm class', function () {

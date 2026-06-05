@@ -47,6 +47,10 @@ test('a bound subclass is resolved in place of the default tool', function () {
 
     $tools = [...(new MemoryToolAgent)->tools()];
 
-    expect($tools[0])->toBeInstanceOf(Recall::class);
-    expect($tools[0]::class)->not->toBe(Recall::class);
+    // Locate the Recall-assignable tool by type rather than position, so the
+    // assertion does not depend on registration order.
+    $recall = collect($tools)->first(static fn (object $tool): bool => $tool instanceof Recall);
+
+    expect($recall)->toBeInstanceOf(Recall::class);
+    expect($recall::class)->not->toBe(Recall::class);
 });

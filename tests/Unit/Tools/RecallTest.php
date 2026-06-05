@@ -39,13 +39,13 @@ test('it implements the Laravel AI Tool contract', function () {
     expect(new Recall)->toBeInstanceOf(Tool::class);
 });
 
-test('its schema describes key, prefix, and scope', function () {
+test('its schema describes key, prefix, and the four scopes', function () {
     $schema = (new Recall)->schema(new JsonSchemaTypeFactory);
 
     expect($schema)->toHaveKeys(['key', 'prefix', 'scope']);
     expect($schema['key'])->toBeInstanceOf(Type::class);
-    expect($schema['prefix'])->toBeInstanceOf(Type::class);
-    expect($schema['scope'])->toBeInstanceOf(Type::class);
+    expect($schema['scope']->toArray()['enum'] ?? null)
+        ->toBe(array_map(static fn (MemoryScope $scope): string => $scope->value, MemoryScope::cases()));
 });
 
 test('it reads a single key from run scope by default', function () {
