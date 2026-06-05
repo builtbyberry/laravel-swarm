@@ -2,9 +2,28 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Commands\MakeMemoryToolCommand;
+use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use Composer\InstalledVersions;
+use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
+use Illuminate\Foundation\Console\Kernel as FoundationKernel;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
+use Symfony\Component\Console\Output\BufferedOutput;
+
+/**
+ * Test double that reports the vector companion as installed, so the `--vector`
+ * generation path can be exercised without the optional companion package being
+ * a dependency of this repo. Mirrors `InstallPulseCommandWithoutPulse` in
+ * tests/Installer/InstallPulseCommandTest.php.
+ */
+final class MakeMemoryToolCommandWithVector extends MakeMemoryToolCommand
+{
+    protected function vectorCompanionInstalled(): bool
+    {
+        return true;
+    }
+}
 
 afterEach(function () {
     foreach (glob(app_path('Ai/Tools/*.php')) ?: [] as $file) {
@@ -179,4 +198,51 @@ test('make:memory-tool generated class shape matches the shipped Recall tool', f
         ->toMatch('/public function name\(\): string/')
         ->toMatch('/protected function resolveScope\(string \$scope\): \?MemoryScope/')
         ->toMatch('/protected function agent\(\): \?Agent/');
+});
+
+test('make:memory-tool --vector scaffolds a compiling vector tool when the companion is present', function () {
+    // The vector companion is not a dependency, so the real command always
+    // refuses (covered by the absent-companion test above). Swap in a double
+    // that reports it present and register it under the same signature so the
+    // harness resolves it for this test — the same kernel dance the installer
+    // suite uses in registerInstallerCommand().
+    $kernel = app(ConsoleKernel::class);
+    assert($kernel instanceof FoundationKernel);
+    // Force Artisan to initialize before attaching the replacement, so the
+    // command binds to the live application call() dispatches to.
+    $kernel->call('list', [], new BufferedOutput);
+    $kernel->registerCommand(app(MakeMemoryToolCommandWithVector::class));
+
+    $path = app_path('Ai/Tools/VectorRecallShape.php');
+
+    File::ensureDirectoryExists(dirname($path));
+
+    Artisan::call('make:memory-tool', ['name' => 'VectorRecallShape', '--vector' => true]);
+
+    expect(File::exists($path))->toBeTrue();
+
+    $contents = File::get($path);
+
+    // Every placeholder resolved + the vector stub's distinguishing shape. The
+    // vector stub hardcodes `extends Recall` (no {{ baseTool }}), so --base is
+    // irrelevant for this variant.
+    expect($contents)
+        ->toContain('namespace App\Ai\Tools;')
+        ->toContain('class VectorRecallShape extends Recall')
+        ->toContain("return 'vector_recall_shape';")
+        ->toContain('protected MemoryScope $defaultScope = MemoryScope::Run;')
+        ->toContain('public function description(): Stringable|string')
+        ->toContain('public function handle(Request $request): string')
+        ->toContain('protected function semanticRecall(string $query, MemoryScope $scope): string')
+        ->toContain('protected function resolveScope(string $scope): ?MemoryScope')
+        ->toContain('protected function agent(): ?Agent')
+        ->not->toContain('{{');
+
+    // It must actually compile and be a real Recall subclass — a broken
+    // placeholder or stray syntax in the 128-line vector stub fails here.
+    // Unique class name, required exactly once (a same-named redeclare fatals).
+    require_once $path;
+
+    expect(class_exists('App\Ai\Tools\VectorRecallShape'))->toBeTrue();
+    expect((new ReflectionClass('App\Ai\Tools\VectorRecallShape'))->isSubclassOf(Recall::class))->toBeTrue();
 });

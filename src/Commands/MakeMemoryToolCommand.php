@@ -80,6 +80,12 @@ class MakeMemoryToolCommand extends GeneratorCommand
 
     /**
      * Validate the options and resolve scope/base/stub before generating.
+     *
+     * Return convention follows `GeneratorCommand::handle()` (`?bool`, matching
+     * the `make:swarm:*` generators): a validation failure returns `true`, which
+     * Laravel casts to a non-zero exit code (`(int) true === 1`) — i.e. `true`
+     * here means "stop, failed", not "succeeded". The success path defers to
+     * `parent::handle()`.
      */
     public function handle(): ?bool
     {
