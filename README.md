@@ -356,6 +356,8 @@ $approved = $memory->get(MemoryScope::Run, $runId, 'draft_approved');
 
 See [Swarm Memory](docs/memory.md) for the full reference: scope hierarchy, store drivers, lifecycle events, propagation and capture policies, snapshot inspection, replay semantics (`frozen_view` vs `fresh_execution`), and the `#[MemoryReplay]` / `#[PropagationPolicy]` attributes; and [Compliance & Audit](docs/compliance-audit.md) for the regulated-workload runbook (redaction, retention, audit-packet export). Vector-backed recall ships as the [laravel-swarm-memory-vector](https://github.com/builtbyberry/laravel-swarm-memory-vector) companion package.
 
+**Agent memory tools (v0.11.0+).** Agents can now read and write memory *mid-prompt* as ordinary `laravel/ai` tools — drop the shipped `Recall` and `Remember` tools into any agent's `tools()` array (or expose them via the `HasSwarmMemoryTools` trait). Scope ids resolve from the active run, never the model; reads honour the propagation policy and writes honour the capture policy, so the tools can never surface or persist anything the policies forbid. They are **disabled by default** (`swarm.memory.tools.enabled`) — granting an LLM access to shared memory is an explicit decision. Scaffold custom variants with `php artisan make:memory-tool`. See the [memory recipes](docs/memory-recipes.md) for worked patterns: per-user and tenant-scoped recall, policy-enforced custom tools, recall + redact, and sub-agent memory continuity.
+
 ## Topologies
 
 Laravel Swarm supports four topologies.
