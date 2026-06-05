@@ -484,6 +484,10 @@ classes are resolved from the container, so you can bind a subclass — for
 example to override a tool's `description()`, or to bind it to a specific agent
 so the `agent` scope resolves to that agent's class.
 
+For worked, copy-paste patterns built on these hooks — per-user and tenant-scoped
+recall, a policy-enforced custom `Recall`, recall + redact, and sub-agent memory
+continuity — see [Memory recipes](memory-recipes.md).
+
 ---
 
 ## Capture policy (write-time redaction)
@@ -963,6 +967,7 @@ For aggregate Pulse internals — period selectors, recorder enable flag, troubl
 
 ## See Also
 
+- [Memory Recipes](memory-recipes.md) — worked patterns for the Recall/Remember tools: per-user and tenant-scoped recall, policy-enforced custom tools, recall + redact, and sub-agent memory continuity
 - [RunContext](run-context.md) — the envelope that carries input, identity, and carry-forward data through a run; includes ArrayAccess reference
 - [Lifecycle Events](events.md) — every swarm lifecycle event, including memory events
 - [Durable Execution](durable-execution.md) — checkpointing, crash-resume, and replay

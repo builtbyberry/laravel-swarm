@@ -15,6 +15,10 @@ Memory-as-tool DX. First-class Recall/Remember tools agents can use mid-prompt, 
 
 _To be filled in during release wrap-up._
 
+### Documentation
+
+- **Memory-as-tool recipe book (#131).** New [docs/memory-recipes.md](docs/memory-recipes.md) is the pattern companion to the [Recall and Remember tools](docs/memory.md#recall-and-remember-tools) reference — the "here's how people actually use this" cookbook that anchors the memory contracts to real, copy-paste shipping patterns. Five worked recipes, each built on the tools' real extension hooks (so each is a `make:memory-tool`-scaffoldable subclass) and stating a problem, code, and when-to-use guidance: **per-user scoped recall** (override `Recall::visibleEntries()` to filter to `auth()->id()`'s keys, so the model can't read across users), **tenant-isolated memory** (the honest mechanism — partition by swarm class or enforce a tenant-aware `MemoryPropagationPolicy` — reinforcing the existing warning that `swarm` scope is shared across every tenant of a class), **policy-enforced custom Recall** (bake a scope/key allow-list into the tool via `resolveScope()` + `visibleEntries()` so the read boundary survives prompt injection), **recall + redact for compliance** (bind a `MemoryCapturePolicy` returning `CaptureDecision::Redact` so PII an agent `Remember`s never lands unredacted and later `Recall`s read back `[redacted]`), and **sub-agent with memory continuity** (make the `agent` scope addressable by overriding `agent()`, giving a reusable sub-agent state that persists across runs). Cross-links the tool reference ([docs/memory.md](docs/memory.md#recall-and-remember-tools)), the generator ([docs/generators.md](docs/generators.md#make-memory-tool)), and the capture-policy and compliance guides; registered in the docs index and cross-linked from [docs/memory.md](docs/memory.md#see-also).
+
 ## v0.10.0 - 2026-06-04
 
 Propagation + operator surface — MemoryPropagationPolicy controlling what workers see, CapturePolicy redaction at memory-write, CLI operator commands (inspect/dump/purge), Pulse memory metrics, and the compliance audit guide. Builds on the v0.9.0 memory foundation.
