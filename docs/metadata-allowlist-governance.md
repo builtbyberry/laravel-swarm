@@ -4,12 +4,31 @@ Run metadata is developer-supplied. Laravel Swarm does not validate, sanitize,
 or shape the values. When you allowlist a metadata key with
 `SWARM_AUDIT_METADATA_ALLOWLIST` or `SWARM_OBSERVABILITY_METADATA_ALLOWLIST`,
 the raw value flows verbatim into every audit evidence payload or telemetry
-emission for that run. The allowlist is the only line of defense between your
-application's metadata bag and your sinks.
+emission for that run. For developer-supplied keys the allowlist is the only
+line of defense between your application's metadata bag and your sinks (a small
+set of framework-owned keys is always emitted — see [Reserved keys](#reserved-keys-bypass-the-allowlist) below).
 
 This document covers what should go in metadata, what should not, the named
 anti-patterns to avoid, and the review pattern to apply whenever the allowlist
 is extended.
+
+## Reserved keys bypass the allowlist
+
+A small, fixed set of framework-owned metadata keys is **always emitted** on
+audit and telemetry payloads regardless of the allowlist — they are run
+provenance the package guarantees. The set is published as
+`EvidenceEnvelope::RESERVED_METADATA_KEYS`:
+
+- `actor` — the resolved identity bound at run entry (`RunContext::withActor()`).
+- `conversation_id` — the conversation a run belongs to
+  (`RunContext::withConversationId()`), since v0.12.0.
+
+Because their **values** flow to your sinks even when the allowlist is empty,
+keep them opaque: bind an actor reference and an **opaque, non-PII**
+conversation id (a UUID or namespaced surrogate — never an email address, raw
+chat-thread title, or anything you would not want verbatim in a SIEM). The
+allowlist is the line of defense for *developer-supplied* metadata; reserved
+keys are out of its scope by design.
 
 ## Metadata vs Capture Payloads
 

@@ -162,7 +162,7 @@ final class SharedSwarmStatePolicy implements MemoryPropagationPolicy
 }
 ```
 
-`present()` receives the candidates gathered from the scopes `scopes()` declared, the live `RunContext`, and the target `Agent` (null on the durable and hierarchical-parallel paths, where only the agent class is known at freeze time). It returns the ordered subset the agent may see. Implementations must not fabricate or mutate entries — they may only drop and reorder. Note: the `Agent` scope is gathered only when the concrete agent instance is known, and the `Conversation` scope is not yet gatherable (no conversation handle exists) — declaring it is a no-op for now.
+`present()` receives the candidates gathered from the scopes `scopes()` declared, the live `RunContext`, and the target `Agent` (null on the durable and hierarchical-parallel paths, where only the agent class is known at freeze time). It returns the ordered subset the agent may see. Implementations must not fabricate or mutate entries — they may only drop and reorder. Note: the `Agent` scope is gathered only when the concrete agent instance is known, and the `Conversation` scope is gathered only when the run is bound to a conversation id (see [Conversation-scoped memory](#conversation-scoped-memory)) — declaring either scope on a run that cannot address it is a no-op.
 
 ### Default behavior
 
@@ -198,6 +198,47 @@ class ResearchSwarm implements Swarm
 ```
 
 The attribute takes precedence over the config-bound default. Widening the view is a **semantic** change — downstream agents may see more memory than they did before — but it is never an API change, and the default keeps the v0.9 behavior.
+
+---
+
+## Conversation-scoped memory
+
+`MemoryScope::Conversation` is the scope shared across every run in the same conversation thread — longer-lived than a run, narrower than the whole swarm class. You can store and query it directly from the start:
+
+```php
+$memory->put(MemoryScope::Conversation, 'conv-42', 'preference', 'concise');
+$memory->all(MemoryScope::Conversation, 'conv-42');
+```
+
+What needs a handle is surfacing it *at runtime*: the snapshot view and the `Recall`/`Remember` tools resolve the scope id from the active run, not from the model, so they need to know which conversation the run belongs to. Bind it on the `RunContext` with `withConversationId()`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
+$swarm->run(
+    RunContext::from('Summarise the thread so far', $runId)
+        ->withConversationId('conv-42'),
+);
+```
+
+Once bound, the id threads through every execution path — sync, queued, durable, and the parallel/hierarchical branches — because it travels in the run's metadata, which all of those paths carry wholesale. With a conversation id in hand:
+
+- **`AgentVisibleMemoryView`** gathers `Conversation`-scoped entries under that id, so a `MemoryPropagationPolicy` that declares the scope (e.g. `[MemoryScope::Run, MemoryScope::Conversation]`) surfaces the conversation's memory to the agent. Two runs in different conversations never see each other's entries — the scope id isolates them.
+- **`Recall`** can read the conversation's entries (subject to the propagation policy), and **`Remember`** can write to `conversation` scope. Without a bound conversation id the scope stays unaddressable: `Remember` declines with a clear message and `Recall` simply finds nothing there.
+
+Deriving the conversation id from request or session state is application wiring — Swarm does not guess it. Set it explicitly per run as shown above.
+
+> **Multi-tenant note.** Conversation scope is addressed by the **app-supplied
+> conversation id**, not by anything Swarm derives. If your ids are not unique
+> across tenants — per-tenant sequential numbers, raw chat-thread ids — a run in
+> tenant B bound to a reused id surfaces (and lets an agent `Remember` into)
+> tenant A's conversation memory. The propagation policy gates *which scopes* an
+> agent sees, not *which tenant's* conversation an id resolves to. In a
+> multi-tenant app, either namespace conversation ids per tenant (e.g.
+> `"{tenant}:{thread}"`) or enforce the boundary in a tenant-aware
+> `MemoryPropagationPolicy`. See the [tenant-isolated memory](memory-recipes.md#tenant-isolated-memory) recipe.
+
+> **Dump expansion is separate.** Binding a conversation id surfaces memory to agents, but Swarm still records no queryable link from a conversation back to its runs in its own tables. To make `swarm:memory:dump <conversation-id>` expand a conversation into its constituent runs, bind a [`ConversationRunResolver`](#exporting-a-full-run-with-swarmmemorydump) that knows your app's conversation/run topology; the bundled `NullConversationRunResolver` resolves to an empty run list.
 
 ---
 
@@ -356,14 +397,15 @@ class Researcher implements Agent, HasTools
 
 Both tools take a `scope` *name* from the model but never a scope *id* — the id
 is framework-owned and resolved from the active run, so an agent can never
-address another run's, swarm's, or agent's memory by guessing an id:
+address another run's, swarm's, agent's, or conversation's memory by guessing an
+id:
 
 | Scope          | Resolves to                          |
 | -------------- | ------------------------------------ |
 | `run` (default) | the active run id                   |
 | `swarm`        | the active swarm class               |
 | `agent`        | only when the tool is bound to a specific agent (see below) |
-| `conversation` | not addressable yet (no runtime conversation handle) |
+| `conversation` | the run's bound conversation id, when set (see [Conversation-scoped memory](#conversation-scoped-memory)); otherwise declined gracefully |
 
 `run` is the safe default: memory scoped to the current task, cleared with it.
 Use `swarm` for state shared across the whole swarm class.

@@ -56,10 +56,23 @@ test('the agent scope is unresolvable without a bound agent', function () {
     expect((new MemoryToolScopeResolver)->resolve(MemoryScope::Agent))->toBeNull();
 });
 
-test('the conversation scope is never resolvable yet', function () {
+test('the conversation scope is unresolvable when no conversation id is bound', function () {
     enterResolverRun();
 
     expect((new MemoryToolScopeResolver)->resolve(MemoryScope::Conversation))->toBeNull();
+});
+
+test('it resolves the conversation scope to the run\'s bound conversation id', function () {
+    ActiveRunContext::enter(
+        'run-7',
+        FakeSequentialSwarm::class,
+        RunContext::fake(['run_id' => 'run-7', 'input' => 'go', 'conversation_id' => 'conv-42']),
+    );
+
+    $resolved = (new MemoryToolScopeResolver)->resolve(MemoryScope::Conversation);
+
+    expect($resolved->scope)->toBe(MemoryScope::Conversation);
+    expect($resolved->scopeId)->toBe('conv-42');
 });
 
 test('every scope is unresolvable outside an active run', function () {

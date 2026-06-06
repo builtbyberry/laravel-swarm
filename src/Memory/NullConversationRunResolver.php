@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
 /**
  * Default {@see ConversationRunResolver}: resolves every conversation to an
  * empty run list.
  *
- * This is the honest no-op for v0.10, where Swarm records no link between a
- * run and a conversation (the runtime exposes no conversation handle). With
+ * This is the honest no-op default: although a run can now carry a conversation
+ * handle ({@see RunContext::withConversationId()}),
+ * Swarm records no queryable link from a conversation back to its runs in its
+ * own tables, so the package cannot expand a conversation generically. With
  * this resolver bound, `swarm:memory:dump <conversation-id>` exports only the
  * Conversation-scoped entries and reports `runs_expanded: false` in the
  * envelope so an auditor is never misled into reading a non-expanded export as
