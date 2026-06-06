@@ -270,7 +270,25 @@ stability settings while Laravel AI remains pre-stable.
 
 ## Upgrading to v0.12.0
 
-**No required action for most applications.** v0.12.0 ships no breaking changes on the public surface and no new migrations.
+v0.12.0 ships two breaking changes on the public surface. No new migrations are required.
+
+### Breaking: `Contracts\HasStructuredOutput` removed
+
+`BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput` has been removed. It was a zero-value wrapper — it added no methods beyond what `Laravel\Ai\Contracts\HasStructuredOutput` already declares. Switch any application code that references the Swarm-owned interface to the upstream contract directly:
+
+```php
+// v0.12 — use the upstream contract
+use Laravel\Ai\Contracts\HasStructuredOutput;
+
+class MyCoordinator implements HasStructuredOutput { /* unchanged */ }
+```
+
+> **Note:** This reverses the migration instruction from the
+> [v0.5.0 upgrade guide](#upgrading-to-v050), which asked coordinator classes
+> to adopt the Swarm marker. The upstream contract was always the runtime
+> requirement; the Swarm marker was a redundant indirection.
+
+Agent classes that implement only `HasStructuredOutput` (with no other Swarm contracts) are unaffected at runtime — method signatures are identical. Only the `use` statement and any `instanceof` checks against the Swarm namespace need updating.
 
 ### Behavior change: streamed static-hierarchical runs now emit `swarm_memory_snapshots` rows
 
