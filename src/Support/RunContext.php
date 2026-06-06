@@ -9,11 +9,8 @@ use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
-use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Responses\DurableWaitOutcome;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
-use BuiltByBerry\LaravelSwarm\Tools\Recall;
-use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Auth\Authenticatable;
 use JsonException;
@@ -228,14 +225,16 @@ class RunContext implements ArrayAccess
      * The id is stored under the reserved metadata key "conversation_id" rather
      * than a dedicated column — the same mechanism {@see withActor()} uses — so
      * it threads through every queue, cache, and durable persistence path, all
-     * of which carry the metadata map wholesale.
+     * of which carry the metadata map wholesale. The key is reserved in
+     * `EvidenceEnvelope::RESERVED_METADATA_KEYS`, so its value is always
+     * emitted on audit and telemetry payloads as run provenance — keep
+     * conversation ids opaque (non-PII), since the value bypasses the operator
+     * metadata allowlist.
      *
      * Once set, the {@see MemoryScope::Conversation} scope becomes addressable:
-     * {@see AgentVisibleMemoryView} gathers
-     * Conversation-scoped entries under this id, and the
-     * {@see Recall}/
-     * {@see Remember} tools read and write it.
-     * With no conversation id bound the scope stays unaddressable and those
+     * the agent-visible memory view gathers Conversation-scoped entries under
+     * this id, and the agent memory tools (`recall`/`remember`) read and write
+     * it. With no conversation id bound the scope stays unaddressable and those
      * call sites skip or decline it gracefully, exactly as before.
      */
     public function withConversationId(?string $conversationId): self

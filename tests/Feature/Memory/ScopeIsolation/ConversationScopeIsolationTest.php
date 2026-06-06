@@ -8,10 +8,15 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalSingleRouteSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingleWorkerSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\ConversationDeclaringPropagationPolicy;
+use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
 
 /**
@@ -25,13 +30,16 @@ use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
  *    propagation policy that declares Conversation scope surfaces nothing when
  *    the run carries no conversation id, because `AgentVisibleMemoryView`
  *    resolves the Conversation scope_id to null and skips the scope.
- * 3. Per-conversation surfacing, asserted at the same boundary — once a run is
- *    bound to a conversation via {@see RunContext::withConversationId()}, that
- *    conversation's entries surface to the agent and another conversation's do
- *    not.
+ * 3. Per-conversation surfacing, asserted at the same boundary across every live
+ *    runner topology (sequential, parallel, hierarchical, static-hierarchical) —
+ *    once a run is bound to a conversation via
+ *    {@see RunContext::withConversationId()}, that conversation's entries surface
+ *    to the agent and another conversation's do not. The durable runner is
+ *    covered separately in ConversationScopeDurableTest (it reads the frozen
+ *    snapshot back from the real recorder).
  *
- * The exhaustive end-to-end isolation matrix (multiple agents, topologies, and
- * write-back) rides on this and is tracked in #168.
+ * The remaining end-to-end isolation matrix (multiple agents and conversation
+ * write-back across runs) rides on this and is tracked in #168.
  */
 pest()->group('compliance');
 
@@ -43,6 +51,39 @@ beforeEach(function () {
     $this->recorder = new RecordingSnapshotsMemory;
     $this->app->instance(SnapshotsMemory::class, $this->recorder);
 });
+
+/**
+ * Run the given topology bound to a conversation id, using a plain (no
+ * #[PropagationPolicy]) fixture per topology so the globally-configured
+ * ConversationDeclaringPropagationPolicy applies. Mirrors the per-runner setup
+ * used by RestrictivePolicyAcrossRunnersTest and StepOutputCaptureTest.
+ */
+function runConversationBoundTopology(string $topology, string $conversationId): void
+{
+    $bind = fn (string $runId): RunContext => RunContext::from('task', $runId)->withConversationId($conversationId);
+
+    if ($topology === 'hierarchical') {
+        FakeHierarchicalCoordinator::fake([
+            HierarchicalTestPlan::make('writer_node', [
+                'writer_node' => [
+                    'type' => 'worker',
+                    'agent' => FakeWriter::class,
+                    'prompt' => 'writer-task',
+                ],
+            ]),
+        ]);
+
+        FakeHierarchicalSingleRouteSwarm::make()->run($bind('conv-hier-run'));
+
+        return;
+    }
+
+    match ($topology) {
+        'sequential' => FakeSequentialSwarm::make()->run($bind('conv-seq-run')),
+        'parallel' => FakeParallelSwarm::make()->run($bind('conv-par-run')),
+        'static-hierarchical' => FakeStaticHierarchicalSingleWorkerSwarm::make()->run($bind('conv-static-run')),
+    };
+}
 
 test('conversation-scoped entries are addressed per conversation id', function () {
     $memory = app(SwarmMemory::class);
@@ -86,26 +127,24 @@ test('a policy that declares Conversation scope receives nothing when the run ha
         ->and(app(SwarmMemory::class)->get(MemoryScope::Conversation, 'conv-1', 'preference'))->toBe('concise');
 });
 
-test('a run bound to a conversation surfaces that conversation\'s entries and isolates others', function () {
+test('a run bound to a conversation surfaces that conversation\'s entries and isolates others', function (string $topology) {
     // Once the run carries a conversation id, AgentVisibleMemoryView resolves the
-    // Conversation scope to that id and gathers it. Two conversations are seeded;
-    // the run is bound to conv-1, so only conv-1's entry surfaces — conv-2's is
-    // addressed under a different id and never reaches this agent's view.
+    // Conversation scope to that id and gathers it — on every live runner. Two
+    // conversations are seeded; the run is bound to conv-1, so only conv-1's entry
+    // surfaces. conv-2 is addressed under a different id and never reaches the
+    // agent's view: per-conversation isolation holds across topologies.
     config()->set('swarm.memory.propagation_policy', ConversationDeclaringPropagationPolicy::class);
 
     app(SwarmMemory::class)->put(MemoryScope::Conversation, 'conv-1', 'preference', 'concise');
     app(SwarmMemory::class)->put(MemoryScope::Conversation, 'conv-2', 'preference', 'verbose');
 
-    FakeSequentialSwarm::make()->run(
-        RunContext::from('task', 'conv-surfacing-run')->withConversationId('conv-1'),
-    );
+    runConversationBoundTopology($topology, 'conv-1');
 
     $entries = capturedEntries($this->recorder);
     $scopes = array_map(static fn (MemoryEntry $entry): MemoryScope => $entry->scope, $entries);
     $values = array_map(static fn (MemoryEntry $entry): mixed => $entry->value, $entries);
 
-    // conv-1's entry surfaces under the Conversation scope; conv-2's never does.
     expect($scopes)->toContain(MemoryScope::Conversation)
         ->and($values)->toContain('concise')
         ->and($values)->not->toContain('verbose');
-});
+})->with(['sequential', 'parallel', 'hierarchical', 'static-hierarchical']);

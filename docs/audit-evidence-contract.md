@@ -361,9 +361,16 @@ checkpoint categories), the envelope carries:
 
 The `metadata` array always includes any reserved keys present on the run,
 regardless of the configured allowlist. The reserved set is published as
-`EvidenceEnvelope::RESERVED_METADATA_KEYS`. The only reserved key in `0.x` is
-`actor`. New reserved keys may be added additively; the constant is the
-authoritative list.
+`EvidenceEnvelope::RESERVED_METADATA_KEYS`. The reserved keys in `0.x` are
+`actor` and (since v0.12.0) `conversation_id` — the conversation a run belongs
+to, bound via `RunContext::withConversationId()`. Both are emitted as run
+provenance so an audit can answer "who ran this, and as part of which
+conversation" without the operator having to allowlist them. Because a reserved
+key's **value** bypasses the allowlist, keep conversation ids opaque (non-PII),
+the same guidance that applies to memory metadata generally. New reserved keys
+may be added additively; the constant is the authoritative list. (Adding a
+reserved key does not change the envelope shape, so it carries no
+`schema_version` bump.)
 
 `actor` is delivered in a single slot: `metadata.actor`. This is the same
 across every category — run, step, durable runtime, webhook, and the

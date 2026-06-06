@@ -228,6 +228,16 @@ Once bound, the id threads through every execution path — sync, queued, durabl
 
 Deriving the conversation id from request or session state is application wiring — Swarm does not guess it. Set it explicitly per run as shown above.
 
+> **Multi-tenant note.** Conversation scope is addressed by the **app-supplied
+> conversation id**, not by anything Swarm derives. If your ids are not unique
+> across tenants — per-tenant sequential numbers, raw chat-thread ids — a run in
+> tenant B bound to a reused id surfaces (and lets an agent `Remember` into)
+> tenant A's conversation memory. The propagation policy gates *which scopes* an
+> agent sees, not *which tenant's* conversation an id resolves to. In a
+> multi-tenant app, either namespace conversation ids per tenant (e.g.
+> `"{tenant}:{thread}"`) or enforce the boundary in a tenant-aware
+> `MemoryPropagationPolicy`. See the [tenant-isolated memory](memory-recipes.md#tenant-isolated-memory) recipe.
+
 > **Dump expansion is separate.** Binding a conversation id surfaces memory to agents, but Swarm still records no queryable link from a conversation back to its runs in its own tables. To make `swarm:memory:dump <conversation-id>` expand a conversation into its constituent runs, bind a [`ConversationRunResolver`](#exporting-a-full-run-with-swarmmemorydump) that knows your app's conversation/run topology; the bundled `NullConversationRunResolver` resolves to an empty run list.
 
 ---
