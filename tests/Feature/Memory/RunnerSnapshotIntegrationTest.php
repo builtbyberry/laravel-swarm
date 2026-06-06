@@ -11,6 +11,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalSingleRouteS
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRichStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingleRichWorkerSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
 
@@ -71,6 +73,41 @@ test('HierarchicalRunner snapshots memory for the coordinator and every worker',
     // Coordinator (index 0) plus at least one worker step.
     expect(count($recorder->snapshotCalls))->toBeGreaterThanOrEqual(2);
     expect($recorder->snapshotCalls[0]['step_index'])->toBe(0);
+});
+
+test('StaticHierarchicalStreamRunner streaming snapshots memory before every worker node', function () {
+    $events = iterator_to_array(FakeStaticHierarchicalStreamSequentialSwarm::make()->stream('stream-task'));
+
+    expect($events)->not->toBeEmpty();
+
+    /** @var RecordingSnapshotsMemory $recorder */
+    $recorder = $this->recorder;
+    expect($recorder->snapshotCalls)->toHaveCount(2);
+    expect($recorder->snapshotCalls[0]['step_index'])->toBe(0);
+    expect($recorder->snapshotCalls[1]['step_index'])->toBe(1);
+    expect($recorder->snapshotCalls[0]['run_id'])->toBe($recorder->snapshotCalls[1]['run_id']);
+});
+
+test('StaticHierarchicalStreamRunner streaming appends paired tool-call entries to the snapshot', function () {
+    $events = iterator_to_array(FakeStaticHierarchicalSingleRichWorkerSwarm::make()->stream('stream-task'));
+
+    expect($events)->not->toBeEmpty();
+
+    /** @var RecordingSnapshotsMemory $recorder */
+    $recorder = $this->recorder;
+    expect($recorder->snapshotCalls)->toHaveCount(1);
+
+    $appends = array_filter(
+        $recorder->toolCallAppends,
+        static fn (array $append): bool => $append['step_index'] === 0,
+    );
+    expect($appends)->toHaveCount(1);
+
+    /** @var array{tool_call: array<string, mixed>} $append */
+    $append = array_values($appends)[0];
+    expect($append['tool_call']['name'])->toBe('search_docs');
+    expect($append['tool_call']['arguments'])->toBe(['query' => 'swarm']);
+    expect($append['tool_call']['result'])->toBe(['matches' => 1]);
 });
 
 test('SequentialRunner streaming appends paired tool-call entries to the snapshot', function () {

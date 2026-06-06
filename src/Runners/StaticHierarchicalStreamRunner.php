@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
@@ -42,6 +43,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
+use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -99,6 +103,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         protected HierarchicalRoutePlanner $planner,
         protected ConcurrencyManager $concurrency,
         protected SwarmStepRecorder $stepsRecorder,
+        protected SnapshotsMemory $snapshots,
+        protected AgentVisibleMemoryView $view,
     ) {
         parent::__construct(
             $config,
@@ -347,8 +353,14 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                     $stepStartedAt = MonotonicTime::now();
 
+                    $snapshot = $this->snapshots->snapshot(
+                        $context->runId,
+                        $nextIndex,
+                        $this->view->present($swarm, $context, $agent),
+                    );
+
                     ['output' => $output, 'usage' => $stepUsage] = yield from $this->streamAgentEvents(
-                        $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart,
+                        $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart, $snapshot,
                     );
 
                     $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
@@ -424,8 +436,14 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                             $stepStartedAt = MonotonicTime::now();
 
+                            $snapshot = $this->snapshots->snapshot(
+                                $context->runId,
+                                $nextIndex,
+                                $this->view->present($swarm, $context, $agent),
+                            );
+
                             ['output' => $output, 'usage' => $stepUsage] = yield from $this->streamAgentEvents(
-                                $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart,
+                                $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart, $snapshot,
                             );
 
                             $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
@@ -480,12 +498,19 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     } else {
                         // Concurrent mode: branches run via ConcurrencyManager (no live text deltas)
                         $branchDefinitions = [];
+                        $branchSnapshots = [];
                         $callbacks = [];
 
                         foreach ($node->branches as $ordinal => $branchNodeId) {
                             /** @var HierarchicalWorkerNode $branch */
                             $branch = $plan->node($branchNodeId);
                             $input = $this->composeStaticPrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
+
+                            $branchSnapshots[$ordinal] = $this->snapshots->snapshot(
+                                $context->runId,
+                                $nextIndex + $ordinal,
+                                $this->view->present($swarm, $context, $workerMap[$branch->agentClass]),
+                            );
 
                             $this->stepsRecorder->started($state, $nextIndex + $ordinal, $branch->agentClass, $input);
 
@@ -517,6 +542,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                         'output' => (string) $response,
                                         'usage' => $response->usage->toArray(),
                                         'duration_ms' => MonotonicTime::elapsedMilliseconds($branchStartedAt),
+                                        'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
                                     ];
                                 } finally {
                                     ActiveRunContext::exit();
@@ -524,7 +550,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             };
                         }
 
-                        /** @var array<string, array{output: string, usage: array<string, int>, duration_ms: int}> $results */
+                        /** @var array<int, array{output: string, usage: array<string, int>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
                         $results = $this->concurrency->driver()->run($callbacks);
 
                         $policy = GuardrailParallelFailurePolicy::tryFrom((string) $this->config->get(
@@ -619,6 +645,16 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         }
 
                         $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
+
+                        foreach ($node->branches as $ordinal => $branchNodeId) {
+                            if (! array_key_exists($ordinal, $results)) {
+                                continue;
+                            }
+                            foreach ($results[$ordinal]['tool_calls'] as $toolCall) {
+                                $branchSnapshots[$ordinal] = $this->snapshots->appendToolCall($branchSnapshots[$ordinal], $toolCall);
+                            }
+                        }
+
                         $nextIndex += count($node->branches);
                     }
 
@@ -722,9 +758,12 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         SwarmExecutionState $state,
         int &$streamSequenceIndex,
         float $streamTelemetryStart,
+        MemorySnapshot $snapshot,
     ): \Generator {
         $output = '';
         $stepUsage = [];
+        /** @var array<string, ToolCallData> $pendingToolCalls */
+        $pendingToolCalls = [];
 
         // Publish the active run for the agent's RemembersRunContext trait while
         // its stream is consumed; cleared in finally so it never leaks past the
@@ -786,6 +825,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                 } elseif ($event instanceof ToolCall) {
+                    $pendingToolCalls[$event->toolCall->id] = $event->toolCall;
+
                     $swarmEvent = new SwarmToolCall(
                         id: $event->id,
                         runId: $context->runId,
@@ -798,6 +839,17 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                 } elseif ($event instanceof ToolResult) {
+                    $matchedCallId = $event->toolResult->id;
+                    $matchedCall = $pendingToolCalls[$matchedCallId] ?? null;
+
+                    if ($matchedCall !== null) {
+                        unset($pendingToolCalls[$matchedCallId]);
+                        $snapshot = $this->snapshots->appendToolCall(
+                            $snapshot,
+                            SnapshotToolCallNormalizer::entry($matchedCall, $event->toolResult),
+                        );
+                    }
+
                     $swarmEvent = new SwarmToolResult(
                         id: $event->id,
                         runId: $context->runId,
@@ -824,6 +876,13 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         providerErrorType: $event->type,
                     );
                 }
+            }
+
+            foreach ($pendingToolCalls as $unpairedCall) {
+                $snapshot = $this->snapshots->appendToolCall(
+                    $snapshot,
+                    SnapshotToolCallNormalizer::entry($unpairedCall),
+                );
             }
 
             return ['output' => $output, 'usage' => $stepUsage];
