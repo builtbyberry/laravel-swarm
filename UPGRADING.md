@@ -268,6 +268,16 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.12.0
+
+**No required action for most applications.** v0.12.0 ships no breaking changes on the public surface and no new migrations.
+
+### Behavior change: streamed static-hierarchical runs now emit `swarm_memory_snapshots` rows
+
+Previously, `SwarmRunner::stream()` on a `StaticHierarchical` swarm produced no `swarm_memory_snapshots` rows — a pre-existing gap tracked in [#159](https://github.com/builtbyberry/laravel-swarm/issues/159). As of v0.12.0, a snapshot is frozen before each worker invocation and tool-call pairs are appended, consistent with all other runners. Applications that explicitly assert a zero-row count in `swarm_memory_snapshots` for these runs — for example, in database-level integration tests — must update those assertions.
+
+No migration is required; the `swarm_memory_snapshots` table already exists from v0.9.0.
+
 ## Upgrading to v0.11.0
 
 **No required action.** v0.11.0 is purely additive — there are no breaking
