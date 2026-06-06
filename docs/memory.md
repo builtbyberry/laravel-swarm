@@ -323,8 +323,6 @@ $context['brief'] = 'Ship the v2 launch post.';
 - Under `DefaultPropagationPolicy` the step keys are excluded, so `swarm:memory:inspect` does **not** show them. They are always in raw Run memory, so `swarm:memory:dump`, `Swarm::memory()->get(...)`, and retention/purge all see them. For audit evidence of step outputs, reach for [`swarm:memory:dump`](#exporting-a-full-run-with-swarmmemorydump), not `inspect`.
 - A step never sees its own (not-yet-produced) output, only prior steps': step `k`'s view holds `swarm:step.0..k-1.output`. The final step's output is therefore in no in-run view — it lives in raw memory like every other.
 
-> `StaticHierarchicalStreamRunner` freezes no snapshot (a pre-existing v0.9 gap, [#159](https://github.com/builtbyberry/laravel-swarm/issues/159)), but it still records steps, so per-step capture to raw memory works there like everywhere else.
-
 ### Configuring the message role
 
 Rendered entries use the `assistant` role by default (they are prior context, not the new user turn). Change it globally:

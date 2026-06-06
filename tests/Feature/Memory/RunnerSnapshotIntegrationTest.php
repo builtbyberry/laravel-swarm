@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRichStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingleRichWorkerSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamConcurrentSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
@@ -108,6 +109,25 @@ test('StaticHierarchicalStreamRunner streaming appends paired tool-call entries 
     expect($append['tool_call']['name'])->toBe('search_docs');
     expect($append['tool_call']['arguments'])->toBe(['query' => 'swarm']);
     expect($append['tool_call']['result'])->toBe(['matches' => 1]);
+});
+
+test('StaticHierarchicalStreamRunner concurrent branches each receive a snapshot', function () {
+    $events = iterator_to_array(FakeStaticHierarchicalStreamConcurrentSwarm::make()->stream('stream-task'));
+
+    expect($events)->not->toBeEmpty();
+
+    /** @var RecordingSnapshotsMemory $recorder */
+    $recorder = $this->recorder;
+    // 2 concurrent branches (researcher + writer) + 1 sequential editor node = 3 snapshots total.
+    expect($recorder->snapshotCalls)->toHaveCount(3);
+
+    $stepIndexes = array_column($recorder->snapshotCalls, 'step_index');
+    sort($stepIndexes);
+    expect($stepIndexes)->toBe([0, 1, 2]);
+
+    // All snapshots share the same run id.
+    $runIds = array_unique(array_column($recorder->snapshotCalls, 'run_id'));
+    expect($runIds)->toHaveCount(1);
 });
 
 test('SequentialRunner streaming appends paired tool-call entries to the snapshot', function () {
