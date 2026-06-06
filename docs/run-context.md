@@ -121,7 +121,13 @@ Use `$data` for information that agents or your application code need to act on 
 
 Observability and operator data attached to the run. `$metadata` is written to persistence records, lifecycle events, and history rows. It is the right place for trace IDs, user IDs, request IDs, campaign tags, or other correlation values that belong in your observability pipeline but should not influence agent logic.
 
-`$metadata` is also the internal storage for labels and details — `withLabels()` and `withDetails()` write into `metadata['durable_labels']` and `metadata['durable_details']` respectively. The `label()`, `detail()`, `labels()`, and `details()` accessors read those keys back out.
+`$metadata` is also the internal storage for several framework-owned slots written by their own builders:
+
+- `withLabels()` and `withDetails()` write into `metadata['durable_labels']` and `metadata['durable_details']`; the `label()`, `detail()`, `labels()`, and `details()` accessors read them back.
+- `withActor()` writes the resolved actor into `metadata['actor']`, read back via `actor()`.
+- `withConversationId()` writes the conversation handle into `metadata['conversation_id']`, read back via `conversationId()`.
+
+`actor` and `conversation_id` are **reserved keys** (`EvidenceEnvelope::RESERVED_METADATA_KEYS`): their values are always emitted on audit and telemetry payloads regardless of the metadata allowlist, so keep the conversation id opaque (non-PII). See [Metadata Allowlist Governance](metadata-allowlist-governance.md#reserved-keys-bypass-the-allowlist).
 
 ### `$artifacts`
 
