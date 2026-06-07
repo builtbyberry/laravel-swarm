@@ -23,6 +23,7 @@ class DurableStepAdvancer
         protected DurableRunStore $durableRuns,
         protected DurableRetryHandler $retryHandler,
         protected DurableHierarchicalCoordinator $hierarchical,
+        protected DurableStaticHierarchicalCoordinator $staticHierarchical,
         protected DurableRunTerminalHandler $terminal,
         protected DurableTopLevelParallelAdvancer $parallel,
         protected DurableStepExecutionBuilder $executionBuilder,
@@ -92,6 +93,14 @@ class DurableStepAdvancer
                 }
 
                 $step = $hierarchicalResult->step;
+            } elseif ($run['topology'] === Topology::StaticHierarchical->value) {
+                $hierarchicalResult = $this->advanceStaticHierarchical($state, $run, $token, $context, $stepLeaseSeconds, $expectedStepIndex);
+
+                if ($hierarchicalResult === null) {
+                    return;
+                }
+
+                $step = $hierarchicalResult->step;
             } else {
                 $step = $this->sequential->advance($state, $expectedStepIndex);
             }
@@ -137,7 +146,7 @@ class DurableStepAdvancer
         $nextStepIndex = $hierarchicalResult !== null && $hierarchicalResult->nextStepIndex !== null
             ? $hierarchicalResult->nextStepIndex
             : $expectedStepIndex + 1;
-        $isComplete = $run['topology'] === Topology::Hierarchical->value
+        $isComplete = in_array($run['topology'], [Topology::Hierarchical->value, Topology::StaticHierarchical->value], true)
             ? $hierarchicalResult?->complete === true
             : $nextStepIndex >= (int) $run['total_steps'];
 
@@ -174,6 +183,30 @@ class DurableStepAdvancer
     public function failCurrentRunFromBranchFailures(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId): void
     {
         $this->terminal->failCurrentRunFromBranchFailures($run, $token, $context, $stepLeaseSeconds, $parentNodeId);
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     */
+    protected function advanceStaticHierarchical(
+        SwarmExecutionState $state,
+        array $run,
+        string $token,
+        RunContext $context,
+        int $stepLeaseSeconds,
+        int $expectedStepIndex,
+    ): ?DurableHierarchicalStepResult {
+        return $this->staticHierarchical->runStep(
+            $state,
+            $run,
+            $token,
+            $context,
+            $stepLeaseSeconds,
+            $expectedStepIndex,
+            function (array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId): void {
+                $this->failCurrentRunFromBranchFailures($run, $token, $context, $stepLeaseSeconds, $parentNodeId);
+            },
+        );
     }
 
     /**

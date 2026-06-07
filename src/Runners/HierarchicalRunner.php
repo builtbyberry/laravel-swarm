@@ -470,35 +470,50 @@ class HierarchicalRunner
     {
         [$coordinator, $workers, $workerMap] = $this->resolveCoordinatorAndWorkers($state);
 
-        if ($stepIndex === 0) {
-            $coordinatorStep = $this->executeAgent(
-                state: $state,
-                agent: $coordinator,
-                input: $state->context->input,
-                index: 0,
-                metadata: ['node_role' => 'coordinator'],
-                storeContext: false,
-                storeArtifacts: false,
-            );
+        return $stepIndex === 0
+            ? $this->runDurableCoordinatorStep($state, $coordinator, $workers)
+            : $this->runDurableWorkerStep($state, $stepIndex, $run, $workerMap);
+    }
 
-            $plan = $this->planner->fromCoordinatorOutput($coordinator, $workers, $coordinatorStep->output, $state->swarm::class);
-            $this->ensurePlanWithinExecutionBudget($state, $plan);
+    /**
+     * @param  array<int, Agent>  $workers
+     */
+    protected function runDurableCoordinatorStep(SwarmExecutionState $state, Agent $coordinator, array $workers): DurableHierarchicalStepResult
+    {
+        $coordinatorStep = $this->executeAgent(
+            state: $state,
+            agent: $coordinator,
+            input: $state->context->input,
+            index: 0,
+            metadata: ['node_role' => 'coordinator'],
+            storeContext: false,
+            storeArtifacts: false,
+        );
 
-            $cursor = $this->buildDurableCursor($plan, $coordinator::class);
-            $nodeOutputs = [];
-            $this->mergeDurableUsage($state, $coordinatorStep);
-            $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
-            $this->applyDurableCursorToContext($state, $cursor);
+        $plan = $this->planner->fromCoordinatorOutput($coordinator, $workers, $coordinatorStep->output, $state->swarm::class);
+        $this->ensurePlanWithinExecutionBudget($state, $plan);
 
-            return new DurableHierarchicalStepResult(
-                step: $coordinatorStep,
-                routeCursor: $cursor,
-                routePlan: $plan->toArray(),
-                complete: $this->isDurableCursorComplete($cursor),
-                totalSteps: (int) $cursor['total_steps'],
-            );
-        }
+        $cursor = $this->buildDurableCursor($plan, $coordinator::class);
+        $nodeOutputs = [];
+        $this->mergeDurableUsage($state, $coordinatorStep);
+        $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
+        $this->applyDurableCursorToContext($state, $cursor);
 
+        return new DurableHierarchicalStepResult(
+            step: $coordinatorStep,
+            routeCursor: $cursor,
+            routePlan: $plan->toArray(),
+            complete: $this->isDurableCursorComplete($cursor),
+            totalSteps: (int) $cursor['total_steps'],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     * @param  array<class-string, Agent>  $workerMap
+     */
+    protected function runDurableWorkerStep(SwarmExecutionState $state, int $stepIndex, array $run, array $workerMap): DurableHierarchicalStepResult
+    {
         $cursor = $this->durableCursor($state, $run);
         $plan = HierarchicalRoutePlan::fromArray($this->routePlan($state, $run));
         $entry = $cursor['entries'][$cursor['offset']] ?? null;
