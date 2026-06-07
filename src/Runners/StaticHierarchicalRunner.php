@@ -105,7 +105,10 @@ class StaticHierarchicalRunner extends HierarchicalRunner
     {
         assert($swarm instanceof HasRoutePlan);
 
-        return $this->planner->fromStaticPlan($swarm->agents(), $swarm->plan(), $swarm::class);
+        $agents = $swarm->agents();
+        $this->ensureUniqueWorkerClasses($swarm::class, $agents);
+
+        return $this->planner->fromStaticPlan($agents, $swarm->plan(), $swarm::class);
     }
 
     public function runDurableStep(SwarmExecutionState $state, int $stepIndex, array $run): DurableHierarchicalStepResult

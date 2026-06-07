@@ -2,10 +2,15 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
@@ -231,4 +236,32 @@ test('durable static hierarchical crash-replay is idempotent at worker step', fu
     expect($manager->find($runId)['status'])->toBe('completed')
         ->and($history['steps'])->toHaveCount(2)
         ->and($history['output'])->toBe('writer-out');
+});
+
+test('durable static hierarchical dispatchDurable() validates plan before writing any DB row', function () {
+    $swarm = new #[Topology(BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements HasRoutePlan, Swarm
+    {
+        use Runnable;
+
+        public function agents(): array
+        {
+            return [new FakeWriter, new FakeWriter];
+        }
+
+        public function plan(): array
+        {
+            return [
+                'start_at' => 'writer_node',
+                'nodes' => [
+                    'writer_node' => ['type' => 'worker', 'agent' => FakeWriter::class, 'prompt' => 'task', 'next' => 'finish'],
+                    'finish' => ['type' => 'finish', 'output_from' => 'writer_node'],
+                ],
+            ];
+        }
+    };
+
+    expect(fn () => $swarm->dispatchDurable('pre-flight-task'))
+        ->toThrow(SwarmException::class);
+
+    expect(DB::table('swarm_durable_runs')->count())->toBe(0);
 });
