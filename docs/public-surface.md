@@ -114,6 +114,10 @@ adding a new public API.
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
 | `HasRoutePlan` | Implement on a `StaticHierarchical` swarm to return a fixed route-plan array. | [Static Hierarchical Topology](static-hierarchical-topology.md) |
+| `ConfiguresDurableRetries` | Configure per-swarm and per-agent durable retry policies. | [Durable Retries And Progress](durable-retries-and-progress.md) |
+| `RoutesDurableBranches` | Route durable parallel branches to a specific queue connection and queue name. | [Durable Execution](durable-execution.md) |
+| `RoutesDurableWaits` | Declare durable waits entered after checkpoints; each wait specifies name, optional timeout, and optional metadata. | [Durable Waits And Signals](durable-waits-and-signals.md) |
+| `DispatchesChildSwarms` | Declare durable child swarms dispatched after checkpoints; parent pauses until all children complete. | [Durable Child Swarms](durable-child-swarms.md) |
 | `ContextStore` | Store active run context. | [Persistence And History](persistence-and-history.md) |
 | `ArtifactRepository` | Store step and run artifacts. | [Persistence And History](persistence-and-history.md) |
 | `RunHistoryStore` | Store run and step history. | [Persistence And History](persistence-and-history.md) |

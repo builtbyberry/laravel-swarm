@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Routing;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
-use BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use JsonException;
+use Laravel\Ai\Contracts\HasStructuredOutput;
 
 /**
  * @internal
