@@ -272,6 +272,14 @@ stability settings while Laravel AI remains pre-stable.
 
 **No required action for most applications.** v0.12.0 ships no breaking changes on the public surface and no new migrations.
 
+### New: `dispatchDurable()` now supported for static-hierarchical swarms
+
+Previously, calling `dispatchDurable()` on a `Topology::StaticHierarchical` swarm threw a `SwarmException`. As of v0.12.0, static-hierarchical swarms execute durably: the plan is built at dispatch time (fail-fast validation), and execution begins directly with the first worker — there is no LLM coordinator step.
+
+If you had a `catch` block guarding against this exception, remove it.
+
+`swarm_durable_*` rows are now written when `dispatchDurable()` is called on these swarms. The stored `route_cursor` metadata includes `coordinator_agent_class: ''` (empty string) for durable static-hierarchical runs. Guard against absent coordinator data with `!empty($metadata['coordinator_agent_class'])` rather than `isset`.
+
 ### Behavior change: streamed static-hierarchical runs now emit `swarm_memory_snapshots` rows
 
 Previously, `SwarmRunner::stream()` on a `StaticHierarchical` swarm produced no `swarm_memory_snapshots` rows — a pre-existing gap tracked in [#159](https://github.com/builtbyberry/laravel-swarm/issues/159). As of v0.12.0, a snapshot is frozen before each worker invocation and tool-call pairs are appended, consistent with all other runners. Applications that explicitly assert a zero-row count in `swarm_memory_snapshots` for these runs — for example, in database-level integration tests — must update those assertions.

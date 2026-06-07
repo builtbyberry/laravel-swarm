@@ -404,12 +404,6 @@ class SwarmRunner
 
         $topology = $this->resolver->resolveTopology($swarm);
 
-        if ($topology === Topology::StaticHierarchical) {
-            throw new SwarmException(
-                $swarm::class.': static hierarchical swarms do not yet support dispatchDurable(). Use prompt(), queue(), or stream() instead.'
-            );
-        }
-
         $this->validator->ensureDatabaseDurableInfrastructure();
 
         if ($topology === Topology::Parallel) {
@@ -418,6 +412,10 @@ class SwarmRunner
 
         if ($topology === Topology::Hierarchical) {
             $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
+        }
+
+        if ($topology === Topology::StaticHierarchical) {
+            $this->staticHierarchical->buildPlanForSwarm($swarm);
         }
 
         $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);

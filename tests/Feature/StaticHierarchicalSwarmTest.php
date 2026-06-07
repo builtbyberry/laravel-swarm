@@ -231,12 +231,18 @@ test('static hierarchical swarm rejects plans with unknown node references befor
     FakeWriter::assertNeverPrompted();
 });
 
-test('static hierarchical dispatchDurable() throws with a clear message', function () {
-    expect(fn () => FakeStaticHierarchicalSingleWorkerSwarm::make()->dispatchDurable('durable-task'))
-        ->toThrow(
-            SwarmException::class,
-            FakeStaticHierarchicalSingleWorkerSwarm::class.': static hierarchical swarms do not yet support dispatchDurable(). Use prompt(), queue(), or stream() instead.'
-        );
+test('static hierarchical dispatchDurable() returns a DurableSwarmResponse', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('queue.connections.durable-test', ['driver' => 'null']);
+    config()->set('swarm.durable.queue.connection', 'durable-test');
+    config()->set('swarm.durable.queue.name', 'swarm-durable');
+    app()->forgetInstance(\BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore::class);
+    app()->forgetInstance(\BuiltByBerry\LaravelSwarm\Runners\SwarmRunner::class);
+    app()->forgetInstance(\BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager::class);
+
+    $response = FakeStaticHierarchicalSingleWorkerSwarm::make()->dispatchDurable('durable-task');
+
+    expect($response)->toBeInstanceOf(\BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse::class);
 });
 
 test('queued static hierarchical job runs and records completion in history', function () {

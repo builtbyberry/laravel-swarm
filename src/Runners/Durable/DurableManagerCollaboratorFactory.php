@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
+use BuiltByBerry\LaravelSwarm\Runners\StaticHierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
@@ -52,6 +53,7 @@ class DurableManagerCollaboratorFactory
         Dispatcher $events,
         SequentialRunner $sequential,
         HierarchicalRunner $hierarchicalRunner,
+        StaticHierarchicalRunner $staticHierarchicalRunner,
         SwarmStepRecorder $stepsRecorder,
         Connection $connection,
         SwarmCapture $capture,
@@ -188,6 +190,19 @@ class DurableManagerCollaboratorFactory
             'outbox' => $outbox,
             'coordinator' => $memoryReplayCoordinator,
         ]);
+        $staticHierarchical = $this->application->makeWith(DurableStaticHierarchicalCoordinator::class, [
+            'durableRuns' => $durableRuns,
+            'historyStore' => $historyStore,
+            'contextStore' => $contextStore,
+            'connection' => $connection,
+            'capture' => $capture,
+            'application' => $application,
+            'runs' => $runContext,
+            'branches' => $branches,
+            'hierarchical' => $staticHierarchicalRunner,
+            'outbox' => $outbox,
+            'coordinator' => $memoryReplayCoordinator,
+        ]);
         $terminal = $this->application->makeWith(DurableRunTerminalHandler::class, [
             'durableRuns' => $durableRuns,
             'events' => $events,
@@ -236,6 +251,7 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'retryHandler' => $retryHandler,
             'hierarchical' => $hierarchical,
+            'staticHierarchical' => $staticHierarchical,
             'terminal' => $terminal,
             'parallel' => $parallel,
             'executionBuilder' => $executionBuilder,
@@ -277,6 +293,7 @@ class DurableManagerCollaboratorFactory
             lifecycle: $lifecycle,
             recovery: $recovery,
             hierarchical: $hierarchical,
+            staticHierarchical: $staticHierarchical,
             advancer: $advancer,
             branchAdvancer: $branchAdvancer,
         );

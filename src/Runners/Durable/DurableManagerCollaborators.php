@@ -33,6 +33,7 @@ class DurableManagerCollaborators
         public DurableLifecycleController $lifecycle,
         public DurableRecoveryCoordinator $recovery,
         public DurableHierarchicalCoordinator $hierarchical,
+        public DurableStaticHierarchicalCoordinator $staticHierarchical,
         public DurableStepAdvancer $advancer,
         public DurableBranchAdvancer $branchAdvancer,
     ) {}
