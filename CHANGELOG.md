@@ -4,13 +4,19 @@
 
 Close every open-ended / half-built feature surfaced by the v0.11.0 audit: memory completeness, audit fidelity, durable/streaming execution, and contract surface.
 
+> **Breaking for coordinator agents.** `BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput` is removed — switch the `use` statement to `Laravel\Ai\Contracts\HasStructuredOutput`. Method signatures and `instanceof` checks are identical; only the import namespace changes. See [UPGRADING.md](UPGRADING.md#upgrading-to-v0120).
+
 ### Added
 
 - **Conversation-scoped memory surfaces to agents via a run conversation handle (#186).** `MemoryScope::Conversation` was always storable and queryable (`SwarmMemory::all(Conversation, $id)`) but never reached an agent at runtime: `AgentVisibleMemoryView` and `MemoryToolScopeResolver` both resolved the Conversation scope id to `null` because the runtime exposed no conversation handle, and `Recall`/`Remember` declined it as "not addressable in this run". `RunContext::withConversationId()` now binds an opaque conversation id to a run (with a `conversationId()` accessor), stored in the run metadata so it threads through every execution path — sync, queued, durable, and the parallel/hierarchical branches — without a new column, mirroring how `withActor()` is carried. With a conversation id bound, `AgentVisibleMemoryView` gathers `Conversation`-scoped entries under that id (so a `MemoryPropagationPolicy` declaring the scope surfaces them, isolated per conversation), and the `Recall`/`Remember` tools read and write `conversation` scope; with none bound the scope stays unaddressable and those call sites skip or decline it gracefully, exactly as before. `ConversationRunResolver` is promoted out of `@experimental` (its `string -> list<string>` signature is now stable); `NullConversationRunResolver` remains the default no-op binding, since Swarm still records no queryable conversation→run link in its own tables for `swarm:memory:dump` expansion. Deriving the conversation id from request/session state is application wiring and is left to the operator. `conversation_id` is added to `EvidenceEnvelope::RESERVED_METADATA_KEYS`, so its value is always emitted on audit and telemetry payloads as run provenance regardless of the metadata allowlist (no `schema_version` bump — the addition is shape-preserving); keep conversation ids opaque (non-PII), since reserved values bypass the allowlist. See [Conversation-scoped memory](docs/memory.md#conversation-scoped-memory) and the [audit evidence contract](docs/audit-evidence-contract.md).
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **BREAKING (contract surface):** `BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput` is removed (#189). The interface was a zero-value marker — it extended `Laravel\Ai\Contracts\HasStructuredOutput` verbatim and added no methods or behavior. Switch any `use BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput` import to `use Laravel\Ai\Contracts\HasStructuredOutput`; the `instanceof` check and all method signatures are identical. This reverses the v0.5.0 upgrade guide instruction, which asked coordinators to adopt the Swarm marker — the upstream contract was always the runtime requirement. See [UPGRADING.md](UPGRADING.md#upgrading-to-v0120).
+
+### Documentation
+
+- **Four durable-runtime extension points added to the public surface contract (#189).** `ConfiguresDurableRetries`, `RoutesDurableBranches`, `RoutesDurableWaits`, and `DispatchesChildSwarms` are now listed in [docs/public-surface.md](docs/public-surface.md). These contracts have been available since v0.10.0/v0.11.0; this corrects an omission in the surface documentation. No behavior change; no migration required.
 
 ### Fixed
 
