@@ -58,9 +58,9 @@ final class AgentVisibleMemoryView
      * the declared order — so a policy never pays to load a scope it will not
      * look at, and the default policy (Run only) reads nothing extra.
      *
-     * The Agent scope is gathered only when the concrete agent instance is
-     * known; on the durable and hierarchical-parallel paths only the
-     * class-string is in hand, so a declared Agent scope is skipped there. The
+     * The Agent scope requires a concrete agent instance; callers that hold
+     * only a class-string must resolve it before calling {@see present()}.
+     * When {@see $agent} is null the Agent scope is skipped. The
      * Conversation scope keys on the conversation id bound to the run via
      * {@see RunContext::withConversationId()}; when no conversation id is bound
      * the scope has no id to key on and is skipped if declared.

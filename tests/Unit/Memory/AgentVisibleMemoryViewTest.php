@@ -85,7 +85,7 @@ test('a wide policy reads every scope it declares when the agent is known', func
 test('the Agent scope is skipped when only the class-string is known (null agent)', function () {
     $spy = memorySpy();
 
-    // Mirrors the durable and hierarchical-parallel paths, which pass null.
+    // Mirrors scope-driven callers (e.g. the Recall tool) that have no bound agent.
     makeView($spy)->present(new FakeWideViewPropagationSwarm, RunContext::fake(['run_id' => 'r1']), null);
 
     expect($spy->scopesRead)->toBe([MemoryScope::Run, MemoryScope::Swarm]);

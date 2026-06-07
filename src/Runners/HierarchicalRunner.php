@@ -794,20 +794,15 @@ class HierarchicalRunner
                         if (! is_subclass_of($workerClass, Agent::class)) {
                             throw new SwarmException("Hierarchical parallel worker [{$workerClass}] must be a Laravel AI agent class.");
                         }
-                        $this->resolveParallelWorker($state->swarm::class, $workerClass);
+                        $worker = $this->resolveParallelWorker($state->swarm::class, $workerClass);
                         $input = $this->composePrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
 
                         $branchIndex = $nextIndex + count($branchDefinitions);
                         $this->stepsRecorder->started($state, $branchIndex, $branch->agentClass, $input);
-                        // The worker instance is resolved lazily inside the
-                        // concurrency callback below, so only the class-string is
-                        // in hand here; pass a null agent to the view. The default
-                        // policy ignores the agent, and Agent-scope candidates are
-                        // unpopulated by package code today.
                         $branchSnapshots[$branchNodeId] = $this->snapshots->snapshot(
                             $state->context->runId,
                             $branchIndex,
-                            $this->view->present($state->swarm, $state->context, null),
+                            $this->view->present($state->swarm, $state->context, $worker),
                         );
 
                         $branchDefinitions[$branchNodeId] = [
