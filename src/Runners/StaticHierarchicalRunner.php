@@ -152,17 +152,17 @@ class StaticHierarchicalRunner extends HierarchicalRunner
         $entries = $this->durableEntries($plan);
 
         return [
-            'entries'                 => $entries,
-            'offset'                  => 0,
-            'current_node_id'         => null,
-            'completed_node_ids'      => [],
-            'executed_node_ids'       => [],
-            'executed_agent_classes'  => [],
-            'parallel_groups'         => [],
-            'final_output'            => null,
+            'entries' => $entries,
+            'offset' => 0,
+            'current_node_id' => null,
+            'completed_node_ids' => [],
+            'executed_node_ids' => [],
+            'executed_agent_classes' => [],
+            'parallel_groups' => [],
+            'final_output' => null,
             'coordinator_agent_class' => '',
-            'route_plan_start'        => $plan->startAt,
-            'total_steps'             => count(array_filter(
+            'route_plan_start' => $plan->startAt,
+            'total_steps' => count(array_filter(
                 $entries,
                 static fn (array $e): bool => $e['type'] === 'worker',
             )),

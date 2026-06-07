@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Attributes\Topology;
 use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
@@ -14,8 +15,10 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
+use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
@@ -236,13 +239,13 @@ test('static hierarchical dispatchDurable() returns a DurableSwarmResponse', fun
     config()->set('queue.connections.durable-test', ['driver' => 'null']);
     config()->set('swarm.durable.queue.connection', 'durable-test');
     config()->set('swarm.durable.queue.name', 'swarm-durable');
-    app()->forgetInstance(\BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore::class);
-    app()->forgetInstance(\BuiltByBerry\LaravelSwarm\Runners\SwarmRunner::class);
-    app()->forgetInstance(\BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager::class);
+    app()->forgetInstance(DurableRunStore::class);
+    app()->forgetInstance(SwarmRunner::class);
+    app()->forgetInstance(DurableSwarmManager::class);
 
     $response = FakeStaticHierarchicalSingleWorkerSwarm::make()->dispatchDurable('durable-task');
 
-    expect($response)->toBeInstanceOf(\BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse::class);
+    expect($response)->toBeInstanceOf(DurableSwarmResponse::class);
 });
 
 test('queued static hierarchical job runs and records completion in history', function () {
