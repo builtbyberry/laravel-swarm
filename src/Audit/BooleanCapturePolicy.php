@@ -12,9 +12,10 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
  * Default CapturePolicy: reads the swarm.capture.* booleans and returns
  * CaptureDecision::Full when true / CaptureDecision::Redact when false.
  *
- * Preserves the v0.3 capture behavior exactly. The boolean config keys are
- * deprecated in v0.4 and scheduled for removal in v0.5; bind a custom
- * CapturePolicy to make decisions per-run with context and actor visibility.
+ * Preserves the legacy boolean capture behavior exactly: this policy only ever
+ * returns Full or Redact and never Skip, so the boolean config path can never
+ * omit a field. Bind a custom CapturePolicy to make decisions per-run with
+ * context and actor visibility, including CaptureDecision::Skip.
  *
  * @internal
  */
@@ -35,7 +36,7 @@ class BooleanCapturePolicy implements CapturePolicy
     }
 
     /**
-     * Artifacts capture remains gated on outputs capture, matching the v0.3
+     * Artifacts capture remains gated on outputs capture, matching the
      * SwarmCapture::capturesArtifacts() contract.
      */
     public function artifacts(?RunContext $context = null, ?Actor $actor = null): CaptureDecision
