@@ -182,7 +182,7 @@ Every payload is an array with the following invariant fields:
 
 | Field            | Type   | Notes                                    |
 |------------------|--------|------------------------------------------|
-| `schema_version` | string | Currently `"2"`. Increments on breaking changes to the stable payload shape. |
+| `schema_version` | string | Currently `"3"`. Increments on breaking changes to the stable payload shape. |
 | `category`       | string | Event category (see below).              |
 | `occurred_at`    | string | ISO-8601 timestamp of the emission.      |
 
@@ -304,11 +304,13 @@ For example:
 
 ## Versioning
 
-The `schema_version` field began at `"1"` for the v0.4 line and bumped to
-`"2"` in v0.5.0 alongside the `command.*` actor-envelope unification (see
-`UPGRADING.md`). When any stable payload field is removed or its type
-changes, `schema_version` will increment and the change will be documented
-in the changelog.
+The `schema_version` field began at `"1"` for the v0.4 line, bumped to
+`"2"` in v0.5.0 alongside the `command.*` actor-envelope unification, and
+bumped to `"3"` in v0.12.0 when `CaptureDecision::Skip` became true per-field
+omission (a `Skip` now omits the key / persists `NULL` instead of emitting
+`[redacted]`; see `UPGRADING.md`). When any stable payload field is removed or
+its type changes, `schema_version` will increment and the change will be
+documented in the changelog.
 
 Adding new optional fields does not increment `schema_version`. Applications
 should handle unknown keys gracefully.
@@ -346,7 +348,7 @@ Every payload, in every category, carries the following top-level fields:
 
 | Field            | Type   | Notes                                                                 |
 |------------------|--------|-----------------------------------------------------------------------|
-| `schema_version` | string | `"2"` as of v0.5.0 (was `"1"` in v0.4). Bumps signal a breaking envelope change. |
+| `schema_version` | string | `"3"` as of v0.12.0 (was `"2"` in v0.5.0, `"1"` in v0.4). Bumps signal a breaking envelope change. |
 | `category`       | string | One of the frozen category names below.                               |
 | `occurred_at`    | string | ISO-8601 timestamp of the emission.                                   |
 
@@ -584,8 +586,8 @@ bump:
 When a breaking change to the frozen surface becomes necessary, the package
 will:
 
-1. Increment `EvidenceEnvelope::SCHEMA_VERSION` to `"2"` (or the next
-   integer).
+1. Increment `EvidenceEnvelope::SCHEMA_VERSION` to the next integer (most
+   recently `"3"` in v0.12.0).
 2. Document the change in `CHANGELOG.md` and add a per-version migration
    block to `UPGRADING.md` enumerating which fields moved, which were renamed
    or removed, and how to read both shapes during a transitional period.
@@ -768,13 +770,14 @@ interface CapturePolicy
 | Case     | Behavior                                                                 |
 |----------|--------------------------------------------------------------------------|
 | `Full`   | Store the payload as-is.                                                 |
-| `Redact` | Store the payload structure with scalar values replaced by `SwarmCapture::REDACTED`. |
-| `Skip`   | Omit the payload from audit and history. In v0.4 the runtime treats `Skip` identically to `Redact` at the field level. Per-field omit lands in v0.5 alongside the audit dispatcher `Skip`-aware path. The contract is locked; custom policies may return `Skip` today to declare intent. |
+| `Redact` | Store the payload structure with scalar values replaced by `SwarmCapture::REDACTED`. Keys and structure are preserved. |
+| `Skip`   | **Omit the field entirely** (since v0.12.0). The key is absent from persisted/emitted arrays (history steps, history context, lifecycle and stream events) and `NULL` on the nullable columns (`swarm_run_steps.input`/`output`, `swarm_contexts.input`, `swarm_run_histories.output`). A failure under `Skip` omits the `error.message` key while keeping `error.class`. (Through v0.4–v0.11, `Skip` behaved identically to `Redact`.) |
 
 The default binding, `BuiltByBerry\LaravelSwarm\Audit\BooleanCapturePolicy`,
 reads the existing `swarm.capture.*` booleans and returns `Full` when true /
-`Redact` when false, preserving v0.3 behavior exactly. The booleans are
-deprecated in v0.4 and scheduled for removal in v0.5.
+`Redact` when false, preserving the legacy boolean behavior exactly. The
+boolean policy never returns `Skip`, so only a custom policy can omit a field;
+every `swarm.capture.*=false` install continues to see `[redacted]`.
 
 Bind a custom policy to make decisions per-run with context and actor
 visibility — for example, capture inputs only for runs initiated by service

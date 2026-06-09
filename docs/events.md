@@ -71,7 +71,7 @@ All event classes live under the `BuiltByBerry\LaravelSwarm\Events` namespace.
 | `$runId` | `string` | Stable identifier for this run. Use it to correlate all subsequent events. |
 | `$swarmClass` | `string` | Fully qualified class name of the swarm. |
 | `$topology` | `string` | Topology string: `sequential`, `parallel`, or `hierarchical`. |
-| `$input` | `string` | The string representation of the task passed to the swarm. |
+| `$input` | `string\|null` | The string representation of the task passed to the swarm. `[redacted]` when input capture is off (boolean policy); `null` when a custom `CapturePolicy` returns `CaptureDecision::Skip` for inputs (v0.12.0+). |
 | `$metadata` | `array<string, mixed>` | Arbitrary key/value pairs attached to the run context. |
 | `$executionMode` | `string\|null` | Execution mode: `run`, `queue`, `stream`, or `durable`. Synchronous `prompt()` uses `run`. |
 
@@ -101,7 +101,7 @@ Event::listen(SwarmStarted::class, function (SwarmStarted $event): void {
 | `$runId` | `string` | Run identifier. |
 | `$swarmClass` | `string` | Fully qualified class name of the swarm. |
 | `$topology` | `string` | Topology string. |
-| `$output` | `string` | Final output text produced by the swarm. |
+| `$output` | `string\|null` | Final output text produced by the swarm. `[redacted]` when output capture is off (boolean policy); `null` when a custom `CapturePolicy` returns `CaptureDecision::Skip` for outputs (v0.12.0+). |
 | `$durationMs` | `int` | Wall-clock duration of the run in milliseconds. |
 | `$metadata` | `array<string, mixed>` | Run context metadata. |
 | `$artifacts` | `array<int, SwarmArtifact>` | Any artifacts captured during the run. Each `SwarmArtifact` has `name`, `content`, `metadata`, and `stepAgentClass`. |
@@ -167,7 +167,7 @@ Event::listen(SwarmFailed::class, function (SwarmFailed $event): void {
 | `$swarmClass` | `string` | Fully qualified class name of the swarm. |
 | `$index` | `int` | Zero-based position of this step in the run's step sequence. |
 | `$agentClass` | `string` | Fully qualified class name of the agent being invoked. |
-| `$input` | `string` | Input passed to this agent step. |
+| `$input` | `string\|null` | Input passed to this agent step. `[redacted]` when input capture is off (boolean policy); `null` under `CaptureDecision::Skip` for inputs (v0.12.0+). |
 | `$metadata` | `array<string, mixed>` | Run context metadata at the time of step start. |
 | `$topology` | `string\|null` | Topology string. |
 | `$executionMode` | `string\|null` | Execution mode. |
@@ -199,8 +199,8 @@ Event::listen(SwarmStepStarted::class, function (SwarmStepStarted $event): void 
 | `$topology` | `string` | Topology string. |
 | `$index` | `int` | Zero-based step index. |
 | `$agentClass` | `string` | Fully qualified class name of the agent. |
-| `$input` | `string` | Input that was given to the agent. |
-| `$output` | `string` | Output returned by the agent. |
+| `$input` | `string\|null` | Input that was given to the agent. `[redacted]` when input capture is off (boolean policy); `null` under `CaptureDecision::Skip` for inputs (v0.12.0+). |
+| `$output` | `string\|null` | Output returned by the agent. `[redacted]` when output capture is off (boolean policy); `null` under `CaptureDecision::Skip` for outputs (v0.12.0+). |
 | `$durationMs` | `int` | Duration of this step in milliseconds. |
 | `$metadata` | `array<string, mixed>` | Run context metadata. |
 | `$artifacts` | `array<int, SwarmArtifact>` | Artifacts produced during this step. |
@@ -478,7 +478,7 @@ Event::listen(SwarmChildCompleted::class, function (SwarmChildCompleted $event):
 | `$parentRunId` | `string` | Run identifier of the parent swarm. |
 | `$childRunId` | `string` | Run identifier of the child swarm that failed. |
 | `$childSwarmClass` | `string` | Fully qualified class name of the child swarm. |
-| `$failure` | `array<string, mixed>\|null` | Structured failure data. `null` if no failure detail was captured. |
+| `$failure` | `array<string, mixed>\|null` | Structured failure data (`class`, plus `message` and any `timed_out` flag). `null` if no failure detail was captured. Under a `CapturePolicy` that `Skip`s failures, the `message` key is omitted while `class` is retained (v0.12.0+). |
 | `$executionMode` | `string` | Execution mode. Defaults to `durable`. |
 
 ```php
