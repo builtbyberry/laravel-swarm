@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
@@ -24,14 +25,17 @@ class DatabaseContextStore implements ContextStore
         protected Connection $connection,
         protected ConfigRepository $config,
         protected SwarmPersistenceCipher $cipher,
+        protected SwarmCapture $capture,
     ) {}
 
     public function put(RunContext $context, int $ttlSeconds): void
     {
-        $contextPayload = $context->toArray();
+        // A Skip on active-context omits `input` entirely; the column is
+        // nullable, so seal(null) persists NULL while data drops its mirror.
+        $contextPayload = $this->capture->omitSkippedActiveContextKeys($context->toArray(), $context);
         $payload = [
             'run_id' => $contextPayload['run_id'],
-            'input' => $this->cipher->seal($contextPayload['input']),
+            'input' => $this->cipher->seal($contextPayload['input'] ?? null),
             'data' => $this->encodeJson($contextPayload['data']),
             'metadata' => $this->encodeJson($contextPayload['metadata']),
             'artifacts' => $this->encodeJson($contextPayload['artifacts']),
@@ -60,7 +64,7 @@ class DatabaseContextStore implements ContextStore
 
         return [
             'run_id' => $record->run_id,
-            'input' => $this->cipher->open((string) $record->input),
+            'input' => $record->input !== null ? $this->cipher->open((string) $record->input) : null,
             'data' => $this->decodeJson($record->data, []),
             'metadata' => $this->decodeJson($record->metadata, []),
             'artifacts' => $this->decodeJson($record->artifacts, []),

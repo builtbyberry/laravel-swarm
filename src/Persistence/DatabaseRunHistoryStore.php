@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
@@ -166,7 +167,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
 
         $history = $this->find($runId) ?? [];
         $history['steps'] ??= [];
-        $history['steps'][] = $step->toArray();
+        $history['steps'][] = $this->capture->stepToPersistedArray($step);
 
         $updated = $this->update($runId, [
             'steps' => $this->encodeJson(array_map(
@@ -185,9 +186,9 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     {
         $updated = $this->update($runId, [
             'status' => 'completed',
-            'output' => $this->cipher->seal($response->output),
+            'output' => $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $this->cipher->seal($response->output),
             'usage' => $this->encodeJson($response->usage),
-            'context' => $this->encodeJson($response->context !== null ? $this->cipher->sealContextTopLevelInput($response->context->toArray()) : null),
+            'context' => $this->encodeJson($response->context !== null ? $this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($response->context->toArray(), $response->context)) : null),
             'artifacts' => $this->encodeJson(array_map(static fn ($artifact): array => $artifact->toArray(), $response->artifacts)),
             'metadata' => $this->encodeJson($response->metadata),
             'finished_at' => Carbon::now('UTC'),
@@ -205,10 +206,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     {
         $updated = $this->update($runId, [
             'status' => 'failed',
-            'error' => $this->encodeJson([
-                'message' => $this->capture->failureMessage($exception),
-                'class' => $exception::class,
-            ]),
+            'error' => $this->encodeJson($this->failurePayload($exception)),
             'finished_at' => Carbon::now('UTC'),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
             'execution_token' => null,
@@ -231,15 +229,12 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'swarm_class' => $swarmClass,
             'topology' => $topology,
             'status' => 'failed',
-            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($context->toArray())),
+            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context))),
             'metadata' => $this->encodeJson($metadata),
             'steps' => $this->encodeJson([]),
             'output' => null,
             'usage' => $this->encodeJson([]),
-            'error' => $this->encodeJson([
-                'message' => $this->capture->failureMessage($exception),
-                'class' => $exception::class,
-            ]),
+            'error' => $this->encodeJson($this->failurePayload($exception)),
             'artifacts' => $this->encodeJson([]),
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
@@ -257,7 +252,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     {
         $values = [
             'status' => $status,
-            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($context->toArray())),
+            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context))),
             'metadata' => $this->encodeJson($metadata),
             'artifacts' => $this->encodeJson(array_map(static fn ($artifact): array => $artifact->toArray(), $context->artifacts)),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
@@ -420,7 +415,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'swarm_class' => $swarmClass,
             'topology' => $topology,
             'status' => 'running',
-            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($context->toArray())),
+            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context))),
             'metadata' => $this->encodeJson($metadata),
             'steps' => $this->encodeJson([]),
             'output' => null,
@@ -559,14 +554,28 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             ->orderBy('step_index')
             ->orderBy('id')
             ->get()
-            ->map(fn (object $record): array => [
-                'step_index' => (int) $record->step_index,
-                'agent_class' => $record->agent_class,
-                'input' => $this->cipher->open((string) $record->input),
-                'output' => $this->cipher->open((string) $record->output),
-                'artifacts' => $this->decodeJson($record->artifacts, []),
-                'metadata' => $this->decodeJson($record->metadata, []),
-            ])
+            ->map(function (object $record): array {
+                $step = [
+                    'step_index' => (int) $record->step_index,
+                    'agent_class' => $record->agent_class,
+                ];
+
+                // A NULL column is a CaptureDecision::Skip omission — keep the
+                // key absent so the reconstructed step shape matches the
+                // persisted-array contract (present only when captured).
+                if ($record->input !== null) {
+                    $step['input'] = $this->cipher->open((string) $record->input);
+                }
+
+                if ($record->output !== null) {
+                    $step['output'] = $this->cipher->open((string) $record->output);
+                }
+
+                $step['artifacts'] = $this->decodeJson($record->artifacts, []);
+                $step['metadata'] = $this->decodeJson($record->metadata, []);
+
+                return $step;
+            })
             ->all();
     }
 
@@ -576,7 +585,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     protected function stepPayload(string $runId, SwarmStep $step, int $ttlSeconds): array
     {
         $timestamp = Carbon::now('UTC');
-        $payload = $this->cipher->sealStepIo($step->toArray());
+        $payload = $this->cipher->sealStepIo($this->capture->stepToPersistedArray($step));
         $stepIndex = $step->metadata['index'] ?? null;
 
         if (! is_int($stepIndex)) {
@@ -587,13 +596,34 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'run_id' => $runId,
             'step_index' => $stepIndex,
             'agent_class' => $payload['agent_class'],
-            'input' => $payload['input'],
-            'output' => $payload['output'],
+            // A Skip omission leaves the key absent; persist NULL on the column.
+            'input' => $payload['input'] ?? null,
+            'output' => $payload['output'] ?? null,
             'artifacts' => $this->encodeJson($payload['artifacts']),
             'metadata' => $this->encodeJson($payload['metadata']),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
+        ];
+    }
+
+    /**
+     * Build the persisted `error` payload. CaptureDecision::Skip omits the
+     * `message` key entirely (keeping `class`); Full/Redact keep a `message`.
+     *
+     * @return array{message?: string, class: class-string<Throwable>}
+     */
+    protected function failurePayload(Throwable $exception): array
+    {
+        $message = $this->capture->applyFailureMessage($exception);
+
+        if ($message === null) {
+            return ['class' => $exception::class];
+        }
+
+        return [
+            'message' => $message,
+            'class' => $exception::class,
         ];
     }
 
