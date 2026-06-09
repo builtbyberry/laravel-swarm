@@ -11,9 +11,10 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
  * Regression coverage for the audit evidence envelope's schema_version contract.
  *
  * The shared envelope bumped from "1" to "2" in v0.5.0 alongside the command.*
- * actor-unification work (see UPGRADING.md v0.5.0 + docs/audit-evidence-contract.md).
+ * actor-unification work, and from "2" to "3" in v0.12.0 alongside the
+ * CaptureDecision::Skip true-omission work (see UPGRADING.md + docs/audit-evidence-contract.md).
  * Any code path that emits an envelope MUST pull schema_version from
- * EvidenceEnvelope::SCHEMA_VERSION rather than hard-coding "1" — otherwise
+ * EvidenceEnvelope::SCHEMA_VERSION rather than hard-coding a literal — otherwise
  * downstream consumers reading the field can't trust it, and the bump-on-shape-
  * change rule is silently broken.
  *
@@ -81,18 +82,19 @@ const AUDIT_CATEGORIES = [
     'webhook.start_in_flight',
 ];
 
-test('EvidenceEnvelope::SCHEMA_VERSION is "2" — bumped in v0.5.0', function (): void {
+test('EvidenceEnvelope::SCHEMA_VERSION is "3" — bumped in v0.12.0', function (): void {
     // Hard-coded literal here is intentional: this assertion is the canary that
     // catches an inadvertent further bump without a coordinated CHANGELOG /
-    // UPGRADING / docs update. Issue #76 is scoped to coverage, NOT a bump.
-    expect(EvidenceEnvelope::SCHEMA_VERSION)->toBe('2');
+    // UPGRADING / docs update. v0.12.0 bumped "2" -> "3" for CaptureDecision::Skip
+    // true omission (see UPGRADING.md + docs/audit-evidence-contract.md).
+    expect(EvidenceEnvelope::SCHEMA_VERSION)->toBe('3');
 });
 
 test('SwarmAuditDispatcher::SCHEMA_VERSION mirrors EvidenceEnvelope::SCHEMA_VERSION', function (): void {
     expect(SwarmAuditDispatcher::SCHEMA_VERSION)->toBe(EvidenceEnvelope::SCHEMA_VERSION);
 });
 
-test('every audit category dispatched through SwarmAuditDispatcher carries schema_version "2"', function (): void {
+test('every audit category dispatched through SwarmAuditDispatcher carries schema_version "3"', function (): void {
     $sink = new RecordingSwarmAuditSink;
     app()->instance(SwarmAuditSink::class, $sink);
     $dispatcher = app(SwarmAuditDispatcher::class);
@@ -109,7 +111,7 @@ test('every audit category dispatched through SwarmAuditDispatcher carries schem
     foreach ($records as $record) {
         expect($record)
             ->toHaveKey('schema_version')
-            ->and($record['schema_version'])->toBe('2')
+            ->and($record['schema_version'])->toBe('3')
             ->and($record['schema_version'])->toBe(EvidenceEnvelope::SCHEMA_VERSION);
     }
 });
@@ -127,5 +129,5 @@ test('dispatcher emit does not let a caller-supplied schema_version override the
     ]);
 
     $record = $sink->allRecords()[0];
-    expect($record['schema_version'])->toBe('2');
+    expect($record['schema_version'])->toBe('3');
 });
