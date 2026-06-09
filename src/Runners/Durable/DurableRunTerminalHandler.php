@@ -46,11 +46,7 @@ class DurableRunTerminalHandler
         $exception = new SwarmException("Durable swarm run [{$runId}] exceeded its configured timeout.");
 
         $this->recorder->fail($runId, $token, $exception, $context, $stepLeaseSeconds);
-        $this->children->markChildTerminalIfNeeded($runId, 'failed', null, [
-            'message' => $this->capture->failureMessage($exception),
-            'class' => $exception::class,
-            'timed_out' => true,
-        ]);
+        $this->children->markChildTerminalIfNeeded($runId, 'failed', null, $this->capture->failureArray($exception, ['timed_out' => true], $context));
         $this->dispatchFailed($run, $context, $exception, ExecutionMode::Durable->value);
     }
 
@@ -97,10 +93,7 @@ class DurableRunTerminalHandler
         $runId = (string) $run['run_id'];
 
         $this->recorder->fail($runId, $token, $exception, $context, $stepLeaseSeconds);
-        $this->children->markChildTerminalIfNeeded($runId, 'failed', null, [
-            'message' => $this->capture->failureMessage($exception),
-            'class' => $exception::class,
-        ]);
+        $this->children->markChildTerminalIfNeeded($runId, 'failed', null, $this->capture->failureArray($exception, [], $context));
         $this->dispatchFailed($run, $context, $exception, ExecutionMode::Durable->value);
     }
 
@@ -153,10 +146,7 @@ class DurableRunTerminalHandler
         ]);
 
         $this->recorder->fail($runId, $token, $exception, $context, $stepLeaseSeconds);
-        $this->children->markChildTerminalIfNeeded($runId, 'failed', null, [
-            'message' => $this->capture->failureMessage($exception),
-            'class' => $exception::class,
-        ]);
+        $this->children->markChildTerminalIfNeeded($runId, 'failed', null, $this->capture->failureArray($exception, [], $context));
         $this->dispatchFailed($run, $context, $exception, $this->runs->publicLifecycleExecutionMode($run));
     }
 

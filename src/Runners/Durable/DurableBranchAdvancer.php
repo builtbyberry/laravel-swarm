@@ -227,10 +227,7 @@ class DurableBranchAdvancer
                     ]);
 
                     try {
-                        $this->durableRuns->markBranchFailed($runId, $branchId, $token, [
-                            'message' => $this->capture->failureMessage($exception),
-                            'class' => $exception::class,
-                        ]);
+                        $this->durableRuns->markBranchFailed($runId, $branchId, $token, $this->capture->failureArray($exception));
                     } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                         return false;
                     }

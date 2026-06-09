@@ -217,7 +217,7 @@ class SwarmRunner
                 runId: $context->runId,
                 swarmClass: $swarm::class,
                 topology: $topology->value,
-                input: $this->capture->input($context->input),
+                input: $this->capture->applyInput($context->input, $context),
                 metadata: $context->metadata,
                 executionMode: $executionMode->value,
             ));
@@ -684,7 +684,7 @@ class SwarmRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $topology->value,
-            output: $capturedResponse->output,
+            output: $this->capture->applyOutput($capturedResponse->output, $context),
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $capturedResponse->metadata,
             artifacts: $capturedResponse->artifacts,
