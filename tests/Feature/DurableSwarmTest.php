@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -58,6 +60,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelChildDispatchingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RetryableDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RetryableParallelDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingAuditCapturePolicy;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Database\Schema\Builder;
 use Illuminate\Foundation\Bus\PendingDispatch;
@@ -80,6 +83,27 @@ function configureDurableRuntime(): void
     app()->forgetInstance(SwarmRunner::class);
 
     app()->forgetInstance(DurableSwarmManager::class);
+}
+
+function bindDurableCaptureSkipPolicy(SkippingAuditCapturePolicy $policy): void
+{
+    app()->instance(CapturePolicy::class, $policy);
+
+    foreach ([
+        SwarmCapture::class,
+        ContextStore::class,
+        ArtifactRepository::class,
+        RunHistoryStore::class,
+        DurableRunStore::class,
+        DatabaseContextStore::class,
+        DatabaseRunHistoryStore::class,
+        DatabaseDurableRunStore::class,
+        DurableRunRecorder::class,
+        SwarmRunner::class,
+        DurableSwarmManager::class,
+    ] as $abstract) {
+        app()->forgetInstance($abstract);
+    }
 }
 
 function noopPendingDispatch(): PendingDispatch
@@ -1035,7 +1059,7 @@ test('durable hierarchical completion rolls back terminal scrub when terminal co
 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
 
-    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config'), app(SwarmPersistenceCipher::class)) extends DatabaseContextStore
+    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config'), app(SwarmPersistenceCipher::class), app(SwarmCapture::class)) extends DatabaseContextStore
     {
         public function put(RunContext $context, int $ttlSeconds): void
         {
@@ -1780,7 +1804,7 @@ test('dispatch durable fails without leaving persisted state behind when the his
 });
 
 test('dispatch durable rolls startup writes back when a later startup write fails', function () {
-    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config'), app(SwarmPersistenceCipher::class)) extends DatabaseContextStore
+    app()->instance(ContextStore::class, new class(app('db')->connection(), app('config'), app(SwarmPersistenceCipher::class), app(SwarmCapture::class)) extends DatabaseContextStore
     {
         public function put(RunContext $context, int $ttlSeconds): void
         {
@@ -3007,4 +3031,62 @@ test('webhook none driver registers routes and accepts unauthenticated requests 
     ], $payload)
         ->assertAccepted()
         ->assertJsonStructure(['run_id']);
+});
+
+test('durable Skip on outputs omits step output keys and persists NULL output columns', function () {
+    bindDurableCaptureSkipPolicy(new SkippingAuditCapturePolicy(
+        inputs: CaptureDecision::Full,
+        outputs: CaptureDecision::Skip,
+        artifacts: CaptureDecision::Full,
+        activeContext: CaptureDecision::Full,
+    ));
+
+    $response = FakeSequentialSwarm::make()->dispatchDurable('durable-skip-task');
+    $runId = $response->runId;
+
+    (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class));
+    (new AdvanceDurableSwarm($runId, 1))->handle(app(DurableSwarmManager::class));
+    (new AdvanceDurableSwarm($runId, 2))->handle(app(DurableSwarmManager::class));
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($history['status'])->toBe('completed')
+        ->and($history['output'])->toBeNull()
+        ->and($history['steps'])->toHaveCount(3);
+
+    foreach ($history['steps'] as $step) {
+        expect($step)->not->toHaveKey('output')
+            ->and($step)->toHaveKey('input');
+    }
+
+    $stepOutputs = DB::table('swarm_run_steps')->where('run_id', $runId)->pluck('output');
+    expect($stepOutputs)->each->toBeNull();
+
+    expect(DB::table('swarm_run_histories')->where('run_id', $runId)->value('output'))->toBeNull();
+});
+
+test('durable Skip on failures omits the error message key but keeps the class', function () {
+    bindDurableCaptureSkipPolicy(new SkippingAuditCapturePolicy(
+        inputs: CaptureDecision::Full,
+        outputs: CaptureDecision::Skip,
+        artifacts: CaptureDecision::Full,
+        activeContext: CaptureDecision::Full,
+    ));
+    Event::fake([SwarmFailed::class]);
+
+    $response = FailingQueuedSwarm::make()->dispatchDurable('durable-skip-fail');
+    $runId = $response->runId;
+
+    expect(fn () => app(DurableSwarmManager::class)->advance($runId, 0))
+        ->toThrow(RuntimeException::class, 'Queued swarm failed.');
+
+    $history = app(SwarmHistory::class)->find($runId);
+    $run = app(DurableSwarmManager::class)->find($runId);
+
+    expect($history['error'])->toHaveKey('class', RuntimeException::class)
+        ->and($history['error'])->not->toHaveKey('message');
+    expect($run['failure'])->toHaveKey('class', RuntimeException::class)
+        ->and($run['failure'])->not->toHaveKey('message');
+    expect($run['node_states']['step:0']['failure'])->toHaveKey('class', RuntimeException::class)
+        ->and($run['node_states']['step:0']['failure'])->not->toHaveKey('message');
 });

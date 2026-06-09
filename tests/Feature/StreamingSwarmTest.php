@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
@@ -13,9 +16,11 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamedSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
@@ -24,6 +29,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
@@ -36,6 +42,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeProviderErrorStreamingSw
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRichStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStreamingFailureSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingAuditCapturePolicy;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -50,6 +57,21 @@ beforeEach(function () {
     FakeWriter::fake(['writer-out']);
     FakeEditor::fake(['editor-out']);
 });
+
+function bindStreamCaptureSkipPolicy(SkippingAuditCapturePolicy $policy): void
+{
+    app()->instance(CapturePolicy::class, $policy);
+
+    foreach ([
+        SwarmCapture::class,
+        ContextStore::class,
+        RunHistoryStore::class,
+        StreamEventStore::class,
+        SwarmRunner::class,
+    ] as $abstract) {
+        app()->forgetInstance($abstract);
+    }
+}
 
 test('sequential swarm stream yields ordered payloads and lifecycle events', function () {
     Event::fake();
@@ -511,6 +533,55 @@ test('sequential swarm stream redacts failure events and history when capture is
         'message' => '[redacted]',
         'class' => RuntimeException::class,
     ]);
+});
+
+test('Skip on outputs nulls stream delta and end payloads while history omits output', function () {
+    bindStreamCaptureSkipPolicy(new SkippingAuditCapturePolicy(
+        inputs: CaptureDecision::Full,
+        outputs: CaptureDecision::Skip,
+        artifacts: CaptureDecision::Full,
+        activeContext: CaptureDecision::Full,
+    ));
+    Event::fake([SwarmCompleted::class]);
+
+    $stream = FakeSequentialSwarm::make()->stream('skip-stream-task');
+    $events = iterator_to_array($stream);
+
+    $textDelta = collect($events)->whereInstanceOf(SwarmTextDelta::class)->first();
+    $streamEnd = collect($events)->whereInstanceOf(SwarmStreamEnd::class)->first();
+    $stepEnds = collect($events)->whereInstanceOf(SwarmStepEnd::class);
+
+    expect($textDelta->delta)->toBeNull();
+    expect($streamEnd->output)->toBeNull();
+    $stepEnds->each(fn (SwarmStepEnd $event) => expect($event->output)->toBeNull());
+
+    $completedEvent = Event::dispatched(SwarmCompleted::class)->first()[0];
+    expect($completedEvent->output)->toBeNull();
+
+    $history = app(RunHistoryStore::class)->find($completedEvent->runId);
+    expect($history['output'])->toBeNull();
+
+    foreach ($history['steps'] as $step) {
+        expect($step)->not->toHaveKey('output');
+    }
+});
+
+test('Skip on inputs nulls stream start input while boolean redact path is unaffected', function () {
+    bindStreamCaptureSkipPolicy(new SkippingAuditCapturePolicy(
+        inputs: CaptureDecision::Skip,
+        outputs: CaptureDecision::Full,
+        artifacts: CaptureDecision::Full,
+        activeContext: CaptureDecision::Full,
+    ));
+
+    $stream = FakeSequentialSwarm::make()->stream('skip-input-stream-task');
+    $events = iterator_to_array($stream);
+
+    $streamStart = collect($events)->whereInstanceOf(SwarmStreamStart::class)->first();
+    $stepStarts = collect($events)->whereInstanceOf(SwarmStepStart::class);
+
+    expect($streamStart->input)->toBeNull();
+    $stepStarts->each(fn (SwarmStepStart $event) => expect($event->input)->toBeNull());
 });
 
 test('store for replay persists ordered stream events as they are yielded', function () {
