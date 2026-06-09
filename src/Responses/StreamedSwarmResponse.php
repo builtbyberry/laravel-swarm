@@ -38,12 +38,15 @@ class StreamedSwarmResponse extends SwarmResponse
         $stepEnds = $events->whereInstanceOf(SwarmStepEnd::class)->values();
 
         $response = new SwarmResponse(
-            output: $streamEnd instanceof SwarmStreamEnd ? $streamEnd->output : SwarmTextDelta::combine($events),
+            // Stream events carry nullable I/O once a CaptureDecision::Skip
+            // omits a field; the live SwarmResponse/SwarmStep surface requires
+            // a string, so coerce omitted values to '' when rebuilding.
+            output: ($streamEnd instanceof SwarmStreamEnd ? $streamEnd->output : SwarmTextDelta::combine($events)) ?? '',
             steps: $stepEnds
                 ->map(fn (SwarmStepEnd $event): SwarmStep => new SwarmStep(
                     agentClass: $event->agentClass,
                     input: '',
-                    output: $event->output,
+                    output: $event->output ?? '',
                     metadata: array_merge($event->metadata, [
                         'index' => $event->stepIndex,
                         'duration_ms' => $event->durationMs,

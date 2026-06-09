@@ -13,7 +13,7 @@ final class SwarmStreamEnd extends SwarmStreamEvent
     public function __construct(
         public string $id,
         public string $runId,
-        public string $output,
+        public ?string $output,
         public array $usage,
         public array $metadata,
         public int $timestamp,
@@ -44,7 +44,7 @@ final class SwarmStreamEnd extends SwarmStreamEvent
         return new self(
             id: self::stringValue($payload, 'id', self::newId()),
             runId: self::stringValue($payload, 'run_id'),
-            output: self::stringValue($payload, 'output'),
+            output: self::nullableStringValue($payload, 'output'),
             usage: self::arrayValue($payload, 'usage'),
             metadata: self::arrayValue($payload, 'metadata'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
