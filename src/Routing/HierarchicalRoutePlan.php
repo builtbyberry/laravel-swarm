@@ -30,34 +30,119 @@ class HierarchicalRoutePlan
 
     /**
      * Worst-case number of worker executions the plan can require, including
-     * bounded loop replays. A looped worker can replay its loop body up to
-     * `max_iterations - 1` additional times; this counts those replays so the
-     * execution budget gate reflects the worst case rather than a single pass.
+     * bounded loop replays.
+     *
+     * Loops compose multiplicatively: a worker inside an outer loop bounded at
+     * Mo and an inner loop bounded at Mi runs up to Mo*Mi times, not Mo+Mi. This
+     * walks the plan once, folding each bounded loop's body cost in as
+     * `max_iterations * bodyCost` (the body cost itself already including any
+     * nested loops), so the budget gate reflects the true product-of-bounds
+     * worst case. Shared by every execution mode's budget and total_steps via a
+     * single source of truth.
      */
     public function reachableWorkerCount(): int
     {
-        $visited = [];
-        $count = $this->countReachableWorkers($this->startAt, $visited);
+        $seen = [];
 
-        foreach ($this->nodes as $node) {
-            if (! $node instanceof HierarchicalWorkerNode || ! $node->hasLoop() || ! isset($visited[$node->id])) {
-                continue;
-            }
-
-            $count += ((int) $node->loopMaxIterations - 1) * $this->loopBodyWorkerCount((string) $node->loopTo, $node->id);
-        }
-
-        return $count;
+        return $this->weightedSegmentCost($this->startAt, null, $seen);
     }
 
     /**
-     * Count worker nodes on the forward loop body between the loop target and
-     * the looping node (inclusive) — the set of workers that re-execute on
-     * each additional loop iteration.
+     * Worst-case worker executions for ONE pass through the segment beginning at
+     * $entry and ending after $stopNodeId (or at a finish/dead-end). Bounded
+     * loops are fully expanded: a loop whose looping node is reached adds
+     * `(max_iterations - 1) * bodyCost` on top of the single linear pass already
+     * counted, where the body cost is itself produced by this same walk so a
+     * nested inner loop is expanded before its outer multiplier applies. The net
+     * effect is the product-of-bounds worst case (Mo*Mm*Mi, not Mo+Mm+Mi).
+     *
+     * The visited-set is shared across the whole pass so a diamond-join node is
+     * counted once; a fresh set is seeded for each loop body so the body can be
+     * re-costed independently of the enclosing pass.
+     *
+     * @param  array<string, true>  $seen
      */
-    protected function loopBodyWorkerCount(string $loopTo, string $loopNodeId): int
+    protected function weightedSegmentCost(string $entry, ?string $stopNodeId, array &$seen): int
     {
-        $count = 0;
+        $cost = 0;
+        $current = $entry;
+
+        while (true) {
+            if (isset($seen[$current])) {
+                break;
+            }
+
+            $seen[$current] = true;
+            $node = $this->node($current);
+
+            if ($node instanceof HierarchicalParallelNode) {
+                foreach ($node->branches as $branchNodeId) {
+                    if (! isset($seen[$branchNodeId])) {
+                        $seen[$branchNodeId] = true;
+                        $cost++;
+                    }
+                }
+
+                if ($node->next === null) {
+                    break;
+                }
+
+                $current = $node->next;
+
+                continue;
+            }
+
+            if (! $node instanceof HierarchicalWorkerNode) {
+                // Finish node — terminal.
+                break;
+            }
+
+            // Every worker runs at least once on this linear pass.
+            $cost++;
+
+            // A bounded loop adds (max - 1) extra replays of its body. The body
+            // is re-walked here (fresh visited-set) so any nested inner loop is
+            // expanded first; multiplying that fully-expanded body by the outer
+            // bound yields the product-of-bounds worst case.
+            if ($node->hasLoop() && $node->id !== $stopNodeId) {
+                $bodySeen = [];
+                $bodyCost = $this->weightedSegmentCost((string) $node->loopTo, $node->id, $bodySeen);
+                $cost += ((int) $node->loopMaxIterations - 1) * $bodyCost;
+            }
+
+            // Reached this scope's loop boundary — the body ends here.
+            if ($node->id === $stopNodeId) {
+                break;
+            }
+
+            if ($node->next === null) {
+                break;
+            }
+
+            $current = $node->next;
+        }
+
+        return $cost;
+    }
+
+    /**
+     * The looping worker nodes that live strictly inside the loop body between
+     * $loopTo and $loopNodeId — i.e. every worker on the forward control path
+     * that itself defines a loop, excluding the looping node $loopNodeId.
+     *
+     * When the outer loop re-enters (a back-edge fires), each of these inner
+     * loops must have its per-node iteration counter reset to zero so it can run
+     * its full count again on the next outer pass. Recomputed from the persisted
+     * plan on each step — never persisted — so the reset is replay-safe.
+     *
+     * Uses a visited-set so diamond-join nodes on the body are walked once,
+     * consistent with the durable entry-spine dedup (F3).
+     *
+     * @return array<int, string>
+     */
+    public function loopBodyLoopingNodes(string $loopTo, string $loopNodeId): array
+    {
+        $looping = [];
         $seen = [];
         $stack = [$loopTo];
 
@@ -71,10 +156,12 @@ class HierarchicalRoutePlan
             $seen[$current] = true;
             $node = $this->node($current);
 
-            if ($node instanceof HierarchicalWorkerNode) {
-                $count++;
-            } elseif ($node instanceof HierarchicalParallelNode) {
-                $count += count($node->branches);
+            if (
+                $node instanceof HierarchicalWorkerNode
+                && $node->hasLoop()
+                && $node->id !== $loopNodeId
+            ) {
+                $looping[] = $node->id;
             }
 
             if ($current === $loopNodeId) {
@@ -86,7 +173,80 @@ class HierarchicalRoutePlan
             }
         }
 
-        return $count;
+        return $looping;
+    }
+
+    /**
+     * The innermost bounded-loop worker whose loop body contains $nodeId, or
+     * null if $nodeId sits outside every loop. Used to thread the enclosing
+     * loop's current iteration onto steps (e.g. parallel branch steps) that do
+     * not themselves own a loop counter. "Innermost" is the looping node whose
+     * body is smallest among those that contain $nodeId.
+     */
+    public function enclosingLoopNodeId(string $nodeId): ?string
+    {
+        $best = null;
+        $bestSize = PHP_INT_MAX;
+
+        foreach ($this->nodes as $node) {
+            if (! $node instanceof HierarchicalWorkerNode || ! $node->hasLoop()) {
+                continue;
+            }
+
+            $body = $this->loopBodyNodeIds((string) $node->loopTo, $node->id);
+
+            if (! isset($body[$nodeId])) {
+                continue;
+            }
+
+            if (count($body) < $bestSize) {
+                $best = $node->id;
+                $bestSize = count($body);
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * The set of node ids on the forward control path from $loopTo to
+     * $loopNodeId (inclusive), excluding loop back-edges.
+     *
+     * @return array<string, true>
+     */
+    protected function loopBodyNodeIds(string $loopTo, string $loopNodeId): array
+    {
+        $body = [];
+        $seen = [];
+        $stack = [$loopTo];
+
+        while ($stack !== []) {
+            $current = array_pop($stack);
+
+            if (isset($seen[$current])) {
+                continue;
+            }
+
+            $seen[$current] = true;
+            $body[$current] = true;
+            $node = $this->node($current);
+
+            if ($node instanceof HierarchicalParallelNode) {
+                foreach ($node->branches as $branchNodeId) {
+                    $body[$branchNodeId] = true;
+                }
+            }
+
+            if ($current === $loopNodeId) {
+                continue;
+            }
+
+            foreach ($node->controlEdges() as $edge) {
+                $stack[] = $edge;
+            }
+        }
+
+        return $body;
     }
 
     /**
@@ -467,95 +627,15 @@ class HierarchicalRoutePlan
 
     protected function validatePersistedAcyclic(): void
     {
-        $visited = [];
-        $inProgress = [];
-
-        if ($this->hasPersistedCycle($this->startAt, $visited, $inProgress)) {
-            throw new SwarmException('Persisted hierarchical route plans must be acyclic. Loops are not supported in durable recovery.');
-        }
-    }
-
-    /**
-     * @param  array<string, bool>  $visited
-     * @param  array<string, bool>  $inProgress
-     */
-    protected function hasPersistedCycle(string $nodeId, array &$visited, array &$inProgress): bool
-    {
-        $visited[$nodeId] = true;
-        $inProgress[$nodeId] = true;
-
-        foreach ($this->node($nodeId)->controlEdges() as $nextNodeId) {
-            if (! isset($visited[$nextNodeId])) {
-                if ($this->hasPersistedCycle($nextNodeId, $visited, $inProgress)) {
-                    return true;
-                }
-            } elseif (isset($inProgress[$nextNodeId])) {
-                return true;
-            }
-        }
-
-        unset($inProgress[$nodeId]);
-
-        return false;
+        (new LoopRuleValidator)->assertAcyclic(
+            $this,
+            'Persisted hierarchical route plans must be acyclic. Loops are not supported in durable recovery.',
+        );
     }
 
     protected function validatePersistedLoops(): void
     {
-        $branchNodeIds = [];
-
-        foreach ($this->nodes as $node) {
-            if ($node instanceof HierarchicalParallelNode) {
-                foreach ($node->branches as $branchNodeId) {
-                    $branchNodeIds[$branchNodeId] = true;
-                }
-            }
-        }
-
-        foreach ($this->nodes as $node) {
-            if (! $node instanceof HierarchicalWorkerNode || ! $node->hasLoop()) {
-                continue;
-            }
-
-            if (isset($branchNodeIds[$node->id])) {
-                throw new SwarmException("Persisted hierarchical worker node [{$node->id}] cannot define a [loop] while used as a parallel branch.");
-            }
-
-            $target = $this->node((string) $node->loopTo);
-
-            if (! $target instanceof HierarchicalWorkerNode) {
-                throw new SwarmException("Persisted hierarchical worker node [{$node->id}] may only loop back to a worker node, not [{$node->loopTo}].");
-            }
-
-            if (! $this->controlReaches((string) $node->loopTo, $node->id)) {
-                throw new SwarmException("Persisted hierarchical worker node [{$node->id}] must loop back to an earlier node on its own path; [{$node->loopTo}] does not reach [{$node->id}].");
-            }
-        }
-    }
-
-    protected function controlReaches(string $fromNodeId, string $targetNodeId): bool
-    {
-        $seen = [];
-        $stack = [$fromNodeId];
-
-        while ($stack !== []) {
-            $current = array_pop($stack);
-
-            if ($current === $targetNodeId) {
-                return true;
-            }
-
-            if (isset($seen[$current])) {
-                continue;
-            }
-
-            $seen[$current] = true;
-
-            foreach ($this->node($current)->controlEdges() as $edge) {
-                $stack[] = $edge;
-            }
-        }
-
-        return false;
+        (new LoopRuleValidator)->assertLoops($this, 'Persisted hierarchical');
     }
 
     protected function validatePersistedDataDependencies(): void

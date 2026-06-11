@@ -14,6 +14,13 @@ use Laravel\Ai\Contracts\HasStructuredOutput;
  */
 class HierarchicalRoutePlanner
 {
+    protected LoopRuleValidator $loopRules;
+
+    public function __construct(?LoopRuleValidator $loopRules = null)
+    {
+        $this->loopRules = $loopRules ?? new LoopRuleValidator;
+    }
+
     /**
      * @param  array<int, Agent>  $workers
      */
@@ -355,100 +362,15 @@ class HierarchicalRoutePlanner
 
     protected function validateAcyclic(HierarchicalRoutePlan $plan): void
     {
-        $visited = [];
-        $inProgress = [];
-
-        if ($this->hasCycle($plan->startAt, $plan, $visited, $inProgress)) {
-            throw new SwarmException('Hierarchical route plans must be acyclic. Loops are not supported in this release.');
-        }
-    }
-
-    /**
-     * @param  array<string, bool>  $visited
-     * @param  array<string, bool>  $inProgress
-     */
-    protected function hasCycle(string $nodeId, HierarchicalRoutePlan $plan, array &$visited, array &$inProgress): bool
-    {
-        $visited[$nodeId] = true;
-        $inProgress[$nodeId] = true;
-
-        foreach ($plan->node($nodeId)->controlEdges() as $nextNodeId) {
-            if (! isset($visited[$nextNodeId])) {
-                if ($this->hasCycle($nextNodeId, $plan, $visited, $inProgress)) {
-                    return true;
-                }
-            } elseif (isset($inProgress[$nextNodeId])) {
-                return true;
-            }
-        }
-
-        unset($inProgress[$nodeId]);
-
-        return false;
+        $this->loopRules->assertAcyclic(
+            $plan,
+            'Hierarchical route plans must be acyclic. Loops are not supported in this release.',
+        );
     }
 
     protected function validateLoops(HierarchicalRoutePlan $plan): void
     {
-        $branchNodeIds = [];
-
-        foreach ($plan->nodes as $node) {
-            if ($node instanceof HierarchicalParallelNode) {
-                foreach ($node->branches as $branchNodeId) {
-                    $branchNodeIds[$branchNodeId] = true;
-                }
-            }
-        }
-
-        foreach ($plan->nodes as $node) {
-            if (! $node instanceof HierarchicalWorkerNode || ! $node->hasLoop()) {
-                continue;
-            }
-
-            if (isset($branchNodeIds[$node->id])) {
-                throw new SwarmException("Hierarchical worker node [{$node->id}] cannot define a [loop] while used as a parallel branch.");
-            }
-
-            $target = $plan->node((string) $node->loopTo);
-
-            if (! $target instanceof HierarchicalWorkerNode) {
-                throw new SwarmException("Hierarchical worker node [{$node->id}] may only loop back to a worker node, not [{$node->loopTo}].");
-            }
-
-            if (! $this->controlReaches((string) $node->loopTo, $node->id, $plan)) {
-                throw new SwarmException("Hierarchical worker node [{$node->id}] must loop back to an earlier node on its own path; [{$node->loopTo}] does not reach [{$node->id}].");
-            }
-        }
-    }
-
-    /**
-     * Whether $targetNodeId is reachable from $fromNodeId following forward
-     * control edges only (loop back-edges excluded). Used to confirm a loop
-     * back-edge points to a genuine ancestor on the same path.
-     */
-    protected function controlReaches(string $fromNodeId, string $targetNodeId, HierarchicalRoutePlan $plan): bool
-    {
-        $seen = [];
-        $stack = [$fromNodeId];
-
-        while ($stack !== []) {
-            $current = array_pop($stack);
-
-            if ($current === $targetNodeId) {
-                return true;
-            }
-
-            if (isset($seen[$current])) {
-                continue;
-            }
-
-            $seen[$current] = true;
-
-            foreach ($plan->node($current)->controlEdges() as $edge) {
-                $stack[] = $edge;
-            }
-        }
-
-        return false;
+        $this->loopRules->assertLoops($plan, 'Hierarchical');
     }
 
     protected function validateDataDependencies(HierarchicalRoutePlan $plan): void

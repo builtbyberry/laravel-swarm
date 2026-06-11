@@ -534,6 +534,13 @@ class HierarchicalRunner
                     $nodeOutputs = $this->durableRuns->hierarchicalNodeOutputsFor($state->context->runId, $requiredNodeOutputIds);
                     $branchDefinitions = [];
 
+                    // Thread the enclosing loop's current iteration onto each
+                    // branch step when the fan-out sits inside a bounded loop.
+                    $enclosingLoopId = $plan->enclosingLoopNodeId($parallel->id);
+                    $parallelLoopIteration = $enclosingLoopId !== null
+                        ? (int) ($cursor['loop_iterations'][$enclosingLoopId] ?? 0) + 1
+                        : null;
+
                     foreach ($parallel->branches as $ordinal => $branchNodeId) {
                         /** @var HierarchicalWorkerNode $branch */
                         $branch = $plan->node($branchNodeId);
@@ -546,10 +553,10 @@ class HierarchicalRunner
                             'agent_class' => $branch->agentClass,
                             'parent_node_id' => $parallel->id,
                             'input' => $input,
-                            'metadata' => array_merge($branch->metadata, [
-                                'node_id' => $branch->id,
-                                'parent_parallel_node_id' => $parallel->id,
-                            ]),
+                            'metadata' => array_merge(
+                                $branch->metadata,
+                                $this->parallelBranchMetadata($branch->id, $parallel->id, $parallelLoopIteration),
+                            ),
                         ];
                     }
 
@@ -659,6 +666,14 @@ class HierarchicalRunner
         if ($node->hasLoop() && $iteration < (int) $node->loopMaxIterations) {
             $cursor['loop_iterations'][$node->id] = $iteration;
             $cursor['offset'] = $this->durableEntryOffsetForNode($cursor, (string) $node->loopTo);
+
+            // Reset every inner loop's persisted counter on the back-edge so each
+            // re-enters fresh on the next outer pass. This is part of the cursor
+            // that gets checkpointed, so a crash-before-checkpoint replay recomputes
+            // the same resets deterministically.
+            foreach ($plan->loopBodyLoopingNodes((string) $node->loopTo, $node->id) as $inner) {
+                unset($cursor['loop_iterations'][$inner]);
+            }
         } else {
             if ($node->hasLoop()) {
                 $cursor['loop_iterations'][$node->id] = $iteration;
@@ -738,11 +753,30 @@ class HierarchicalRunner
                 $loopIterations[$node->id] = $iteration;
                 $currentNodeId = $this->resolveWorkerSuccessor($node, $iteration);
 
+                // On a loop back-edge, reset every inner loop's counter so it can
+                // run its full count again on the next outer pass. Without this a
+                // nested loop would fire only once across all outer iterations.
+                if ($node->hasLoop() && $currentNodeId === $node->loopTo) {
+                    foreach ($plan->loopBodyLoopingNodes((string) $node->loopTo, $node->id) as $inner) {
+                        unset($loopIterations[$inner]);
+                    }
+                }
+
                 continue;
             }
 
             if ($node instanceof HierarchicalParallelNode) {
                 $parallelGroups[] = ['node_id' => $node->id, 'branches' => $node->branches];
+
+                // If this fan-out sits inside a bounded loop, stamp each branch
+                // step with the enclosing loop's current iteration so a parallel
+                // group re-run is attributable to its pass. The enclosing looping
+                // node fires at the end of each pass, so the current pass number
+                // is its completed-count + 1.
+                $enclosingLoopId = $plan->enclosingLoopNodeId($node->id);
+                $parallelLoopIteration = $enclosingLoopId !== null
+                    ? ($loopIterations[$enclosingLoopId] ?? 0) + 1
+                    : null;
 
                 if ($state->executionMode === ExecutionMode::Queue && $state->queueHierarchicalParallelCoordination === 'multi_worker') {
                     $routeCursor = $this->cursorAtQueueParallelBoundary($state, $plan, $coordinatorClass, $node, $nodeOutputs);
@@ -759,10 +793,10 @@ class HierarchicalRunner
                             'agent_class' => $branch->agentClass,
                             'parent_node_id' => $node->id,
                             'input' => $input,
-                            'metadata' => array_merge($branch->metadata, [
-                                'node_id' => $branch->id,
-                                'parent_parallel_node_id' => $node->id,
-                            ]),
+                            'metadata' => array_merge(
+                                $branch->metadata,
+                                $this->parallelBranchMetadata($branch->id, $node->id, $parallelLoopIteration),
+                            ),
                         ];
                     }
 
@@ -794,10 +828,10 @@ class HierarchicalRunner
                             agent: $workerMap[$branch->agentClass],
                             input: $this->composePrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id),
                             index: $nextIndex,
-                            metadata: array_merge($branch->metadata, [
-                                'node_id' => $branch->id,
-                                'parent_parallel_node_id' => $node->id,
-                            ]),
+                            metadata: array_merge(
+                                $branch->metadata,
+                                $this->parallelBranchMetadata($branch->id, $node->id, $parallelLoopIteration),
+                            ),
                         );
 
                         $steps[] = $step;
@@ -909,9 +943,7 @@ class HierarchicalRunner
                                     array_merge($branch->metadata, [
                                         'index' => $index,
                                         'usage' => $row['usage'],
-                                        'node_id' => $branch->id,
-                                        'parent_parallel_node_id' => $node->id,
-                                    ]),
+                                    ], $this->parallelBranchMetadata($branch->id, $node->id, $parallelLoopIteration)),
                                 ),
                                 $state->context,
                             );
@@ -933,9 +965,7 @@ class HierarchicalRunner
                         $mergedMeta = array_merge($branch->metadata, [
                             'index' => $index,
                             'usage' => $row['usage'],
-                            'node_id' => $branch->id,
-                            'parent_parallel_node_id' => $node->id,
-                        ]);
+                        ], $this->parallelBranchMetadata($branch->id, $node->id, $parallelLoopIteration));
 
                         if ($policy === GuardrailParallelFailurePolicy::Existing) {
                             $this->guardrails->validateStep(
@@ -1062,23 +1092,40 @@ class HierarchicalRunner
     protected function durableEntries(HierarchicalRoutePlan $plan): array
     {
         $entries = [];
-        $this->appendDurableEntries($plan, $plan->startAt, $entries);
+        $visited = [];
+        $this->appendDurableEntries($plan, $plan->startAt, $entries, $visited);
 
         return $entries;
     }
 
     /**
+     * Flatten the plan's forward control graph into a linear entry spine.
+     *
+     * A visited-set guards the recursive `next`-walk so a diamond-join node
+     * (reachable from multiple predecessors) appears exactly once. Without it the
+     * join would be emitted twice and durableEntryOffsetForNode would rewind a
+     * loop to the wrong (first) occurrence. Parallel branch entries are appended
+     * inline inside the parallel block — not via the recursive walk — so they are
+     * never affected by this dedup.
+     *
      * @param  array<int, array{type: string, node_id: string, parent_parallel_node_id?: string}>  $entries
+     * @param  array<string, true>  $visited
      */
-    protected function appendDurableEntries(HierarchicalRoutePlan $plan, string $nodeId, array &$entries): void
+    protected function appendDurableEntries(HierarchicalRoutePlan $plan, string $nodeId, array &$entries, array &$visited): void
     {
+        if (isset($visited[$nodeId])) {
+            return;
+        }
+
+        $visited[$nodeId] = true;
+
         $node = $plan->node($nodeId);
 
         if ($node instanceof HierarchicalWorkerNode) {
             $entries[] = ['type' => 'worker', 'node_id' => $node->id];
 
             if ($node->next !== null) {
-                $this->appendDurableEntries($plan, $node->next, $entries);
+                $this->appendDurableEntries($plan, $node->next, $entries, $visited);
             }
 
             return;
@@ -1096,7 +1143,7 @@ class HierarchicalRunner
             }
 
             if ($node->next !== null) {
-                $this->appendDurableEntries($plan, $node->next, $entries);
+                $this->appendDurableEntries($plan, $node->next, $entries, $visited);
             }
 
             return;
@@ -1305,6 +1352,28 @@ class HierarchicalRunner
         }
 
         return $nodeOutputs[$sourceNodeId];
+    }
+
+    /**
+     * Base metadata keys every parallel branch step carries. When the parallel
+     * group is nested inside a bounded loop, the enclosing loop's current
+     * iteration is threaded through so the branch step is attributable to its
+     * pass (parity with the looping worker's own `loop_iteration`).
+     *
+     * @return array<string, mixed>
+     */
+    protected function parallelBranchMetadata(string $branchNodeId, string $parallelNodeId, ?int $loopIteration): array
+    {
+        $metadata = [
+            'node_id' => $branchNodeId,
+            'parent_parallel_node_id' => $parallelNodeId,
+        ];
+
+        if ($loopIteration !== null) {
+            $metadata['loop_iteration'] = $loopIteration;
+        }
+
+        return $metadata;
     }
 
     /**
