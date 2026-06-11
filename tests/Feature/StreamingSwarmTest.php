@@ -584,6 +584,43 @@ test('Skip on inputs nulls stream start input while boolean redact path is unaff
     $stepStarts->each(fn (SwarmStepStart $event) => expect($event->input)->toBeNull());
 });
 
+test('rebuilt streamed response flags output_skipped so consumers can tell Skip from empty', function () {
+    bindStreamCaptureSkipPolicy(new SkippingAuditCapturePolicy(
+        inputs: CaptureDecision::Full,
+        outputs: CaptureDecision::Skip,
+        artifacts: CaptureDecision::Full,
+        activeContext: CaptureDecision::Full,
+    ));
+
+    $stream = FakeSequentialSwarm::make()->stream('skip-flag-task');
+    $events = collect(iterator_to_array($stream));
+
+    $response = StreamedSwarmResponse::fromEvents('skip-flag-run', $events);
+
+    // Output is coerced to '' on the non-null live surface, but the flag marks
+    // it as a deliberate omission rather than a genuine empty output.
+    expect($response->output)->toBe('');
+    expect($response->metadata['output_skipped'] ?? null)->toBeTrue();
+
+    foreach ($response->steps as $step) {
+        expect($step->output)->toBe('');
+        expect($step->metadata['output_skipped'] ?? null)->toBeTrue();
+    }
+});
+
+test('rebuilt streamed response omits output_skipped when output is captured', function () {
+    $stream = FakeSequentialSwarm::make()->stream('normal-stream-task');
+    $events = collect(iterator_to_array($stream));
+
+    $response = StreamedSwarmResponse::fromEvents('normal-stream-run', $events);
+
+    expect($response->metadata)->not->toHaveKey('output_skipped');
+
+    foreach ($response->steps as $step) {
+        expect($step->metadata)->not->toHaveKey('output_skipped');
+    }
+});
+
 test('store for replay persists ordered stream events as they are yielded', function () {
     $stream = FakeSequentialSwarm::make()
         ->stream('stream-task')

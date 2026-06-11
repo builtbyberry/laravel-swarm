@@ -7,7 +7,6 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ResolvesSwarmCacheStore;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
-use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -22,15 +21,16 @@ class CacheContextStore implements ContextStore
     public function __construct(
         protected CacheFactory $cacheFactory,
         protected ConfigRepository $config,
-        protected SwarmCapture $capture,
     ) {}
 
     public function put(RunContext $context, int $ttlSeconds): void
     {
-        // A Skip on active-context omits `input` from the persisted payload.
+        // The active-context store is operational runtime state needed for
+        // durable resume, so it always retains the true input. Skip is honored
+        // on the evidence surfaces (run history, events, audit), not here.
         $this->store()->put(
             $this->key($context->runId),
-            $this->capture->omitSkippedActiveContextKeys($context->toArray(), $context),
+            $context->toArray(),
             $ttlSeconds,
         );
     }

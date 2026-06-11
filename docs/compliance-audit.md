@@ -39,10 +39,13 @@ shape.
 > outputs, artifacts, active context) governs what lands in **run history,
 > lifecycle/stream events, and audit evidence**. Both return the same
 > `Full` / `Redact` / `Skip` decision. As of **v0.12.0**, a `Skip` from the audit
-> `CapturePolicy` is true omission — the field is absent from persisted/emitted
-> payloads and `NULL` on the nullable columns, and a failure under `Skip` drops
-> `error.message` while keeping `error.class`. The default boolean policy never
-> returns `Skip`, so `swarm.capture.*=false` installs still record `[redacted]`.
+> `CapturePolicy` is true omission on the **evidence** surfaces — the field is
+> absent from persisted/emitted payloads and `NULL` on the nullable evidence
+> columns, and a failure under `Skip` drops `error.message` while keeping
+> `error.class`. The operational active-context store (`swarm_contexts.input`)
+> retains the encrypted input for durable resume and is never nulled by `Skip`.
+> The default boolean policy never returns `Skip`, so `swarm.capture.*=false`
+> installs still record `[redacted]`.
 > See the [audit evidence contract](audit-evidence-contract.md#capture-policy).
 
 ## Memory capture policy

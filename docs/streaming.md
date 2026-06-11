@@ -175,6 +175,22 @@ other modes. When **output capture** is disabled, output-bearing fields in text,
 reasoning, and tool events are redacted consistently in **live** and **replayed**
 streams. Tool payloads keep **keys** while values become `[redacted]`.
 
+A custom `CapturePolicy` returning `CaptureDecision::Skip` for outputs emits
+`null` output/delta on the stream events (the raw events round-trip the `null`,
+so iterating a replay preserves the Skip-vs-empty distinction). The convenience
+`StreamedSwarmResponse` rebuilt from those events coerces a Skipped output to
+`''` — its `output` is a non-null `string` — and sets
+`metadata['output_skipped'] = true` on the response and each affected step so
+you can still tell a deliberate omission from a genuinely empty output:
+
+```php
+SwarmHistory::replay($runId)->then(function (StreamedSwarmResponse $response) {
+    if ($response->metadata['output_skipped'] ?? false) {
+        // output was deliberately omitted by a Skip policy, not empty
+    }
+});
+```
+
 Treat streamed prompts, outputs, reasoning, and tool arguments as sensitive in
 production unless you have explicitly chosen capture settings for your risk
 profile.

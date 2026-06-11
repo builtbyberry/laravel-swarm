@@ -17,11 +17,15 @@ use Throwable;
  * Adapter over the bound CapturePolicy.
  *
  * SwarmCapture is the single chokepoint that turns a CapturePolicy decision
- * into a captured payload shape for run history, the context store, and
- * lifecycle/stream events. Custom policies bound in the container affect every
- * emit site without touching call sites. The default BooleanCapturePolicy reads
- * the swarm.capture.* booleans and only ever returns Full / Redact, so apps
- * using those booleans see no behavior change.
+ * into a captured payload shape for the *evidence* surfaces — run history,
+ * lifecycle/stream events, and audit envelopes. Custom policies bound in the
+ * container affect every emit site without touching call sites. The default
+ * BooleanCapturePolicy reads the swarm.capture.* booleans and only ever returns
+ * Full / Redact, so apps using those booleans see no behavior change.
+ *
+ * Capture governs evidence, not operational state: the active-context store
+ * (swarm_contexts) is the only persisted source of the top-level input for
+ * durable resume, so it always retains the true input and is NOT shaped here.
  *
  * Per-field decision shapes:
  *
@@ -29,8 +33,8 @@ use Throwable;
  *  - Redact — scalar values become {@see self::REDACTED}; structure/keys
  *             preserved.
  *  - Skip   — the field is omitted entirely: absent from persisted/emitted
- *             arrays and null on the DB columns that allow it (history/context
- *             step input/output, context input, top-level run output, the
+ *             arrays and null on the evidence DB columns that allow it
+ *             (run-history step input/output, top-level run output, the
  *             error `message`). Use the Skip-aware apply and persisted-array
  *             helpers to obtain that shape; the `capturesX()` predicates stay
  *             `=== Full` so the execution/storage gates they drive are
@@ -309,26 +313,6 @@ class SwarmCapture
         if ($this->outputsDecision($context) === CaptureDecision::Skip && isset($contextArray['data']) && is_array($contextArray['data'])) {
             foreach (['last_output', 'hierarchical_node_outputs', 'durable_hierarchical_cursor'] as $key) {
                 unset($contextArray['data'][$key]);
-            }
-        }
-
-        return $contextArray;
-    }
-
-    /**
-     * Strip the Skip-omitted `input` key (and its data mirror) from a
-     * serialized active-context payload written to the context store.
-     *
-     * @param  array<string, mixed>  $contextArray
-     * @return array<string, mixed>
-     */
-    public function omitSkippedActiveContextKeys(array $contextArray, ?RunContext $context = null): array
-    {
-        if ($this->activeContextDecision($context) === CaptureDecision::Skip) {
-            unset($contextArray['input']);
-
-            if (isset($contextArray['data']) && is_array($contextArray['data'])) {
-                unset($contextArray['data']['input']);
             }
         }
 

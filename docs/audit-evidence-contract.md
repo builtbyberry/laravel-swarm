@@ -315,6 +315,15 @@ documented in the changelog.
 Adding new optional fields does not increment `schema_version`. Applications
 should handle unknown keys gracefully.
 
+> **Replaying a `Skip` stream.** Persisted stream events round-trip the omitted
+> output as `null`, so iterating the raw events of a replay preserves the
+> Skip-vs-empty distinction. The convenience `StreamedSwarmResponse` rebuilt from
+> those events coerces a Skipped output to `''` (its `output` is a non-null
+> `string`) and sets `metadata['output_skipped'] = true` on the response and on
+> each affected step so consumers can still distinguish a deliberate omission
+> from a genuinely empty output. This live-object flag is **not** part of the
+> signed envelope and does not affect `schema_version`.
+
 ## Frozen Schema for the v0.x Line
 
 The following envelope shape is frozen for the entire `0.x` release line.
@@ -771,7 +780,7 @@ interface CapturePolicy
 |----------|--------------------------------------------------------------------------|
 | `Full`   | Store the payload as-is.                                                 |
 | `Redact` | Store the payload structure with scalar values replaced by `SwarmCapture::REDACTED`. Keys and structure are preserved. |
-| `Skip`   | **Omit the field entirely** (since v0.12.0). The key is absent from persisted/emitted arrays (history steps, history context, lifecycle and stream events) and `NULL` on the nullable columns (`swarm_run_steps.input`/`output`, `swarm_contexts.input`, `swarm_run_histories.output`). A failure under `Skip` omits the `error.message` key while keeping `error.class`. (Through v0.4–v0.11, `Skip` behaved identically to `Redact`.) |
+| `Skip`   | **Omit the field entirely from the evidence surfaces** (since v0.12.0). The key is absent from persisted/emitted arrays (history steps, history context, lifecycle and stream events) and `NULL` on the nullable evidence columns (`swarm_run_steps.input`/`output`, `swarm_run_histories.output`). A failure under `Skip` omits the `error.message` key while keeping `error.class`. The operational active-context store (`swarm_contexts.input`) is runtime state required for durable resume and always retains the (encrypted) input — `Skip` never nulls it. (Through v0.4–v0.11, `Skip` behaved identically to `Redact`.) |
 
 The default binding, `BuiltByBerry\LaravelSwarm\Audit\BooleanCapturePolicy`,
 reads the existing `swarm.capture.*` booleans and returns `Full` when true /
@@ -810,7 +819,12 @@ class TenantAwareCapturePolicy implements CapturePolicy
 
     public function activeContext(?RunContext $context = null, ?Actor $actor = null): CaptureDecision
     {
-        return CaptureDecision::Skip;
+        // The active context is operational runtime state (durable resume reads
+        // its input). Return Full so durable/queued runs can persist and resume;
+        // a non-Full decision redacts the run-history snapshot and is rejected
+        // at dispatch for durable runs. `inputs` already controls whether the
+        // input appears in the evidence/history projection.
+        return CaptureDecision::Full;
     }
 }
 ```

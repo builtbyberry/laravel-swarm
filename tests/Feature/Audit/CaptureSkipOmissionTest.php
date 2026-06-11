@@ -110,12 +110,16 @@ test('Skip omission persists NULL columns on the database driver', function (): 
     $response = FakeSequentialSwarm::make()->run('skip-db-task');
     $runId = $response->metadata['run_id'];
 
+    // Evidence step columns are nulled by inputs/outputs Skip.
     $stepRow = DB::table('swarm_run_steps')->where('run_id', $runId)->orderBy('step_index')->first();
     expect($stepRow->input)->toBeNull();
     expect($stepRow->output)->toBeNull();
 
+    // The active-context store is OPERATIONAL runtime state (the only persisted
+    // source of the top-level input for durable resume), so Skip never nulls it
+    // — its input column is always retained (NOT NULL).
     $contextRow = DB::table('swarm_contexts')->where('run_id', $runId)->first();
-    expect($contextRow->input)->toBeNull();
+    expect($contextRow->input)->not->toBeNull();
 
     $historyRow = DB::table('swarm_run_histories')->where('run_id', $runId)->first();
     expect($historyRow->output)->toBeNull();

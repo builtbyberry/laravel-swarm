@@ -144,12 +144,17 @@ The three decisions differ in **shape**, not just content:
 | --- | --- |
 | `Full` | The value, as-is. |
 | `Redact` | Scalar values replaced with `[redacted]`; keys and structure preserved. |
-| `Skip` | The field is **omitted entirely** (v0.12.0+) — the key is absent from history/events and the column is `NULL` (`swarm_run_steps.input`/`output`, `swarm_contexts.input`, `swarm_run_histories.output`). A failure under `Skip` drops `error.message` but keeps `error.class`. |
+| `Skip` | The field is **omitted entirely** from the evidence surfaces (v0.12.0+) — the key is absent from history/events and the column is `NULL` (`swarm_run_steps.input`/`output`, `swarm_run_histories.output`). A failure under `Skip` drops `error.message` but keeps `error.class`. The operational active-context store (`swarm_contexts.input`) is runtime state for durable resume and always retains the input — `Skip` never nulls it. |
 
 Use `Skip` (not `Redact`) when even a `[redacted]` placeholder would leak that
 a field existed, or when downstream consumers must distinguish "deliberately
 not captured" from "captured but masked". The boolean flags above can never
 produce `Skip` — only an explicit policy can.
+
+> **Failure messages follow inputs *and* outputs.** A failure's `error.message`
+> is omitted whenever **either** `inputs` or `outputs` is `Skip` (a thrown
+> message can echo either side), so a policy that `Skip`s only inputs while
+> capturing outputs still drops `error.message` — `error.class` is always kept.
 
 ### Sign Audit Evidence
 
