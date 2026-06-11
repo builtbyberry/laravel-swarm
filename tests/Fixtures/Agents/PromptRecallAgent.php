@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
-use BuiltByBerry\LaravelSwarm\Tools\Remember;
+use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Laravel\Ai\Enums\Lab;
@@ -19,27 +19,20 @@ use RuntimeException;
 use Stringable;
 
 /**
- * A non-streaming first step that writes a value to run memory via the real
- * {@see Remember} tool, so a later streaming step can {@see Recall} it. Lets a
- * test prove a streamed recall sees a value an earlier (non-final) step wrote.
+ * Non-streaming worker that invokes the real {@see Recall} tool in prompt() and
+ * returns the recalled value as its output. Concurrent static-hierarchical
+ * branches run workers via prompt() (not stream()), so this fixture lets a
+ * concurrent-branch resume assert each branch read its OWN frozen snapshot.
  *
  * @phpstan-import-type LaravelAiAgentAttachments from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  * @phpstan-import-type LaravelAiAgentProvider from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  */
-class RememberingPrimerAgent implements Agent
+abstract class PromptRecallAgent implements Agent
 {
-    /**
-     * Count of prompt() invocations across a test. The F2 boundary test asserts
-     * this reaches 2 across a crash + resume — proving the non-final primer step
-     * RE-EXECUTES on resume (it is not replayed from the frozen snapshot; only
-     * the terminal streamed step is). Reset it in the test's beforeEach.
-     */
-    public static int $invocations = 0;
-
     public function instructions(): Stringable|string
     {
-        return 'You seed shared memory for later agents.';
+        return 'You read shared memory before answering.';
     }
 
     /**
@@ -48,17 +41,14 @@ class RememberingPrimerAgent implements Agent
      */
     public function prompt(string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
-        self::$invocations++;
-
-        Container::getInstance()->make(Remember::class)->handle(new Request([
+        $result = Container::getInstance()->make(Recall::class)->handle(new Request([
             'key' => 'finding',
-            'value' => 'primed-answer',
             'scope' => 'run',
         ]));
 
         return new AgentResponse(
-            invocationId: 'remembering-primer',
-            text: 'primed',
+            invocationId: 'prompt-recall',
+            text: $result,
             usage: new Usage,
             meta: new Meta('fake', 'test'),
         );

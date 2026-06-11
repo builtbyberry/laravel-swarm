@@ -28,6 +28,7 @@ class DurableSequentialStepAdvancer
             $state->context->runId,
             $expectedStepIndex,
             fn (?MemorySnapshot $existing) => $this->sequential->runSingleStep($state, $expectedStepIndex),
+            $state->context,
         );
     }
 }

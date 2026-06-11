@@ -193,6 +193,20 @@ Two things make such a run recoverable:
   re-emits the same upstream text, reasoning, and tool events it produced before
   the crash.
 
+> **Scope — terminal step only.** Byte-identical resume covers the **final,
+> streamed** step only. In a multi-step swarm, the **non-final** steps
+> **re-execute against live memory** on resume: their providers are re-invoked
+> and any tool side effects re-fire (a primer step that writes to memory runs
+> again). This is safe when earlier steps are idempotent; if you need idempotent
+> multi-step resume across the whole pipeline, use `dispatchDurable()`
+> ([Durable Execution](durable-execution.md)), which checkpoints every step.
+> Per-step replay of non-terminal `stream()` steps is tracked as issue #202.
+
+The frozen view is scoped per-invocation on the run's internal active-run frame
+rather than rebound globally, so two streams running concurrently in one process
+(for example under Octane) each resume against their own frozen snapshot with no
+cross-run interference.
+
 ```php
 $runId = (string) Str::uuid();
 

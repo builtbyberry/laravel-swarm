@@ -322,7 +322,28 @@ class SwarmServiceProvider extends ServiceProvider
             policy: $app->make(MemoryCapturePolicy::class),
             events: $app->make(Dispatcher::class),
         ));
-        $this->app->singleton(SwarmMemory::class, DefaultSwarmMemory::class);
+        // The live store is bound (not a singleton) under its concrete name so
+        // each resolution rebuilds the thin DefaultSwarmMemory coordinator around
+        // the *current* MemoryStore binding — the run-state data lives in the
+        // store driver (cache/database), not in this stateless facade, so there is
+        // no instance to share. A singleton here would pin the first-resolved
+        // MemoryStore reference, so a consumer that later rebinds MemoryStore
+        // (e.g. to install a capture policy or swap drivers) would keep writing
+        // through the stale chain. The SwarmMemory contract resolves to the
+        // per-invocation frozen-view override when a crash-resume replay is active
+        // on the current ActiveRunContext frame, else to that live store. This is
+        // what lets *any* consumer that resolves SwarmMemory from the container —
+        // including agents that read `app(SwarmMemory::class)` directly during a
+        // durable retry — observe the frozen view, WITHOUT a process-global rebind
+        // (so concurrent in-process runs under Octane each see their own frame's
+        // view). The override never wraps itself: MemoryReplayCoordinator builds
+        // its ReplaySwarmMemory from the concrete DefaultSwarmMemory binding, not
+        // this contract resolution.
+        $this->app->bind(DefaultSwarmMemory::class);
+        $this->app->bind(
+            SwarmMemory::class,
+            fn (Application $app): SwarmMemory => ActiveRunContext::currentMemory() ?? $app->make(DefaultSwarmMemory::class),
+        );
 
         // Default conversation→runs resolver is the honest no-op: Swarm records
         // no run/conversation link in v0.10, so `swarm:memory:dump` of a
