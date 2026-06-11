@@ -65,16 +65,6 @@ class SwarmCapture
         return $this->policy->outputs($context, $context?->actor());
     }
 
-    public function artifactsDecision(?RunContext $context = null): CaptureDecision
-    {
-        return $this->policy->artifacts($context, $context?->actor());
-    }
-
-    public function activeContextDecision(?RunContext $context = null): CaptureDecision
-    {
-        return $this->policy->activeContext($context, $context?->actor());
-    }
-
     /**
      * Failure capture is a function of inputs + outputs: Full only when both
      * are Full, Skip as soon as either category is Skip, otherwise Redact.
