@@ -26,7 +26,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
-use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -58,6 +58,7 @@ use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Events\Dispatcher;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
@@ -106,6 +107,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         protected SwarmStepRecorder $stepsRecorder,
         protected SnapshotsMemory $snapshots,
         protected AgentVisibleMemoryView $view,
+        protected MemoryReplayCoordinator $coordinator,
     ) {
         parent::__construct(
             $config,
@@ -354,14 +356,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                     $stepStartedAt = MonotonicTime::now();
 
-                    $snapshot = $this->snapshots->snapshot(
-                        $context->runId,
-                        $nextIndex,
-                        $this->view->present($swarm, $context, $agent),
-                    );
-
+                    // The snapshot is frozen (or replayed) inside streamAgentEvents,
+                    // after the run frame is entered, so begin()'s frozen-view
+                    // override lands on the same frame the agent reads through.
                     ['output' => $output, 'usage' => $stepUsage] = yield from $this->streamAgentEvents(
-                        $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart, $snapshot,
+                        $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart,
                     );
 
                     $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
@@ -437,14 +436,10 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                             $stepStartedAt = MonotonicTime::now();
 
-                            $snapshot = $this->snapshots->snapshot(
-                                $context->runId,
-                                $nextIndex,
-                                $this->view->present($swarm, $context, $agent),
-                            );
-
+                            // The snapshot is frozen (or replayed) inside
+                            // streamAgentEvents, after the run frame is entered.
                             ['output' => $output, 'usage' => $stepUsage] = yield from $this->streamAgentEvents(
-                                $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart, $snapshot,
+                                $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart,
                             );
 
                             $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
@@ -507,11 +502,26 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             $branch = $plan->node($branchNodeId);
                             $input = $this->composeStaticPrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
 
-                            $branchSnapshots[$ordinal] = $this->snapshots->snapshot(
+                            // Persist the branch snapshot BEFORE ConcurrencyManager
+                            // dispatches, so each (possibly forked) child's begin()
+                            // can find() it and reconstruct its own frozen view. On
+                            // a crash-resume the prior frozen snapshot is preserved
+                            // (its entries are the determinism record) with tool
+                            // calls reset so this attempt rebuilds them; on a fresh
+                            // attempt a new snapshot is frozen from the live view.
+                            $existingBranchSnapshot = $this->coordinator->existingSnapshot(
+                                $swarm::class,
                                 $context->runId,
                                 $nextIndex + $ordinal,
-                                $this->view->present($swarm, $context, $workerMap[$branch->agentClass]),
                             );
+
+                            $branchSnapshots[$ordinal] = $existingBranchSnapshot !== null
+                                ? $this->snapshots->resetToolCalls($existingBranchSnapshot)
+                                : $this->snapshots->snapshot(
+                                    $context->runId,
+                                    $nextIndex + $ordinal,
+                                    $this->view->present($swarm, $context, $workerMap[$branch->agentClass]),
+                                );
 
                             $this->stepsRecorder->started($state, $nextIndex + $ordinal, $branch->agentClass, $input);
 
@@ -526,14 +536,60 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             $branchRunId = $state->context->runId;
                             $branchSwarmClass = $state->swarm::class;
                             $branchContextPayload = $state->context->toQueuePayload();
-                            $callbacks[$ordinal] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload): array {
-                                $worker = Container::getInstance()->make($agentClass);
+                            $branchStepIndex = $nextIndex + $ordinal;
+                            // A `static` closure that resolves every collaborator
+                            // from the container — it MUST NOT bind `$this`. The
+                            // real ProcessDriver serializes this callback with
+                            // SerializableClosure to ship it to a child process;
+                            // binding `$this` would drag the entire runner object
+                            // graph (every injected collaborator) into the
+                            // serialization and blow up. The agent and the
+                            // MemoryReplayCoordinator are both re-resolved from the
+                            // child's container instead, mirroring how the worker
+                            // agent is resolved below.
+                            $callbacks[$ordinal] = static function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchStepIndex): array {
+                                $container = Container::getInstance();
+                                $worker = $container->make($agentClass);
 
                                 if (! $worker instanceof Agent) {
                                     throw new SwarmException("Static hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
                                 }
 
                                 ActiveRunContext::enter($branchRunId, $branchSwarmClass, RunContext::fromPayload($branchContextPayload, $branchRunId));
+
+                                // Each concurrent branch resolves its OWN frozen-view
+                                // override from the DB. A process-local handle cannot
+                                // cross a fork/process boundary, so the branch calls
+                                // begin() itself: its find() is a DB read that works
+                                // in any process and reconstructs this branch's own
+                                // ReplaySwarmMemory as the frame override. The parent
+                                // persisted this branch's snapshot before dispatch
+                                // (above), so find() sees it. We use begin() only for
+                                // the read override — the parent owns the tool-call
+                                // append from the returned payload — so the returned
+                                // boundary's snapshot is intentionally unused here.
+                                // This is correct-by-construction across fork/process
+                                // branches because F1 removed the shared-container
+                                // mutation that made begin() unsafe inside a child.
+                                //
+                                // Resolve the coordinator defensively: a child
+                                // process whose container has not booted the package
+                                // bindings (so SnapshotsMemory is unresolvable) cannot
+                                // replay anyway — there is no snapshot store to read —
+                                // so it simply runs the branch fresh against live
+                                // memory rather than failing the whole run. Real
+                                // workers (Octane/queue) boot the provider, so they
+                                // take the begin()/end() override path.
+                                $coordinator = null;
+                                $boundary = null;
+
+                                try {
+                                    $coordinator = $container->make(MemoryReplayCoordinator::class);
+                                    $boundary = $coordinator->begin($branchSwarmClass, $branchRunId, $branchStepIndex);
+                                } catch (BindingResolutionException) {
+                                    $coordinator = null;
+                                    $boundary = null;
+                                }
 
                                 try {
                                     $branchStartedAt = MonotonicTime::now();
@@ -546,6 +602,9 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                         'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
                                     ];
                                 } finally {
+                                    if ($coordinator !== null && $boundary !== null) {
+                                        $coordinator->end($boundary);
+                                    }
                                     ActiveRunContext::exit();
                                 }
                             };
@@ -759,7 +818,6 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         SwarmExecutionState $state,
         int &$streamSequenceIndex,
         float $streamTelemetryStart,
-        MemorySnapshot $snapshot,
     ): \Generator {
         $output = '';
         $stepUsage = [];
@@ -770,6 +828,22 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         // its stream is consumed; cleared in finally so it never leaks past the
         // streamed step.
         ActiveRunContext::enter($context->runId, $swarm::class, $context);
+
+        // Open the snapshot-backed replay boundary now that the run frame exists,
+        // mirroring SequentialRunner. begin() detects a prior frozen snapshot,
+        // installs the frozen-view override on the frame just entered, and returns
+        // it for resetToolCalls() below; on the fresh path it freezes a new
+        // snapshot from the (live or frozen) view. The override and any pending
+        // tool calls are torn down in the finally so neither leaks past this step.
+        $boundary = $this->coordinator->begin($swarm::class, $context->runId, $stepIndex);
+
+        $snapshot = $boundary->isReplay()
+            ? $this->snapshots->resetToolCalls($boundary->snapshot)
+            : $this->snapshots->snapshot(
+                $context->runId,
+                $stepIndex,
+                $this->view->present($swarm, $context, $agent),
+            );
 
         try {
             foreach ($agent->stream($input) as $event) {
@@ -879,6 +953,14 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 }
             }
 
+            return ['output' => $output, 'usage' => $stepUsage];
+        } finally {
+            // Flush any tool calls without a matching ToolResult into the
+            // snapshot — on the happy path (calls pending at stream end) AND on
+            // abandonment (the generator was torn down mid-stream, so the foreach
+            // never reached StreamEnd). Doing it in finally makes the append
+            // crash-safe: an in-flight call is persisted with result=null instead
+            // of being lost, mirroring SequentialRunner.
             foreach ($pendingToolCalls as $unpairedCall) {
                 $snapshot = $this->snapshots->appendToolCall(
                     $snapshot,
@@ -886,8 +968,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 );
             }
 
-            return ['output' => $output, 'usage' => $stepUsage];
-        } finally {
+            // Clear the frozen-view override even if the stream was abandoned
+            // mid-flight (no-op on the fresh-execution path), then exit the run
+            // frame. Flush first, then exit, so the frame is still live while the
+            // snapshot append runs.
+            $this->coordinator->end($boundary);
             ActiveRunContext::exit();
         }
     }
