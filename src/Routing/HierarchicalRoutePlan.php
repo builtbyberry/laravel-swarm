@@ -28,11 +28,65 @@ class HierarchicalRoutePlan
         return $this->nodes[$nodeId];
     }
 
+    /**
+     * Worst-case number of worker executions the plan can require, including
+     * bounded loop replays. A looped worker can replay its loop body up to
+     * `max_iterations - 1` additional times; this counts those replays so the
+     * execution budget gate reflects the worst case rather than a single pass.
+     */
     public function reachableWorkerCount(): int
     {
         $visited = [];
+        $count = $this->countReachableWorkers($this->startAt, $visited);
 
-        return $this->countReachableWorkers($this->startAt, $visited);
+        foreach ($this->nodes as $node) {
+            if (! $node instanceof HierarchicalWorkerNode || ! $node->hasLoop() || ! isset($visited[$node->id])) {
+                continue;
+            }
+
+            $count += ((int) $node->loopMaxIterations - 1) * $this->loopBodyWorkerCount((string) $node->loopTo, $node->id);
+        }
+
+        return $count;
+    }
+
+    /**
+     * Count worker nodes on the forward loop body between the loop target and
+     * the looping node (inclusive) — the set of workers that re-execute on
+     * each additional loop iteration.
+     */
+    protected function loopBodyWorkerCount(string $loopTo, string $loopNodeId): int
+    {
+        $count = 0;
+        $seen = [];
+        $stack = [$loopTo];
+
+        while ($stack !== []) {
+            $current = array_pop($stack);
+
+            if (isset($seen[$current])) {
+                continue;
+            }
+
+            $seen[$current] = true;
+            $node = $this->node($current);
+
+            if ($node instanceof HierarchicalWorkerNode) {
+                $count++;
+            } elseif ($node instanceof HierarchicalParallelNode) {
+                $count += count($node->branches);
+            }
+
+            if ($current === $loopNodeId) {
+                continue;
+            }
+
+            foreach ($node->controlEdges() as $edge) {
+                $stack[] = $edge;
+            }
+        }
+
+        return $count;
     }
 
     /**
@@ -54,6 +108,9 @@ class HierarchicalRoutePlan
                     'prompt' => $node->prompt,
                     'with_outputs' => $node->withOutputs,
                     'next' => $node->next,
+                    'loop' => $node->hasLoop()
+                        ? ['to' => $node->loopTo, 'max_iterations' => $node->loopMaxIterations]
+                        : null,
                 ]);
             } elseif ($node instanceof HierarchicalParallelNode) {
                 $payload = array_merge($payload, [
@@ -116,6 +173,7 @@ class HierarchicalRoutePlan
         $plan->validatePersistedParallelBranches();
         $plan->validatePersistedReachability();
         $plan->validatePersistedAcyclic();
+        $plan->validatePersistedLoops();
         $plan->validatePersistedDataDependencies();
 
         return $plan;
@@ -136,14 +194,7 @@ class HierarchicalRoutePlan
         $next = self::optionalString($payload, 'next', $nodeId);
 
         return match ($type) {
-            'worker' => new HierarchicalWorkerNode(
-                id: $nodeId,
-                agentClass: self::requiredString($payload, 'agent', $nodeId),
-                prompt: self::requiredString($payload, 'prompt', $nodeId),
-                withOutputs: self::optionalStringMap($payload, 'with_outputs', $nodeId),
-                metadata: $metadata,
-                next: $next,
-            ),
+            'worker' => self::workerFromArray($nodeId, $payload, $metadata, $next),
             'parallel' => new HierarchicalParallelNode(
                 id: $nodeId,
                 branches: self::requiredStringList($payload, 'branches', $nodeId),
@@ -158,6 +209,57 @@ class HierarchicalRoutePlan
             ),
             default => throw new SwarmException("Persisted hierarchical route node [{$nodeId}] uses unsupported type [{$type}]."),
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $metadata
+     */
+    protected static function workerFromArray(string $nodeId, array $payload, array $metadata, ?string $next): HierarchicalWorkerNode
+    {
+        [$loopTo, $loopMaxIterations] = self::loopFromArray($nodeId, $payload['loop'] ?? null, $next);
+
+        return new HierarchicalWorkerNode(
+            id: $nodeId,
+            agentClass: self::requiredString($payload, 'agent', $nodeId),
+            prompt: self::requiredString($payload, 'prompt', $nodeId),
+            withOutputs: self::optionalStringMap($payload, 'with_outputs', $nodeId),
+            metadata: $metadata,
+            next: $next,
+            loopTo: $loopTo,
+            loopMaxIterations: $loopMaxIterations,
+        );
+    }
+
+    /**
+     * @return array{0: string|null, 1: int|null}
+     */
+    protected static function loopFromArray(string $nodeId, mixed $loop, ?string $next): array
+    {
+        if ($loop === null) {
+            return [null, null];
+        }
+
+        if (! is_array($loop) || array_is_list($loop)) {
+            throw new SwarmException("Persisted hierarchical worker node [{$nodeId}] must define [loop] as an object with [to] and [max_iterations].");
+        }
+
+        $to = $loop['to'] ?? null;
+        $maxIterations = $loop['max_iterations'] ?? null;
+
+        if (! is_string($to) || $to === '') {
+            throw new SwarmException("Persisted hierarchical worker node [{$nodeId}] must define [loop.to] as a non-empty node id.");
+        }
+
+        if (! is_int($maxIterations) || $maxIterations < 1) {
+            throw new SwarmException("Persisted hierarchical worker node [{$nodeId}] must define [loop.max_iterations] as a positive integer.");
+        }
+
+        if ($next === null) {
+            throw new SwarmException("Persisted hierarchical worker node [{$nodeId}] with a [loop] must also define [next] as the loop's exit node.");
+        }
+
+        return [$to, $maxIterations];
     }
 
     /**
@@ -393,6 +495,65 @@ class HierarchicalRoutePlan
         }
 
         unset($inProgress[$nodeId]);
+
+        return false;
+    }
+
+    protected function validatePersistedLoops(): void
+    {
+        $branchNodeIds = [];
+
+        foreach ($this->nodes as $node) {
+            if ($node instanceof HierarchicalParallelNode) {
+                foreach ($node->branches as $branchNodeId) {
+                    $branchNodeIds[$branchNodeId] = true;
+                }
+            }
+        }
+
+        foreach ($this->nodes as $node) {
+            if (! $node instanceof HierarchicalWorkerNode || ! $node->hasLoop()) {
+                continue;
+            }
+
+            if (isset($branchNodeIds[$node->id])) {
+                throw new SwarmException("Persisted hierarchical worker node [{$node->id}] cannot define a [loop] while used as a parallel branch.");
+            }
+
+            $target = $this->node((string) $node->loopTo);
+
+            if (! $target instanceof HierarchicalWorkerNode) {
+                throw new SwarmException("Persisted hierarchical worker node [{$node->id}] may only loop back to a worker node, not [{$node->loopTo}].");
+            }
+
+            if (! $this->controlReaches((string) $node->loopTo, $node->id)) {
+                throw new SwarmException("Persisted hierarchical worker node [{$node->id}] must loop back to an earlier node on its own path; [{$node->loopTo}] does not reach [{$node->id}].");
+            }
+        }
+    }
+
+    protected function controlReaches(string $fromNodeId, string $targetNodeId): bool
+    {
+        $seen = [];
+        $stack = [$fromNodeId];
+
+        while ($stack !== []) {
+            $current = array_pop($stack);
+
+            if ($current === $targetNodeId) {
+                return true;
+            }
+
+            if (isset($seen[$current])) {
+                continue;
+            }
+
+            $seen[$current] = true;
+
+            foreach ($this->node($current)->controlEdges() as $edge) {
+                $stack[] = $edge;
+            }
+        }
 
         return false;
     }

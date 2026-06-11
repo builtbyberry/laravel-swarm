@@ -94,6 +94,7 @@ Fields:
 - `with_outputs`: optional alias-to-node-id map
 - `metadata`: optional step metadata
 - `next`: optional next node id
+- `loop`: optional bounded loop back-edge (see [Bounded Loops](#bounded-loops))
 
 ### Parallel Nodes
 
@@ -174,6 +175,57 @@ Named outputs:
 ```
 
 This keeps routing explicit and avoids a mini template language in the plan.
+
+## Bounded Loops
+
+A worker node may revisit an earlier node a bounded number of times with a
+`loop` back-edge. This is the only supported form of cycle in a hierarchical
+plan: it always carries an explicit iteration bound, so the plan still
+terminates.
+
+```json
+{
+  "type": "worker",
+  "agent": "App\\Ai\\Agents\\ReplyEditor",
+  "prompt": "Refine the draft.",
+  "with_outputs": {
+    "draft": "draft_node"
+  },
+  "next": "finish_node",
+  "loop": {
+    "to": "draft_node",
+    "max_iterations": 3
+  }
+}
+```
+
+How it runs:
+
+- after the worker executes, while its iteration count is **below**
+  `max_iterations`, control routes back to `loop.to`
+- once the bound is reached, control falls through to `next` (the loop's exit)
+- each iteration is its own persisted step with a `loop_iteration` value in the
+  step metadata, so history shows exactly how many times the body ran
+
+Rules:
+
+- `loop.to` must reference a **worker** node that is an ancestor on the looping
+  node's own path — i.e. a genuine back-edge, not a forward jump
+- `loop.max_iterations` must be a positive integer; a missing or non-positive
+  bound is rejected as an unbounded loop
+- a looping worker must also define `next` so the loop's exit is always
+  reachable
+- a worker used as a parallel branch may not define a `loop`
+- `#[MaxAgentSteps]` is checked against the worst case — the first pass plus
+  every bounded replay of the loop body — so a loop that could exceed the limit
+  is rejected before any worker runs
+
+`dispatchDurable()` runs bounded loops the same way: the persisted route cursor
+rewinds to the loop target while advancing the step index monotonically, so a
+resumed loop never re-dispatches infinitely and each iteration is counted
+exactly once.
+
+Loops are supported for hierarchical and static-hierarchical topologies only.
 
 `with_outputs` may only reference nodes that are guaranteed to have completed
 before the worker runs. A worker after a parallel group may reference any branch
@@ -264,7 +316,9 @@ The plan must satisfy all of these:
 - every worker `agent` must belong to the swarm's worker set
 - worker agent classes returned after the coordinator must be unique
 - the coordinator cannot route to itself as a worker
-- the graph must be acyclic
+- the graph must be acyclic except for bounded `loop` back-edges (see
+  [Bounded Loops](#bounded-loops)); cycles formed by plain `next`/`branch` edges
+  are still rejected as unbounded
 - unreachable nodes are rejected
 - finish nodes may not define `next`
 - parallel branches may only reference worker nodes
@@ -272,8 +326,9 @@ The plan must satisfy all of these:
 - worker nodes used as parallel branches may not define `next`
 - named outputs may only reference previously completed nodes
 - finish `output_from` may only reference a previously completed node
-
-Loops are intentionally unsupported in this release.
+- a `loop` back-edge must be bounded by a positive `max_iterations` and target
+  a worker node that is an ancestor on the looping node's path; unbounded loops
+  are rejected
 
 ## Execution Modes
 
@@ -350,7 +405,9 @@ branches include:
 ## Step Limits
 
 `#[MaxAgentSteps]` counts the coordinator plus each reachable worker node.
-Parallel and finish nodes are control nodes and do not count by themselves.
+Parallel and finish nodes are control nodes and do not count by themselves. A
+bounded `loop` counts its worst case: the loop body is counted once per possible
+iteration up to `max_iterations`.
 
 If a route plan requires more agent executions than the swarm allows, Laravel
 Swarm fails before any worker node executes. Increase `#[MaxAgentSteps]` or

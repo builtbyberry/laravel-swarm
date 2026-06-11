@@ -629,7 +629,12 @@ class HierarchicalRunner
         $node = $plan->node((string) $entry['node_id']);
         $nodeOutputs = $this->durableNodeOutputsForCursor($state, $plan, $cursor, $node);
         $parentParallelNodeId = $entry['parent_parallel_node_id'] ?? null;
+        $iteration = (int) ($cursor['loop_iterations'][$node->id] ?? 0) + 1;
         $metadata = array_merge($node->metadata, ['node_id' => $node->id]);
+
+        if ($node->hasLoop()) {
+            $metadata['loop_iteration'] = $iteration;
+        }
 
         if (is_string($parentParallelNodeId)) {
             $metadata['parent_parallel_node_id'] = $parentParallelNodeId;
@@ -650,7 +655,17 @@ class HierarchicalRunner
         $cursor['executed_node_ids'][] = $node->id;
         $cursor['completed_node_ids'][] = $node->id;
         $cursor['executed_agent_classes'][] = $step->agentClass;
-        $cursor['offset']++;
+
+        if ($node->hasLoop() && $iteration < (int) $node->loopMaxIterations) {
+            $cursor['loop_iterations'][$node->id] = $iteration;
+            $cursor['offset'] = $this->durableEntryOffsetForNode($cursor, (string) $node->loopTo);
+        } else {
+            if ($node->hasLoop()) {
+                $cursor['loop_iterations'][$node->id] = $iteration;
+            }
+
+            $cursor['offset']++;
+        }
 
         $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
         $this->applyDurableCursorToContext($state, $cursor);
@@ -690,18 +705,28 @@ class HierarchicalRunner
         $currentNodeId = $startNodeId ?? $plan->startAt;
         $lastOutput = null;
 
+        /** @var array<string, int> $loopIterations */
+        $loopIterations = [];
+
         while ($currentNodeId !== null) {
             $node = $plan->node($currentNodeId);
 
             $executedNodeIds[] = $node->id;
 
             if ($node instanceof HierarchicalWorkerNode) {
+                $iteration = ($loopIterations[$node->id] ?? 0) + 1;
+                $metadata = array_merge($node->metadata, ['node_id' => $node->id]);
+
+                if ($node->hasLoop()) {
+                    $metadata['loop_iteration'] = $iteration;
+                }
+
                 $step = $this->executeAgent(
                     state: $state,
                     agent: $workerMap[$node->agentClass],
                     input: $this->composePrompt($node->prompt, $node->withOutputs, $nodeOutputs, $node->id),
                     index: $nextIndex,
-                    metadata: array_merge($node->metadata, ['node_id' => $node->id]),
+                    metadata: $metadata,
                 );
 
                 $steps[] = $step;
@@ -710,7 +735,8 @@ class HierarchicalRunner
                 $executedAgentClasses[] = $step->agentClass;
                 $lastOutput = $step->output;
                 $nextIndex++;
-                $currentNodeId = $node->next;
+                $loopIterations[$node->id] = $iteration;
+                $currentNodeId = $this->resolveWorkerSuccessor($node, $iteration);
 
                 continue;
             }
@@ -957,6 +983,21 @@ class HierarchicalRunner
         return $lastOutput ?? '';
     }
 
+    /**
+     * Resolve the next node id after a worker executes, honouring a bounded
+     * loop back-edge. While the worker's iteration count is below its loop
+     * bound, control routes back to the loop target; once the bound is reached
+     * (or there is no loop) control falls through to `next`.
+     */
+    protected function resolveWorkerSuccessor(HierarchicalWorkerNode $node, int $iteration): ?string
+    {
+        if ($node->hasLoop() && $iteration < (int) $node->loopMaxIterations) {
+            return $node->loopTo;
+        }
+
+        return $node->next;
+    }
+
     protected function ensurePlanWithinExecutionBudget(SwarmExecutionState $state, HierarchicalRoutePlan $plan): void
     {
         $requiredExecutions = 1 + $plan->reachableWorkerCount();
@@ -1007,10 +1048,11 @@ class HierarchicalRunner
             'executed_node_ids' => [],
             'executed_agent_classes' => [],
             'parallel_groups' => [],
+            'loop_iterations' => [],
             'final_output' => null,
             'coordinator_agent_class' => $coordinatorClass,
             'route_plan_start' => $plan->startAt,
-            'total_steps' => 1 + count(array_filter($entries, static fn (array $entry): bool => $entry['type'] === 'worker')),
+            'total_steps' => 1 + $plan->reachableWorkerCount(),
         ];
     }
 
@@ -1061,6 +1103,26 @@ class HierarchicalRunner
         }
 
         $entries[] = ['type' => 'finish', 'node_id' => $node->id];
+    }
+
+    /**
+     * Locate the flat-entry offset of a worker node id so a bounded loop can
+     * rewind the durable cursor to its loop target. The loop target is always
+     * a worker node and appears exactly once in the forward entry spine.
+     *
+     * @param  array<string, mixed>  $cursor
+     */
+    protected function durableEntryOffsetForNode(array $cursor, string $nodeId): int
+    {
+        $entries = is_array($cursor['entries'] ?? null) ? $cursor['entries'] : [];
+
+        foreach ($entries as $offset => $entry) {
+            if (is_array($entry) && ($entry['node_id'] ?? null) === $nodeId) {
+                return (int) $offset;
+            }
+        }
+
+        throw new SwarmException("Hierarchical loop target [{$nodeId}] is not present in the durable route cursor entries.");
     }
 
     /**

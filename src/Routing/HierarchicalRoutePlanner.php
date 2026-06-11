@@ -114,6 +114,7 @@ class HierarchicalRoutePlanner
         $this->validateParallelBranches($plan);
         $this->validateReachability($plan);
         $this->validateAcyclic($plan);
+        $this->validateLoops($plan);
         $this->validateDataDependencies($plan);
 
         return $plan;
@@ -155,6 +156,7 @@ class HierarchicalRoutePlanner
         $agentClass = $payload['agent'] ?? null;
         $prompt = $payload['prompt'] ?? null;
         $withOutputs = $this->normalizeWithOutputs($nodeId, $payload['with_outputs'] ?? []);
+        [$loopTo, $loopMaxIterations] = $this->normalizeLoop($nodeId, $payload['loop'] ?? null, $next);
 
         if (! is_string($agentClass) || $agentClass === '') {
             throw new SwarmException("Hierarchical worker node [{$nodeId}] must define a non-empty [agent] class.");
@@ -179,7 +181,42 @@ class HierarchicalRoutePlanner
             withOutputs: $withOutputs,
             metadata: $metadata,
             next: $next,
+            loopTo: $loopTo,
+            loopMaxIterations: $loopMaxIterations,
         );
+    }
+
+    /**
+     * Normalize a worker node's optional bounded loop back-edge.
+     *
+     * @return array{0: string|null, 1: int|null}
+     */
+    protected function normalizeLoop(string $nodeId, mixed $loop, ?string $next): array
+    {
+        if ($loop === null) {
+            return [null, null];
+        }
+
+        if (! is_array($loop) || array_is_list($loop)) {
+            throw new SwarmException("Hierarchical worker node [{$nodeId}] must define [loop] as an object with [to] and [max_iterations].");
+        }
+
+        $to = $loop['to'] ?? null;
+        $maxIterations = $loop['max_iterations'] ?? null;
+
+        if (! is_string($to) || $to === '') {
+            throw new SwarmException("Hierarchical worker node [{$nodeId}] must define [loop.to] as a non-empty node id.");
+        }
+
+        if (! is_int($maxIterations) || $maxIterations < 1) {
+            throw new SwarmException("Hierarchical worker node [{$nodeId}] must define [loop.max_iterations] as a positive integer to bound the loop. Unbounded loops are not supported.");
+        }
+
+        if ($next === null) {
+            throw new SwarmException("Hierarchical worker node [{$nodeId}] with a [loop] must also define [next] as the loop's exit node so termination is always reachable.");
+        }
+
+        return [$to, $maxIterations];
     }
 
     /**
@@ -346,6 +383,70 @@ class HierarchicalRoutePlanner
         }
 
         unset($inProgress[$nodeId]);
+
+        return false;
+    }
+
+    protected function validateLoops(HierarchicalRoutePlan $plan): void
+    {
+        $branchNodeIds = [];
+
+        foreach ($plan->nodes as $node) {
+            if ($node instanceof HierarchicalParallelNode) {
+                foreach ($node->branches as $branchNodeId) {
+                    $branchNodeIds[$branchNodeId] = true;
+                }
+            }
+        }
+
+        foreach ($plan->nodes as $node) {
+            if (! $node instanceof HierarchicalWorkerNode || ! $node->hasLoop()) {
+                continue;
+            }
+
+            if (isset($branchNodeIds[$node->id])) {
+                throw new SwarmException("Hierarchical worker node [{$node->id}] cannot define a [loop] while used as a parallel branch.");
+            }
+
+            $target = $plan->node((string) $node->loopTo);
+
+            if (! $target instanceof HierarchicalWorkerNode) {
+                throw new SwarmException("Hierarchical worker node [{$node->id}] may only loop back to a worker node, not [{$node->loopTo}].");
+            }
+
+            if (! $this->controlReaches((string) $node->loopTo, $node->id, $plan)) {
+                throw new SwarmException("Hierarchical worker node [{$node->id}] must loop back to an earlier node on its own path; [{$node->loopTo}] does not reach [{$node->id}].");
+            }
+        }
+    }
+
+    /**
+     * Whether $targetNodeId is reachable from $fromNodeId following forward
+     * control edges only (loop back-edges excluded). Used to confirm a loop
+     * back-edge points to a genuine ancestor on the same path.
+     */
+    protected function controlReaches(string $fromNodeId, string $targetNodeId, HierarchicalRoutePlan $plan): bool
+    {
+        $seen = [];
+        $stack = [$fromNodeId];
+
+        while ($stack !== []) {
+            $current = array_pop($stack);
+
+            if ($current === $targetNodeId) {
+                return true;
+            }
+
+            if (isset($seen[$current])) {
+                continue;
+            }
+
+            $seen[$current] = true;
+
+            foreach ($plan->node($current)->controlEdges() as $edge) {
+                $stack[] = $edge;
+            }
+        }
 
         return false;
     }

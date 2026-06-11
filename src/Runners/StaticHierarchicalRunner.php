@@ -159,13 +159,11 @@ class StaticHierarchicalRunner extends HierarchicalRunner
             'executed_node_ids' => [],
             'executed_agent_classes' => [],
             'parallel_groups' => [],
+            'loop_iterations' => [],
             'final_output' => null,
             'coordinator_agent_class' => '',
             'route_plan_start' => $plan->startAt,
-            'total_steps' => count(array_filter(
-                $entries,
-                static fn (array $e): bool => $e['type'] === 'worker',
-            )),
+            'total_steps' => $plan->reachableWorkerCount(),
         ];
     }
 

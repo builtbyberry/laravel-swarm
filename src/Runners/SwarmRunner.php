@@ -420,7 +420,7 @@ class SwarmRunner
 
         $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolver->resolveMaxAgentExecutions($swarm);
-        $totalSteps = $topology === Topology::Hierarchical
+        $totalSteps = in_array($topology, [Topology::Hierarchical, Topology::StaticHierarchical], true)
             ? $maxAgentExecutions
             : min(count($swarm->agents()), $maxAgentExecutions);
         $context = RunContext::fromTask($task);
