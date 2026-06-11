@@ -270,7 +270,41 @@ stability settings while Laravel AI remains pre-stable.
 
 ## Upgrading to v0.12.0
 
-v0.12.0 ships two breaking changes on the public surface. No new migrations are required.
+v0.12.0 ships breaking changes on the public surface. It includes **one new migration** that makes the run-history step columns nullable so a `CaptureDecision::Skip` can persist `NULL` (see below); run `php artisan migrate`.
+
+### Breaking: `CaptureDecision::Skip` now omits fields instead of redacting them
+
+A `CapturePolicy` returning `CaptureDecision::Skip` for a category used to behave exactly like `Redact` — the value was still persisted and emitted, just as the `[redacted]` string. As of v0.12.0, `Skip` means **true omission on the evidence surfaces** (run history, lifecycle/stream events, audit envelopes):
+
+- **Persisted/emitted arrays** (run-history steps, history `context`, lifecycle and stream events) drop the key entirely instead of carrying `[redacted]`.
+- **Nullable database columns** store `NULL`: `swarm_run_steps.input`/`output` and the already-nullable `swarm_run_histories.output`.
+- **Failures** under `Skip` omit the `error.message` key while keeping `error.class`.
+
+> **Scope: capture governs evidence, not operational state.** The active-context
+> store (`swarm_contexts.input`) is the **only** persisted source of the top-level
+> input that a durable run resumes its first step from, so it is operational
+> runtime state — it always retains the (encrypted) input for the run's TTL and is
+> **never** nulled by a `Skip`. `Skip` omits input from the evidence/history/event/
+> audit surfaces above; it does not erase the operational input. (Durable runs
+> additionally require a `Full` active-context decision at dispatch.)
+
+A new migration (`*_make_swarm_capture_columns_nullable`) makes `swarm_run_steps.input`/`output` nullable. Run `php artisan migrate`. If you have **never** bound a custom `CapturePolicy` that returns `Skip`, no row shape changes — the migration only widens the columns.
+
+**The boolean path is frozen.** The default `BooleanCapturePolicy` (driven by `swarm.capture.*`) only ever returns `Full` or `Redact`, never `Skip`. Every existing `swarm.capture.*=false` install continues to see `[redacted]` exactly as before — only an explicit `Skip` from a custom policy changes the shape.
+
+If you read persisted history/events programmatically, treat the I/O keys as optional and the columns as nullable when a `Skip` policy is in effect:
+
+```php
+// A Skipped output omits the key; a Redacted output is the [redacted] string.
+$output = $step['output'] ?? null;            // may be absent under Skip
+$message = $history['error']['message'] ?? null; // omitted under Skip, class retained
+```
+
+Lifecycle and stream event I/O fields (`SwarmStarted::$input`, `SwarmCompleted::$output`, `SwarmStepStarted`/`SwarmStepCompleted` I/O, and the stream events' `input`/`output`/`delta`/`message`) are now `?string` and emit `null` under `Skip`. Artifacts `Redact`/`Skip` collapse is pre-existing and unchanged; `RedactingMemoryStore` Skip behavior is unchanged.
+
+### Breaking: audit evidence schema version is now `"3"`
+
+Because the `Skip` omission shape changes the audit payload contract, `EvidenceEnvelope::SCHEMA_VERSION` is bumped to `"3"`. Any consumer that pins or asserts the evidence schema version must accept `"3"`. Installs that never return `CaptureDecision::Skip` see no payload-shape change.
 
 ### Breaking: `Contracts\HasStructuredOutput` removed
 
@@ -1179,10 +1213,13 @@ The boolean capture keys are **deprecated** in v0.4 and are scheduled for
 removal in v0.5. They continue to work through `BooleanCapturePolicy` for the
 duration of the v0.4 line.
 
-`CaptureDecision::Skip` is reserved for the v0.5 audit dispatcher work. In
-v0.4 a `Skip` decision behaves identically to `Redact` at the field level;
-custom policies may return `Skip` today to declare intent ahead of the v0.5
-change.
+> **Historical note:** through the v0.4–v0.11 lines, `CaptureDecision::Skip`
+> behaved identically to `Redact` at the field level (the value was persisted as
+> `[redacted]`). As of **v0.12.0**, `Skip` is true omission on the evidence
+> surfaces — the field is absent from persisted/emitted payloads and `NULL` on
+> the nullable evidence columns. The operational active-context store
+> (`swarm_contexts.input`) retains the input for durable resume. See
+> [Upgrading to v0.12.0](#upgrading-to-v0120).
 
 A minimal custom policy:
 

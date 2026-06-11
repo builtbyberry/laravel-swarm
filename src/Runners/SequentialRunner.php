@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
@@ -25,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
@@ -123,7 +125,7 @@ class SequentialRunner
                     stepIndex: $index,
                     agentClass: $agent::class,
                     agent: $agentName,
-                    input: $this->capture->input($input),
+                    input: $this->capture->applyInput($input, $state->context),
                     timestamp: SwarmStreamEvent::timestamp(),
                 );
 
@@ -145,7 +147,7 @@ class SequentialRunner
                                 runId: $state->context->runId,
                                 stepIndex: $index,
                                 agentClass: $agent::class,
-                                delta: $this->capture->output($event->delta),
+                                delta: $this->capture->applyOutput($event->delta, $state->context),
                                 timestamp: $event->timestamp,
                             );
                             $this->syncInvocationId($swarmEvent, $event->invocationId);
@@ -170,9 +172,9 @@ class SequentialRunner
                                 stepIndex: $index,
                                 agentClass: $agent::class,
                                 reasoningId: $event->reasoningId,
-                                delta: $this->capture->output($event->delta),
+                                delta: $this->capture->applyOutput($event->delta, $state->context),
                                 timestamp: $event->timestamp,
-                                summary: $this->captureReasoningSummary($event->summary),
+                                summary: $this->captureReasoningSummary($event->summary, $state->context),
                             );
                             $this->syncInvocationId($swarmEvent, $event->invocationId);
 
@@ -185,7 +187,7 @@ class SequentialRunner
                                 agentClass: $agent::class,
                                 reasoningId: $event->reasoningId,
                                 timestamp: $event->timestamp,
-                                summary: $this->captureReasoningSummary($event->summary),
+                                summary: $this->captureReasoningSummary($event->summary, $state->context),
                             );
                             $this->syncInvocationId($swarmEvent, $event->invocationId);
 
@@ -203,7 +205,7 @@ class SequentialRunner
                                 runId: $state->context->runId,
                                 stepIndex: $index,
                                 agentClass: $agent::class,
-                                toolCall: $this->captureToolCall($event->toolCall),
+                                toolCall: $this->captureToolCall($event->toolCall, $state->context),
                                 timestamp: $event->timestamp,
                             );
                             $this->syncInvocationId($swarmEvent, $event->invocationId);
@@ -226,9 +228,9 @@ class SequentialRunner
                                 runId: $state->context->runId,
                                 stepIndex: $index,
                                 agentClass: $agent::class,
-                                toolResult: $this->captureToolResult($event->toolResult),
+                                toolResult: $this->captureToolResult($event->toolResult, $state->context),
                                 successful: $event->successful,
-                                error: $this->captureToolError($event->error),
+                                error: $this->captureToolError($event->error, $state->context),
                                 timestamp: $event->timestamp,
                             );
                             $this->syncInvocationId($swarmEvent, $event->invocationId);
@@ -298,7 +300,7 @@ class SequentialRunner
                 }
 
                 $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
-                $stepOutput = $step->artifacts[0]->content ?? $this->capture->output($output);
+                $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $state->context);
 
                 yield new SwarmStepEnd(
                     id: SwarmStreamEvent::newId(),
@@ -382,10 +384,12 @@ class SequentialRunner
      * @param  array<int|string, mixed>|null  $summary
      * @return array<int|string, mixed>|null
      */
-    protected function captureReasoningSummary(?array $summary): ?array
+    protected function captureReasoningSummary(?array $summary, ?RunContext $context = null): ?array
     {
-        if ($summary === null || $this->capture->capturesOutputs()) {
-            return $summary;
+        $decision = $this->capture->outputsDecision($context);
+
+        if ($summary === null || $decision === CaptureDecision::Full || $decision === CaptureDecision::Skip) {
+            return $decision === CaptureDecision::Skip ? null : $summary;
         }
 
         /** @var array<int, string> $redacted */
@@ -394,10 +398,23 @@ class SequentialRunner
         return $redacted;
     }
 
-    protected function captureToolCall(ToolCallData $toolCall): ToolCallData
+    protected function captureToolCall(ToolCallData $toolCall, ?RunContext $context = null): ToolCallData
     {
-        if ($this->capture->capturesOutputs()) {
+        $decision = $this->capture->outputsDecision($context);
+
+        if ($decision === CaptureDecision::Full) {
             return $toolCall;
+        }
+
+        if ($decision === CaptureDecision::Skip) {
+            return new ToolCallData(
+                id: $toolCall->id,
+                name: $toolCall->name,
+                arguments: [],
+                resultId: $toolCall->resultId,
+                reasoningId: $toolCall->reasoningId,
+                reasoningSummary: null,
+            );
         }
 
         return new ToolCallData(
@@ -412,10 +429,22 @@ class SequentialRunner
         );
     }
 
-    protected function captureToolResult(ToolResultData $toolResult): ToolResultData
+    protected function captureToolResult(ToolResultData $toolResult, ?RunContext $context = null): ToolResultData
     {
-        if ($this->capture->capturesOutputs()) {
+        $decision = $this->capture->outputsDecision($context);
+
+        if ($decision === CaptureDecision::Full) {
             return $toolResult;
+        }
+
+        if ($decision === CaptureDecision::Skip) {
+            return new ToolResultData(
+                id: $toolResult->id,
+                name: $toolResult->name,
+                arguments: [],
+                result: null,
+                resultId: $toolResult->resultId,
+            );
         }
 
         return new ToolResultData(
@@ -427,10 +456,16 @@ class SequentialRunner
         );
     }
 
-    protected function captureToolError(?string $error): ?string
+    protected function captureToolError(?string $error, ?RunContext $context = null): ?string
     {
-        if ($error === null || $this->capture->capturesOutputs()) {
+        $decision = $this->capture->outputsDecision($context);
+
+        if ($error === null || $decision === CaptureDecision::Full) {
             return $error;
+        }
+
+        if ($decision === CaptureDecision::Skip) {
+            return null;
         }
 
         return '[redacted]';

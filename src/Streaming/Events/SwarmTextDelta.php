@@ -11,7 +11,7 @@ final class SwarmTextDelta extends SwarmStreamEvent
         public string $runId,
         public int $stepIndex,
         public string $agentClass,
-        public string $delta,
+        public ?string $delta,
         public int $timestamp,
     ) {}
 
@@ -42,7 +42,7 @@ final class SwarmTextDelta extends SwarmStreamEvent
             runId: self::stringValue($payload, 'run_id'),
             stepIndex: self::intValue($payload, 'step_index'),
             agentClass: self::stringValue($payload, 'agent_class'),
-            delta: self::stringValue($payload, 'delta'),
+            delta: self::nullableStringValue($payload, 'delta'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
         );
     }
@@ -56,7 +56,7 @@ final class SwarmTextDelta extends SwarmStreamEvent
 
         foreach ($events as $event) {
             if ($event instanceof self) {
-                $text .= $event->delta;
+                $text .= $event->delta ?? '';
             }
         }
 

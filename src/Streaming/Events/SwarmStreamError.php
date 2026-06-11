@@ -12,7 +12,7 @@ final class SwarmStreamError extends SwarmStreamEvent
     public function __construct(
         public string $id,
         public string $runId,
-        public string $message,
+        public ?string $message,
         public ?string $exceptionClass,
         public bool $recoverable,
         public array $metadata,
@@ -47,7 +47,7 @@ final class SwarmStreamError extends SwarmStreamEvent
         return new self(
             id: self::stringValue($payload, 'id', self::newId()),
             runId: self::stringValue($payload, 'run_id'),
-            message: self::stringValue($payload, 'message'),
+            message: self::nullableStringValue($payload, 'message'),
             exceptionClass: $exceptionClass !== '' ? $exceptionClass : null,
             recoverable: is_bool($payload['recoverable'] ?? null) ? $payload['recoverable'] : false,
             metadata: self::arrayValue($payload, 'metadata'),

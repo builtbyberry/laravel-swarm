@@ -13,7 +13,7 @@ class SwarmStarted
         public readonly string $runId,
         public readonly string $swarmClass,
         public readonly string $topology,
-        public readonly string $input,
+        public readonly ?string $input,
         public readonly array $metadata = [],
         public readonly ?string $executionMode = null,
     ) {}

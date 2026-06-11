@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
@@ -283,7 +284,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $state->topology->value,
-            input: $this->capture->input($context->input),
+            input: $this->capture->applyInput($context->input, $context),
             metadata: $context->metadata,
             executionMode: ExecutionMode::Stream->value,
         ));
@@ -305,7 +306,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $state->topology->value,
-            input: $this->capture->input($context->input),
+            input: $this->capture->applyInput($context->input, $context),
             metadata: $context->metadata,
             timestamp: SwarmStreamEvent::timestamp(),
         );
@@ -345,7 +346,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         stepIndex: $nextIndex,
                         agentClass: $agent::class,
                         agent: $agentName,
-                        input: $this->capture->input($input),
+                        input: $this->capture->applyInput($input, $context),
                         timestamp: SwarmStreamEvent::timestamp(),
                     );
                     yield $stepStartEvent;
@@ -385,7 +386,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $executedNodeIds[] = $node->id;
                     $executedAgentClasses[] = $node->agentClass;
                     $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
-                    $stepOutput = $step->artifacts[0]->content ?? $this->capture->output($output);
+                    $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $context);
 
                     $stepEndEvent = new SwarmStepEnd(
                         id: SwarmStreamEvent::newId(),
@@ -428,7 +429,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                 stepIndex: $nextIndex,
                                 agentClass: $agent::class,
                                 agent: $agentName,
-                                input: $this->capture->input($input),
+                                input: $this->capture->applyInput($input, $context),
                                 timestamp: SwarmStreamEvent::timestamp(),
                             );
                             yield $branchStartEvent;
@@ -477,7 +478,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             $executedNodeIds[] = $branch->id;
                             $executedAgentClasses[] = $branch->agentClass;
                             $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
-                            $stepOutput = $step->artifacts[0]->content ?? $this->capture->output($output);
+                            $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $context);
 
                             $branchEndEvent = new SwarmStepEnd(
                                 id: SwarmStreamEvent::newId(),
@@ -635,7 +636,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                 stepIndex: $index,
                                 agentClass: $branch->agentClass,
                                 agent: class_basename($branch->agentClass),
-                                output: $step->artifacts[0]->content ?? $this->capture->output($row['output']),
+                                output: $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $row['output']), $context),
                                 durationMs: $row['duration_ms'],
                                 metadata: ['usage' => $row['usage']],
                                 timestamp: SwarmStreamEvent::timestamp(),
@@ -704,7 +705,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 runId: $context->runId,
                 swarmClass: $swarm::class,
                 topology: $state->topology->value,
-                output: $capturedResponse->output,
+                output: $this->capture->applyOutput($capturedResponse->output, $context),
                 durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                 metadata: $capturedResponse->metadata,
                 artifacts: $capturedResponse->artifacts,
@@ -724,7 +725,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             $streamEndEvent = new SwarmStreamEnd(
                 id: SwarmStreamEvent::newId(),
                 runId: $context->runId,
-                output: $capturedResponse->output,
+                output: $this->capture->applyOutput($capturedResponse->output, $context),
                 usage: $capturedResponse->usage,
                 metadata: $capturedResponse->metadata,
                 timestamp: SwarmStreamEvent::timestamp(),
@@ -779,7 +780,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         runId: $context->runId,
                         stepIndex: $stepIndex,
                         agentClass: $agent::class,
-                        delta: $this->capture->output($event->delta),
+                        delta: $this->capture->applyOutput($event->delta, $context),
                         timestamp: $event->timestamp,
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
@@ -804,9 +805,9 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         stepIndex: $stepIndex,
                         agentClass: $agent::class,
                         reasoningId: $event->reasoningId,
-                        delta: $this->capture->output($event->delta),
+                        delta: $this->capture->applyOutput($event->delta, $context),
                         timestamp: $event->timestamp,
-                        summary: $this->captureStaticReasoningSummary($event->summary),
+                        summary: $this->captureStaticReasoningSummary($event->summary, $context),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
                     yield $swarmEvent;
@@ -819,7 +820,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         agentClass: $agent::class,
                         reasoningId: $event->reasoningId,
                         timestamp: $event->timestamp,
-                        summary: $this->captureStaticReasoningSummary($event->summary),
+                        summary: $this->captureStaticReasoningSummary($event->summary, $context),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
                     yield $swarmEvent;
@@ -832,7 +833,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         runId: $context->runId,
                         stepIndex: $stepIndex,
                         agentClass: $agent::class,
-                        toolCall: $this->captureStaticToolCall($event->toolCall),
+                        toolCall: $this->captureStaticToolCall($event->toolCall, $context),
                         timestamp: $event->timestamp,
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
@@ -855,9 +856,9 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         runId: $context->runId,
                         stepIndex: $stepIndex,
                         agentClass: $agent::class,
-                        toolResult: $this->captureStaticToolResult($event->toolResult),
+                        toolResult: $this->captureStaticToolResult($event->toolResult, $context),
                         successful: $event->successful,
-                        error: $this->captureStaticToolError($event->error),
+                        error: $this->captureStaticToolError($event->error, $context),
                         timestamp: $event->timestamp,
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
@@ -928,10 +929,23 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         }
     }
 
-    protected function captureStaticToolCall(ToolCallData $toolCall): ToolCallData
+    protected function captureStaticToolCall(ToolCallData $toolCall, ?RunContext $context = null): ToolCallData
     {
-        if ($this->capture->capturesOutputs()) {
+        $decision = $this->capture->outputsDecision($context);
+
+        if ($decision === CaptureDecision::Full) {
             return $toolCall;
+        }
+
+        if ($decision === CaptureDecision::Skip) {
+            return new ToolCallData(
+                id: $toolCall->id,
+                name: $toolCall->name,
+                arguments: [],
+                resultId: $toolCall->resultId,
+                reasoningId: $toolCall->reasoningId,
+                reasoningSummary: null,
+            );
         }
 
         return new ToolCallData(
@@ -946,10 +960,22 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         );
     }
 
-    protected function captureStaticToolResult(ToolResultData $toolResult): ToolResultData
+    protected function captureStaticToolResult(ToolResultData $toolResult, ?RunContext $context = null): ToolResultData
     {
-        if ($this->capture->capturesOutputs()) {
+        $decision = $this->capture->outputsDecision($context);
+
+        if ($decision === CaptureDecision::Full) {
             return $toolResult;
+        }
+
+        if ($decision === CaptureDecision::Skip) {
+            return new ToolResultData(
+                id: $toolResult->id,
+                name: $toolResult->name,
+                arguments: [],
+                result: null,
+                resultId: $toolResult->resultId,
+            );
         }
 
         return new ToolResultData(
@@ -961,10 +987,16 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         );
     }
 
-    protected function captureStaticToolError(?string $error): ?string
+    protected function captureStaticToolError(?string $error, ?RunContext $context = null): ?string
     {
-        if ($error === null || $this->capture->capturesOutputs()) {
+        $decision = $this->capture->outputsDecision($context);
+
+        if ($error === null || $decision === CaptureDecision::Full) {
             return $error;
+        }
+
+        if ($decision === CaptureDecision::Skip) {
+            return null;
         }
 
         return '[redacted]';
@@ -974,10 +1006,12 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
      * @param  array<int|string, mixed>|null  $summary
      * @return array<int|string, mixed>|null
      */
-    protected function captureStaticReasoningSummary(?array $summary): ?array
+    protected function captureStaticReasoningSummary(?array $summary, ?RunContext $context = null): ?array
     {
-        if ($summary === null || $this->capture->capturesOutputs()) {
-            return $summary;
+        $decision = $this->capture->outputsDecision($context);
+
+        if ($summary === null || $decision === CaptureDecision::Full || $decision === CaptureDecision::Skip) {
+            return $decision === CaptureDecision::Skip ? null : $summary;
         }
 
         /** @var array<int, string> $redacted */

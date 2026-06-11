@@ -35,7 +35,7 @@ class SwarmStepRecorder
             swarmClass: $state->swarm::class,
             index: $index,
             agentClass: $agentClass,
-            input: $this->capture->input($input),
+            input: $this->capture->applyInput($input, $state->context),
             metadata: $state->context->metadata,
             topology: $state->topology->value,
             executionMode: $state->executionMode->value,
@@ -75,6 +75,10 @@ class SwarmStepRecorder
         $limitedOutput = $this->capture->capturesOutputs()
             ? $this->limits->output($output)
             : new PayloadLimitResult($this->capture->output($output));
+
+        // Skip-aware value for emitted/persisted output: Full keeps the
+        // (possibly truncated) value, Redact yields REDACTED, Skip yields null.
+        $capturedOutput = $this->capture->applyOutput($limitedOutput->value, $state->context);
 
         $stepMetadata = array_merge(
             $includeUsageInMetadata ? ['index' => $index, 'usage' => $usage] : ['index' => $index],
@@ -133,14 +137,17 @@ class SwarmStepRecorder
             $state->context->addArtifact($artifact);
         }
 
+        // Pass the raw (payload-limited) step; the history store routes it
+        // through SwarmCapture::stepToPersistedArray(), which applies the
+        // input/output capture decisions (Skip omits the column entirely).
         $this->verifyOwnership($state);
-        $state->historyStore->recordStep($state->context->runId, $this->capture->step(new SwarmStep(
+        $state->historyStore->recordStep($state->context->runId, new SwarmStep(
             agentClass: $agentClass,
             input: $input,
             output: $limitedOutput->value,
             artifacts: [$artifact],
             metadata: $stepMetadata,
-        )), $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
+        ), $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
 
         if ($storeContext) {
             $this->verifyOwnership($state);
@@ -159,8 +166,8 @@ class SwarmStepRecorder
             topology: $state->topology->value,
             index: $index,
             agentClass: $agentClass,
-            input: $this->capture->input($input),
-            output: $limitedOutput->value,
+            input: $this->capture->applyInput($input, $state->context),
+            output: $capturedOutput,
             durationMs: $durationMs,
             metadata: $stepMetadata,
             artifacts: $this->capture->artifacts($step->artifacts),

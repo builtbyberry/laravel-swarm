@@ -37,23 +37,32 @@ class StreamedSwarmResponse extends SwarmResponse
         $streamEnd = $events->first(fn (SwarmStreamEvent $event): bool => $event instanceof SwarmStreamEnd);
         $stepEnds = $events->whereInstanceOf(SwarmStepEnd::class)->values();
 
+        // Stream events carry nullable output once a CaptureDecision::Skip omits
+        // a field; the live SwarmResponse/SwarmStep surface requires a string, so
+        // omitted values are coerced to ''. To keep the Skip-vs-empty distinction
+        // on this convenience surface, set metadata['output_skipped'] = true
+        // wherever the resolved output was an explicit null (a Skip omission) —
+        // never where combine() yields a genuinely empty '' output.
+        $resolvedOutput = $streamEnd instanceof SwarmStreamEnd ? $streamEnd->output : SwarmTextDelta::combine($events);
+
         $response = new SwarmResponse(
-            output: $streamEnd instanceof SwarmStreamEnd ? $streamEnd->output : SwarmTextDelta::combine($events),
+            output: $resolvedOutput ?? '',
             steps: $stepEnds
                 ->map(fn (SwarmStepEnd $event): SwarmStep => new SwarmStep(
                     agentClass: $event->agentClass,
                     input: '',
-                    output: $event->output,
+                    output: $event->output ?? '',
                     metadata: array_merge($event->metadata, [
                         'index' => $event->stepIndex,
                         'duration_ms' => $event->durationMs,
-                    ]),
+                    ], $event->output === null ? ['output_skipped' => true] : []),
                 ))
                 ->all(),
             usage: $streamEnd instanceof SwarmStreamEnd ? $streamEnd->usage : [],
             metadata: array_merge(
                 ['run_id' => $runId],
                 $streamEnd instanceof SwarmStreamEnd ? $streamEnd->metadata : [],
+                $resolvedOutput === null ? ['output_skipped' => true] : [],
             ),
         );
 

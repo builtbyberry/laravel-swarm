@@ -177,7 +177,7 @@ class SequentialStreamRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $state->topology->value,
-            input: $this->capture->input($context->input),
+            input: $this->capture->applyInput($context->input, $context),
             metadata: $context->metadata,
             executionMode: ExecutionMode::Stream->value,
         ));
@@ -199,7 +199,7 @@ class SequentialStreamRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $state->topology->value,
-            input: $this->capture->input($context->input),
+            input: $this->capture->applyInput($context->input, $context),
             metadata: $context->metadata,
             timestamp: SwarmStreamEvent::timestamp(),
         );
@@ -234,7 +234,7 @@ class SequentialStreamRunner
                 runId: $context->runId,
                 swarmClass: $swarm::class,
                 topology: $state->topology->value,
-                output: $capturedResponse->output,
+                output: $this->capture->applyOutput($capturedResponse->output, $context),
                 durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
                 metadata: $capturedResponse->metadata,
                 artifacts: $capturedResponse->artifacts,
@@ -254,7 +254,7 @@ class SequentialStreamRunner
             $streamEndEvent = new SwarmStreamEnd(
                 id: SwarmStreamEvent::newId(),
                 runId: $context->runId,
-                output: $capturedResponse->output,
+                output: $this->capture->applyOutput($capturedResponse->output, $context),
                 usage: $capturedResponse->usage,
                 metadata: $capturedResponse->metadata,
                 timestamp: SwarmStreamEvent::timestamp(),
@@ -354,7 +354,7 @@ class SequentialStreamRunner
         $event = new SwarmStreamError(
             id: $exception instanceof SwarmStreamProviderException ? $exception->eventId : SwarmStreamEvent::newId(),
             runId: $context->runId,
-            message: $this->capture->failureMessage($exception),
+            message: $this->capture->applyFailureMessage($exception, $context),
             exceptionClass: $this->failureExceptionClass($exception),
             recoverable: $exception instanceof SwarmStreamProviderException ? $exception->recoverable : false,
             metadata: $this->failureMetadata($context, $exception),

@@ -64,10 +64,7 @@ class LeaseManager
             return;
         }
 
-        $this->durableRuns->markFailed($runId, $token, [
-            'message' => $this->capture->failureMessage($exception),
-            'class' => $exception::class,
-        ]);
+        $this->durableRuns->markFailed($runId, $token, $this->capture->failureArray($exception));
     }
 
     /**

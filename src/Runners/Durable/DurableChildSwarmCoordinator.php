@@ -270,13 +270,13 @@ class DurableChildSwarmCoordinator
     }
 
     /**
-     * @return array{message: string, class: class-string<Throwable>}
+     * @return array{message?: string, class: class-string<Throwable>}
      */
     protected function failurePayload(Throwable $exception): array
     {
-        return [
-            'message' => $this->capture->failureMessage($exception),
-            'class' => $exception::class,
-        ];
+        /** @var array{message?: string, class: class-string<Throwable>} $payload */
+        $payload = $this->capture->failureArray($exception);
+
+        return $payload;
     }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ResolvesSwarmCacheStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -39,7 +40,7 @@ class CacheRunHistoryStore implements RunHistoryStore
             'swarm_class' => $swarmClass,
             'topology' => $topology,
             'status' => 'running',
-            'context' => $context->toArray(),
+            'context' => $this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context),
             'metadata' => $metadata,
             'steps' => [],
             'output' => null,
@@ -59,7 +60,7 @@ class CacheRunHistoryStore implements RunHistoryStore
     {
         $history = $this->find($runId) ?? [];
         $history['steps'] ??= [];
-        $history['steps'][] = $step->toArray();
+        $history['steps'][] = $this->capture->stepToPersistedArray($step);
         $history['updated_at'] = Carbon::now('UTC')->toIso8601String();
 
         $this->store()->put($this->key($runId), $history, $ttlSeconds);
@@ -69,9 +70,11 @@ class CacheRunHistoryStore implements RunHistoryStore
     {
         $history = $this->find($runId) ?? [];
         $history['status'] = 'completed';
-        $history['output'] = $response->output;
+        $history['output'] = $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $response->output;
         $history['usage'] = $response->usage;
-        $history['context'] = $response->context?->toArray();
+        $history['context'] = $response->context !== null
+            ? $this->capture->omitSkippedHistoryContextKeys($response->context->toArray(), $response->context)
+            : null;
         $history['artifacts'] = array_map(static fn ($artifact): array => $artifact->toArray(), $response->artifacts);
         $history['metadata'] = $response->metadata;
         $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
@@ -84,10 +87,7 @@ class CacheRunHistoryStore implements RunHistoryStore
     {
         $history = $this->find($runId) ?? [];
         $history['status'] = 'failed';
-        $history['error'] = [
-            'message' => $this->capture->failureMessage($exception),
-            'class' => $exception::class,
-        ];
+        $history['error'] = $this->failurePayload($exception);
         $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
         $history['updated_at'] = $history['finished_at'];
 
@@ -106,15 +106,12 @@ class CacheRunHistoryStore implements RunHistoryStore
             'swarm_class' => $swarmClass,
             'topology' => $topology,
             'status' => 'failed',
-            'context' => $context->toArray(),
+            'context' => $this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context),
             'metadata' => $metadata,
             'steps' => [],
             'output' => null,
             'usage' => [],
-            'error' => [
-                'message' => $this->capture->failureMessage($exception),
-                'class' => $exception::class,
-            ],
+            'error' => $this->failurePayload($exception),
             'artifacts' => [],
             'started_at' => $timestamp,
             'finished_at' => $timestamp,
@@ -193,6 +190,26 @@ class CacheRunHistoryStore implements RunHistoryStore
     public function assertReady(): void
     {
         $this->assertCacheStoreReady($this->cacheFactory, $this->config, 'history', 'history');
+    }
+
+    /**
+     * Build the persisted `error` payload. CaptureDecision::Skip omits the
+     * `message` key entirely (keeping `class`); Full/Redact keep a `message`.
+     *
+     * @return array{message?: string, class: class-string<Throwable>}
+     */
+    protected function failurePayload(Throwable $exception): array
+    {
+        $message = $this->capture->applyFailureMessage($exception);
+
+        if ($message === null) {
+            return ['class' => $exception::class];
+        }
+
+        return [
+            'message' => $message,
+            'class' => $exception::class,
+        ];
     }
 
     protected function key(string $runId): string

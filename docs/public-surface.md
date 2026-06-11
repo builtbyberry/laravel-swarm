@@ -140,8 +140,8 @@ adding a new public API.
 | `Actor` | Value object describing the resolved actor identity. | [Audit Evidence Contract](audit-evidence-contract.md#actor-binding) |
 | `RunContext::withActor()` | Bind an explicit actor to a run before dispatch. | [Audit Evidence Contract](audit-evidence-contract.md#actor-binding) |
 | `MissingActorException` | Thrown when actor resolution is required but unavailable. | [Audit Evidence Contract](audit-evidence-contract.md#actor-binding) |
-| `CapturePolicy` | Decide whether each evidence payload is captured, redacted, or skipped. | [Audit Evidence Contract](audit-evidence-contract.md#capture-policy) |
-| `CaptureDecision` | Enum of capture outcomes (`Full`, `Redact`, `Skip`). | [Audit Evidence Contract](audit-evidence-contract.md#capture-policy) |
+| `CapturePolicy` | Decide whether each evidence payload (inputs, outputs, artifacts, active context) is captured, redacted, or omitted. Returns `CaptureDecision`. Default `BooleanCapturePolicy` reads `swarm.capture.*` and returns only `Full`/`Redact`. | [Audit Evidence Contract](audit-evidence-contract.md#capture-policy) |
+| `CaptureDecision` | Enum of capture outcomes: `Full` (as-is), `Redact` (scalars → `[redacted]`, keys preserved), `Skip` (**true omission on the evidence surfaces as of v0.12.0** — key absent / evidence column `NULL` / `error.message` dropped; the operational active-context input is retained for durable resume; behaved like `Redact` through v0.4–v0.11). | [Audit Evidence Contract](audit-evidence-contract.md#capture-policy) |
 | `SwarmAuditSigner` | Sign audit envelopes for tamper-evident chains. | [Audit Evidence Contract](audit-evidence-contract.md#audit-signing) |
 | `SinkFailureHandler` | Decide how to react when an audit sink throws. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `SinkFailureDecision` | Enum of sink failure outcomes (`Swallow`, `RetryInline`, `Halt`, `Queue`, `DeadLetter`). `Queue` and `DeadLetter` added in v0.5.0 alongside the audit outbox. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |

@@ -1893,7 +1893,7 @@ class DatabaseDurableRunStore implements DurableRunStore
     }
 
     /**
-     * @param  array{message: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure
+     * @param  array{message?: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure  `message` is omitted when the capture policy Skips failures.
      */
     protected function markTerminal(string $runId, string $executionToken, string $status, ?array $failure = null): void
     {

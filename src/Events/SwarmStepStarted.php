@@ -14,7 +14,7 @@ class SwarmStepStarted
         public readonly string $swarmClass,
         public readonly int $index,
         public readonly string $agentClass,
-        public readonly string $input,
+        public readonly ?string $input,
         public readonly array $metadata = [],
         public readonly ?string $topology = null,
         public readonly ?string $executionMode = null,

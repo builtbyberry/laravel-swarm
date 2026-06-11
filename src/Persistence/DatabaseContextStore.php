@@ -28,6 +28,11 @@ class DatabaseContextStore implements ContextStore
 
     public function put(RunContext $context, int $ttlSeconds): void
     {
+        // The active-context store is operational runtime state: it is the only
+        // persisted source of the top-level input for durable resume, so it
+        // always retains the true (sealed) input. CaptureDecision::Skip is
+        // honored on the *evidence* surfaces (run history, events, audit), not
+        // here. RunContext::input is a non-null string.
         $contextPayload = $context->toArray();
         $payload = [
             'run_id' => $contextPayload['run_id'],
@@ -60,7 +65,10 @@ class DatabaseContextStore implements ContextStore
 
         return [
             'run_id' => $record->run_id,
-            'input' => $this->cipher->open((string) $record->input),
+            // Defensive: the column is NOT NULL for rows this store writes, but
+            // tolerate a null (e.g. a stale row from an interim nullable schema)
+            // rather than handing open() a null.
+            'input' => $record->input !== null ? $this->cipher->open((string) $record->input) : null,
             'data' => $this->decodeJson($record->data, []),
             'metadata' => $this->decodeJson($record->metadata, []),
             'artifacts' => $this->decodeJson($record->artifacts, []),

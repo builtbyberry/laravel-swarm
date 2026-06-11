@@ -15,7 +15,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
  */
 final class EvidenceEnvelope
 {
-    public const SCHEMA_VERSION = '2';
+    public const SCHEMA_VERSION = '3';
 
     /**
      * Top-level metadata keys that are always emitted on audit and telemetry

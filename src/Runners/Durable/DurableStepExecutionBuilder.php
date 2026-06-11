@@ -62,7 +62,7 @@ class DurableStepExecutionBuilder
                 runId: $runId,
                 swarmClass: $run['swarm_class'],
                 topology: $run['topology'],
-                input: $this->capture->input($context->input),
+                input: $this->capture->applyInput($context->input, $context),
                 metadata: $this->payloads->eventMetadata($context),
                 executionMode: ExecutionMode::Durable->value,
             ));
