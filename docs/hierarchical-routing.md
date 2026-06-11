@@ -227,6 +227,47 @@ exactly once.
 
 Loops are supported for hierarchical and static-hierarchical topologies only.
 
+### Nested Loops
+
+A loop body may itself contain another bounded loop. Each time the outer loop
+takes its back-edge, every inner loop nested inside the outer body has its
+iteration counter reset to zero, so the inner loop runs its full count again on
+every outer pass. An outer loop bounded at `Mo` wrapping an inner loop bounded
+at `Mi` therefore runs the innermost worker up to `Mo * Mi` times.
+
+Because nesting composes multiplicatively, `#[MaxAgentSteps]` is budgeted as the
+**product of the enclosing bounds**, not their sum: the worst-case worker count
+folds each bounded loop's body in as `max_iterations * bodyCost`, where the body
+cost already includes any loops nested inside it. A nested plan that could exceed
+the step limit is rejected at plan time, before any worker runs.
+
+Nested loops must be **fully contained**: an inner loop's back-edge must point to
+a node that also lives inside the enclosing loop's body. A back-edge that escapes
+its enclosing loop cannot be reset deterministically on outer re-entry and is
+rejected at plan time.
+
+### Parallel Groups Inside a Loop
+
+A parallel group may sit inside a loop body. The whole fan-out (and its join)
+re-runs on every iteration, and each branch step carries the enclosing loop's
+`loop_iteration` in its metadata — mirroring the value a looping worker records
+on its own steps — so history attributes each branch run to the pass that
+produced it. For budgeting, a parallel group inside a loop counts its branches
+once per iteration (the product-of-bounds rule applies to the branch fan-out just
+as it does to sequential body workers). Under `dispatchDurable()` the durable
+branch rows are recreated for each pass and the parent rewinds across the join on
+the loop back-edge exactly as it does for a single-worker loop body.
+
+### Lowering a Loop Bound Across a Redeploy
+
+A loop's `max_iterations` is read from the live plan on every durable step, so
+lowering it in a deploy that lands mid-run is safe. If the freshly read bound is
+already at or below the iteration count persisted from earlier passes, the loop
+**clamps and falls through** to its `next` exit on the next step — it never
+rewinds and never crashes. The iteration already in flight completes; no extra
+pass is started beyond it. (Raising the bound mid-run simply allows the
+additional iterations the new bound permits.)
+
 `with_outputs` may only reference nodes that are guaranteed to have completed
 before the worker runs. A worker after a parallel group may reference any branch
 output from that completed group. A branch inside a parallel group may not
@@ -329,6 +370,8 @@ The plan must satisfy all of these:
 - a `loop` back-edge must be bounded by a positive `max_iterations` and target
   a worker node that is an ancestor on the looping node's path; unbounded loops
   are rejected
+- a loop nested inside another loop must be fully contained — its back-edge may
+  not escape the enclosing loop's body (see [Nested Loops](#nested-loops))
 
 ## Execution Modes
 
