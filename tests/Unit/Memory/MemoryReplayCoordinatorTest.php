@@ -270,3 +270,54 @@ test('MemoryReplay attribute with FrozenView wins over fresh_execution config', 
     // Attribute wins — binding IS swapped despite fresh_execution config.
     expect($seenInCallback)->toBeInstanceOf(ReplaySwarmMemory::class);
 });
+
+// ---------------------------------------------------------------------------
+// begin() / end() — the generator-friendly boundary used by streaming runners
+// ---------------------------------------------------------------------------
+
+test('begin returns a fresh-execution boundary when no snapshot exists', function () {
+    $snapshots = new RecordingSnapshotsMemory;
+    $coordinator = makeCoordinator($snapshots);
+
+    $boundary = $coordinator->begin('stdClass', 'run-1', 0);
+
+    expect($boundary->isReplay())->toBeFalse();
+    expect($boundary->snapshot)->toBeNull();
+    expect(app(SwarmMemory::class))->toBeInstanceOf(DefaultSwarmMemory::class);
+
+    // end() is a no-op for a fresh boundary.
+    $coordinator->end($boundary);
+    expect(app(SwarmMemory::class))->toBeInstanceOf(DefaultSwarmMemory::class);
+});
+
+test('begin swaps the binding and returns a replay boundary when a snapshot exists', function () {
+    $snapshots = new RecordingSnapshotsMemory;
+    $frozen = preloadSnapshot($snapshots, 'run-1', 2);
+    $coordinator = makeCoordinator($snapshots);
+
+    $boundary = $coordinator->begin('stdClass', 'run-1', 2);
+
+    expect($boundary->isReplay())->toBeTrue();
+    expect($boundary->snapshot)->toBe($frozen);
+    // The binding stays swapped until end() — the generator yields under it.
+    expect(app(SwarmMemory::class))->toBeInstanceOf(ReplaySwarmMemory::class);
+
+    $coordinator->end($boundary);
+
+    // Restored after the boundary closes.
+    expect(app(SwarmMemory::class))->toBeInstanceOf(DefaultSwarmMemory::class);
+});
+
+test('begin honours fresh_execution mode and never swaps the binding', function () {
+    config(['swarm.memory.replay_mode' => ReplayMode::FreshExecution->value]);
+
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'run-1', 0); // a snapshot exists — should be ignored
+
+    $coordinator = makeCoordinator($snapshots);
+
+    $boundary = $coordinator->begin('stdClass', 'run-1', 0);
+
+    expect($boundary->isReplay())->toBeFalse();
+    expect(app(SwarmMemory::class))->toBeInstanceOf(DefaultSwarmMemory::class);
+});

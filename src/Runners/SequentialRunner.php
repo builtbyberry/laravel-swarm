@@ -10,7 +10,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Memory\ReplayBoundary;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -56,6 +58,7 @@ class SequentialRunner
         protected SwarmGuardrailRunner $guardrails,
         protected SnapshotsMemory $snapshots,
         protected AgentVisibleMemoryView $view,
+        protected MemoryReplayCoordinator $coordinator,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -113,11 +116,26 @@ class SequentialRunner
                 $agentName = class_basename($agent::class);
 
                 $this->steps->started($state, $index, $agent::class, $input);
-                $snapshot = $this->snapshots->snapshot(
-                    $state->context->runId,
-                    $index,
-                    $this->view->present($state->swarm, $state->context, $agent),
-                );
+
+                // The final (streamed) step opens a snapshot-backed replay
+                // boundary so a crash-resume re-run replays byte-identically:
+                // begin() detects a prior frozen snapshot, swaps SwarmMemory to
+                // the frozen view, and returns it for resetToolCalls() below.
+                // Non-final steps (and first-attempt streamed steps) take the
+                // fresh-execution path and freeze a new snapshot. The binding is
+                // restored in the streamed step's finally, so the swap never
+                // leaks past the agent invocation.
+                $boundary = $index === $lastIndex
+                    ? $this->coordinator->begin($state->swarm::class, $state->context->runId, $index)
+                    : ReplayBoundary::freshExecution();
+
+                $snapshot = $boundary->isReplay()
+                    ? $this->snapshots->resetToolCalls($boundary->snapshot)
+                    : $this->snapshots->snapshot(
+                        $state->context->runId,
+                        $index,
+                        $this->view->present($state->swarm, $state->context, $agent),
+                    );
 
                 yield new SwarmStepStart(
                     id: SwarmStreamEvent::newId(),
@@ -139,126 +157,139 @@ class SequentialRunner
                     /** @var array<string, ToolCallData> $pendingToolCalls */
                     $pendingToolCalls = [];
 
-                    foreach ($stream as $event) {
-                        if ($event instanceof TextDelta) {
-                            $output .= $event->delta;
-                            $swarmEvent = new SwarmTextDelta(
-                                id: $event->id,
-                                runId: $state->context->runId,
-                                stepIndex: $index,
-                                agentClass: $agent::class,
-                                delta: $this->capture->applyOutput($event->delta, $state->context),
-                                timestamp: $event->timestamp,
-                            );
-                            $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    try {
+                        foreach ($stream as $event) {
+                            if ($event instanceof TextDelta) {
+                                $output .= $event->delta;
+                                $swarmEvent = new SwarmTextDelta(
+                                    id: $event->id,
+                                    runId: $state->context->runId,
+                                    stepIndex: $index,
+                                    agentClass: $agent::class,
+                                    delta: $this->capture->applyOutput($event->delta, $state->context),
+                                    timestamp: $event->timestamp,
+                                );
+                                $this->syncInvocationId($swarmEvent, $event->invocationId);
 
-                            yield $swarmEvent;
-                        } elseif ($event instanceof TextEnd) {
-                            $swarmEvent = new SwarmTextEnd(
-                                id: $event->id,
-                                runId: $state->context->runId,
-                                stepIndex: $index,
-                                agentClass: $agent::class,
-                                messageId: $event->messageId,
-                                timestamp: $event->timestamp,
-                            );
-                            $this->syncInvocationId($swarmEvent, $event->invocationId);
+                                yield $swarmEvent;
+                            } elseif ($event instanceof TextEnd) {
+                                $swarmEvent = new SwarmTextEnd(
+                                    id: $event->id,
+                                    runId: $state->context->runId,
+                                    stepIndex: $index,
+                                    agentClass: $agent::class,
+                                    messageId: $event->messageId,
+                                    timestamp: $event->timestamp,
+                                );
+                                $this->syncInvocationId($swarmEvent, $event->invocationId);
 
-                            yield $swarmEvent;
-                        } elseif ($event instanceof ReasoningDelta) {
-                            $swarmEvent = new SwarmReasoningDelta(
-                                id: $event->id,
-                                runId: $state->context->runId,
-                                stepIndex: $index,
-                                agentClass: $agent::class,
-                                reasoningId: $event->reasoningId,
-                                delta: $this->capture->applyOutput($event->delta, $state->context),
-                                timestamp: $event->timestamp,
-                                summary: $this->captureReasoningSummary($event->summary, $state->context),
-                            );
-                            $this->syncInvocationId($swarmEvent, $event->invocationId);
+                                yield $swarmEvent;
+                            } elseif ($event instanceof ReasoningDelta) {
+                                $swarmEvent = new SwarmReasoningDelta(
+                                    id: $event->id,
+                                    runId: $state->context->runId,
+                                    stepIndex: $index,
+                                    agentClass: $agent::class,
+                                    reasoningId: $event->reasoningId,
+                                    delta: $this->capture->applyOutput($event->delta, $state->context),
+                                    timestamp: $event->timestamp,
+                                    summary: $this->captureReasoningSummary($event->summary, $state->context),
+                                );
+                                $this->syncInvocationId($swarmEvent, $event->invocationId);
 
-                            yield $swarmEvent;
-                        } elseif ($event instanceof ReasoningEnd) {
-                            $swarmEvent = new SwarmReasoningEnd(
-                                id: $event->id,
-                                runId: $state->context->runId,
-                                stepIndex: $index,
-                                agentClass: $agent::class,
-                                reasoningId: $event->reasoningId,
-                                timestamp: $event->timestamp,
-                                summary: $this->captureReasoningSummary($event->summary, $state->context),
-                            );
-                            $this->syncInvocationId($swarmEvent, $event->invocationId);
+                                yield $swarmEvent;
+                            } elseif ($event instanceof ReasoningEnd) {
+                                $swarmEvent = new SwarmReasoningEnd(
+                                    id: $event->id,
+                                    runId: $state->context->runId,
+                                    stepIndex: $index,
+                                    agentClass: $agent::class,
+                                    reasoningId: $event->reasoningId,
+                                    timestamp: $event->timestamp,
+                                    summary: $this->captureReasoningSummary($event->summary, $state->context),
+                                );
+                                $this->syncInvocationId($swarmEvent, $event->invocationId);
 
-                            yield $swarmEvent;
-                        } elseif ($event instanceof ToolCall) {
-                            // Hold the call until we see its matching ToolResult so the
-                            // snapshot row records a paired input/output entry, then a
-                            // single appendToolCall persists the finalized pair. This
-                            // keeps the snapshot row write count proportional to tool
-                            // results, not events.
-                            $pendingToolCalls[$event->toolCall->id] = $event->toolCall;
+                                yield $swarmEvent;
+                            } elseif ($event instanceof ToolCall) {
+                                // Hold the call until we see its matching ToolResult so the
+                                // snapshot row records a paired input/output entry, then a
+                                // single appendToolCall persists the finalized pair. This
+                                // keeps the snapshot row write count proportional to tool
+                                // results, not events.
+                                $pendingToolCalls[$event->toolCall->id] = $event->toolCall;
 
-                            $swarmEvent = new SwarmToolCall(
-                                id: $event->id,
-                                runId: $state->context->runId,
-                                stepIndex: $index,
-                                agentClass: $agent::class,
-                                toolCall: $this->captureToolCall($event->toolCall, $state->context),
-                                timestamp: $event->timestamp,
-                            );
-                            $this->syncInvocationId($swarmEvent, $event->invocationId);
+                                $swarmEvent = new SwarmToolCall(
+                                    id: $event->id,
+                                    runId: $state->context->runId,
+                                    stepIndex: $index,
+                                    agentClass: $agent::class,
+                                    toolCall: $this->captureToolCall($event->toolCall, $state->context),
+                                    timestamp: $event->timestamp,
+                                );
+                                $this->syncInvocationId($swarmEvent, $event->invocationId);
 
-                            yield $swarmEvent;
-                        } elseif ($event instanceof ToolResult) {
-                            $matchedCallId = $event->toolResult->id;
-                            $matchedCall = $pendingToolCalls[$matchedCallId] ?? null;
+                                yield $swarmEvent;
+                            } elseif ($event instanceof ToolResult) {
+                                $matchedCallId = $event->toolResult->id;
+                                $matchedCall = $pendingToolCalls[$matchedCallId] ?? null;
 
-                            if ($matchedCall !== null) {
-                                unset($pendingToolCalls[$matchedCallId]);
-                                $snapshot = $this->snapshots->appendToolCall(
-                                    $snapshot,
-                                    SnapshotToolCallNormalizer::entry($matchedCall, $event->toolResult),
+                                if ($matchedCall !== null) {
+                                    unset($pendingToolCalls[$matchedCallId]);
+                                    $snapshot = $this->snapshots->appendToolCall(
+                                        $snapshot,
+                                        SnapshotToolCallNormalizer::entry($matchedCall, $event->toolResult),
+                                    );
+                                }
+
+                                $swarmEvent = new SwarmToolResult(
+                                    id: $event->id,
+                                    runId: $state->context->runId,
+                                    stepIndex: $index,
+                                    agentClass: $agent::class,
+                                    toolResult: $this->captureToolResult($event->toolResult, $state->context),
+                                    successful: $event->successful,
+                                    error: $this->captureToolError($event->error, $state->context),
+                                    timestamp: $event->timestamp,
+                                );
+                                $this->syncInvocationId($swarmEvent, $event->invocationId);
+
+                                yield $swarmEvent;
+                            } elseif ($event instanceof StreamEnd) {
+                                $stepUsage = $event->usage->toArray();
+                            } elseif ($event instanceof ProviderStreamError) {
+                                throw new SwarmStreamProviderException(
+                                    message: $event->message,
+                                    eventId: $event->id,
+                                    invocationId: $event->invocationId,
+                                    recoverable: $event->recoverable,
+                                    metadata: $this->captureProviderErrorMetadata($event),
+                                    timestamp: $event->timestamp,
+                                    providerErrorType: $event->type,
                                 );
                             }
-
-                            $swarmEvent = new SwarmToolResult(
-                                id: $event->id,
-                                runId: $state->context->runId,
-                                stepIndex: $index,
-                                agentClass: $agent::class,
-                                toolResult: $this->captureToolResult($event->toolResult, $state->context),
-                                successful: $event->successful,
-                                error: $this->captureToolError($event->error, $state->context),
-                                timestamp: $event->timestamp,
-                            );
-                            $this->syncInvocationId($swarmEvent, $event->invocationId);
-
-                            yield $swarmEvent;
-                        } elseif ($event instanceof StreamEnd) {
-                            $stepUsage = $event->usage->toArray();
-                        } elseif ($event instanceof ProviderStreamError) {
-                            throw new SwarmStreamProviderException(
-                                message: $event->message,
-                                eventId: $event->id,
-                                invocationId: $event->invocationId,
-                                recoverable: $event->recoverable,
-                                metadata: $this->captureProviderErrorMetadata($event),
-                                timestamp: $event->timestamp,
-                                providerErrorType: $event->type,
+                        }
+                    } finally {
+                        // Flush any tool calls without a matching ToolResult into
+                        // the snapshot. This runs on the happy path (calls left
+                        // pending at stream end) AND on abandonment (the generator
+                        // was torn down mid-stream by a worker crash, so the
+                        // `foreach` never reached `StreamEnd`). Doing it in
+                        // `finally` makes the append crash-safe: an in-flight call
+                        // is persisted with result=null instead of being lost, so
+                        // the frozen snapshot is a faithful record of every tool
+                        // the agent invoked and replay can rebuild byte-identically.
+                        foreach ($pendingToolCalls as $unpairedCall) {
+                            $snapshot = $this->snapshots->appendToolCall(
+                                $snapshot,
+                                SnapshotToolCallNormalizer::entry($unpairedCall),
                             );
                         }
-                    }
 
-                    // Any tool calls without a matching ToolResult by stream end
-                    // are still part of the agent's invocation surface, so persist
-                    // them with result=null so replay can detect partial runs.
-                    foreach ($pendingToolCalls as $unpairedCall) {
-                        $snapshot = $this->snapshots->appendToolCall(
-                            $snapshot,
-                            SnapshotToolCallNormalizer::entry($unpairedCall),
-                        );
+                        // Restore the live SwarmMemory binding even if the stream
+                        // was abandoned mid-flight. No-op on the fresh-execution
+                        // path (begin() never swapped).
+                        $this->coordinator->end($boundary);
                     }
 
                     $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);

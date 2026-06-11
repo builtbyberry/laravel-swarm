@@ -96,6 +96,67 @@ final class MemoryReplayCoordinator
     }
 
     /**
+     * Begin a snapshot-backed replay boundary for a generator-based runner.
+     *
+     * The closure-based {@see during()} cannot wrap a runner that *yields*
+     * across the boundary (a streamed agent invocation), so streaming runners
+     * use this explicit begin/end pair instead. The semantics match
+     * {@see during()} exactly:
+     *
+     * - Returns `null` when replay is disabled for `$swarmClass` or no prior
+     *   crashed attempt exists — the caller takes the fresh-execution path and
+     *   freezes a new snapshot as usual. No binding swap happens.
+     * - Returns the existing frozen {@see MemorySnapshot} when a prior attempt
+     *   is found, after swapping the container's `SwarmMemory` to a
+     *   {@see ReplaySwarmMemory} backed by that snapshot. The caller MUST pass
+     *   the returned {@see ReplayBoundary} to {@see end()} in a `finally` block
+     *   so the original binding is restored even when the generator is torn
+     *   down mid-stream.
+     *
+     * @param  class-string  $swarmClass
+     */
+    public function begin(string $swarmClass, string $runId, int $stepIndex): ReplayBoundary
+    {
+        if (! $this->replayEnabled($swarmClass)) {
+            return ReplayBoundary::freshExecution();
+        }
+
+        $existing = $this->snapshots->find($runId, $stepIndex);
+
+        if ($existing === null) {
+            return ReplayBoundary::freshExecution();
+        }
+
+        /** @var SwarmMemory $original */
+        $original = $this->application->make(SwarmMemory::class);
+
+        $this->application->instance(
+            SwarmMemory::class,
+            new ReplaySwarmMemory(
+                live: $original,
+                snapshot: $existing,
+                events: $this->events,
+            ),
+        );
+
+        return ReplayBoundary::replay($existing, $original);
+    }
+
+    /**
+     * Close a replay boundary opened by {@see begin()}, restoring the original
+     * `SwarmMemory` binding. A no-op for fresh-execution boundaries. Safe to
+     * call more than once.
+     */
+    public function end(ReplayBoundary $boundary): void
+    {
+        if ($boundary->original === null) {
+            return;
+        }
+
+        $this->application->instance(SwarmMemory::class, $boundary->original);
+    }
+
+    /**
      * Resolve the effective replay mode for `$swarmClass`.
      *
      * The `#[MemoryReplay]` attribute wins over the global config when present.
