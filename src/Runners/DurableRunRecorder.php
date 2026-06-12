@@ -134,6 +134,7 @@ class DurableRunRecorder
                 routePlan: $result->routePlan,
                 nodeOutput: $result->nodeOutput,
                 totalSteps: $result->totalSteps,
+                clearBranchParentNodeIds: $result->clearBranchParentNodeIds,
             );
             if ($withTransaction !== null) {
                 ($withTransaction)();

@@ -177,6 +177,29 @@ class HierarchicalRoutePlan
     }
 
     /**
+     * The parallel fan-out nodes that live inside the loop body between $loopTo
+     * and $loopNodeId. When the loop re-enters on a back-edge, each of these
+     * parallel nodes' persisted durable branch rows must be cleared so the
+     * fan-out re-dispatches its branch agents on the next pass instead of
+     * re-joining pass-1's stale completed rows. Recomputed from the persisted
+     * plan on each step — never persisted — so the deletion is replay-safe.
+     *
+     * @return array<int, string>
+     */
+    public function loopBodyParallelNodeIds(string $loopTo, string $loopNodeId): array
+    {
+        $parallels = [];
+
+        foreach (array_keys($this->loopBodyNodeIds($loopTo, $loopNodeId)) as $nodeId) {
+            if ($this->node($nodeId) instanceof HierarchicalParallelNode) {
+                $parallels[] = $nodeId;
+            }
+        }
+
+        return $parallels;
+    }
+
+    /**
      * The innermost bounded-loop worker whose loop body contains $nodeId, or
      * null if $nodeId sits outside every loop. Used to thread the enclosing
      * loop's current iteration onto steps (e.g. parallel branch steps) that do
@@ -531,26 +554,6 @@ class HierarchicalRoutePlan
         }
 
         return $payload[$key];
-    }
-
-    /**
-     * @param  array<string, true>  $visited
-     */
-    protected function countReachableWorkers(string $nodeId, array &$visited): int
-    {
-        if (isset($visited[$nodeId])) {
-            return 0;
-        }
-
-        $visited[$nodeId] = true;
-        $node = $this->node($nodeId);
-        $count = $node instanceof HierarchicalWorkerNode ? 1 : 0;
-
-        foreach ($node->controlEdges() as $nextNodeId) {
-            $count += $this->countReachableWorkers($nextNodeId, $visited);
-        }
-
-        return $count;
     }
 
     protected function validatePersistedReferences(): void

@@ -382,6 +382,10 @@ class HierarchicalRunner
             $nextIndex,
             $deferral,
             $currentNodeId,
+            // Seed the persisted per-node loop counters so a looping join node
+            // resumed mid-loop continues from its real iteration and exits at the
+            // bound, instead of restarting from iteration 1 and never converging.
+            is_array($cursor['loop_iterations'] ?? null) ? $cursor['loop_iterations'] : [],
         );
 
         if ($deferral instanceof QueueHierarchicalParallelBoundary) {
@@ -663,6 +667,8 @@ class HierarchicalRunner
         $cursor['completed_node_ids'][] = $node->id;
         $cursor['executed_agent_classes'][] = $step->agentClass;
 
+        $clearBranchParentNodeIds = [];
+
         if ($node->hasLoop() && $iteration < (int) $node->loopMaxIterations) {
             $cursor['loop_iterations'][$node->id] = $iteration;
             $cursor['offset'] = $this->durableEntryOffsetForNode($cursor, (string) $node->loopTo);
@@ -674,6 +680,17 @@ class HierarchicalRunner
             foreach ($plan->loopBodyLoopingNodes((string) $node->loopTo, $node->id) as $inner) {
                 unset($cursor['loop_iterations'][$inner]);
             }
+
+            // Clear the persisted branch rows of every parallel fan-out inside the
+            // loop body. Pass-1's rows are still `completed`, so without this the
+            // next pass would re-land on the fan-out entry, see non-empty branches,
+            // and skip the dispatch arm — re-joining stale outputs instead of
+            // re-running the branch agents. Deleting them is done atomically with
+            // this checkpoint's cursor write (see checkpointHierarchicalStep), so a
+            // crash before the commit replays the same deletion deterministically,
+            // and a crash after the commit leaves the cursor already rewound past
+            // this step with the rows gone — the dispatch arm fires cleanly either way.
+            $clearBranchParentNodeIds = $plan->loopBodyParallelNodeIds((string) $node->loopTo, $node->id);
         } else {
             if ($node->hasLoop()) {
                 $cursor['loop_iterations'][$node->id] = $iteration;
@@ -690,6 +707,7 @@ class HierarchicalRunner
             routeCursor: $cursor,
             nodeOutput: ['node_id' => $node->id, 'output' => $step->output],
             complete: $this->isDurableCursorComplete($cursor),
+            clearBranchParentNodeIds: $clearBranchParentNodeIds,
         );
     }
 
@@ -701,6 +719,11 @@ class HierarchicalRunner
      * @param  array<int, string>  $executedAgentClasses
      * @param  array<int, array{node_id: string, branches: array<int, string>}>  $parallelGroups
      * @param  array<string, string>  $nodeOutputs
+     * @param  array<string, int>  $loopIterations  Per-node loop counters carried in from a
+     *                                              persisted cursor so the queued resume path
+     *                                              re-enters mid-loop with the correct iteration
+     *                                              (without this a looping join node always reads
+     *                                              iteration 1 on resume and never reaches its bound).
      */
     protected function executePlan(
         SwarmExecutionState $state,
@@ -716,12 +739,10 @@ class HierarchicalRunner
         int &$nextIndex,
         ?QueueHierarchicalParallelBoundary &$deferral = null,
         ?string $startNodeId = null,
+        array $loopIterations = [],
     ): string {
         $currentNodeId = $startNodeId ?? $plan->startAt;
         $lastOutput = null;
-
-        /** @var array<string, int> $loopIterations */
-        $loopIterations = [];
 
         while ($currentNodeId !== null) {
             $node = $plan->node($currentNodeId);
@@ -779,7 +800,7 @@ class HierarchicalRunner
                     : null;
 
                 if ($state->executionMode === ExecutionMode::Queue && $state->queueHierarchicalParallelCoordination === 'multi_worker') {
-                    $routeCursor = $this->cursorAtQueueParallelBoundary($state, $plan, $coordinatorClass, $node, $nodeOutputs);
+                    $routeCursor = $this->cursorAtQueueParallelBoundary($state, $plan, $coordinatorClass, $node, $nodeOutputs, $loopIterations);
                     $branchDefinitions = [];
 
                     foreach ($node->branches as $ordinal => $branchNodeId) {
