@@ -177,6 +177,22 @@ class HierarchicalRoutePlan
     }
 
     /**
+     * Reset the per-node loop counters of every loop nested inside this
+     * back-edge's body, so each inner loop re-runs its full count on the next
+     * outer pass. The single authority for the nested-loop counter-reset rule,
+     * shared by the sync, durable, and streamed runners. $counters is mutated
+     * in place.
+     *
+     * @param  array<string, int>  $counters
+     */
+    public function clearInnerLoopCounters(array &$counters, string $loopTo, string $loopNodeId): void
+    {
+        foreach ($this->loopBodyLoopingNodes($loopTo, $loopNodeId) as $inner) {
+            unset($counters[$inner]);
+        }
+    }
+
+    /**
      * The parallel fan-out nodes that live inside the loop body between $loopTo
      * and $loopNodeId. When the loop re-enters on a back-edge, each of these
      * parallel nodes' persisted durable branch rows must be cleared so the

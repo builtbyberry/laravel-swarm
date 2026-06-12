@@ -669,7 +669,7 @@ class HierarchicalRunner
 
         $clearBranchParentNodeIds = [];
 
-        if ($node->hasLoop() && $iteration < (int) $node->loopMaxIterations) {
+        if ($node->loopsBackAt($iteration)) {
             $cursor['loop_iterations'][$node->id] = $iteration;
             $cursor['offset'] = $this->durableEntryOffsetForNode($cursor, (string) $node->loopTo);
 
@@ -677,9 +677,7 @@ class HierarchicalRunner
             // re-enters fresh on the next outer pass. This is part of the cursor
             // that gets checkpointed, so a crash-before-checkpoint replay recomputes
             // the same resets deterministically.
-            foreach ($plan->loopBodyLoopingNodes((string) $node->loopTo, $node->id) as $inner) {
-                unset($cursor['loop_iterations'][$inner]);
-            }
+            $plan->clearInnerLoopCounters($cursor['loop_iterations'], (string) $node->loopTo, $node->id);
 
             // Clear the persisted branch rows of every parallel fan-out inside the
             // loop body. Pass-1's rows are still `completed`, so without this the
@@ -772,15 +770,13 @@ class HierarchicalRunner
                 $lastOutput = $step->output;
                 $nextIndex++;
                 $loopIterations[$node->id] = $iteration;
-                $currentNodeId = $this->resolveWorkerSuccessor($node, $iteration);
+                $currentNodeId = $node->successor($iteration);
 
                 // On a loop back-edge, reset every inner loop's counter so it can
                 // run its full count again on the next outer pass. Without this a
                 // nested loop would fire only once across all outer iterations.
                 if ($node->hasLoop() && $currentNodeId === $node->loopTo) {
-                    foreach ($plan->loopBodyLoopingNodes((string) $node->loopTo, $node->id) as $inner) {
-                        unset($loopIterations[$inner]);
-                    }
+                    $plan->clearInnerLoopCounters($loopIterations, (string) $node->loopTo, $node->id);
                 }
 
                 continue;
@@ -1032,21 +1028,6 @@ class HierarchicalRunner
         }
 
         return $lastOutput ?? '';
-    }
-
-    /**
-     * Resolve the next node id after a worker executes, honouring a bounded
-     * loop back-edge. While the worker's iteration count is below its loop
-     * bound, control routes back to the loop target; once the bound is reached
-     * (or there is no loop) control falls through to `next`.
-     */
-    protected function resolveWorkerSuccessor(HierarchicalWorkerNode $node, int $iteration): ?string
-    {
-        if ($node->hasLoop() && $iteration < (int) $node->loopMaxIterations) {
-            return $node->loopTo;
-        }
-
-        return $node->next;
     }
 
     protected function ensurePlanWithinExecutionBudget(SwarmExecutionState $state, HierarchicalRoutePlan $plan): void

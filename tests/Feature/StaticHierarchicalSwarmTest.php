@@ -28,16 +28,20 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeReviewer;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Jobs\NoOpQueuedJob;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalChainSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalLoopSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalMissingInterfaceSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalNestedLoopSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalOverBudgetSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalParallelInLoopSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalParallelWithSynthesisSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingleWorkerSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamConcurrentSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamMixedSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamSequentialParallelInLoopSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamSequentialParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamSequentialSwarm;
 use Illuminate\Broadcasting\Channel;
@@ -641,4 +645,190 @@ test('broadcastNow() routes a static hierarchical swarm through the stream runne
     expect($response)->toBeInstanceOf(StreamableSwarmResponse::class);
     expect($response->streamedResponse)->not->toBeNull();
     expect($response->streamedResponse->metadata['topology'])->toBe('static_hierarchical');
+});
+
+// -------------------------------------------------------------------------
+// Stream scenarios: bounded loops (#203 — parity with prompt()/queue()/dispatchDurable())
+// -------------------------------------------------------------------------
+
+test('static hierarchical stream honors a bounded loop to its iteration bound', function () {
+    FakeWriter::fake(['draft-out']);
+    FakeEditor::fake(['refine-1', 'refine-2', 'refine-3']);
+
+    $stream = FakeStaticHierarchicalLoopSwarm::make()->stream('loop-stream-task');
+    $events = iterator_to_array($stream);
+
+    // Writer streams once, then the editor streams three times (max_iterations),
+    // then the run ends — parity with the sync loop test, not body-once-and-exit.
+    $types = array_map(fn ($event): string => $event->type(), $events);
+    expect($types)->toBe([
+        'swarm_stream_start',
+        'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
+        'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
+        'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
+        'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
+        'swarm_stream_end',
+    ]);
+
+    $deltas = collect($events)->whereInstanceOf(SwarmTextDelta::class)->map->delta->values();
+    expect($deltas->all())->toBe(['draft-out', 'refine-1', 'refine-2', 'refine-3']);
+    expect(last($events)->output)->toBe('refine-3');
+
+    // Step indices stay monotonic across loop passes (each pass is its own step).
+    $stepStarts = collect($events)->whereInstanceOf(SwarmStepStart::class)->map->stepIndex->values();
+    expect($stepStarts->all())->toBe([0, 1, 2, 3]);
+
+    // The recorded history mirrors the sync path: looped node executed thrice,
+    // each step stamped with its loop_iteration.
+    $history = app(RunHistoryStore::class)->find($stream->runId);
+    expect($history['metadata']['executed_node_ids'])->toBe([
+        'writer_node', 'editor_node', 'editor_node', 'editor_node', 'finish',
+    ]);
+
+    $editorIterations = array_values(array_map(
+        static fn (array $step): ?int => $step['metadata']['loop_iteration'] ?? null,
+        array_filter($history['steps'], static fn (array $s): bool => ($s['metadata']['node_id'] ?? null) === 'editor_node'),
+    ));
+    expect($editorIterations)->toBe([1, 2, 3]);
+});
+
+test('static hierarchical stream rejects an unbounded loop plan', function () {
+    $swarm = new #[Topology(BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements HasRoutePlan, Swarm
+    {
+        use Runnable;
+
+        public function agents(): array
+        {
+            return [new FakeWriter];
+        }
+
+        public function plan(): array
+        {
+            return [
+                'start_at' => 'writer_node',
+                'nodes' => [
+                    'writer_node' => [
+                        'type' => 'worker',
+                        'agent' => FakeWriter::class,
+                        'prompt' => 'Write.',
+                        'next' => 'finish',
+                        'loop' => ['to' => 'writer_node'],
+                    ],
+                    'finish' => ['type' => 'finish', 'output_from' => 'writer_node'],
+                ],
+            ];
+        }
+    };
+
+    expect(fn () => iterator_to_array($swarm->stream('unbounded-stream')))
+        ->toThrow(SwarmException::class, 'Unbounded loops are not supported.');
+
+    FakeWriter::assertNeverPrompted();
+});
+
+test('static hierarchical stream re-runs a parallel group inside a loop, stamping each pass', function () {
+    FakeEditor::fake(array_fill(0, 20, 'gather-out'));
+    FakeResearcher::fake(array_fill(0, 20, 'research-out'));
+    FakeWriter::fake(array_fill(0, 20, 'write-out'));
+    FakeReviewer::fake(array_fill(0, 20, 'review-out'));
+
+    $stream = FakeStaticHierarchicalParallelInLoopSwarm::make()->stream('par-loop-stream');
+    iterator_to_array($stream);
+
+    $history = app(RunHistoryStore::class)->find($stream->runId);
+    $executed = $history['metadata']['executed_node_ids'];
+    $count = fn (string $id): int => count(array_filter($executed, static fn (string $n): bool => $n === $id));
+
+    // The fan-out and both branches re-run on every one of the three passes.
+    expect($count('gather'))->toBe(3)
+        ->and($count('fan_out'))->toBe(3)
+        ->and($count('branch_research'))->toBe(3)
+        ->and($count('branch_write'))->toBe(3)
+        ->and($count('join'))->toBe(3);
+
+    // Branch steps carry the enclosing loop's iteration — parity with the sync path.
+    $branchSteps = array_values(array_filter(
+        $history['steps'],
+        static fn (array $s): bool => in_array($s['metadata']['node_id'] ?? null, ['branch_research', 'branch_write'], true),
+    ));
+    expect($branchSteps)->toHaveCount(6);
+
+    $researchIterations = array_values(array_map(
+        static fn (array $s): ?int => $s['metadata']['loop_iteration'] ?? null,
+        array_filter($branchSteps, static fn (array $s): bool => ($s['metadata']['node_id'] ?? null) === 'branch_research'),
+    ));
+    expect($researchIterations)->toBe([1, 2, 3]);
+});
+
+test('streamed loop replay re-emits recorded events without re-running the loop', function () {
+    config()->set('swarm.streaming.replay.enabled', true);
+
+    FakeWriter::fake(['draft-out']);
+    // Exactly three editor responses: a loop that wrongly re-executed on replay
+    // would prompt a fourth time, exhaust the fakes, and diverge from $first.
+    FakeEditor::fake(['refine-1', 'refine-2', 'refine-3']);
+
+    $stream = FakeStaticHierarchicalLoopSwarm::make()->stream('loop-replay-task');
+
+    $first = iterator_to_array($stream);
+    $second = iterator_to_array($stream);
+
+    expect($second)->toBe($first);
+    expect(last($first)->output)->toBe('refine-3');
+
+    $editorDeltas = collect($first)
+        ->whereInstanceOf(SwarmTextDelta::class)
+        ->filter(fn ($delta): bool => str_starts_with($delta->delta, 'refine-'))
+        ->values();
+    expect($editorDeltas)->toHaveCount(3);
+});
+
+test('static hierarchical stream resets inner loop counters on every outer pass', function () {
+    FakeWriter::fake(array_fill(0, 20, 'draft-out'));
+    FakeEditor::fake(array_fill(0, 20, 'refine-out'));
+    FakeReviewer::fake(array_fill(0, 20, 'review-out'));
+
+    $stream = FakeStaticHierarchicalNestedLoopSwarm::make()->stream('nested-loop-stream');
+    iterator_to_array($stream);
+
+    // The inner loop (max 3) must run its full count on each of the two outer
+    // passes — only possible if the streamed inner counter resets on the outer
+    // back-edge. Parity with the sync nested-loop test.
+    $history = app(RunHistoryStore::class)->find($stream->runId);
+    expect($history['metadata']['executed_node_ids'])->toBe([
+        'inner_body', 'inner_loop',  // inner it1
+        'inner_body', 'inner_loop',  // inner it2
+        'inner_body', 'inner_loop',  // inner it3 -> falls to outer
+        'outer_loop',                // outer it1 -> loops back, resets inner
+        'inner_body', 'inner_loop',  // inner it1 (reset worked)
+        'inner_body', 'inner_loop',  // inner it2
+        'inner_body', 'inner_loop',  // inner it3
+        'outer_loop',                // outer it2 -> finish
+        'finish',
+    ]);
+});
+
+test('static hierarchical stream stamps loop_iteration on sequential parallel-in-loop branches', function () {
+    FakeEditor::fake(array_fill(0, 20, 'gather-out'));
+    FakeResearcher::fake(array_fill(0, 20, 'research-out'));
+    FakeWriter::fake(array_fill(0, 20, 'write-out'));
+    FakeReviewer::fake(array_fill(0, 20, 'review-out'));
+
+    $stream = FakeStaticHierarchicalStreamSequentialParallelInLoopSwarm::make()->stream('seq-par-loop-stream');
+    iterator_to_array($stream);
+
+    // Sequential branch mode reaches a different stamping site than concurrent;
+    // each branch step must still carry the enclosing loop's iteration (1,2,3).
+    $history = app(RunHistoryStore::class)->find($stream->runId);
+    $branchSteps = array_values(array_filter(
+        $history['steps'],
+        static fn (array $s): bool => in_array($s['metadata']['node_id'] ?? null, ['branch_research', 'branch_write'], true),
+    ));
+    expect($branchSteps)->toHaveCount(6);
+
+    $researchIterations = array_values(array_map(
+        static fn (array $s): ?int => $s['metadata']['loop_iteration'] ?? null,
+        array_filter($branchSteps, static fn (array $s): bool => ($s['metadata']['node_id'] ?? null) === 'branch_research'),
+    ));
+    expect($researchIterations)->toBe([1, 2, 3]);
 });

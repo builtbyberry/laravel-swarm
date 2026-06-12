@@ -326,6 +326,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             $executedNodeIds = [];
             $executedAgentClasses = [];
             $parallelGroups = [];
+            $loopIterations = [];
             $currentNodeId = $plan->startAt;
 
             while ($currentNodeId !== null) {
@@ -339,6 +340,13 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $agent = $workerMap[$node->agentClass];
                     $input = $this->composeStaticPrompt($node->prompt, $node->withOutputs, $nodeOutputs, $node->id);
                     $agentName = class_basename($agent::class);
+
+                    $iteration = ($loopIterations[$node->id] ?? 0) + 1;
+                    $stepMetadata = array_merge($node->metadata, ['node_id' => $node->id]);
+
+                    if ($node->hasLoop()) {
+                        $stepMetadata['loop_iteration'] = $iteration;
+                    }
 
                     $this->stepsRecorder->started($state, $nextIndex, $agent::class, $input);
 
@@ -366,7 +374,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
                     $this->guardrails->validateStep(
                         $swarm,
-                        GuardrailStepContext::fromState($state, $nextIndex, $agent::class, $input, $output, array_merge($node->metadata, ['node_id' => $node->id])),
+                        GuardrailStepContext::fromState($state, $nextIndex, $agent::class, $input, $output, $stepMetadata),
                         $context,
                     );
 
@@ -378,7 +386,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         output: $output,
                         usage: $stepUsage,
                         durationMs: $durationMs,
-                        metadata: array_merge($node->metadata, ['node_id' => $node->id]),
+                        metadata: $stepMetadata,
                     );
 
                     $nodeOutputs[$node->id] = $output;
@@ -402,7 +410,15 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $this->recordStreamTelemetry($swarm, $state, $stepEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
                     $nextIndex++;
-                    $currentNodeId = $node->next;
+                    $loopIterations[$node->id] = $iteration;
+                    $currentNodeId = $node->successor($iteration);
+
+                    // On a loop back-edge, reset every inner loop's counter so it
+                    // runs its full count again on the next outer pass. Mirrors the
+                    // sync path in HierarchicalRunner::executePlan().
+                    if ($node->hasLoop() && $currentNodeId === $node->loopTo) {
+                        $plan->clearInnerLoopCounters($loopIterations, (string) $node->loopTo, $node->id);
+                    }
 
                     continue;
                 }
@@ -410,6 +426,18 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 if ($node instanceof HierarchicalParallelNode) {
                     $executedNodeIds[] = $node->id;
                     $parallelGroups[] = ['node_id' => $node->id, 'branches' => $node->branches];
+
+                    // If this fan-out sits inside a bounded loop, stamp each branch
+                    // step with the enclosing loop's current iteration so a parallel
+                    // group re-run is attributable to its pass — parity with the sync
+                    // path (HierarchicalRunner::parallelBranchMetadata).
+                    $enclosingLoopId = $plan->enclosingLoopNodeId($node->id);
+                    $parallelLoopIteration = $enclosingLoopId !== null
+                        ? ($loopIterations[$enclosingLoopId] ?? 0) + 1
+                        : null;
+                    $branchLoopMeta = $parallelLoopIteration !== null
+                        ? ['loop_iteration' => $parallelLoopIteration]
+                        : [];
 
                     if ($parallelMode === 'sequential') {
                         // Stream each branch in declaration order
@@ -451,7 +479,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                     $agent::class,
                                     $input,
                                     $output,
-                                    array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id]),
+                                    array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
                                 ),
                                 $context,
                             );
@@ -464,7 +492,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                 output: $output,
                                 usage: $stepUsage,
                                 durationMs: $durationMs,
-                                metadata: array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id]),
+                                metadata: array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
                                 updateContext: false,
                                 storeContext: false,
                             );
@@ -639,7 +667,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                         $branch->agentClass,
                                         $input,
                                         $row['output'],
-                                        array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id]),
+                                        array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
                                     ),
                                     $context,
                                 );
@@ -660,7 +688,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             $mergedMeta = array_merge($branch->metadata, [
                                 'node_id' => $branch->id,
                                 'parent_parallel_node_id' => $node->id,
-                            ]);
+                            ], $branchLoopMeta);
 
                             if ($policy === GuardrailParallelFailurePolicy::Existing) {
                                 $this->guardrails->validateStep(

@@ -23,10 +23,14 @@ Use `prompt()` when the caller only needs the final aggregate result. Use
 `queue()` or `dispatchDurable()` when the work should outlive the request or
 needs background or checkpointed execution.
 
-## Topology: Sequential Only
+## Topology: Sequential and Static-Hierarchical
 
-Streaming is supported for **sequential** swarms only. Parallel and hierarchical
-workflows use other execution modes (`prompt()`, `queue()`, `dispatchDurable()`).
+Streaming is supported for **sequential** and **static-hierarchical** swarms.
+Static-hierarchical streams worker nodes live, fan parallel groups out in
+`concurrent` or `sequential` mode, and honor [bounded loops](static-hierarchical-topology.md#bounded-loops)
+— a looped worker re-streams up to `max_iterations` before falling through to its
+exit. Dynamic (router-driven) hierarchical workflows use other execution modes
+(`prompt()`, `queue()`, `dispatchDurable()`).
 
 ## Consuming Stream Events
 
