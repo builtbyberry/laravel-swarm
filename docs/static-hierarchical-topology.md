@@ -169,8 +169,10 @@ to a fixed number of times:
 ],
 ```
 
-The plan validates and runs identically in `prompt()`, `queue()`, and
-`dispatchDurable()`. See
+The plan validates and runs identically in `prompt()`, `queue()`, `stream()`,
+and `dispatchDurable()` — a streamed looped plan re-streams the loop body up to
+`max_iterations` before falling through to `next`, and each looped step carries
+its `loop_iteration` in the recorded history. See
 [Bounded Loops](hierarchical-routing.md#bounded-loops) for the full rules and
 durable-recovery semantics.
 
@@ -183,7 +185,7 @@ durable-recovery semantics.
 | `stream()` | Yes — see below |
 | `broadcast()` / `broadcastNow()` | Yes — wraps `stream()` identically to sequential |
 | `broadcastOnQueue()` | Yes — dispatches a `BroadcastSwarm` job |
-| `dispatchDurable()` | **Not supported in v1** |
+| `dispatchDurable()` | Yes — checkpointed cross-process execution (since v0.12.0) |
 
 ## Streaming
 
@@ -236,6 +238,13 @@ swarm_text_end
 swarm_step_end
 swarm_stream_end
 ```
+
+### Bounded loops in streams
+
+Streamed plans honor [bounded loops](#bounded-loops): a looped worker re-streams
+up to `max_iterations` times, emitting a fresh `swarm_step_start` … `swarm_step_end`
+group on each pass (with monotonically increasing `stepIndex`), before control
+falls through to `next`. A parallel group inside a loop body re-runs on every pass.
 
 ### Config fallback
 
