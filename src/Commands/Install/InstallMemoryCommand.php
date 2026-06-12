@@ -179,11 +179,15 @@ class InstallMemoryCommand extends Command
     {
         $memoriesTable = (string) $config->get('swarm.tables.memories', 'swarm_memories');
         $snapshotsTable = (string) $config->get('swarm.tables.memory_snapshots', 'swarm_memory_snapshots');
+        // Bound in lockstep with the snapshot store: streamed multi-step resume
+        // (#202) needs this table alongside the snapshot table on the database
+        // driver, so a partial publish must surface here too.
+        $checkpointsTable = (string) $config->get('swarm.tables.stream_step_checkpoints', 'swarm_stream_step_checkpoints');
 
         $schema = $connection->getSchemaBuilder();
         $missing = [];
 
-        foreach ([$memoriesTable, $snapshotsTable] as $table) {
+        foreach ([$memoriesTable, $snapshotsTable, $checkpointsTable] as $table) {
             try {
                 if (! $schema->hasTable($table)) {
                     $missing[] = $table;

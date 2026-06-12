@@ -43,6 +43,8 @@ use Laravel\Ai\Streaming\Events\TextDelta;
 use Laravel\Ai\Streaming\Events\TextEnd;
 use Laravel\Ai\Streaming\Events\ToolCall;
 use Laravel\Ai\Streaming\Events\ToolResult;
+use Psr\Log\LoggerInterface;
+use Throwable;
 
 /**
  * @internal
@@ -60,6 +62,7 @@ class SequentialRunner
         protected AgentVisibleMemoryView $view,
         protected MemoryReplayCoordinator $coordinator,
         protected StreamStepCheckpointStore $checkpoints,
+        protected LoggerInterface $logger,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -101,6 +104,12 @@ class SequentialRunner
         $lastIndex = count($agents) - 1;
         $mergedUsage = [];
 
+        // Resolve the frozen-view replay mode once: it is invariant for the
+        // swarm class across the whole run (attribute-over-config), so gating
+        // the per-step checkpoint probe/record on it avoids a ReflectionClass
+        // allocation per step in this hot loop.
+        $replayEnabled = $this->coordinator->replayEnabled($state->swarm::class);
+
         // Publish the active run so an agent's RemembersRunContext trait can
         // read the propagation-policy view during messages(). Set once for the
         // generator's lifetime (run id, swarm, and context are constant across
@@ -129,7 +138,7 @@ class SequentialRunner
                 // fresh_execution swarms are unaffected. The final streamed step
                 // is never checkpoint-skipped — it always replays from its frozen
                 // snapshot (the #192 guarantee).
-                $resumeCheckpoint = (! $isFinal && $this->coordinator->replayEnabled($state->swarm::class))
+                $resumeCheckpoint = (! $isFinal && $replayEnabled)
                     ? $this->checkpoints->find($state->context->runId, $index)
                     : null;
 
@@ -385,9 +394,22 @@ class SequentialRunner
                     // Record the per-step checkpoint AFTER the step fully
                     // completed and guardrails passed — the post-completion write
                     // is the completion marker that lets a resume skip this step.
-                    // Gated on replay so fresh_execution mode writes nothing.
-                    if ($this->coordinator->replayEnabled($state->swarm::class)) {
-                        $this->checkpoints->record($state->context->runId, $index, $output, $stepUsage);
+                    // Gated on replay so fresh_execution mode writes nothing. The
+                    // write is best-effort: the step is already done and its side
+                    // effects fired, so a checkpoint-store failure must not abort
+                    // the stream — it only means this step won't be skippable on a
+                    // future resume. Swallow + log and continue to SwarmStepEnd.
+                    if ($replayEnabled) {
+                        try {
+                            $this->checkpoints->record($state->context->runId, $index, $output, $stepUsage);
+                        } catch (Throwable $exception) {
+                            $this->logger->warning('laravel-swarm: stream step checkpoint write failed; this step will re-execute on resume.', [
+                                'run_id' => $state->context->runId,
+                                'step_index' => $index,
+                                'exception' => $exception->getMessage(),
+                                'class' => $exception::class,
+                            ]);
+                        }
                     }
                 }
 

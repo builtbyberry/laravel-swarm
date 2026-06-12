@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
@@ -1307,6 +1308,47 @@ test('database context store seals persisted input when encrypt at rest is enabl
     expect($raw)->toStartWith('sw0:');
 
     expect($store->find($runId)['input'])->toBe('classified-prompt');
+});
+
+test('stream step checkpoint store seals output when encrypt at rest is enabled (#202)', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(StreamStepCheckpointStore::class);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    $store = app(StreamStepCheckpointStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+
+    $store->record($runId, 0, 'classified-step-output', ['prompt_tokens' => 3]);
+
+    // The raw column is ciphertext, matching swarm_contexts.input / run_steps.output.
+    $raw = DB::table('swarm_stream_step_checkpoints')->where('run_id', $runId)->value('output');
+    expect($raw)->toStartWith('sw0:');
+
+    // find() opens it back to the byte-identical plaintext (resume stays exact).
+    $checkpoint = $store->find($runId, 0);
+    expect($checkpoint->output)->toBe('classified-step-output');
+    expect($checkpoint->usage)->toBe(['prompt_tokens' => 3]);
+});
+
+test('stream step checkpoint store stores plaintext output when encrypt at rest is disabled (#202)', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', false);
+    app()->forgetInstance(StreamStepCheckpointStore::class);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    $store = app(StreamStepCheckpointStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+
+    $store->record($runId, 0, 'plain-step-output', []);
+
+    $raw = DB::table('swarm_stream_step_checkpoints')->where('run_id', $runId)->value('output');
+    expect($raw)->toBe('plain-step-output');
+    expect($store->find($runId, 0)->output)->toBe('plain-step-output');
 });
 
 test('per store database override seals context input when global driver is cache', function () {

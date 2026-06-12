@@ -211,6 +211,13 @@ Two things make such a run recoverable:
 > execution of external side effects across process boundaries — for
 > checkpointed, cross-process execution use `dispatchDurable()`
 > ([Durable Execution](durable-execution.md)).
+>
+> Note that the swarm's own lifecycle events — `swarm_step_start` /
+> `swarm_step_end` and the `step.started` / `step.completed` audit records —
+> are re-emitted for a skipped step on each resume attempt (the agent's
+> *upstream* text/tool events are not). Treat these framework step events as
+> per-attempt, not exactly-once: a consumer that bills or counts per
+> `step.completed` should key on `(run_id, step_index)` to dedupe across resumes.
 
 The frozen view is scoped per-invocation on the run's internal active-run frame
 rather than rebound globally, so two streams running concurrently in one process
@@ -230,8 +237,11 @@ return ArticlePipeline::make()->stream(RunContext::from($task, $runId));
 This resume behaviour is governed by the memory replay mode
 (`#[MemoryReplay]` on the swarm, or `swarm.memory.replay_mode`, default
 `frozen_view`). Setting it to `fresh_execution` opts a swarm out: a re-run then
-freezes a new snapshot from live memory rather than replaying the frozen one.
-See [Memory](memory.md) for the replay-mode contract.
+freezes a new snapshot from live memory rather than replaying the frozen one,
+**and disables per-step checkpoint storage** — so non-final steps re-execute on
+resume (the pre-multi-step-resume behaviour). `fresh_execution` is therefore the
+single kill switch for the whole crash-replay/resume mechanism. See
+[Memory](memory.md) for the replay-mode contract.
 
 Crash-replay durability requires the database persistence driver (the snapshot
 table). It is **not** full durable-mode streaming: for checkpointed execution

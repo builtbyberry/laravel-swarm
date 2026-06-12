@@ -61,7 +61,9 @@ class CountingPrimerAgent implements Agent
         return new AgentResponse(
             invocationId: 'counting-primer',
             text: 'primed-'.self::$invocations,
-            usage: new Usage,
+            // Non-zero usage so a resumed run can prove the non-final step's
+            // usage was rehydrated from its checkpoint (not lost / recomputed).
+            usage: new Usage(promptTokens: 7, completionTokens: 11),
             meta: new Meta('fake', 'test'),
         );
     }

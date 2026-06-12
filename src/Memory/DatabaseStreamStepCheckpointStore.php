@@ -6,19 +6,33 @@ namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
+use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Facades\Schema;
+use Psr\Log\LoggerInterface;
 
 /**
  * Default {@see StreamStepCheckpointStore} implementation backed by the
  * `swarm_stream_step_checkpoints` table (added for issue #202).
  *
- * {@see record()} upserts the completed step's raw output + usage keyed by
+ * {@see record()} upserts the completed step's output + usage keyed by
  * `(run_id, step_index)`. {@see find()} reads it back, returning null unless the
  * row exists AND carries a non-null output — so a reserved-but-crashed row reads
  * as absent and the step re-executes.
+ *
+ * The `output` column is sealed through {@see SwarmPersistenceCipher} on write
+ * and opened on read, exactly as `DatabaseContextStore` (`input`) and
+ * `DatabaseRunHistoryStore` (`output`) do — the checkpoint stores raw agent
+ * output, so it inherits the same at-rest encryption discipline. `usage` is a
+ * plain JSON column (token counts, never sealed, matching the siblings).
+ *
+ * Like {@see DatabaseMemorySnapshotRecorder}, the store probes its own table
+ * once and degrades to a no-op when it is absent (e.g. the database driver is
+ * configured but the migration has not run yet), so a deploy-before-migrate
+ * window never throws mid-stream — resume simply falls back to re-execution.
  *
  * @internal
  */
@@ -26,20 +40,34 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
 {
     use InteractsWithJsonColumns;
 
+    /**
+     * Cached result of the one-time table precheck. `null` means "not yet
+     * probed"; the first {@see record()} / {@see find()} call resolves it via
+     * {@see Schema::hasTable()} and reuses the answer for the lifetime of the
+     * instance.
+     */
+    protected ?bool $tableExists = null;
+
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
+        protected SwarmPersistenceCipher $cipher,
+        protected LoggerInterface $logger,
     ) {}
 
     public function record(string $runId, int $stepIndex, string $output, array $usage): void
     {
+        if (! $this->ensureTableExists()) {
+            return;
+        }
+
         $now = CarbonImmutable::now('UTC');
 
         $this->table()->upsert(
             [[
                 'run_id' => $runId,
                 'step_index' => $stepIndex,
-                'output' => $output,
+                'output' => $this->cipher->seal($output),
                 'usage' => $this->encodeJson($usage),
                 'created_at' => $now,
                 'updated_at' => $now,
@@ -51,6 +79,10 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
 
     public function find(string $runId, int $stepIndex): ?StreamStepCheckpoint
     {
+        if (! $this->ensureTableExists()) {
+            return null;
+        }
+
         /** @var object|null $record */
         $record = $this->table()
             ->where('run_id', $runId)
@@ -64,7 +96,8 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
         $output = $record->output ?? null;
 
         // A row without an output is not a completed step — treat it as absent
-        // so the runner re-executes rather than rehydrating a partial step.
+        // so the runner re-executes rather than rehydrating a partial step. The
+        // is_string check runs BEFORE open() so a NULL column stays the marker.
         if (! is_string($output)) {
             return null;
         }
@@ -75,11 +108,39 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
         return StreamStepCheckpoint::fromPersisted(
             runId: $runId,
             stepIndex: $stepIndex,
-            output: $output,
+            output: $this->cipher->open($output),
             usage: $usage,
             recordedAt: $this->normalizeTimestamp($record->created_at ?? null),
             updatedAt: $this->normalizeTimestamp($record->updated_at ?? null),
         );
+    }
+
+    /**
+     * Probe the `swarm_stream_step_checkpoints` table once per store instance.
+     *
+     * Returns true when the table is present. Returns false when it is absent,
+     * in which case {@see record()} is a no-op and {@see find()} returns null —
+     * resume degrades to re-execution (the pre-#202 behaviour) instead of
+     * throwing a QueryException on a previously-working stream. Mirrors
+     * {@see DatabaseMemorySnapshotRecorder::ensureMemoryTableExists()}.
+     */
+    protected function ensureTableExists(): bool
+    {
+        if ($this->tableExists !== null) {
+            return $this->tableExists;
+        }
+
+        $table = (string) $this->config->get('swarm.tables.stream_step_checkpoints', 'swarm_stream_step_checkpoints');
+        $exists = Schema::connection($this->connection->getName())->hasTable($table);
+
+        if (! $exists) {
+            $this->logger->info(
+                'laravel-swarm: stream step checkpoint table missing; multi-step resume is disabled (steps re-execute on resume)',
+                ['table' => $table, 'connection' => $this->connection->getName()],
+            );
+        }
+
+        return $this->tableExists = $exists;
     }
 
     /**

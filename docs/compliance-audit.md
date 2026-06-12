@@ -47,6 +47,18 @@ shape.
 > The default boolean policy never returns `Skip`, so `swarm.capture.*=false`
 > installs still record `[redacted]`.
 > See the [audit evidence contract](audit-evidence-contract.md#capture-policy).
+>
+> **Streamed multi-step resume checkpoints are operational state too.** The
+> `swarm_stream_step_checkpoints` table (#202) records a completed non-final
+> streamed step's raw output so an abandoned `stream()` run can resume without
+> re-executing it. Like `swarm_contexts.input`, it is operational resume state,
+> **not** an evidence surface: the output is stored untouched (not gated by
+> `swarm.capture.*`), **encrypted at rest** when `encrypt_at_rest` is enabled
+> (the default under the database driver), never audited or emitted, and pruned
+> with the run (the `swarm_run_histories` FK cascade, plus early-prune under
+> `swarm:memory:purge`). A capture-sensitive deployment that must not retain
+> non-final outputs at all should set `swarm.memory.replay_mode=fresh_execution`,
+> which disables checkpoint storage entirely (steps then re-execute on resume).
 
 ## Memory capture policy
 

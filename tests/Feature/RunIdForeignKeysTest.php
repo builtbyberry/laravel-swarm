@@ -171,12 +171,18 @@ test('deleting a history row cascades to contexts artifacts steps and stream eve
         'expires_at' => $now->copy()->addHour(), 'created_at' => $now, 'updated_at' => $now,
     ]);
 
+    DB::table('swarm_stream_step_checkpoints')->insert([
+        'run_id' => $runId, 'step_index' => 0, 'output' => 'primed', 'usage' => json_encode([]),
+        'created_at' => $now, 'updated_at' => $now,
+    ]);
+
     DB::table('swarm_run_histories')->where('run_id', $runId)->delete();
 
     expect(DB::table('swarm_contexts')->where('run_id', $runId)->exists())->toBeFalse()
         ->and(DB::table('swarm_artifacts')->where('run_id', $runId)->exists())->toBeFalse()
         ->and(DB::table('swarm_run_steps')->where('run_id', $runId)->exists())->toBeFalse()
-        ->and(DB::table('swarm_stream_events')->where('run_id', $runId)->exists())->toBeFalse();
+        ->and(DB::table('swarm_stream_events')->where('run_id', $runId)->exists())->toBeFalse()
+        ->and(DB::table('swarm_stream_step_checkpoints')->where('run_id', $runId)->exists())->toBeFalse();
 });
 
 // ---------------------------------------------------------------------------
