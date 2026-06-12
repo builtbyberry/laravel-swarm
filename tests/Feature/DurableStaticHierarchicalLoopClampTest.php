@@ -94,3 +94,63 @@ test('a loop whose bound is lowered below the persisted count across redeploy ex
     expect($editorRuns)->toHaveCount(3)
         ->and($history['context']['metadata']['executed_node_ids'])->toContain('finish');
 });
+
+test('a loop whose bound is raised mid-run across redeploy runs the extra passes', function () {
+    // Start with max_iterations = 3 (the fixture's plan).
+    $response = FakeStaticHierarchicalLoopSwarm::make()->dispatchDurable('raise-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    // Step 0 (init) + step 1 (writer) + step 2 (editor iteration 1, rewinds).
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    expect($manager->find($runId)['route_cursor']['loop_iterations']['editor_node'])->toBe(1)
+        ->and($manager->find($runId)['route_cursor']['current_node_id'])->toBe('editor_node');
+
+    // Simulate a redeploy that RAISES the loop bound from 3 to 5, by rewriting the
+    // persisted route_plan on the durable run-state side table (the same mechanism
+    // the lowering clamp test uses). The freshly-read bound is now above the
+    // persisted count, so the loop must keep rewinding for the extra passes.
+    $run = $manager->find($runId);
+    $plan = $run['route_plan'];
+    $plan['nodes']['editor_node']['loop']['max_iterations'] = 5;
+
+    DB::table('swarm_durable_run_state')
+        ->where('run_id', $runId)
+        ->update(['route_plan' => json_encode($plan)]);
+
+    // Drive the run to completion: each editor step computes iteration = persisted+1
+    // against the raised bound, rewinding until iteration 5, then exits to finish.
+    $guard = 0;
+
+    while (true) {
+        if ($guard++ > 50) {
+            throw new RuntimeException('Raised-bound durable loop did not converge.');
+        }
+
+        $run = $manager->find($runId);
+
+        if (in_array($run['status'], ['completed', 'failed', 'cancelled'], true)) {
+            break;
+        }
+
+        (new AdvanceDurableSwarm($runId, (int) $run['next_step_index']))->handle($manager);
+    }
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and($history['status'])->toBe('completed');
+
+    // The editor ran 5 times total under the raised bound (the extra passes beyond
+    // the original max of 3 actually executed), then control fell through to finish.
+    $editorRuns = array_filter(
+        $history['context']['metadata']['executed_node_ids'],
+        static fn (string $id): bool => $id === 'editor_node',
+    );
+
+    expect($editorRuns)->toHaveCount(5)
+        ->and($history['context']['metadata']['executed_node_ids'])->toContain('finish');
+});
