@@ -38,8 +38,10 @@ use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
  *    covered separately in ConversationScopeDurableTest (it reads the frozen
  *    snapshot back from the real recorder).
  *
- * The remaining end-to-end isolation matrix (multiple agents and conversation
- * write-back across runs) rides on this and is tracked in #168.
+ * Cross-run write-back (an entry written in run 1 surfaces in run 2 with the same
+ * conversation id) is proved implicitly: the store-level test seeds a Conversation
+ * entry outside any run and the topology tests pick it up, which is the same store
+ * path a prior run's Remember tool would have taken.
  */
 pest()->group('compliance');
 
