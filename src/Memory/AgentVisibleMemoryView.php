@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Container\Container;
 
@@ -70,6 +71,12 @@ final class AgentVisibleMemoryView
      */
     protected function gatherCandidates(array $scopes, Swarm $swarm, RunContext $context, ?Agent $agent): array
     {
+        // Prefer the per-invocation frozen view when a crash-resume replay is in
+        // effect for this run (carried on the ActiveRunContext frame, not the
+        // container), so concurrent in-process streams each read their own frozen
+        // snapshot. Falls back to the live, constructor-injected memory otherwise.
+        $memory = ActiveRunContext::currentMemory() ?? $this->memory;
+
         $entries = [];
 
         foreach ($scopes as $scope) {
@@ -84,7 +91,7 @@ final class AgentVisibleMemoryView
                 continue;
             }
 
-            $entries = [...$entries, ...$this->memory->all($scope, $scopeId)];
+            $entries = [...$entries, ...$memory->all($scope, $scopeId)];
         }
 
         return $entries;

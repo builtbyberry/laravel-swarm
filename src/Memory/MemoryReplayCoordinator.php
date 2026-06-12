@@ -8,6 +8,9 @@ use BuiltByBerry\LaravelSwarm\Attributes\MemoryReplay;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Closure;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
@@ -25,20 +28,24 @@ use ReflectionClass;
  *   2. Calls {@see SnapshotsMemory::find()} to detect a prior crashed attempt.
  *      If none is found this is a fresh execution — the callback is invoked with
  *      `null` and the runner's normal `snapshot()` call proceeds as usual.
- *   3. On replay: swaps the container's `SwarmMemory` binding to a
- *      {@see ReplaySwarmMemory} decorator backed by the existing frozen snapshot.
- *      The callback is invoked with the existing snapshot so callers that manage
- *      their own snapshot lifecycle (e.g. `DurableBranchAdvancer`) can skip the
- *      redundant `find()` and decide between `resetToolCalls()` vs `snapshot()`.
- *   4. Restores the original `SwarmMemory` binding in a `finally` block
- *      regardless of whether the callback throws.
+ *   3. On replay: installs a {@see ReplaySwarmMemory} decorator (backed by the
+ *      existing frozen snapshot) as a per-invocation override on the active
+ *      {@see ActiveRunContext} frame. The callback is invoked with the existing
+ *      snapshot so callers that manage their own snapshot lifecycle (e.g.
+ *      `DurableBranchAdvancer`) can skip the redundant `find()` and decide
+ *      between `resetToolCalls()` vs `snapshot()`.
+ *   4. Clears the override in a `finally` block regardless of whether the
+ *      callback throws.
  *
- * Because `DatabaseMemorySnapshotRecorder::snapshot()` reads from
- * `SwarmMemory::all(Run, $runId)`, swapping the binding before any runner
- * method that internally calls `snapshot()` causes that UPSERT to re-write the
- * row with the frozen entries instead of live memory — the net result is
- * identical snapshot contents with an empty `tool_calls` column ready for
- * rebuilding by the new attempt.
+ * The override is scoped to the run's `ActiveRunContext` frame — process-local,
+ * per-invocation, and flushed on every Octane worker reset — rather than rebound
+ * on the container. That is what makes concurrent in-process streaming safe: two
+ * runs sharing one container each read their own frozen view, with no cross-run
+ * bleed and no risk of restoring the wrong "original" binding. Both the read
+ * chokepoint ({@see AgentVisibleMemoryView}) and the write chokepoint
+ * ({@see Remember}) prefer
+ * {@see ActiveRunContext::currentMemory()} over the live store, so the frozen
+ * view reaches the agent without any global mutation.
  *
  * @internal
  */
@@ -58,13 +65,23 @@ final class MemoryReplayCoordinator
      * (no prior crashed attempt found), non-null means replay (the binding has
      * been swapped and the snapshot is available for tool-call lifecycle).
      *
+     * The durable advancers enter their own {@see ActiveRunContext} frame
+     * *inside* `$callback` (for the agent invocation), so at this point there is
+     * typically no frame yet to carry the per-invocation override. When
+     * `$context` is provided this method pushes a dedicated override-bearing
+     * frame that brackets the callback; the inner frame the callback adds
+     * inherits the override via {@see ActiveRunContext::currentMemory()}'s
+     * top-down walk, and exit() in the finally tears it down even if the
+     * callback threw. When `$context` is null the override is set on the
+     * existing top frame instead (idempotently cleared in the finally).
+     *
      * @template T
      *
      * @param  class-string  $swarmClass
      * @param  Closure(?MemorySnapshot): T  $callback
      * @return T
      */
-    public function during(string $swarmClass, string $runId, int $stepIndex, Closure $callback): mixed
+    public function during(string $swarmClass, string $runId, int $stepIndex, Closure $callback, ?RunContext $context = null): mixed
     {
         if (! $this->replayEnabled($swarmClass)) {
             return $callback(null);
@@ -76,23 +93,123 @@ final class MemoryReplayCoordinator
             return $callback(null);
         }
 
-        /** @var SwarmMemory $original */
-        $original = $this->application->make(SwarmMemory::class);
+        // Resolve the concrete live store, NOT the SwarmMemory contract: the
+        // contract binding prefers the active frame override, so resolving it here
+        // could wrap an override inside another ReplaySwarmMemory.
+        /** @var SwarmMemory $live */
+        $live = $this->application->make(DefaultSwarmMemory::class);
 
-        $this->application->instance(
-            SwarmMemory::class,
-            new ReplaySwarmMemory(
-                live: $original,
-                snapshot: $existing,
-                events: $this->events,
-            ),
+        $replay = new ReplaySwarmMemory(
+            live: $live,
+            snapshot: $existing,
+            events: $this->events,
         );
+
+        if ($context !== null) {
+            ActiveRunContext::enter($runId, $swarmClass, $context, $replay);
+
+            try {
+                return $callback($existing);
+            } finally {
+                ActiveRunContext::exit();
+            }
+        }
+
+        ActiveRunContext::withMemoryOverride($replay);
 
         try {
             return $callback($existing);
         } finally {
-            $this->application->instance(SwarmMemory::class, $original);
+            ActiveRunContext::clearMemoryOverride();
         }
+    }
+
+    /**
+     * Begin a snapshot-backed replay boundary for a generator-based runner.
+     *
+     * The closure-based {@see during()} cannot wrap a runner that *yields*
+     * across the boundary (a streamed agent invocation), so streaming runners
+     * use this explicit begin/end pair instead. The semantics match
+     * {@see during()} exactly:
+     *
+     * - Returns a fresh-execution boundary when replay is disabled for
+     *   `$swarmClass` or no prior crashed attempt exists — the caller takes the
+     *   fresh-execution path and freezes a new snapshot as usual. No override is
+     *   installed.
+     * - Returns a replay boundary carrying the existing frozen
+     *   {@see MemorySnapshot} when a prior attempt is found, after installing a
+     *   {@see ReplaySwarmMemory} backed by that snapshot as the per-invocation
+     *   override on the active {@see ActiveRunContext} frame. The caller MUST
+     *   have already entered that frame (streaming runners enter once for the
+     *   generator's lifetime) and MUST pass the returned {@see ReplayBoundary}
+     *   to {@see end()} in a `finally` block so the override is cleared even when
+     *   the generator is torn down mid-stream.
+     *
+     * @param  class-string  $swarmClass
+     */
+    public function begin(string $swarmClass, string $runId, int $stepIndex): ReplayBoundary
+    {
+        if (! $this->replayEnabled($swarmClass)) {
+            return ReplayBoundary::freshExecution();
+        }
+
+        $existing = $this->snapshots->find($runId, $stepIndex);
+
+        if ($existing === null) {
+            return ReplayBoundary::freshExecution();
+        }
+
+        // Resolve the concrete live store, NOT the SwarmMemory contract: the
+        // contract binding prefers the active frame override, so resolving it here
+        // could wrap an override inside another ReplaySwarmMemory.
+        /** @var SwarmMemory $live */
+        $live = $this->application->make(DefaultSwarmMemory::class);
+
+        ActiveRunContext::withMemoryOverride(new ReplaySwarmMemory(
+            live: $live,
+            snapshot: $existing,
+            events: $this->events,
+        ));
+
+        return ReplayBoundary::replay($existing);
+    }
+
+    /**
+     * Close a replay boundary opened by {@see begin()}, clearing the
+     * per-invocation frozen-memory override from the active frame. A no-op for
+     * fresh-execution boundaries. Idempotent — safe to call more than once.
+     */
+    public function end(ReplayBoundary $boundary): void
+    {
+        if (! $boundary->isReplay()) {
+            return;
+        }
+
+        ActiveRunContext::clearMemoryOverride();
+    }
+
+    /**
+     * Detect a prior frozen snapshot for `(runId, stepIndex)` WITHOUT installing
+     * any frame override.
+     *
+     * Returns the existing {@see MemorySnapshot} when replay is enabled and a
+     * prior crashed attempt exists, else null. Used by the static-hierarchical
+     * concurrent-branch path, where the parent must persist each branch's
+     * snapshot before `ConcurrencyManager` dispatches the (possibly forked)
+     * children — but the parent itself reads no memory through the frame, so it
+     * must not mutate it. The child callback installs its own override by calling
+     * {@see begin()} after it enters its own {@see ActiveRunContext} frame in its
+     * own process.
+     *
+     * @param  class-string  $swarmClass
+     */
+    public function existingSnapshot(string $swarmClass, string $runId, int $stepIndex): ?MemorySnapshot
+    {
+        if (! $this->replayEnabled($swarmClass)) {
+            return null;
+        }
+
+        return $this->snapshots->find($runId, $stepIndex);
     }
 
     /**

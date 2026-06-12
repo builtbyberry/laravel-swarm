@@ -246,6 +246,7 @@ class DurableBranchAdvancer
 
                 return true;
             },
+            $context,
         );
 
         if ($shouldDispatch) {

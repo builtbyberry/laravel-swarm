@@ -168,6 +168,67 @@ Configuration for replay storage drivers and prefixes lives under
 `swarm.streaming.replay` in `config/swarm.php`. See
 [Persistence And History — Replaying Stream Events](persistence-and-history.md#replaying-stream-events).
 
+## Crash-Replay Durability
+
+Persisted replay above re-yields a stream that **completed**. A separate
+guarantee covers the stream that **did not**: a non-durable streamed run whose
+generator is abandoned mid-stream — a worker crash, a dropped HTTP connection, a
+`break` out of the loop before `swarm_stream_end`.
+
+Two things make such a run recoverable:
+
+- **Crash-safe tool-call capture.** Each agent the runner streams freezes a
+  memory snapshot keyed by `(run_id, step_index)` before its invocation. Tool
+  calls observed during the invocation are appended to that snapshot. If the
+  generator is torn down mid-stream, any tool call still in flight (a
+  `swarm_tool_call` whose `swarm_tool_result` never arrived) is still flushed
+  into the snapshot with a `null` result. No partial or lost pairs: the frozen
+  snapshot is a faithful record of every tool the agent invoked before the
+  tear-down.
+- **Byte-identical resume.** Re-running the same swarm with the **same run id**
+  resumes from the frozen snapshot instead of re-reading live memory. The final
+  streamed step detects the prior frozen snapshot, serves the agent the frozen
+  memory view (so a value some other run has since changed cannot leak in), and
+  rebuilds the tool-call record from scratch. A deterministic agent therefore
+  re-emits the same upstream text, reasoning, and tool events it produced before
+  the crash.
+
+> **Scope — terminal step only.** Byte-identical resume covers the **final,
+> streamed** step only. In a multi-step swarm, the **non-final** steps
+> **re-execute against live memory** on resume: their providers are re-invoked
+> and any tool side effects re-fire (a primer step that writes to memory runs
+> again). This is safe when earlier steps are idempotent; if you need idempotent
+> multi-step resume across the whole pipeline, use `dispatchDurable()`
+> ([Durable Execution](durable-execution.md)), which checkpoints every step.
+> Per-step replay of non-terminal `stream()` steps is tracked as issue #202.
+
+The frozen view is scoped per-invocation on the run's internal active-run frame
+rather than rebound globally, so two streams running concurrently in one process
+(for example under Octane) each resume against their own frozen snapshot with no
+cross-run interference.
+
+```php
+$runId = (string) Str::uuid();
+
+// First attempt — abandoned mid-stream by a worker crash.
+ArticlePipeline::make()->stream(RunContext::from($task, $runId));
+
+// Resume on a fresh worker: same run id replays from the frozen snapshot.
+return ArticlePipeline::make()->stream(RunContext::from($task, $runId));
+```
+
+This resume behaviour is governed by the memory replay mode
+(`#[MemoryReplay]` on the swarm, or `swarm.memory.replay_mode`, default
+`frozen_view`). Setting it to `fresh_execution` opts a swarm out: a re-run then
+freezes a new snapshot from live memory rather than replaying the frozen one.
+See [Memory](memory.md) for the replay-mode contract.
+
+Crash-replay durability requires the database persistence driver (the snapshot
+table). It is **not** full durable-mode streaming: for checkpointed execution
+that survives process boundaries by design, use `dispatchDurable()`
+([Durable Execution](durable-execution.md)). Crash-replay closes the gap for the
+non-durable `stream()` path so an interrupted run is not silently unrecoverable.
+
 ## Capture And Redaction
 
 Capture flags under `swarm.capture.*` apply to streamed payloads the same way as

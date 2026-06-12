@@ -191,6 +191,12 @@ class Remember implements Tool
 
     protected function memory(): SwarmMemory
     {
-        return Container::getInstance()->make(SwarmMemory::class);
+        // During a crash-resume replay, writes go to the per-invocation frozen
+        // view (the ReplaySwarmMemory buffer carried on the ActiveRunContext
+        // frame) so the agent can recall its own mid-replay writes without
+        // touching live memory. Outside a replay this falls back to the
+        // container-bound live store.
+        return ActiveRunContext::currentMemory()
+            ?? Container::getInstance()->make(SwarmMemory::class);
     }
 }

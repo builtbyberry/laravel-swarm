@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use Illuminate\Support\Facades\Context;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Octane\Contracts\OperationTerminated;
@@ -55,9 +56,9 @@ final class ActiveRunContext
     /** @var list<ActiveRunRecord> */
     private static array $stack = [];
 
-    public static function enter(string $runId, string $swarmClass, RunContext $context): void
+    public static function enter(string $runId, string $swarmClass, RunContext $context, ?SwarmMemory $memoryOverride = null): void
     {
-        self::$stack[] = new ActiveRunRecord($runId, $swarmClass, $context);
+        self::$stack[] = new ActiveRunRecord($runId, $swarmClass, $context, $memoryOverride);
     }
 
     public static function exit(): void
@@ -68,6 +69,52 @@ final class ActiveRunContext
     public static function current(): ?ActiveRunRecord
     {
         return self::$stack === [] ? null : self::$stack[array_key_last(self::$stack)];
+    }
+
+    /**
+     * Set the per-invocation frozen-memory override on the top frame. Used by
+     * {@see MemoryReplayCoordinator} to scope a crash-resume replay's
+     * {@see ReplaySwarmMemory} to this run only, rather than rebinding the
+     * container's `SwarmMemory` process-wide.
+     */
+    public static function withMemoryOverride(SwarmMemory $memory): void
+    {
+        $top = self::current();
+
+        if ($top !== null) {
+            $top->memoryOverride = $memory;
+        }
+    }
+
+    /**
+     * Clear the frozen-memory override on the top frame. Idempotent: a no-op
+     * when there is no frame or no override is set.
+     */
+    public static function clearMemoryOverride(): void
+    {
+        $top = self::current();
+
+        if ($top !== null) {
+            $top->memoryOverride = null;
+        }
+    }
+
+    /**
+     * Resolve the frozen-memory override in effect for the current invocation,
+     * if any. Walks the frame stack top-down so an inner frame pushed for the
+     * agent invocation (e.g. by a runner's own {@see enter()}) inherits the
+     * override carried by the enclosing replay frame. Returns null outside a
+     * replay, so reads fall back to the live, container-bound `SwarmMemory`.
+     */
+    public static function currentMemory(): ?SwarmMemory
+    {
+        for ($i = array_key_last(self::$stack); $i !== null && $i >= 0; $i--) {
+            if (self::$stack[$i]->memoryOverride !== null) {
+                return self::$stack[$i]->memoryOverride;
+            }
+        }
+
+        return null;
     }
 
     /**
