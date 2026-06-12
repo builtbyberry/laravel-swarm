@@ -45,6 +45,9 @@ interface DurableRunStore
      * @param  array<string, mixed>  $routeCursor
      * @param  array<string, mixed>|null  $routePlan
      * @param  array{node_id: string, output: string}|null  $nodeOutput
+     * @param  array<int, string>  $clearBranchParentNodeIds  Parallel node ids whose persisted
+     *                                                        branch rows are deleted atomically
+     *                                                        with this checkpoint (loop back-edge).
      */
     public function checkpointHierarchicalStep(
         string $runId,
@@ -56,6 +59,7 @@ interface DurableRunStore
         ?array $routePlan = null,
         ?array $nodeOutput = null,
         ?int $totalSteps = null,
+        array $clearBranchParentNodeIds = [],
     ): void;
 
     /**

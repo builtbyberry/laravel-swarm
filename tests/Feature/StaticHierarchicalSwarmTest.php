@@ -31,6 +31,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Jobs\NoOpQueuedJob;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalChainSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalLoopSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalMissingInterfaceSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalOverBudgetSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalParallelWithSynthesisSwarm;
@@ -64,6 +65,75 @@ test('static hierarchical swarm executes a single-worker plan', function () {
     expect($response->metadata)->not->toHaveKey('coordinator_agent_class');
 
     FakeWriter::assertPrompted('static-writer-task');
+});
+
+test('static hierarchical bounded loop runs the looped worker to its iteration bound', function () {
+    FakeWriter::fake(['draft-out']);
+    FakeEditor::fake(['refine-1', 'refine-2', 'refine-3']);
+
+    $response = FakeStaticHierarchicalLoopSwarm::make()->run('loop-task');
+
+    // Writer once, then editor three times (max_iterations), then finish.
+    expect($response->output)->toBe('refine-3')
+        ->and($response->steps)->toHaveCount(4)
+        ->and($response->metadata['executed_node_ids'])->toBe([
+            'writer_node',
+            'editor_node',
+            'editor_node',
+            'editor_node',
+            'finish',
+        ])
+        ->and($response->metadata['executed_agent_classes'])->toBe([
+            FakeWriter::class,
+            FakeEditor::class,
+            FakeEditor::class,
+            FakeEditor::class,
+        ]);
+
+    // The loop terminates at the bound rather than re-dispatching forever.
+    $loopSteps = array_values(array_filter(
+        $response->steps,
+        static fn ($step) => ($step->metadata['node_id'] ?? null) === 'editor_node',
+    ));
+
+    expect($loopSteps)->toHaveCount(3)
+        ->and($loopSteps[0]->metadata['loop_iteration'])->toBe(1)
+        ->and($loopSteps[1]->metadata['loop_iteration'])->toBe(2)
+        ->and($loopSteps[2]->metadata['loop_iteration'])->toBe(3);
+});
+
+test('static hierarchical swarm rejects an unbounded loop plan', function () {
+    $swarm = new #[Topology(BuiltByBerry\LaravelSwarm\Enums\Topology::StaticHierarchical)] class implements HasRoutePlan, Swarm
+    {
+        use Runnable;
+
+        public function agents(): array
+        {
+            return [new FakeWriter];
+        }
+
+        public function plan(): array
+        {
+            return [
+                'start_at' => 'writer_node',
+                'nodes' => [
+                    'writer_node' => [
+                        'type' => 'worker',
+                        'agent' => FakeWriter::class,
+                        'prompt' => 'Write.',
+                        'next' => 'finish',
+                        'loop' => ['to' => 'writer_node'],
+                    ],
+                    'finish' => ['type' => 'finish', 'output_from' => 'writer_node'],
+                ],
+            ];
+        }
+    };
+
+    expect(fn () => $swarm->run('unbounded'))
+        ->toThrow(SwarmException::class, 'Unbounded loops are not supported.');
+
+    FakeWriter::assertNeverPrompted();
 });
 
 test('static hierarchical swarm executes a parallel group followed by a synthesis join', function () {

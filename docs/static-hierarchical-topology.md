@@ -154,6 +154,26 @@ depend on nodes that executed before the parallel group.
 
 Exactly one of `output_from` or `output` must be present.
 
+### Bounded loops
+
+A worker node may add a bounded `loop` back-edge to revisit an earlier node up
+to a fixed number of times:
+
+```php
+'editor_node' => [
+    'type'   => 'worker',
+    'agent'  => ReplyEditor::class,
+    'prompt' => 'Refine the draft.',
+    'next'   => 'finish',                          // the loop's exit
+    'loop'   => ['to' => 'draft_node', 'max_iterations' => 3],
+],
+```
+
+The plan validates and runs identically in `prompt()`, `queue()`, and
+`dispatchDurable()`. See
+[Bounded Loops](hierarchical-routing.md#bounded-loops) for the full rules and
+durable-recovery semantics.
+
 ## Execution Modes
 
 | Mode | Supported |

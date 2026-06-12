@@ -489,10 +489,21 @@ class DatabaseDurableRunStore implements DurableRunStore
         ?array $routePlan = null,
         ?array $nodeOutput = null,
         ?int $totalSteps = null,
+        array $clearBranchParentNodeIds = [],
     ): void {
-        $this->connection->transaction(function () use ($runId, $executionToken, $nextStepIndex, $context, $ttlSeconds, $routeCursor, $routePlan, $nodeOutput, $totalSteps): void {
+        $this->connection->transaction(function () use ($runId, $executionToken, $nextStepIndex, $context, $ttlSeconds, $routeCursor, $routePlan, $nodeOutput, $totalSteps, $clearBranchParentNodeIds): void {
             $timestamp = Carbon::now('UTC');
             $expiresAt = DatabaseTtl::expiresAt($ttlSeconds);
+
+            // Loop back-edge: drop the prior pass's branch rows for every parallel
+            // fan-out inside the loop body, atomically with the cursor rewind below.
+            // branchesFor() then returns [] next pass and the fan-out re-dispatches.
+            foreach ($clearBranchParentNodeIds as $parentNodeId) {
+                $this->branchTable()
+                    ->where('run_id', $runId)
+                    ->where('parent_node_id', $parentNodeId)
+                    ->delete();
+            }
 
             if ($nodeOutput !== null) {
                 $this->nodeOutputTable()->upsert([

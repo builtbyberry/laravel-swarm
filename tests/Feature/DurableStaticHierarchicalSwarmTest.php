@@ -21,6 +21,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalChainSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalLoopSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalParallelWithSynthesisSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingleWorkerSwarm;
 use Illuminate\Support\Facades\Artisan;
@@ -236,6 +237,112 @@ test('durable static hierarchical crash-replay is idempotent at worker step', fu
     expect($manager->find($runId)['status'])->toBe('completed')
         ->and($history['steps'])->toHaveCount(2)
         ->and($history['output'])->toBe('writer-out');
+});
+
+test('durable static hierarchical bounded loop runs to its iteration bound and completes', function () {
+    FakeWriter::fake(['draft-out']);
+    FakeEditor::fake(['refine-1', 'refine-2', 'refine-3']);
+
+    $response = FakeStaticHierarchicalLoopSwarm::make()->dispatchDurable('loop-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    // Step 0: init — cursor lands at writer_node, no agent call yet.
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    FakeWriter::assertNeverPrompted();
+    expect($manager->find($runId)['route_cursor']['current_node_id'])->toBe('writer_node')
+        ->and($manager->find($runId)['next_step_index'])->toBe(1);
+
+    // Step 1: writer_node executes, cursor advances to editor_node (loop entry).
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    expect($manager->find($runId)['route_cursor']['current_node_id'])->toBe('editor_node')
+        ->and($manager->find($runId)['next_step_index'])->toBe(2);
+
+    // Steps 2 and 3: editor_node re-executes; the cursor rewinds to editor_node
+    // each time the loop bound has not yet been reached, but the step index keeps
+    // advancing monotonically so nothing is re-dispatched at the same index.
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    expect($manager->find($runId)['route_cursor']['current_node_id'])->toBe('editor_node')
+        ->and($manager->find($runId)['route_cursor']['loop_iterations']['editor_node'])->toBe(1)
+        ->and($manager->find($runId)['next_step_index'])->toBe(3);
+
+    (new AdvanceDurableSwarm($runId, 3))->handle($manager);
+
+    expect($manager->find($runId)['route_cursor']['current_node_id'])->toBe('editor_node')
+        ->and($manager->find($runId)['route_cursor']['loop_iterations']['editor_node'])->toBe(2)
+        ->and($manager->find($runId)['next_step_index'])->toBe(4);
+
+    // Step 4: third (final) editor iteration — bound reached, cursor exits to finish, run completes.
+    (new AdvanceDurableSwarm($runId, 4))->handle($manager);
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and($history['output'])->toBe('refine-3')
+        ->and($history['steps'])->toHaveCount(4)
+        ->and($history['context']['metadata']['executed_node_ids'])->toBe([
+            'writer_node',
+            'editor_node',
+            'editor_node',
+            'editor_node',
+            'finish',
+        ]);
+
+    // Three editor executions recorded — the loop ran exactly to its bound.
+    $editorRuns = array_filter(
+        $history['context']['metadata']['executed_agent_classes'],
+        static fn (string $class): bool => $class === FakeEditor::class,
+    );
+
+    expect($editorRuns)->toHaveCount(3);
+});
+
+test('durable static hierarchical loop iteration is idempotent across a crash-replay', function () {
+    FakeWriter::fake(['draft-out']);
+    FakeEditor::fake(['refine-1', 'refine-2', 'refine-3', 'refine-replay']);
+
+    $response = FakeStaticHierarchicalLoopSwarm::make()->dispatchDurable('loop-replay-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    // Crash during the second editor step (step index 2) before the checkpoint commits.
+    $manager->beforeStepCheckpointForTesting(function (): void {
+        throw new RuntimeException('Simulated crash before loop checkpoint.');
+    });
+
+    expect(fn () => (new AdvanceDurableSwarm($runId, 2))->handle($manager))
+        ->toThrow(RuntimeException::class, 'Simulated crash before loop checkpoint.');
+
+    $manager->beforeStepCheckpointForTesting(null);
+
+    // The cursor never advanced past the loop entry; the iteration was not counted.
+    expect($manager->find($runId)['next_step_index'])->toBe(2)
+        ->and($manager->find($runId)['route_cursor']['current_node_id'])->toBe('editor_node')
+        ->and($manager->find($runId)['route_cursor']['loop_iterations']['editor_node'] ?? 0)->toBe(0);
+
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update(['leased_until' => now()->subSecond()]);
+
+    // Re-run step 2 — the loop iteration accounting is replayed exactly once.
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    expect($manager->find($runId)['route_cursor']['loop_iterations']['editor_node'])->toBe(1)
+        ->and($manager->find($runId)['next_step_index'])->toBe(3);
+
+    (new AdvanceDurableSwarm($runId, 3))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 4))->handle($manager);
+
+    $history = app(SwarmHistory::class)->find($runId);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and($history['steps'])->toHaveCount(4);
 });
 
 test('durable static hierarchical dispatchDurable() validates plan before writing any DB row', function () {
