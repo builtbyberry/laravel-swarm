@@ -19,6 +19,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingleWorkerSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\ConversationDeclaringPropagationPolicy;
 use Illuminate\Support\Facades\Artisan;
 
@@ -104,6 +105,29 @@ test('a conversation id bound to a durable run survives recovery and surfaces th
     // conv-1's entry surfaces under the Conversation scope on the durable path;
     // conv-2's never does. A regression that dropped conversation_id on the
     // durable round-trip would make 'concise' vanish here.
+    expect($scopes)->toContain(MemoryScope::Conversation->value)
+        ->and($values)->toContain('concise')
+        ->and($values)->not->toContain('verbose');
+});
+
+test('a conversation id bound to a durable static-hierarchical run surfaces the right conversation', function () {
+    $response = FakeStaticHierarchicalSingleWorkerSwarm::make()->dispatchDurable(
+        RunContext::from('task', 'conv-static-durable-run')->withConversationId('conv-1'),
+    );
+    $manager = app(DurableSwarmManager::class);
+
+    app(SwarmMemory::class)->put(MemoryScope::Conversation, 'conv-1', 'preference', 'concise');
+    app(SwarmMemory::class)->put(MemoryScope::Conversation, 'conv-2', 'preference', 'verbose');
+
+    // Static-hierarchical durable advance: step 0 = plan init, step 1 = execute writer_node.
+    // Snapshot is frozen during step 1 (no AdvanceDurableBranch, unlike parallel).
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
+
+    $entries = conversationDurableFrozenEntries($response->runId);
+    $scopes = array_map(static fn (array $entry): string => $entry['scope'], $entries);
+    $values = array_map(static fn (array $entry): mixed => $entry['value'], $entries);
+
     expect($scopes)->toContain(MemoryScope::Conversation->value)
         ->and($values)->toContain('concise')
         ->and($values)->not->toContain('verbose');

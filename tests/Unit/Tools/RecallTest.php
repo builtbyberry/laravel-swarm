@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRestrictivePropagationSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeWideViewPropagationSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\ConversationDeclaringPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RestrictivePropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
@@ -121,4 +122,17 @@ test('it rejects an unknown scope name', function () {
     enterRecallRun('run-1', FakeSequentialSwarm::class);
 
     expect(recall(['scope' => 'bogus']))->toBe('Unknown memory scope. Use one of: run, swarm, agent, conversation.');
+});
+
+test('it reads from conversation scope when the run is bound to a conversation', function () {
+    config()->set('swarm.memory.propagation_policy', ConversationDeclaringPropagationPolicy::class);
+    app(SwarmMemory::class)->put(MemoryScope::Conversation, 'conv-5', 'topic', 'launch plan');
+
+    ActiveRunContext::enter(
+        'run-1',
+        FakeSequentialSwarm::class,
+        RunContext::fake(['run_id' => 'run-1', 'input' => 'go', 'conversation_id' => 'conv-5']),
+    );
+
+    expect(recall(['key' => 'topic', 'scope' => 'conversation']))->toBe('topic: launch plan');
 });
