@@ -7,12 +7,12 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
-use BuiltByBerry\LaravelSwarm\Memory\ReplayBoundary;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -59,6 +59,7 @@ class SequentialRunner
         protected SnapshotsMemory $snapshots,
         protected AgentVisibleMemoryView $view,
         protected MemoryReplayCoordinator $coordinator,
+        protected StreamStepCheckpointStore $checkpoints,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -117,25 +118,20 @@ class SequentialRunner
 
                 $this->steps->started($state, $index, $agent::class, $input);
 
-                // The final (streamed) step opens a snapshot-backed replay
-                // boundary so a crash-resume re-run replays byte-identically:
-                // begin() detects a prior frozen snapshot, swaps SwarmMemory to
-                // the frozen view, and returns it for resetToolCalls() below.
-                // Non-final steps (and first-attempt streamed steps) take the
-                // fresh-execution path and freeze a new snapshot. The binding is
-                // restored in the streamed step's finally, so the swap never
-                // leaks past the agent invocation.
-                $boundary = $index === $lastIndex
-                    ? $this->coordinator->begin($state->swarm::class, $state->context->runId, $index)
-                    : ReplayBoundary::freshExecution();
+                $isFinal = $index === $lastIndex;
 
-                $snapshot = $boundary->isReplay()
-                    ? $this->snapshots->resetToolCalls($boundary->snapshot)
-                    : $this->snapshots->snapshot(
-                        $state->context->runId,
-                        $index,
-                        $this->view->present($state->swarm, $state->context, $agent),
-                    );
+                // Idempotent multi-step resume (issue #202): on a crash-resume
+                // re-run, a completed non-final step is skipped entirely — its
+                // provider is not re-invoked and its tool side effects do not
+                // re-fire. Probe the per-step checkpoint BEFORE freezing a
+                // snapshot so the skip path never overwrites the prior frozen
+                // row. Gated on the same frozen-view replay mode as #192, so
+                // fresh_execution swarms are unaffected. The final streamed step
+                // is never checkpoint-skipped — it always replays from its frozen
+                // snapshot (the #192 guarantee).
+                $resumeCheckpoint = (! $isFinal && $this->coordinator->replayEnabled($state->swarm::class))
+                    ? $this->checkpoints->find($state->context->runId, $index)
+                    : null;
 
                 yield new SwarmStepStart(
                     id: SwarmStreamEvent::newId(),
@@ -151,7 +147,55 @@ class SequentialRunner
                 $durationMs = null;
                 $stepUsage = [];
 
-                if ($index === $lastIndex) {
+                if ($resumeCheckpoint !== null) {
+                    // Skip path: rehydrate the recorded output + usage instead of
+                    // invoking the agent. completed() re-seeds last_output/steps
+                    // into the context so the next step's prompt() is
+                    // byte-identical, and we re-run the step guardrails on the
+                    // rehydrated output for parity with a fresh run. storeArtifacts
+                    // is false: the artifact was already persisted on the original
+                    // attempt and swarm_artifacts has no unique key, so re-storing
+                    // would duplicate the row; the in-memory addArtifact() inside
+                    // completed() still runs so the response artifact list is
+                    // correct.
+                    $output = (string) $resumeCheckpoint->output;
+                    $stepUsage = $resumeCheckpoint->usage;
+
+                    $this->guardrails->validateStep(
+                        $state->swarm,
+                        GuardrailStepContext::fromState($state, $index, $agent::class, $input, $output, []),
+                        $state->context,
+                    );
+
+                    $step = $this->steps->completed(
+                        state: $state,
+                        index: $index,
+                        agentClass: $agent::class,
+                        input: $input,
+                        output: $output,
+                        usage: $stepUsage,
+                        durationMs: $durationMs = MonotonicTime::elapsedMilliseconds($startedAt),
+                        storeArtifacts: false,
+                    );
+                } elseif ($isFinal) {
+                    // The final (streamed) step opens a snapshot-backed replay
+                    // boundary so a crash-resume re-run replays byte-identically:
+                    // begin() detects a prior frozen snapshot, swaps SwarmMemory to
+                    // the frozen view, and returns it for resetToolCalls() below.
+                    // First-attempt streamed steps take the fresh-execution path
+                    // and freeze a new snapshot. The binding is restored in the
+                    // streamed step's finally, so the swap never leaks past the
+                    // agent invocation.
+                    $boundary = $this->coordinator->begin($state->swarm::class, $state->context->runId, $index);
+
+                    $snapshot = $boundary->isReplay()
+                        ? $this->snapshots->resetToolCalls($boundary->snapshot)
+                        : $this->snapshots->snapshot(
+                            $state->context->runId,
+                            $index,
+                            $this->view->present($state->swarm, $state->context, $agent),
+                        );
+
                     $stream = $agent->stream($input);
                     $output = '';
                     /** @var array<string, ToolCallData> $pendingToolCalls */
@@ -308,6 +352,15 @@ class SequentialRunner
                         durationMs: $durationMs,
                     );
                 } else {
+                    // Non-final, fresh execution: freeze the agent-visible view
+                    // (always a new snapshot — only the final step ever replays a
+                    // prior one) and run the agent.
+                    $snapshot = $this->snapshots->snapshot(
+                        $state->context->runId,
+                        $index,
+                        $this->view->present($state->swarm, $state->context, $agent),
+                    );
+
                     $response = $agent->prompt($input);
                     $output = (string) $response;
                     $stepUsage = $this->usageFromResponse($response);
@@ -328,6 +381,14 @@ class SequentialRunner
                         usage: $stepUsage,
                         durationMs: $durationMs = MonotonicTime::elapsedMilliseconds($startedAt),
                     );
+
+                    // Record the per-step checkpoint AFTER the step fully
+                    // completed and guardrails passed — the post-completion write
+                    // is the completion marker that lets a resume skip this step.
+                    // Gated on replay so fresh_execution mode writes nothing.
+                    if ($this->coordinator->replayEnabled($state->swarm::class)) {
+                        $this->checkpoints->record($state->context->runId, $index, $output, $stepUsage);
+                    }
                 }
 
                 $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);

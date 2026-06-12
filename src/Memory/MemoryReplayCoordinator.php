@@ -217,9 +217,14 @@ final class MemoryReplayCoordinator
      *
      * The `#[MemoryReplay]` attribute wins over the global config when present.
      *
+     * Public so generator-based runners can gate their own resume logic (e.g.
+     * the streamed per-step checkpoint probe in issue #202) on the identical
+     * attribute-over-config resolution used by {@see begin()} / {@see during()},
+     * rather than re-implementing it.
+     *
      * @param  class-string  $swarmClass
      */
-    protected function replayEnabled(string $swarmClass): bool
+    public function replayEnabled(string $swarmClass): bool
     {
         $ref = new ReflectionClass($swarmClass);
         $attrs = $ref->getAttributes(MemoryReplay::class);

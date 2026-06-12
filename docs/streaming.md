@@ -197,14 +197,20 @@ Two things make such a run recoverable:
   re-emits the same upstream text, reasoning, and tool events it produced before
   the crash.
 
-> **Scope — terminal step only.** Byte-identical resume covers the **final,
-> streamed** step only. In a multi-step swarm, the **non-final** steps
-> **re-execute against live memory** on resume: their providers are re-invoked
-> and any tool side effects re-fire (a primer step that writes to memory runs
-> again). This is safe when earlier steps are idempotent; if you need idempotent
-> multi-step resume across the whole pipeline, use `dispatchDurable()`
-> ([Durable Execution](durable-execution.md)), which checkpoints every step.
-> Per-step replay of non-terminal `stream()` steps is tracked as issue #202.
+> **Scope — the whole pipeline.** Byte-identical resume covers every step of a
+> multi-step sequential `stream()`. The **final, streamed** step replays from its
+> frozen snapshot (above). Each **non-final** step is checkpointed when it
+> completes, and on resume a completed non-final step is **skipped**: its
+> provider is not re-invoked and its tool side effects do not re-fire (a primer
+> step that writes to memory does not run again). Its recorded output is
+> rehydrated into the next step's prompt, so the downstream stream is
+> byte-identical to the original run. A step that crashed *before* it completed
+> has no checkpoint and re-executes on resume.
+>
+> This is same-process, single-`stream()` resume. It is **not** exactly-once
+> execution of external side effects across process boundaries — for
+> checkpointed, cross-process execution use `dispatchDurable()`
+> ([Durable Execution](durable-execution.md)).
 
 The frozen view is scoped per-invocation on the run's internal active-run frame
 rather than rebound globally, so two streams running concurrently in one process
