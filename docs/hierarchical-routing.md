@@ -254,9 +254,14 @@ re-runs on every iteration, and each branch step carries the enclosing loop's
 on its own steps — so history attributes each branch run to the pass that
 produced it. For budgeting, a parallel group inside a loop counts its branches
 once per iteration (the product-of-bounds rule applies to the branch fan-out just
-as it does to sequential body workers). Under `dispatchDurable()` the durable
-branch rows are recreated for each pass and the parent rewinds across the join on
-the loop back-edge exactly as it does for a single-worker loop body.
+as it does to sequential body workers). Under `dispatchDurable()` the prior pass's
+branch rows are cleared on the loop back-edge — atomically with the same checkpoint
+that rewinds the cursor — so each pass re-dispatches a fresh fan-out and the branch
+agents genuinely re-run every iteration rather than the join re-reading stale
+outputs. The parent rewinds across the join on the loop back-edge exactly as it
+does for a single-worker loop body. The queued (`multi_worker`) coordination path
+carries the same guarantee: the persisted loop counters are threaded through each
+resume so a looping join re-enters at its real iteration and exits at the bound.
 
 ### Lowering a Loop Bound Across a Redeploy
 
