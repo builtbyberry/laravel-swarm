@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Schema;
@@ -102,13 +103,33 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
             return null;
         }
 
+        // Open the sealed output defensively. A checkpoint is a best-effort
+        // resume optimisation, NOT an evidence surface, so if the value can't be
+        // turned into trustworthy plaintext we return null → the runner
+        // re-executes the step (always correct), rather than feeding a wrong or
+        // empty prompt downstream. This covers every decrypt-failure policy:
+        // `throw` rethrows DecryptException (caught here); `null_with_log`
+        // returns null; `legacy` returns the still-sealed `sw0:` value. We catch
+        // DecryptException specifically — a genuine bug in open() still surfaces.
+        // The deliberate consequence: even under the `throw` policy a rotated
+        // APP_KEY degrades resume to re-execution instead of aborting the run.
+        try {
+            $opened = $this->cipher->open($output);
+        } catch (DecryptException) {
+            return null;
+        }
+
+        if ($opened === null || str_starts_with($opened, SwarmPersistenceCipher::PREFIX)) {
+            return null;
+        }
+
         /** @var array<string, int> $usage */
         $usage = $this->decodeJson(is_string($record->usage ?? null) ? $record->usage : null, []);
 
         return StreamStepCheckpoint::fromPersisted(
             runId: $runId,
             stepIndex: $stepIndex,
-            output: $this->cipher->open($output),
+            output: $opened,
             usage: $usage,
             recordedAt: $this->normalizeTimestamp($record->created_at ?? null),
             updatedAt: $this->normalizeTimestamp($record->updated_at ?? null),

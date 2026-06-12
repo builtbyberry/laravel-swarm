@@ -1351,6 +1351,34 @@ test('stream step checkpoint store stores plaintext output when encrypt at rest 
     expect($store->find($runId, 0)->output)->toBe('plain-step-output');
 });
 
+test('stream step checkpoint store treats an undecryptable output as absent so the step re-executes (#202)', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(StreamStepCheckpointStore::class);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    $store = app(StreamStepCheckpointStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+
+    // A sealed value this APP_KEY cannot decrypt (rotated/wrong key). The
+    // is_string completion-marker check passes on the ciphertext, but find()
+    // must NOT hand back a checkpoint whose output decrypts to null/garbage —
+    // it returns null so the runner re-executes the step rather than feeding an
+    // empty/wrong prompt downstream.
+    DB::table('swarm_stream_step_checkpoints')->insert([
+        'run_id' => $runId,
+        'step_index' => 0,
+        'output' => 'sw0:'.base64_encode('not-real-ciphertext'),
+        'usage' => json_encode([]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    expect($store->find($runId, 0))->toBeNull();
+});
+
 test('per store database override seals context input when global driver is cache', function () {
     config()->set('swarm.persistence.driver', 'cache');
     config()->set('swarm.context.driver', 'database');

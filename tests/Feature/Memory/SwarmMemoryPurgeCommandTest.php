@@ -309,6 +309,27 @@ test('swarm:memory:purge cascades stream step checkpoints for Run-scoped purges 
     });
 });
 
+test('swarm:memory:purge --dry-run reports the checkpoint would-delete count without deleting (#202)', function (): void {
+    config()->set('swarm.memory.retention.days.run', 7);
+
+    seedMemoryRow(MemoryScope::Run, 'run-old', 'k', Carbon::now('UTC')->subDays(30));
+    seedCheckpointRow('run-old', 0, Carbon::now('UTC')->subDays(30));
+    seedCheckpointRow('run-old', 1, Carbon::now('UTC')->subDays(30));
+
+    Event::fake([MemoryPurged::class]);
+
+    Artisan::call('swarm:memory:purge', ['--dry-run' => true]);
+
+    // Dry-run reports the would-delete checkpoint total but deletes nothing.
+    expect(DB::table('swarm_stream_step_checkpoints')->where('run_id', 'run-old')->count())->toBe(2);
+
+    Event::assertDispatched(MemoryPurged::class, function (MemoryPurged $event): bool {
+        return ($event->counts['checkpoints'] ?? null) === 2
+            && $event->criteria['dry_run'] === true
+            && $event->criteria['prune_checkpoints'] === true;
+    });
+});
+
 test('swarm:memory:purge --keep-snapshots also leaves stream step checkpoints intact (#202)', function (): void {
     config()->set('swarm.memory.retention.days.run', 7);
 

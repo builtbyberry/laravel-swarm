@@ -258,9 +258,10 @@ the backstop that guarantees no snapshot outlives its run history.
 
 ### Audit evidence
 
-Every run dispatches a `MemoryPurged` event with per-scope counts and the
-criteria the operator ran with (retention windows, scope filter, snapshot
-flag, dry-run flag, prevent-prune flag, ISO-8601 cutoffs per scope).
+Every run dispatches a `MemoryPurged` event with per-scope counts (plus
+`snapshots` and `checkpoints` cascade counts) and the criteria the operator ran
+with (retention windows, scope filter, snapshot flag, checkpoint flag, dry-run
+flag, prevent-prune flag, ISO-8601 cutoffs per scope).
 Listeners that record audit evidence should filter on
 `criteria.dry_run === false` to avoid treating preview runs as deletion
 events, and inspect `criteria.prevent_prune` to tell a compliance-suppressed

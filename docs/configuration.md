@@ -306,6 +306,7 @@ Table name overrides for all database-backed stores. If you change these, publis
 | `swarm.tables.history` | `swarm_run_histories` | `SWARM_RUN_HISTORIES_TABLE` |
 | `swarm.tables.history_steps` | `swarm_run_steps` | `SWARM_RUN_HISTORY_STEPS_TABLE` |
 | `swarm.tables.stream_events` | `swarm_stream_events` | `SWARM_STREAM_EVENTS_TABLE` |
+| `swarm.tables.stream_step_checkpoints` | `swarm_stream_step_checkpoints` | `SWARM_STREAM_STEP_CHECKPOINTS_TABLE` |
 | `swarm.tables.durable` | `swarm_durable_runs` | `SWARM_DURABLE_RUNS_TABLE` |
 | `swarm.tables.durable_node_states` | `swarm_durable_node_states` | `SWARM_DURABLE_NODE_STATES_TABLE` |
 | `swarm.tables.durable_run_state` | `swarm_durable_run_state` | `SWARM_DURABLE_RUN_STATE_TABLE` |

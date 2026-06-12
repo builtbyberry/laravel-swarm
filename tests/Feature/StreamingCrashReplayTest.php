@@ -673,7 +673,35 @@ test('#202 a checkpoint-store write failure does not abort the completed step st
     // The stream got past the throwing non-final record() to the final echo step.
     expect(collect($events)->whereInstanceOf(SwarmTextDelta::class)->first()->delta)->toBe('primed-1');
     expect(collect($events)->last())->toBeInstanceOf(SwarmStreamEnd::class);
-    Log::shouldHaveReceived('warning')->atLeast()->once();
+    // Exactly the checkpoint-write-failure summary fired (one per run, in finally),
+    // not just any warning.
+    Log::shouldHaveReceived('warning')->withArgs(
+        fn (string $message): bool => str_contains($message, 'failed to persist')
+    )->atLeast()->once();
+});
+
+test('#202 a checkpoint whose output cannot be decrypted re-executes the step instead of resuming with empty output', function () {
+    $runId = 'multistep-undecryptable-run-id';
+
+    // First attempt records a real step-0 checkpoint, then crashes mid-final-stream.
+    $crashed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmTextDelta);
+    expect(CountingPrimerAgent::$invocations)->toBe(1);
+
+    // Simulate a rotated/wrong APP_KEY: the stored output is now an undecryptable
+    // sealed value. find() must treat it as not-resumable (return null), NOT
+    // rehydrate it as an empty string — so the step RE-EXECUTES on resume.
+    DB::table('swarm_stream_step_checkpoints')
+        ->where('run_id', $runId)->where('step_index', 0)
+        ->update(['output' => 'sw0:'.base64_encode('not-real-ciphertext')]);
+
+    $resumed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    $resumedEvents = iterator_to_array($resumed);
+
+    // Re-executed (not silently skipped with ''): primer ran again, and the final
+    // echo streamed the recomputed value, not an empty string.
+    expect(CountingPrimerAgent::$invocations)->toBe(2);
+    expect(collect($resumedEvents)->whereInstanceOf(SwarmTextDelta::class)->first()->delta)->toBe('primed-2');
 });
 
 test('#202 multi-step resume degrades to re-execution when the checkpoint table is absent', function () {

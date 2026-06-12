@@ -110,6 +110,13 @@ class SequentialRunner
         // allocation per step in this hot loop.
         $replayEnabled = $this->coordinator->replayEnabled($state->swarm::class);
 
+        // Accumulate best-effort checkpoint-write failures and report ONE
+        // warning at stream end (in the finally), not one per step — a systemic
+        // DB outage would otherwise flood logs with a line per non-final step.
+        /** @var array<int, int> $checkpointWriteFailures */
+        $checkpointWriteFailures = [];
+        $firstCheckpointFailureClass = null;
+
         // Publish the active run so an agent's RemembersRunContext trait can
         // read the propagation-policy view during messages(). Set once for the
         // generator's lifetime (run id, swarm, and context are constant across
@@ -398,17 +405,17 @@ class SequentialRunner
                     // write is best-effort: the step is already done and its side
                     // effects fired, so a checkpoint-store failure must not abort
                     // the stream — it only means this step won't be skippable on a
-                    // future resume. Swallow + log and continue to SwarmStepEnd.
+                    // future resume. Accumulate the failure and report it once at
+                    // stream end (see the finally) rather than logging per step.
+                    // We capture only the step index + first exception CLASS, never
+                    // the exception message — a driver QueryException can echo bound
+                    // params (the raw output, plaintext when encryption is off).
                     if ($replayEnabled) {
                         try {
                             $this->checkpoints->record($state->context->runId, $index, $output, $stepUsage);
                         } catch (Throwable $exception) {
-                            $this->logger->warning('laravel-swarm: stream step checkpoint write failed; this step will re-execute on resume.', [
-                                'run_id' => $state->context->runId,
-                                'step_index' => $index,
-                                'exception' => $exception->getMessage(),
-                                'class' => $exception::class,
-                            ]);
+                            $checkpointWriteFailures[] = $index;
+                            $firstCheckpointFailureClass ??= $exception::class;
                         }
                     }
                 }
@@ -435,6 +442,23 @@ class SequentialRunner
                 'usage' => $mergedUsage,
             ]);
         } finally {
+            // One warning per run for any best-effort checkpoint-write failures
+            // (also fires if the generator was abandoned mid-stream). Those steps
+            // simply re-execute on resume; the run itself succeeded.
+            if ($checkpointWriteFailures !== []) {
+                $this->logger->warning(
+                    sprintf(
+                        'laravel-swarm: %d stream step checkpoint(s) failed to persist; those steps will re-execute on resume.',
+                        count($checkpointWriteFailures),
+                    ),
+                    [
+                        'run_id' => $state->context->runId,
+                        'failed_steps' => $checkpointWriteFailures,
+                        'exception_class' => $firstCheckpointFailureClass,
+                    ],
+                );
+            }
+
             ActiveRunContext::exit();
         }
     }

@@ -99,10 +99,22 @@ class SwarmMemoryPurgeCommand extends Command
         $keepSnapshots = (bool) $this->option('keep-snapshots');
         $prunePerStepRun = ! $keepSnapshots
             && (bool) $config->get('swarm.memory.retention.prune_snapshots', true);
-        $pruneSnapshots = $prunePerStepRun && $schema->hasTable($snapshotsTable);
-        // Stream-step checkpoints (#202) share the snapshot retention decision —
-        // both are per-step run data the operator opts out of with the same flag.
-        $pruneCheckpoints = $prunePerStepRun && $schema->hasTable($checkpointsTable);
+
+        // Per-step run child tables pruned alongside Run-scoped memory, all under
+        // the one `--keep-snapshots` retention decision (#202 added checkpoints).
+        // Threading them as a single map — rather than a boolean + counter +
+        // summary block per table — means another such table is one map entry,
+        // not a fifth flag woven through the command. The `MemoryPurged`/audit
+        // payload keeps its named `prune_snapshots` / `prune_checkpoints` /
+        // `snapshots` / `checkpoints` keys (derived from this map) for back-compat.
+        $perStepChildTables = [];
+        if ($prunePerStepRun) {
+            foreach (['snapshots' => $snapshotsTable, 'checkpoints' => $checkpointsTable] as $name => $table) {
+                if ($schema->hasTable($table)) {
+                    $perStepChildTables[$name] = $table;
+                }
+            }
+        }
 
         $pauseMs = $this->resolvePauseMs();
 
@@ -121,14 +133,14 @@ class SwarmMemoryPurgeCommand extends Command
             $criteria = $this->criteria(
                 retentionDays: $retentionDays,
                 scopeFilter: $scopeFilter,
-                pruneSnapshots: $pruneSnapshots,
-                pruneCheckpoints: $pruneCheckpoints,
+                pruneSnapshots: isset($perStepChildTables['snapshots']),
+                pruneCheckpoints: isset($perStepChildTables['checkpoints']),
                 dryRun: false,
                 preventPrune: true,
                 cutoffs: $cutoffs,
             );
 
-            $counts = $this->zeroedCounts($retentionDays, $pruneSnapshots, $pruneCheckpoints);
+            $counts = $this->zeroedCounts($retentionDays, array_keys($perStepChildTables));
 
             $events->dispatch(new MemoryPurged($counts, $criteria));
 
@@ -145,8 +157,7 @@ class SwarmMemoryPurgeCommand extends Command
         }
 
         $counts = [];
-        $snapshotsDeleted = 0;
-        $checkpointsDeleted = 0;
+        $childDeleted = array_fill_keys(array_keys($perStepChildTables), 0);
 
         foreach ($retentionDays as $scopeValue => $days) {
             if ($days === null) {
@@ -156,66 +167,30 @@ class SwarmMemoryPurgeCommand extends Command
             $cutoff = $cutoffs[$scopeValue];
             $isRunScope = $scopeValue === MemoryScope::Run->value;
 
-            if ($dryRun) {
-                $counts[$scopeValue] = $this->countScope($connection, $memoriesTable, $scopeValue, $cutoff);
-
-                if ($pruneSnapshots && $isRunScope) {
-                    $snapshotsDeleted += $this->countChildForCutoff(
-                        $connection,
-                        $memoriesTable,
-                        $snapshotsTable,
-                        $cutoff,
-                    );
+            // Per-step run child tables (snapshots, checkpoints, …) cascade off
+            // Run-scoped memory only — count on dry-run, delete otherwise.
+            if ($isRunScope) {
+                foreach ($perStepChildTables as $name => $table) {
+                    $childDeleted[$name] = ($childDeleted[$name] ?? 0) + ($dryRun
+                        ? $this->countChildForCutoff($connection, $memoriesTable, $table, $cutoff)
+                        : $this->deleteChildForCutoff($connection, $memoriesTable, $table, $cutoff, $pauseMs));
                 }
-
-                if ($pruneCheckpoints && $isRunScope) {
-                    $checkpointsDeleted += $this->countChildForCutoff(
-                        $connection,
-                        $memoriesTable,
-                        $checkpointsTable,
-                        $cutoff,
-                    );
-                }
-
-                continue;
             }
 
-            if ($pruneSnapshots && $isRunScope) {
-                $snapshotsDeleted += $this->deleteChildForCutoff(
-                    $connection,
-                    $memoriesTable,
-                    $snapshotsTable,
-                    $cutoff,
-                    $pauseMs,
-                );
-            }
-
-            if ($pruneCheckpoints && $isRunScope) {
-                $checkpointsDeleted += $this->deleteChildForCutoff(
-                    $connection,
-                    $memoriesTable,
-                    $checkpointsTable,
-                    $cutoff,
-                    $pauseMs,
-                );
-            }
-
-            $counts[$scopeValue] = $this->deleteScope($connection, $memoriesTable, $scopeValue, $cutoff, $pauseMs);
+            $counts[$scopeValue] = $dryRun
+                ? $this->countScope($connection, $memoriesTable, $scopeValue, $cutoff)
+                : $this->deleteScope($connection, $memoriesTable, $scopeValue, $cutoff, $pauseMs);
         }
 
-        if ($pruneSnapshots) {
-            $counts['snapshots'] = $snapshotsDeleted;
-        }
-
-        if ($pruneCheckpoints) {
-            $counts['checkpoints'] = $checkpointsDeleted;
+        foreach ($childDeleted as $name => $deleted) {
+            $counts[$name] = $deleted;
         }
 
         $criteria = $this->criteria(
             retentionDays: $retentionDays,
             scopeFilter: $scopeFilter,
-            pruneSnapshots: $pruneSnapshots,
-            pruneCheckpoints: $pruneCheckpoints,
+            pruneSnapshots: isset($perStepChildTables['snapshots']),
+            pruneCheckpoints: isset($perStepChildTables['checkpoints']),
             dryRun: $dryRun,
             preventPrune: false,
             cutoffs: $cutoffs,
@@ -232,7 +207,7 @@ class SwarmMemoryPurgeCommand extends Command
             ...$audit->metadata($actorMetadata),
         ]);
 
-        $this->renderSummary($counts, $retentionDays, $dryRun, $pruneSnapshots, $pruneCheckpoints);
+        $this->renderSummary($counts, $retentionDays, $dryRun, array_keys($perStepChildTables));
 
         return self::SUCCESS;
     }
@@ -339,9 +314,10 @@ class SwarmMemoryPurgeCommand extends Command
 
     /**
      * @param  array<string, int|null>  $retentionDays
+     * @param  array<int, string>  $childTableNames  per-step child counters to zero (e.g. snapshots, checkpoints)
      * @return array<string, int>
      */
-    protected function zeroedCounts(array $retentionDays, bool $pruneSnapshots, bool $pruneCheckpoints): array
+    protected function zeroedCounts(array $retentionDays, array $childTableNames): array
     {
         $counts = [];
 
@@ -349,12 +325,8 @@ class SwarmMemoryPurgeCommand extends Command
             $counts[$scope] = 0;
         }
 
-        if ($pruneSnapshots) {
-            $counts['snapshots'] = 0;
-        }
-
-        if ($pruneCheckpoints) {
-            $counts['checkpoints'] = 0;
+        foreach ($childTableNames as $name) {
+            $counts[$name] = 0;
         }
 
         return $counts;
@@ -534,8 +506,9 @@ class SwarmMemoryPurgeCommand extends Command
     /**
      * @param  array<string, int>  $counts
      * @param  array<string, int|null>  $retentionDays
+     * @param  array<int, string>  $childTableNames  per-step child tables pruned this run (e.g. snapshots, checkpoints)
      */
-    protected function renderSummary(array $counts, array $retentionDays, bool $dryRun, bool $pruneSnapshots, bool $pruneCheckpoints): void
+    protected function renderSummary(array $counts, array $retentionDays, bool $dryRun, array $childTableNames): void
     {
         $verb = $dryRun ? 'Would purge' : 'Purged';
         $configured = false;
@@ -571,25 +544,21 @@ class SwarmMemoryPurgeCommand extends Command
             );
         }
 
-        if ($pruneSnapshots) {
-            $snapshotCount = $counts['snapshots'] ?? 0;
+        $childTableLabels = [
+            'snapshots' => 'swarm_memory_snapshots',
+            'checkpoints' => 'swarm_stream_step_checkpoints',
+        ];
+
+        foreach ($childTableNames as $name) {
+            $count = $counts[$name] ?? 0;
+            $label = $childTableLabels[$name] ?? $name;
 
             $this->components->info(sprintf(
-                '%s %d swarm_memory_snapshots row%s cascading from Run-scoped purges.',
+                '%s %d %s row%s cascading from Run-scoped purges.',
                 $verb,
-                $snapshotCount,
-                $snapshotCount === 1 ? '' : 's',
-            ));
-        }
-
-        if ($pruneCheckpoints) {
-            $checkpointCount = $counts['checkpoints'] ?? 0;
-
-            $this->components->info(sprintf(
-                '%s %d swarm_stream_step_checkpoints row%s cascading from Run-scoped purges.',
-                $verb,
-                $checkpointCount,
-                $checkpointCount === 1 ? '' : 's',
+                $count,
+                $label,
+                $count === 1 ? '' : 's',
             ));
         }
     }

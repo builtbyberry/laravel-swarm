@@ -61,11 +61,12 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 final class MemoryPurged
 {
     /**
-     * @param  array<string, int>  $counts  scope value (and `snapshots`) keyed deletion counts
+     * @param  array<string, int>  $counts  scope value (and `snapshots`, `checkpoints`) keyed deletion counts
      * @param  array{
      *     retention_days: array<string, int|null>,
      *     scope_filter: string|null,
      *     prune_snapshots: bool,
+     *     prune_checkpoints: bool,
      *     dry_run: bool,
      *     prevent_prune: bool,
      *     cutoffs: array<string, string>,
@@ -98,5 +99,14 @@ final class MemoryPurged
     public function totalSnapshots(): int
     {
         return $this->counts['snapshots'] ?? 0;
+    }
+
+    /**
+     * Number of `swarm_stream_step_checkpoints` rows removed alongside their
+     * owning Run-scoped memories (#202).
+     */
+    public function totalCheckpoints(): int
+    {
+        return $this->counts['checkpoints'] ?? 0;
     }
 }

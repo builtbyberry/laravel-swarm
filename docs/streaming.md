@@ -249,6 +249,12 @@ that survives process boundaries by design, use `dispatchDurable()`
 ([Durable Execution](durable-execution.md)). Crash-replay closes the gap for the
 non-durable `stream()` path so an interrupted run is not silently unrecoverable.
 
+> **Octane note.** The snapshot and stream-step-checkpoint stores probe their
+> backing table once per worker and cache the result, so a long-lived Octane
+> worker booted *before* you run the migrations will treat the tables as absent
+> (multi-step resume silently disabled) until it is recycled. Recycle workers
+> after migrating.
+
 ## Capture And Redaction
 
 Capture flags under `swarm.capture.*` apply to streamed payloads the same way as
