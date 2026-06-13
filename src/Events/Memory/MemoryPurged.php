@@ -20,9 +20,10 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
  * Payload shape:
  *
  * - `counts` — associative array of `scope` value (`run`, `conversation`,
- *   `agent`, `swarm`) to the number of entries deleted in that scope, plus
- *   the synthetic `snapshots` key with the number of snapshot rows pruned
- *   alongside their owning Run-scoped entries (zero when snapshot cascade is
+ *   `agent`, `swarm`) to the number of entries deleted in that scope, plus the
+ *   synthetic `snapshots` and `checkpoints` keys with the number of
+ *   `swarm_memory_snapshots` / `swarm_stream_step_checkpoints` (#202) rows
+ *   pruned alongside their owning Run-scoped entries (zero when that cascade is
  *   disabled or no Run-scoped rows matched). Scopes the operator did not run
  *   against (`--scope=...` filter) are omitted entirely.
  *
@@ -35,6 +36,9 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
  *     - `prune_snapshots`— whether snapshot rows were pruned alongside
  *        Run-scoped entries (defaults to `true`; flip with the
  *        `--keep-snapshots` flag).
+ *     - `prune_checkpoints` — whether `swarm_stream_step_checkpoints` rows were
+ *        pruned alongside Run-scoped entries (#202). Shares the
+ *        `--keep-snapshots` retention decision with `prune_snapshots`.
  *     - `dry_run`        — `true` when the operator passed `--dry-run` (in
  *        which case `counts` reports what *would* have been removed and no
  *        rows were actually deleted).

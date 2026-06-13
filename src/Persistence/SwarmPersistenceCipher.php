@@ -42,6 +42,17 @@ class SwarmPersistenceCipher
         return self::PREFIX.$this->encrypter->encryptString($value);
     }
 
+    /**
+     * Open a sealed value for an **evidence / display** read (run history, audit,
+     * inspector). On a decrypt failure this honors the operator's
+     * `swarm.persistence.decrypt_failure_policy` — `null_with_log` (default),
+     * `legacy` (surface the stored ciphertext), or `throw`.
+     *
+     * For an **operational, recomputable** read — where the right answer on a
+     * decrypt failure is "recompute," not "show the operator something" — use
+     * {@see openStrict()} instead, which gives an unambiguous decrypted-or-throw
+     * result independent of that display policy.
+     */
     public function open(?string $value): ?string
     {
         if ($value === null || $value === '') {
@@ -61,6 +72,34 @@ class SwarmPersistenceCipher
                 PersistenceDecryptFailurePolicy::NullWithLog => $this->decryptFailedReturnNull($value),
             };
         }
+    }
+
+    /**
+     * Decrypt a sealed value strictly: a non-prefixed value is returned as-is
+     * (plaintext / encryption disabled), and a sealed (`sw0:`-prefixed) value is
+     * decrypted or **throws `DecryptException`** — independent of
+     * `swarm.persistence.decrypt_failure_policy`.
+     *
+     * The failure policy governs the evidence/display read path ({@see open()});
+     * it is the wrong lens for operational state that can safely recompute on
+     * failure (e.g. the stream-step checkpoint resume path, issue #202). Such a
+     * consumer needs an unambiguous "did this decrypt cleanly?" answer — `open()`
+     * overloads its return (null / ciphertext / throw, by policy), forcing the
+     * caller to guess from the plaintext's bytes. `openStrict()` never returns a
+     * sealed/ciphertext value and never swallows a failure: the caller catches
+     * `DecryptException` and treats it as "not usable → recompute."
+     */
+    public function openStrict(?string $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return $value;
+        }
+
+        if (! str_starts_with($value, self::PREFIX)) {
+            return $value;
+        }
+
+        return $this->encrypter->decryptString(substr($value, strlen(self::PREFIX)));
     }
 
     /**

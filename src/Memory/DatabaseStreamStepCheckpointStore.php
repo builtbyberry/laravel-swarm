@@ -103,23 +103,26 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
             return null;
         }
 
-        // Open the sealed output defensively. A checkpoint is a best-effort
-        // resume optimisation, NOT an evidence surface, so if the value can't be
-        // turned into trustworthy plaintext we return null → the runner
-        // re-executes the step (always correct), rather than feeding a wrong or
-        // empty prompt downstream. This covers every decrypt-failure policy:
-        // `throw` rethrows DecryptException (caught here); `null_with_log`
-        // returns null; `legacy` returns the still-sealed `sw0:` value. We catch
-        // DecryptException specifically — a genuine bug in open() still surfaces.
-        // The deliberate consequence: even under the `throw` policy a rotated
-        // APP_KEY degrades resume to re-execution instead of aborting the run.
+        // A checkpoint is a best-effort, recomputable resume optimisation — NOT
+        // an evidence surface — so it decrypts with the policy-INDEPENDENT
+        // openStrict() rather than open() (which would apply the operator's
+        // decrypt-failure display policy and force us to guess success from the
+        // plaintext's bytes). If the value can't be decrypted (rotated/wrong
+        // APP_KEY), we return null → the runner re-executes the step (always
+        // correct), under every decrypt-failure policy, and never feeds a
+        // sealed/empty value downstream. A decrypted plaintext that legitimately
+        // begins with `sw0:` round-trips cleanly (no false re-execution).
         try {
-            $opened = $this->cipher->open($output);
+            $opened = $this->cipher->openStrict($output);
         } catch (DecryptException) {
-            return null;
-        }
+            // debug-level: a rotated key fails every checkpoint, so this would
+            // flood at higher levels — and the evidence read path (run history)
+            // already warns loudly about the APP_KEY mismatch.
+            $this->logger->debug(
+                'laravel-swarm: stream step checkpoint output could not be decrypted; the step will re-execute on resume.',
+                ['run_id' => $runId, 'step_index' => $stepIndex],
+            );
 
-        if ($opened === null || str_starts_with($opened, SwarmPersistenceCipher::PREFIX)) {
             return null;
         }
 

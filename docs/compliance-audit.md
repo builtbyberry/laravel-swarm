@@ -256,6 +256,12 @@ when `swarm:prune` ages out the parent run. In short, `swarm:memory:purge`
 removes snapshots *early* when their memory ages out first; `swarm:prune` is
 the backstop that guarantees no snapshot outlives its run history.
 
+`swarm_stream_step_checkpoints` (the #202 multi-step-resume store) follows the
+identical rule: `swarm:memory:purge` early-prunes a run's checkpoints alongside
+its snapshots under the same `--keep-snapshots` decision, and its own
+`cascadeOnDelete` foreign key to `swarm_run_histories` is the `swarm:prune`
+backstop — so no checkpoint outlives its run history either.
+
 ### Audit evidence
 
 Every run dispatches a `MemoryPurged` event with per-scope counts (plus

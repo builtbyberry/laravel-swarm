@@ -1379,6 +1379,57 @@ test('stream step checkpoint store treats an undecryptable output as absent so t
     expect($store->find($runId, 0))->toBeNull();
 });
 
+test('stream step checkpoint store round-trips an output that legitimately starts with the sealed prefix (#202)', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(StreamStepCheckpointStore::class);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    $store = app(StreamStepCheckpointStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+
+    // An agent output that itself begins with the cipher's `sw0:` sentinel. It is
+    // sealed on write and must decrypt cleanly on read — find() must NOT mistake the
+    // decrypted plaintext's leading bytes for a "still sealed / undecryptable" value
+    // and re-execute. (This is the false-negative the round-3 prefix heuristic had.)
+    $store->record($runId, 0, 'sw0:hello', ['prompt_tokens' => 2]);
+
+    $checkpoint = $store->find($runId, 0);
+    expect($checkpoint)->not->toBeNull();
+    expect($checkpoint->output)->toBe('sw0:hello');
+    expect($checkpoint->usage)->toBe(['prompt_tokens' => 2]);
+});
+
+test('stream step checkpoint store re-executes (not surfaces ciphertext) on an undecryptable output under the legacy policy (#202)', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    // The `legacy` display policy makes open() surface stored ciphertext on a
+    // decrypt failure. find() uses the policy-INDEPENDENT openStrict(), so an
+    // undecryptable checkpoint still reads as absent (→ re-execute) and never
+    // feeds the sealed value downstream.
+    config()->set('swarm.persistence.decrypt_failure_policy', 'legacy');
+    app()->forgetInstance(StreamStepCheckpointStore::class);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    $store = app(StreamStepCheckpointStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+
+    DB::table('swarm_stream_step_checkpoints')->insert([
+        'run_id' => $runId,
+        'step_index' => 0,
+        'output' => 'sw0:'.base64_encode('not-real-ciphertext'),
+        'usage' => json_encode([]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    expect($store->find($runId, 0))->toBeNull();
+});
+
 test('per store database override seals context input when global driver is cache', function () {
     config()->set('swarm.persistence.driver', 'cache');
     config()->set('swarm.context.driver', 'database');
