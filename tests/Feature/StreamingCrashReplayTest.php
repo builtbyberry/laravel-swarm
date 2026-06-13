@@ -32,10 +32,12 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\CountingStepGuardrail;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\CountingEchoSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\CountingEchoThreeStepSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRichStreamingSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingConversationRecallSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRecallOnlySwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRecallSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRememberSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingUnpairedToolCallSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\ConversationDeclaringPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -418,6 +420,63 @@ test('two concurrent in-process streams each replay their own frozen snapshot wi
     expect(app(SwarmMemory::class))->toBeInstanceOf(DefaultSwarmMemory::class);
     expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runA, 'finding'))->toBe('A-DRIFTED');
     expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runB, 'finding'))->toBe('B-DRIFTED');
+    expect(ActiveRunContext::current())->toBeNull();
+    expect(ActiveRunContext::currentMemory())->toBeNull();
+});
+
+test('two interleaved in-process streams each read their own conversation-scoped memory with no handle bleed', function () {
+    // Companion to the frozen-snapshot interleave test above: that one locks the
+    // per-invocation frozen-VIEW override on the run frame; this one locks the
+    // per-run CONVERSATION HANDLE (#186) on the same frame. Together they prove
+    // both per-run carriers stay frame-isolated when two streamed runs interleave
+    // in one process (the Octane fiber model). The Recall tool resolves the
+    // conversation scope id from the active frame's RunContext::conversationId(),
+    // so a frame bleed would surface the other run's conversation entry.
+    config()->set('swarm.memory.propagation_policy', ConversationDeclaringPropagationPolicy::class);
+
+    app(SwarmMemory::class)->put(MemoryScope::Conversation, 'conv-A', 'finding', 'A-conv');
+    app(SwarmMemory::class)->put(MemoryScope::Conversation, 'conv-B', 'finding', 'B-conv');
+
+    $genA = StreamingConversationRecallSwarm::make()
+        ->stream(RunContext::from('recall-task', 'conv-handle-run-A')->withConversationId('conv-A'))
+        ->getIterator();
+    $genB = StreamingConversationRecallSwarm::make()
+        ->stream(RunContext::from('recall-task', 'conv-handle-run-B')->withConversationId('conv-B'))
+        ->getIterator();
+
+    // Suspend A right after its recall (the recall already ran by the time the
+    // tool result surfaces), leaving A's frame live on the stack.
+    $aResult = null;
+    $genA->rewind();
+    while ($genA->valid()) {
+        $event = $genA->current();
+        if ($event instanceof SwarmToolResult) {
+            $aResult = $event->toolResult->result;
+            break;
+        }
+        $genA->next();
+    }
+
+    // Drive B to completion while A is suspended.
+    $bResult = null;
+    $genB->rewind();
+    while ($genB->valid()) {
+        $event = $genB->current();
+        if ($event instanceof SwarmToolResult) {
+            $bResult = $event->toolResult->result;
+        }
+        $genB->next();
+    }
+
+    while ($genA->valid()) {
+        $genA->next();
+    }
+
+    // Each stream recalled ITS OWN conversation's entry — the handle never bled.
+    expect($aResult)->toBe('finding: A-conv');
+    expect($bResult)->toBe('finding: B-conv');
+
+    // No frame residue after both finish.
     expect(ActiveRunContext::current())->toBeNull();
     expect(ActiveRunContext::currentMemory())->toBeNull();
 });
