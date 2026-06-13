@@ -80,6 +80,19 @@ use Throwable;
  *   concurrent  — branches run via ConcurrencyManager (no text deltas from branches).
  *   sequential  — branches stream one at a time in declaration order.
  *
+ * Resume scope — hierarchical re-executes, it does not skip. The idempotent
+ * multi-step resume that skips already-completed steps (issue #202,
+ * {@see SequentialRunner}'s checkpoint store) is Sequential-only. On a
+ * crash-resume re-run, this runner re-executes every reachable worker — each
+ * runs under its frozen-snapshot view (issue #192), so the agent-visible memory
+ * is deterministic, but the worker's provider IS re-invoked and the observable
+ * side effects repeat: usage is re-accounted, `step.completed` telemetry/audit
+ * fire again, and stream events are re-emitted to the consumer. A consumer
+ * streaming a hierarchical run therefore sees duplicate usage/telemetry across
+ * the crashed and resumed attempts; a Sequential consumer does not. The
+ * determinism guarantee (frozen-view replay) holds for both; only the skip
+ * optimisation is Sequential-only.
+ *
  * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  *
  * @internal
