@@ -218,6 +218,20 @@ Two things make such a run recoverable:
 > *upstream* text/tool events are not). Treat these framework step events as
 > per-attempt, not exactly-once: a consumer that bills or counts per
 > `step.completed` should key on `(run_id, step_index)` to dedupe across resumes.
+>
+> A skipped step still re-runs its **step guardrails** against the rehydrated
+> output (parity with a fresh run), so step guardrails must be **deterministic** —
+> a guardrail that depends on wall-clock or external state (e.g. a rate or
+> time-window rule) can reject on resume a step the original attempt passed.
+
+> **Sequential only.** This skip-on-resume optimisation applies to sequential
+> `stream()`. A **static-hierarchical** streamed run re-executes every reachable
+> worker on resume — each runs under its frozen snapshot, so the memory it sees
+> is deterministic, but its provider *is* re-invoked and usage / `step.completed`
+> telemetry / stream events are re-emitted across the crashed and resumed
+> attempts. The byte-identical-memory guarantee holds; the per-step *skip* does
+> not. For cross-process idempotent checkpointing of hierarchical work, use
+> `dispatchDurable()` ([Durable Execution](durable-execution.md)).
 
 The frozen view is scoped per-invocation on the run's internal active-run frame
 rather than rebound globally, so two streams running concurrently in one process
