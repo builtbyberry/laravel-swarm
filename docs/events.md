@@ -530,7 +530,7 @@ The memory operator commands (v0.10.0+) dispatch their own events when an operat
 | --- | --- | --- | --- |
 | `MemoryInspected` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryInspected` | After `swarm:memory:inspect` reads snapshots | `runId`, `stepIndex`, `scopeFilter`, `format`, `snapshotCount` |
 | `MemoryDumped` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryDumped` | After `swarm:memory:dump` exports a run/conversation | `subjectType`, `subjectId`, `format`, `includeSnapshots`, `entryCount`, `snapshotCount`, `runsExpanded` |
-| `MemoryPurged` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryPurged` | After `swarm:memory:purge` runs (including dry-run and `prevent_prune` skips) | `counts` (per-scope), `criteria` (retention windows, scope filter, flags, cutoffs) |
+| `MemoryPurged` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryPurged` | After `swarm:memory:purge` runs (including dry-run and `prevent_prune` skips) | `counts` (per-scope, plus `snapshots` and `checkpoints`), `criteria` (retention windows, scope filter, `prune_snapshots`/`prune_checkpoints` flags, dry-run/prevent-prune flags, cutoffs) |
 
 `MemoryInspected` and `MemoryDumped` are read/export events: they record that an operator viewed or extracted frozen memory, complementing the `command.memory.inspect` / `command.memory.dump` audit egress records. `MemoryPurged` fires on every purge outcome — a real delete, a `--dry-run` preview, or a `prevent_prune` suppression (with `criteria.prevent_prune = true` and zeroed `counts`) — so a retention pipeline sees each scheduled run. See [Compliance & Audit](compliance-audit.md).
 

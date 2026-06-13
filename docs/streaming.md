@@ -197,14 +197,27 @@ Two things make such a run recoverable:
   re-emits the same upstream text, reasoning, and tool events it produced before
   the crash.
 
-> **Scope — terminal step only.** Byte-identical resume covers the **final,
-> streamed** step only. In a multi-step swarm, the **non-final** steps
-> **re-execute against live memory** on resume: their providers are re-invoked
-> and any tool side effects re-fire (a primer step that writes to memory runs
-> again). This is safe when earlier steps are idempotent; if you need idempotent
-> multi-step resume across the whole pipeline, use `dispatchDurable()`
-> ([Durable Execution](durable-execution.md)), which checkpoints every step.
-> Per-step replay of non-terminal `stream()` steps is tracked as issue #202.
+> **Scope — the whole pipeline.** Byte-identical resume covers every step of a
+> multi-step sequential `stream()`. The **final, streamed** step replays from its
+> frozen snapshot (above). Each **non-final** step is checkpointed when it
+> completes, and on resume a completed non-final step is **skipped**: its
+> provider is not re-invoked and its tool side effects do not re-fire (a primer
+> step that writes to memory does not run again). Its recorded output is
+> rehydrated into the next step's prompt, so the downstream stream is
+> byte-identical to the original run. A step that crashed *before* it completed
+> has no checkpoint and re-executes on resume.
+>
+> This is same-process, single-`stream()` resume. It is **not** exactly-once
+> execution of external side effects across process boundaries — for
+> checkpointed, cross-process execution use `dispatchDurable()`
+> ([Durable Execution](durable-execution.md)).
+>
+> Note that the swarm's own lifecycle events — `swarm_step_start` /
+> `swarm_step_end` and the `step.started` / `step.completed` audit records —
+> are re-emitted for a skipped step on each resume attempt (the agent's
+> *upstream* text/tool events are not). Treat these framework step events as
+> per-attempt, not exactly-once: a consumer that bills or counts per
+> `step.completed` should key on `(run_id, step_index)` to dedupe across resumes.
 
 The frozen view is scoped per-invocation on the run's internal active-run frame
 rather than rebound globally, so two streams running concurrently in one process
@@ -224,14 +237,23 @@ return ArticlePipeline::make()->stream(RunContext::from($task, $runId));
 This resume behaviour is governed by the memory replay mode
 (`#[MemoryReplay]` on the swarm, or `swarm.memory.replay_mode`, default
 `frozen_view`). Setting it to `fresh_execution` opts a swarm out: a re-run then
-freezes a new snapshot from live memory rather than replaying the frozen one.
-See [Memory](memory.md) for the replay-mode contract.
+freezes a new snapshot from live memory rather than replaying the frozen one,
+**and disables per-step checkpoint storage** — so non-final steps re-execute on
+resume (the pre-multi-step-resume behaviour). `fresh_execution` is therefore the
+single kill switch for the whole crash-replay/resume mechanism. See
+[Memory](memory.md) for the replay-mode contract.
 
 Crash-replay durability requires the database persistence driver (the snapshot
 table). It is **not** full durable-mode streaming: for checkpointed execution
 that survives process boundaries by design, use `dispatchDurable()`
 ([Durable Execution](durable-execution.md)). Crash-replay closes the gap for the
 non-durable `stream()` path so an interrupted run is not silently unrecoverable.
+
+> **Octane note.** The snapshot and stream-step-checkpoint stores probe their
+> backing table once per worker and cache the result, so a long-lived Octane
+> worker booted *before* you run the migrations will treat the tables as absent
+> (multi-step resume silently disabled) until it is recycled. Recycle workers
+> after migrating.
 
 ## Capture And Redaction
 

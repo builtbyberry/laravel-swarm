@@ -338,6 +338,14 @@ Previously, `SwarmRunner::stream()` on a `StaticHierarchical` swarm produced no 
 
 No migration is required; the `swarm_memory_snapshots` table already exists from v0.9.0.
 
+### Behavior change: non-final streamed steps no longer re-execute on resume
+
+Previously, re-running an abandoned streamed sequential run with the same run id replayed only the **terminal** step byte-identically (from its frozen `swarm_memory_snapshots` row); every **non-final** step re-executed against live memory — its provider was re-invoked and its tool side effects (memory writes, external calls) re-fired. As of v0.12.0 ([#202](https://github.com/builtbyberry/laravel-swarm/issues/202)), a completed non-final step is **skipped** on resume: its provider is not re-invoked and its side effects do not re-fire — its recorded output is rehydrated from the new `swarm_stream_step_checkpoints` table so the downstream prompt stays byte-identical. This is governed by the memory replay mode (`#[MemoryReplay]` / `swarm.memory.replay_mode`, default `frozen_view`; set `fresh_execution` to opt out) and requires the database persistence driver.
+
+Applications that assert a non-final step runs **twice** across a crash + resume (for example, an invocation counter expecting `2`) must update those assertions to `1`. Behavior under the cache driver, in `fresh_execution` mode, and for fresh (non-resumed) runs is unchanged.
+
+A new migration creates `swarm_stream_step_checkpoints`; run `php artisan migrate` (or `swarm:install:memory --migrate`). On the database driver without the migration, multi-step resume silently degrades to re-execution rather than failing.
+
 ## Upgrading to v0.11.0
 
 **No required action.** v0.11.0 is purely additive — there are no breaking

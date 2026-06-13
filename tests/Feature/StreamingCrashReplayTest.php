@@ -3,15 +3,20 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
+use BuiltByBerry\LaravelSwarm\Memory\NullStreamStepCheckpointStore;
+use BuiltByBerry\LaravelSwarm\Memory\StreamStepCheckpoint;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
@@ -19,9 +24,13 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\CountingPrimerAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RememberingPrimerAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\CountingStepGuardrail;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\CountingEchoSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\CountingEchoThreeStepSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRichStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRecallOnlySwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRecallSwarm;
@@ -30,6 +39,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingUnpairedToolCallSwa
 use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Laravel\Ai\Tools\Request;
 
 /**
@@ -89,6 +100,10 @@ beforeEach(function () {
 
     // The F2 boundary test counts primer re-executions across crash + resume.
     RememberingPrimerAgent::$invocations = 0;
+
+    // #202 multi-step resume tests count provider invocations + side effects.
+    CountingPrimerAgent::reset();
+    CountingStepGuardrail::$validations = 0;
 
     // No frame should leak between tests (the override travels on the frame).
     ActiveRunContext::flush();
@@ -196,14 +211,15 @@ test('a stream abandoned mid-run can resume and replay byte-identically from its
     expect($resumedSnapshot->toolCalls[0]['name'])->toBe('recall');
     expect($resumedSnapshot->toolCalls[0]['result'])->toBe('finding: primed-answer');
 
-    // F2 boundary (#202): only the TERMINAL streamed step (index 1) replays from
-    // its frozen snapshot. The non-final primer (index 0) RE-EXECUTES on resume —
-    // it ran once on the crashed attempt and once again on the resumed run, so its
-    // invocation counter across crash + resume is 2, not 1. (Here both runs write
-    // the same value, so the streamed recall is shielded by the frozen snapshot
-    // regardless; the F3 test below removes the primer entirely to make the shield
-    // assertion non-vacuous.)
-    expect($primerRunsAcrossCrashAndResume)->toBe(2);
+    // F2 boundary (#202): idempotent multi-step resume. The non-final primer
+    // (index 0) is checkpointed when it completes on the crashed attempt and is
+    // SKIPPED on resume — its provider is not re-invoked, so its invocation
+    // counter across crash + resume is 1, not 2. The terminal streamed step
+    // (index 1) still replays byte-identically from its frozen snapshot. (Here
+    // both attempts would write the same value anyway, so the streamed recall is
+    // shielded by the frozen snapshot regardless; the F3 test below removes the
+    // primer entirely to make the shield assertion non-vacuous.)
+    expect($primerRunsAcrossCrashAndResume)->toBe(1);
 });
 
 test('the happy-path streamed event sequence is unchanged by the replay wiring', function () {
@@ -404,6 +420,306 @@ test('two concurrent in-process streams each replay their own frozen snapshot wi
     expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runB, 'finding'))->toBe('B-DRIFTED');
     expect(ActiveRunContext::current())->toBeNull();
     expect(ActiveRunContext::currentMemory())->toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// #202 — idempotent multi-step resume: a completed NON-final streamed step is
+// skipped on resume (provider not re-invoked, tool side effects not re-fired)
+// and its output is rehydrated from a per-step checkpoint, so the downstream
+// prompt — and therefore the final streamed step — is byte-identical.
+// ---------------------------------------------------------------------------
+
+test('#202 a completed non-final step is skipped on resume and its output is rehydrated, not recomputed', function () {
+    $runId = 'multistep-rehydrate-run-id';
+
+    // First attempt: the counter-dependent primer (step 0) runs once → output
+    // 'primed-1'; the echo final step streams that value. Abandon mid-final-
+    // stream at the first text delta — step 0 has completed (its checkpoint is
+    // recorded) and the final step's snapshot is frozen.
+    $crashed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmTextDelta);
+
+    expect(CountingPrimerAgent::$invocations)->toBe(1);
+
+    // A COMPLETED checkpoint exists for the non-final step, carrying the raw
+    // output fed downstream.
+    /** @var StreamStepCheckpointStore $checkpoints */
+    $checkpoints = app(StreamStepCheckpointStore::class);
+    $checkpoint = $checkpoints->find($runId, 0);
+    expect($checkpoint)->not->toBeNull();
+    expect($checkpoint->output)->toBe('primed-1');
+
+    // Resume with the same run id.
+    $resumed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    $resumedEvents = iterator_to_array($resumed);
+
+    // The non-final primer was NOT re-invoked and its (external) side effect did
+    // NOT re-fire — both counters are still 1 across crash + resume.
+    expect(CountingPrimerAgent::$invocations)->toBe(1);
+    expect(CountingPrimerAgent::$sideEffects)->toBe(1);
+
+    // The echoed downstream prompt is the REHYDRATED 'primed-1'. A run that
+    // re-executed the primer would have produced 'primed-2'.
+    $delta = collect($resumedEvents)->whereInstanceOf(SwarmTextDelta::class)->first();
+    expect($delta->delta)->toBe('primed-1');
+});
+
+test('#202 a multi-step chain skips every completed non-final step on resume', function () {
+    $runId = 'multistep-chain-run-id';
+
+    // Two non-final primers feed the echo final step. On the crashed attempt
+    // both run once (shared counter → 2): step 0 → 'primed-1', step 1 → 'primed-2'.
+    $crashed = CountingEchoThreeStepSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmTextDelta);
+
+    expect(CountingPrimerAgent::$invocations)->toBe(2);
+
+    /** @var StreamStepCheckpointStore $checkpoints */
+    $checkpoints = app(StreamStepCheckpointStore::class);
+    expect($checkpoints->find($runId, 0)?->output)->toBe('primed-1');
+    expect($checkpoints->find($runId, 1)?->output)->toBe('primed-2');
+
+    $resumed = CountingEchoThreeStepSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    $resumedEvents = iterator_to_array($resumed);
+
+    // Both non-final steps skipped on resume — the shared counter stays at 2,
+    // not 4.
+    expect(CountingPrimerAgent::$invocations)->toBe(2);
+
+    // The final echo streamed the rehydrated middle-step output 'primed-2'.
+    $delta = collect($resumedEvents)->whereInstanceOf(SwarmTextDelta::class)->first();
+    expect($delta->delta)->toBe('primed-2');
+});
+
+test('#202 a non-final step crashed before completion has no checkpoint and re-executes on resume', function () {
+    $runId = 'multistep-precrash-run-id';
+
+    // Abandon at the FIRST step-start, before the primer's prompt() runs, so
+    // step 0 never completes and no checkpoint is recorded.
+    $crashed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmStepStart && $event->stepIndex === 0);
+
+    expect(CountingPrimerAgent::$invocations)->toBe(0);
+
+    /** @var StreamStepCheckpointStore $checkpoints */
+    $checkpoints = app(StreamStepCheckpointStore::class);
+    expect($checkpoints->find($runId, 0))->toBeNull();
+
+    // Resume: with no completed checkpoint, step 0 executes (counter → 1).
+    iterator_to_array(CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId)));
+
+    expect(CountingPrimerAgent::$invocations)->toBe(1);
+});
+
+test('#202 fresh_execution mode leaves non-final steps re-executing and writes no checkpoints', function () {
+    config()->set('swarm.memory.replay_mode', ReplayMode::FreshExecution->value);
+    $runId = 'multistep-fresh-exec-run-id';
+
+    $crashed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmTextDelta);
+
+    iterator_to_array(CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId)));
+
+    // Re-executed on resume (pre-#202 behaviour): the primer ran twice.
+    expect(CountingPrimerAgent::$invocations)->toBe(2);
+
+    // No checkpoints were written in fresh_execution mode.
+    expect(DB::table('swarm_stream_step_checkpoints')->count())->toBe(0);
+});
+
+test('#202 resuming a skipped step does not duplicate its persisted artifacts', function () {
+    $runId = 'multistep-artifact-run-id';
+
+    $crashed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmTextDelta);
+
+    $artifactCount = fn (): int => DB::table('swarm_artifacts')
+        ->where('run_id', $runId)
+        ->where('step_agent_class', CountingPrimerAgent::class)
+        ->count();
+
+    $afterCrash = $artifactCount();
+    expect($afterCrash)->toBe(1);
+
+    iterator_to_array(CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId)));
+
+    // The skip path stores no new artifact row — the step-0 artifact is already
+    // durable from the crashed attempt. Without storeArtifacts:false this would
+    // be 2.
+    expect($artifactCount())->toBe($afterCrash);
+});
+
+test('#202 the checkpoint store is the no-op binding under the cache driver', function () {
+    config()->set('swarm.persistence.driver', 'cache');
+    app()->forgetInstance(StreamStepCheckpointStore::class);
+
+    expect(app(StreamStepCheckpointStore::class))->toBeInstanceOf(NullStreamStepCheckpointStore::class);
+    expect(app(StreamStepCheckpointStore::class)->find('any-run', 0))->toBeNull();
+});
+
+test('#202 the database checkpoint store treats a null-output row as absent', function () {
+    $runId = 'marker-semantics-run-id';
+    seedCrashReplayRunHistory($runId);
+
+    /** @var StreamStepCheckpointStore $checkpoints */
+    $checkpoints = app(StreamStepCheckpointStore::class);
+
+    // A recorded (completed) checkpoint round-trips — including an empty-string
+    // output, which is non-null and therefore a valid completed step.
+    $checkpoints->record($runId, 0, '', ['prompt_tokens' => 3]);
+    $found = $checkpoints->find($runId, 0);
+    expect($found)->not->toBeNull();
+    expect($found->output)->toBe('');
+    expect($found->usage)->toBe(['prompt_tokens' => 3]);
+
+    // A row whose output column is NULL reads as absent so the step re-executes.
+    DB::table('swarm_stream_step_checkpoints')->insert([
+        'run_id' => $runId,
+        'step_index' => 1,
+        'output' => null,
+        'usage' => json_encode([]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    expect($checkpoints->find($runId, 1))->toBeNull();
+});
+
+test('#202 a resumed run rehydrates the non-final step usage, not just its output', function () {
+    $runId = 'multistep-usage-run-id';
+
+    // The primer reports a non-zero usage; the echo final step adds its own. On
+    // the original run the merged total is primer(7/11) + echo(1/1).
+    $crashed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmTextDelta);
+
+    // Resume: the skipped primer's usage must be re-merged from the checkpoint.
+    $resumed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    $resumedEnd = collect(iterator_to_array($resumed))->whereInstanceOf(SwarmStreamEnd::class)->first();
+
+    // Control: a clean run of the same swarm carries the full merged usage.
+    $control = CountingEchoSwarm::make()->stream('control-usage-task');
+    $controlEnd = collect(iterator_to_array($control))->whereInstanceOf(SwarmStreamEnd::class)->first();
+
+    // The resumed run's usage equals the control's — proving the non-final
+    // step's usage was rehydrated, not dropped. (If usage rehydration were
+    // broken the resumed total would be missing the primer's 7/11.)
+    expect($resumedEnd->usage)->toBe($controlEnd->usage);
+    // And it actually includes the primer's contribution (non-vacuous).
+    expect($resumedEnd->usage['prompt_tokens'] ?? 0)->toBeGreaterThanOrEqual(7);
+});
+
+test('#202 the skip path re-runs step guardrails on the rehydrated output', function () {
+    config()->set('swarm.guardrails.step', [CountingStepGuardrail::class]);
+    $this->app->bind(CountingStepGuardrail::class, fn () => new CountingStepGuardrail(0));
+
+    $runId = 'multistep-guardrail-run-id';
+
+    // Original run: the step-0 guardrail validates once before the crash.
+    $crashed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmTextDelta);
+    expect(CountingStepGuardrail::$validations)->toBe(1);
+
+    // Resume: step 0 is skipped (provider not re-invoked) BUT its guardrail must
+    // still run against the rehydrated output — so the counter reaches 2.
+    iterator_to_array(CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId)));
+
+    expect(CountingStepGuardrail::$validations)->toBe(2);
+    // The provider itself was not re-invoked on resume.
+    expect(CountingPrimerAgent::$invocations)->toBe(1);
+});
+
+test('#202 checkpoints are isolated by (run_id, step_index) with no cross-run bleed', function () {
+    // The store is a stateless singleton — its only instance field is the
+    // immutable cached table-exists flag — so two concurrent in-process runs
+    // (the Octane fiber model) touch only their own disjoint rows. A direct
+    // store round-trip is the faithful proof of that isolation.
+    seedCrashReplayRunHistory('iso-run-A');
+    seedCrashReplayRunHistory('iso-run-B');
+
+    /** @var StreamStepCheckpointStore $checkpoints */
+    $checkpoints = app(StreamStepCheckpointStore::class);
+
+    $checkpoints->record('iso-run-A', 0, 'A-out', []);
+    $checkpoints->record('iso-run-B', 0, 'B-out', []);
+    $checkpoints->record('iso-run-A', 1, 'A-out-1', []);
+
+    expect($checkpoints->find('iso-run-A', 0)?->output)->toBe('A-out');
+    expect($checkpoints->find('iso-run-B', 0)?->output)->toBe('B-out');
+    expect($checkpoints->find('iso-run-A', 1)?->output)->toBe('A-out-1');
+    expect($checkpoints->find('iso-run-B', 1))->toBeNull();
+});
+
+test('#202 a checkpoint-store write failure does not abort the completed step stream', function () {
+    // A best-effort checkpoint: if record() throws after the step is done, the
+    // stream must still complete (the step already ran + side-effected) and a
+    // warning is logged. The store double throws on every record().
+    Log::spy();
+
+    app()->instance(StreamStepCheckpointStore::class, new class implements StreamStepCheckpointStore
+    {
+        public function record(string $runId, int $stepIndex, string $output, array $usage): void
+        {
+            throw new RuntimeException('checkpoint write boom');
+        }
+
+        public function find(string $runId, int $stepIndex): ?StreamStepCheckpoint
+        {
+            return null;
+        }
+    });
+
+    $events = iterator_to_array(CountingEchoSwarm::make()->stream(RunContext::from('echo-task', 'failsoft-run-id')));
+
+    // The stream got past the throwing non-final record() to the final echo step.
+    expect(collect($events)->whereInstanceOf(SwarmTextDelta::class)->first()->delta)->toBe('primed-1');
+    expect(collect($events)->last())->toBeInstanceOf(SwarmStreamEnd::class);
+    // Exactly the checkpoint-write-failure summary fired (one per run, in finally),
+    // not just any warning.
+    Log::shouldHaveReceived('warning')->withArgs(
+        fn (string $message): bool => str_contains($message, 'failed to persist')
+    )->atLeast()->once();
+});
+
+test('#202 a checkpoint whose output cannot be decrypted re-executes the step instead of resuming with empty output', function () {
+    $runId = 'multistep-undecryptable-run-id';
+
+    // First attempt records a real step-0 checkpoint, then crashes mid-final-stream.
+    $crashed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmTextDelta);
+    expect(CountingPrimerAgent::$invocations)->toBe(1);
+
+    // Simulate a rotated/wrong APP_KEY: the stored output is now an undecryptable
+    // sealed value. find() must treat it as not-resumable (return null), NOT
+    // rehydrate it as an empty string — so the step RE-EXECUTES on resume.
+    DB::table('swarm_stream_step_checkpoints')
+        ->where('run_id', $runId)->where('step_index', 0)
+        ->update(['output' => 'sw0:'.base64_encode('not-real-ciphertext')]);
+
+    $resumed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    $resumedEvents = iterator_to_array($resumed);
+
+    // Re-executed (not silently skipped with ''): primer ran again, and the final
+    // echo streamed the recomputed value, not an empty string.
+    expect(CountingPrimerAgent::$invocations)->toBe(2);
+    expect(collect($resumedEvents)->whereInstanceOf(SwarmTextDelta::class)->first()->delta)->toBe('primed-2');
+});
+
+test('#202 multi-step resume degrades to re-execution when the checkpoint table is absent', function () {
+    // Deploy-before-migrate window: database driver, but the checkpoint table
+    // has not been created. The store precheck must no-op record()/find()
+    // instead of throwing mid-stream — so the run works and resume simply
+    // re-executes the non-final step (pre-#202 behaviour).
+    Schema::drop('swarm_stream_step_checkpoints');
+
+    $runId = 'multistep-no-table-run-id';
+
+    $crashed = CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId));
+    abandonStreamWhen($crashed, fn ($event): bool => $event instanceof SwarmTextDelta);
+
+    iterator_to_array(CountingEchoSwarm::make()->stream(RunContext::from('echo-task', $runId)));
+
+    // No checkpoint table → no skip → the primer re-executed on resume.
+    expect(CountingPrimerAgent::$invocations)->toBe(2);
 });
 
 /**
