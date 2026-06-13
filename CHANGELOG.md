@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.12.0 - unreleased
+## v0.12.0 - 2026-06-12
 
 Close every open-ended / half-built feature surfaced by the v0.11.0 audit: memory completeness, audit fidelity, durable/streaming execution, and contract surface.
 

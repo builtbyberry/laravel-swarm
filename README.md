@@ -294,6 +294,21 @@ $stream = ContentPipeline::make()
 
 Replay later with `SwarmHistory::replay($runId)`. See [Streaming](docs/streaming.md) for event schemas, replay behavior, capture, limits, and failure handling.
 
+### Crash-replay resume (v0.12.0)
+
+A streamed run that is abandoned mid-stream — a worker crash, a dropped connection, an early `break` — can be resumed by re-running the same swarm with the **same run id**:
+
+```php
+$runId = (string) Str::uuid();
+
+ArticlePipeline::make()->stream(RunContext::from($task, $runId)); // abandoned mid-stream
+
+// Resume on a fresh worker: same run id picks up where it left off.
+return ArticlePipeline::make()->stream(RunContext::from($task, $runId));
+```
+
+On resume, already-completed non-final steps are **skipped** (their providers are not re-invoked and tool side effects do not re-fire — their output is rehydrated from a per-step checkpoint), and the terminal streamed step **replays byte-identically** from its frozen memory snapshot. Governed by the memory replay mode (`frozen_view` default; `fresh_execution` opts out) and the database persistence driver. See [Streaming — Crash-Replay Durability](docs/streaming.md#crash-replay-durability).
+
 ## Durable Execution
 
 Use `dispatchDurable()` when the workflow is too important or too long-lived for one queue job:
