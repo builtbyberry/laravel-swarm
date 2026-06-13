@@ -116,8 +116,9 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
             $opened = $this->cipher->openStrict($output);
         } catch (DecryptException) {
             // debug-level: a rotated key fails every checkpoint, so this would
-            // flood at higher levels — and the evidence read path (run history)
-            // already warns loudly about the APP_KEY mismatch.
+            // flood at higher levels — and under the default null_with_log policy
+            // the evidence read path (run history) already warns about the
+            // APP_KEY mismatch.
             $this->logger->debug(
                 'laravel-swarm: stream step checkpoint output could not be decrypted; the step will re-execute on resume.',
                 ['run_id' => $runId, 'step_index' => $stepIndex],

@@ -1430,6 +1430,53 @@ test('stream step checkpoint store re-executes (not surfaces ciphertext) on an u
     expect($store->find($runId, 0))->toBeNull();
 });
 
+test('stream step checkpoint store round-trips an empty-string output (completed step) under encryption (#202)', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(StreamStepCheckpointStore::class);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    $store = app(StreamStepCheckpointStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+
+    // An empty output is a legitimately-completed step (seal('') short-circuits
+    // to '', openStrict('') returns ''), so find() must return a checkpoint with
+    // output '' — NOT treat it as absent/undecryptable.
+    $store->record($runId, 0, '', ['prompt_tokens' => 1]);
+
+    $checkpoint = $store->find($runId, 0);
+    expect($checkpoint)->not->toBeNull();
+    expect($checkpoint->output)->toBe('');
+});
+
+test('stream step checkpoint store treats a prefix-only sealed value as absent (#202)', function () {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(StreamStepCheckpointStore::class);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    $store = app(StreamStepCheckpointStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+
+    // A bare 'sw0:' prefix with empty ciphertext can never decrypt — openStrict()
+    // throws and the step re-executes (find() returns null), never feeding the
+    // sentinel downstream.
+    DB::table('swarm_stream_step_checkpoints')->insert([
+        'run_id' => $runId,
+        'step_index' => 0,
+        'output' => 'sw0:',
+        'usage' => json_encode([]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    expect($store->find($runId, 0))->toBeNull();
+});
+
 test('per store database override seals context input when global driver is cache', function () {
     config()->set('swarm.persistence.driver', 'cache');
     config()->set('swarm.context.driver', 'database');

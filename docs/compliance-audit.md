@@ -59,6 +59,13 @@ shape.
 > `swarm:memory:purge`). A capture-sensitive deployment that must not retain
 > non-final outputs at all should set `swarm.memory.replay_mode=fresh_execution`,
 > which disables checkpoint storage entirely (steps then re-execute on resume).
+>
+> Because the checkpoint is recomputable operational state, its **read** path
+> deliberately bypasses `swarm.persistence.decrypt_failure_policy`: an
+> undecryptable checkpoint (e.g. after an `APP_KEY` rotation) is treated as
+> absent and the step **re-executes** — it never surfaces ciphertext or aborts
+> the run, regardless of the policy. That policy still governs the evidence read
+> paths (run history, audit, inspector), which are the auditable surfaces.
 
 ## Memory capture policy
 
