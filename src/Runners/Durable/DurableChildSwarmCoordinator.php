@@ -128,6 +128,12 @@ class DurableChildSwarmCoordinator
     {
         $childRunId = (string) $child['child_run_id'];
         $childSwarmClass = (string) $child['child_swarm_class'];
+        // Use the caller-provided payload. First dispatch passes the live in-memory
+        // RunContext (the real, unsealed input); the recovery path passes a child that
+        // DurableRecoveryCoordinator already re-read strictly (decrypt-or-throw) so a
+        // wrong/rotated APP_KEY is isolated to that child before we ever get here. Do NOT
+        // re-read the stored context_payload for the operational input — that column is the
+        // capture/evidence view and is `[redacted]` under swarm.capture.inputs=false.
         $contextPayload = is_array($child['context_payload'] ?? null) ? $child['context_payload'] : [];
 
         if ($this->durableRuns->find($childRunId) === null) {

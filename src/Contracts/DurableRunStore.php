@@ -73,6 +73,10 @@ interface DurableRunStore
     public function findBranch(string $runId, string $branchId): ?array;
 
     /**
+     * Operational branch read: decrypts branch input/output strictly (decrypt-or-throw,
+     * independent of swarm.persistence.decrypt_failure_policy) so a wrong/rotated APP_KEY
+     * fails a durable resume loudly rather than feeding null/ciphertext into it.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function branchesFor(string $runId, ?string $parentNodeId = null): array;

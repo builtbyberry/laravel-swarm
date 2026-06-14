@@ -7,6 +7,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
@@ -302,6 +303,29 @@ test('queued hierarchical parallel multi_worker defers branches then completes o
 
     FakeWriter::assertPrompted('writer-branch');
     FakeEditor::assertPrompted('editor-branch');
+});
+
+test('queued hierarchical resume fails loud on an undecryptable context input (#212 T3)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(SwarmRunner::class);
+
+    $context = RunContext::from('queued-hierarchical-task', 'qhpc-poison-1');
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+
+    $manager = app(DurableSwarmManager::class);
+    foreach (DB::table('swarm_durable_branches')->where('run_id', 'qhpc-poison-1')->get() as $branch) {
+        (new AdvanceDurableBranch('qhpc-poison-1', (string) $branch->branch_id))->handle($manager);
+    }
+
+    // Corrupt the persisted resume context (rotated/wrong APP_KEY).
+    DB::table('swarm_contexts')->where('run_id', 'qhpc-poison-1')
+        ->update(['input' => 'sw0:'.base64_encode('not-real-ciphertext')]);
+
+    // The queued-hierarchical resume reads the run's top-level context through the strict F3 path
+    // (DatabaseContextStore::find); an undecryptable input fails loud (SwarmException) so the run is
+    // re-dispatchable, rather than resuming the join step from a null/ciphertext prompt.
+    expect(fn () => app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin('qhpc-poison-1'))
+        ->toThrow(SwarmException::class, 'verify APP_KEY');
 });
 
 test('queued hierarchical parallel multi_worker preserves pre parallel outputs and accounting across resume', function () {

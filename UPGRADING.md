@@ -268,6 +268,16 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.12.1
+
+v0.12.1 is a patch release with **no migrations** and **no application-code changes**. It hardens how the durable runtime decrypts its operational resume state (#212).
+
+### Durable resume reads now decrypt strictly and fail loud
+
+On a wrong or rotated `APP_KEY`, the durable runtime previously read operational resume values (the run's top-level resume input, hierarchical node outputs, branch input/output, child-run context payloads) back through the display `swarm.persistence.decrypt_failure_policy` — so under `null_with_log`/`legacy` a durable run could resume with a `null`/ciphertext prompt instead of failing. As of v0.12.1 those operational reads decrypt strictly and throw a `BuiltByBerry\LaravelSwarm\Exceptions\SwarmException` instead. **No action is required**: the failure is the intended behavior — re-point `APP_KEY` to the key that encrypted the stored rows and re-dispatch the run. The display policy still governs the evidence reads (run history, audit, the durable run inspector).
+
+The public `DurableRunStore` read API you may call from application code — `find()`, `runIdsForLabels()`, and the other documented operational reads — is unchanged. (The strict tightening applies to the durable runtime's own resume reads, not to `find()`.) A child swarm recovered on the crash-before-first-dispatch path under `swarm.capture.inputs=false` resumes with the redacted input — you cannot replay an input you chose not to capture; this is pre-existing behavior.
+
 ## Upgrading to v0.12.0
 
 v0.12.0 ships breaking changes on the public surface. It includes **one new migration** that makes the run-history step columns nullable so a `CaptureDecision::Skip` can persist `NULL` (see below); run `php artisan migrate`.
