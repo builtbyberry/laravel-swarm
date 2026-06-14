@@ -49,8 +49,8 @@ class DurableRunInspector
             waits: $this->durableRuns->waits($runId),
             signals: $this->durableRuns->signals($runId),
             progress: $this->durableRuns->progress($runId),
-            children: $this->durableRuns->childRuns($runId),
-            branches: $this->durableRuns->branchesFor($runId),
+            children: $this->durableRuns->childRunsForInspection($runId),
+            branches: $this->durableRuns->branchesForInspection($runId),
         );
     }
 

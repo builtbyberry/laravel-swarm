@@ -13,9 +13,11 @@ use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 
 /**
  * @internal
@@ -459,7 +461,14 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->whereIn('node_id', $nodeIds)
             ->orderBy('id')
             ->get()
-            ->mapWithKeys(fn (object $record): array => [(string) $record->node_id => $this->cipher->open((string) $record->output)])
+            ->mapWithKeys(fn (object $record): array => [
+                (string) $record->node_id => $this->openStrictOrFail(
+                    (string) $record->output,
+                    'node output',
+                    $runId,
+                    "node [{$record->node_id}]",
+                ),
+            ])
             ->all();
     }
 
@@ -593,6 +602,23 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function branchesFor(string $runId, ?string $parentNodeId = null): array
     {
+        return $this->branchRowsFor($runId, $parentNodeId)
+            ->map(fn (object $record): array => $this->mapBranch($record))
+            ->all();
+    }
+
+    public function branchesForInspection(string $runId, ?string $parentNodeId = null): array
+    {
+        return $this->branchRowsFor($runId, $parentNodeId)
+            ->map(fn (object $record): array => $this->mapBranch($record, strict: false))
+            ->all();
+    }
+
+    /**
+     * @return Collection<int, \stdClass>
+     */
+    private function branchRowsFor(string $runId, ?string $parentNodeId): Collection
+    {
         $query = $this->branchTable()
             ->where('run_id', $runId)
             ->orderBy('step_index')
@@ -602,9 +628,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('parent_node_id', $parentNodeId);
         }
 
-        return $query->get()
-            ->map(fn (object $record): array => $this->mapBranch($record))
-            ->all();
+        return $query->get();
     }
 
     public function acquireBranchLease(string $runId, string $branchId, int $stepTimeoutSeconds): ?string
@@ -746,8 +770,13 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('runs.swarm_class', $swarmClass);
         }
 
+        // Cross-run recovery sweep: the coordinator re-dispatches by id and reads
+        // only status/queue fields, never the branch payload. Decrypt non-strictly
+        // so one undecryptable row (a single run's key mismatch) cannot abort the
+        // whole sweep and starve every healthy run in the batch. The branch input is
+        // re-read strictly per-row in findBranch when the redispatched job resumes.
         return $query->get()
-            ->map(fn (object $record): array => $this->mapBranch($record))
+            ->map(fn (object $record): array => $this->mapBranch($record, strict: false))
             ->all();
     }
 
@@ -776,8 +805,11 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('runs.swarm_class', $swarmClass);
         }
 
+        // Non-strict for the same reason as recoverableBranches(): a cross-run
+        // recovery sweep must tolerate one run's key mismatch; the per-row strict
+        // read happens later in findBranch when the redispatched branch resumes.
         return $query->get()
-            ->map(fn (object $record): array => $this->mapBranch($record))
+            ->map(fn (object $record): array => $this->mapBranch($record, strict: false))
             ->all();
     }
 
@@ -1599,8 +1631,12 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('parents.swarm_class', $swarmClass);
         }
 
+        // Cross-run recovery sweep: non-strict so one child's key mismatch cannot
+        // abort the whole batch. The operational consumer (dispatchChildIntent)
+        // re-reads each child strictly via childRunForChild() before resuming it, so
+        // an undecryptable child fails loud on its own dispatch, not the sweep.
         return $query->get()
-            ->map(fn (object $record): array => $this->mapChildRun($record))
+            ->map(fn (object $record): array => $this->mapChildRun($record, strict: false))
             ->all();
     }
 
@@ -1631,12 +1667,27 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function childRuns(string $runId): array
     {
+        return $this->childRunRowsFor($runId)
+            ->map(fn (object $record): array => $this->mapChildRun($record))
+            ->all();
+    }
+
+    public function childRunsForInspection(string $runId): array
+    {
+        return $this->childRunRowsFor($runId)
+            ->map(fn (object $record): array => $this->mapChildRun($record, strict: false))
+            ->all();
+    }
+
+    /**
+     * @return Collection<int, \stdClass>
+     */
+    private function childRunRowsFor(string $runId): Collection
+    {
         return $this->childRunTable()
             ->where('parent_run_id', $runId)
             ->orderBy('id')
-            ->get()
-            ->map(fn (object $record): array => $this->mapChildRun($record))
-            ->all();
+            ->get();
     }
 
     public function reserveWebhookIdempotency(string $scope, string $idempotencyKey, string $requestHash): array
@@ -2260,9 +2311,53 @@ class DatabaseDurableRunStore implements DurableRunStore
     }
 
     /**
+     * Decrypt an operational durable-resume value strictly, failing loud on a
+     * wrong/rotated APP_KEY. Unlike the streaming twin (#202), the durable runtime
+     * cannot cheaply re-execute a completed node mid-resume, so an undecryptable
+     * operational read throws a clear {@see SwarmException} — the durable job fails
+     * visibly and is re-dispatchable by the operator — instead of silently feeding
+     * null/ciphertext into the resume.
+     */
+    private function openStrictOrFail(?string $value, string $field, string $runId, string $ref): ?string
+    {
+        try {
+            return $this->cipher->openStrict($value);
+        } catch (DecryptException $e) {
+            throw new SwarmException(
+                "Cannot decrypt durable {$field} for run [{$runId}] {$ref}; verify APP_KEY matches the key used to encrypt stored rows.",
+                previous: $e,
+            );
+        }
+    }
+
+    /**
+     * Decrypt a child run's context payload. On the operational ($strict) path the
+     * top-level resume input decrypts-or-throws (wrapped as {@see SwarmException});
+     * the inspection path keeps the policy-aware read.
+     *
+     * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */
-    protected function mapBranch(object $record): array
+    private function openChildContextOrFail(array $payload, bool $strict, string $childRunId): array
+    {
+        if (! $strict) {
+            return $this->cipher->openContextTopLevelInput($payload);
+        }
+
+        try {
+            return $this->cipher->openContextTopLevelInputStrict($payload);
+        } catch (DecryptException $e) {
+            throw new SwarmException(
+                "Cannot decrypt durable child context input for run [{$childRunId}]; verify APP_KEY matches the key used to encrypt stored rows.",
+                previous: $e,
+            );
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function mapBranch(object $record, bool $strict = true): array
     {
         return [
             'run_id' => $record->run_id,
@@ -2272,8 +2367,19 @@ class DatabaseDurableRunStore implements DurableRunStore
             'agent_class' => $record->agent_class,
             'parent_node_id' => $record->parent_node_id,
             'status' => $record->status,
-            'input' => $this->cipher->open((string) $record->input),
-            'output' => $record->output !== null ? $this->cipher->open((string) $record->output) : null,
+            // Branch input + output are operational resume state: the input is the
+            // re-dispatch prompt and the output is folded into the parallel-join
+            // prompt. On the operational ($strict) path they must decrypt-or-throw
+            // so a wrong/rotated APP_KEY fails the resume loudly (#212) rather than
+            // feeding null/ciphertext downstream; the inspection path keeps open().
+            'input' => $strict
+                ? $this->openStrictOrFail((string) $record->input, 'branch input', (string) $record->run_id, "branch [{$record->branch_id}]")
+                : $this->cipher->open((string) $record->input),
+            'output' => $record->output === null
+                ? null
+                : ($strict
+                    ? $this->openStrictOrFail((string) $record->output, 'branch output', (string) $record->run_id, "branch [{$record->branch_id}]")
+                    : $this->cipher->open((string) $record->output)),
             'usage' => $this->decodeJson($record->usage ?? null, []),
             'metadata' => $this->decodeJson($record->metadata ?? null, []),
             'failure' => $this->decodeJson($record->failure ?? null, null),
@@ -2379,15 +2485,26 @@ class DatabaseDurableRunStore implements DurableRunStore
     /**
      * @return array<string, mixed>
      */
-    protected function mapChildRun(object $record): array
+    protected function mapChildRun(object $record, bool $strict = true): array
     {
         return [
             'parent_run_id' => $record->parent_run_id,
             'child_run_id' => $record->child_run_id,
             'child_swarm_class' => $record->child_swarm_class,
             'wait_name' => $record->wait_name,
-            'context_payload' => $this->cipher->openContextTopLevelInput($this->decodeJson($record->context_payload ?? null, [])),
+            // context_payload is operational child-resume input (RunContext::fromPayload
+            // on re-dispatch), so the operational ($strict) path decrypts-or-throws (#212).
+            'context_payload' => $this->openChildContextOrFail(
+                $this->decodeJson($record->context_payload ?? null, []),
+                $strict,
+                (string) $record->child_run_id,
+            ),
             'status' => $record->status,
+            // Child output is read ONLY by the inspector (evidence) — no operational
+            // caller consumes it (the terminal output reaches the parent via the
+            // in-flight event argument, not this DB read). So it stays policy-aware on
+            // every path; making it strict would add a failure mode with no benefit.
+            // This asymmetry with branch output (above) is deliberate — do not "fix" it.
             'output' => $record->output !== null ? $this->cipher->open((string) $record->output) : null,
             'failure' => $this->decodeJson($record->failure ?? null, null),
             'dispatched_at' => $record->dispatched_at ?? null,

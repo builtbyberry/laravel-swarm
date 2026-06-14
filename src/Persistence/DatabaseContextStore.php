@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 
@@ -65,14 +66,36 @@ class DatabaseContextStore implements ContextStore
 
         return [
             'run_id' => $record->run_id,
-            // Defensive: the column is NOT NULL for rows this store writes, but
-            // tolerate a null (e.g. a stale row from an interim nullable schema)
-            // rather than handing open() a null.
-            'input' => $record->input !== null ? $this->cipher->open((string) $record->input) : null,
+            // swarm_contexts.input is the run's top-level resume prompt — operational
+            // resume state, not an evidence surface (find() feeds RunContext::fromPayload
+            // on every durable/queued resume; there is no display reader). So it decrypts
+            // STRICTLY (#212): a wrong/rotated APP_KEY fails the resume loud with a
+            // SwarmException rather than silently feeding a null/ciphertext prompt into the
+            // resumed step under the display decrypt_failure_policy. Defensive null-tolerance
+            // is kept for a stale row from an interim nullable schema.
+            'input' => $record->input !== null ? $this->openInputStrict((string) $record->input, $runId) : null,
             'data' => $this->decodeJson($record->data, []),
             'metadata' => $this->decodeJson($record->metadata, []),
             'artifacts' => $this->decodeJson($record->artifacts, []),
         ];
+    }
+
+    /**
+     * Strictly decrypt the operational resume input, failing loud on a wrong/rotated
+     * APP_KEY (#212). Mirrors the durable runtime's operational reads: an undecryptable
+     * resume prompt throws a clear SwarmException so the run fails visibly and is
+     * re-dispatchable, rather than silently resuming from null/ciphertext.
+     */
+    private function openInputStrict(string $value, string $runId): ?string
+    {
+        try {
+            return $this->cipher->openStrict($value);
+        } catch (DecryptException $e) {
+            throw new SwarmException(
+                "Cannot decrypt durable resume input for run [{$runId}]; verify APP_KEY matches the key used to encrypt stored rows.",
+                previous: $e,
+            );
+        }
     }
 
     public function assertReady(): void

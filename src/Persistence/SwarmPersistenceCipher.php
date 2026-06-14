@@ -133,6 +133,25 @@ class SwarmPersistenceCipher
     }
 
     /**
+     * Strict twin of {@see openContextTopLevelInput()} for operational
+     * child-resume input: the row's `input` is decrypted via {@see openStrict()}
+     * (decrypt-or-throw, policy-independent) rather than the display-policy-aware
+     * {@see open()}. A wrong/rotated `APP_KEY` therefore throws `DecryptException`
+     * instead of silently feeding `null`/ciphertext into a durable child resume.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    public function openContextTopLevelInputStrict(array $row): array
+    {
+        if (isset($row['input']) && is_string($row['input'])) {
+            $row['input'] = $this->openStrict($row['input']);
+        }
+
+        return $row;
+    }
+
+    /**
      * @param  array<string, mixed>  $step
      * @return array<string, mixed>
      */

@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
@@ -19,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -1475,6 +1477,352 @@ test('stream step checkpoint store treats a prefix-only sealed value as absent (
     ]);
 
     expect($store->find($runId, 0))->toBeNull();
+});
+
+// --- #212: durable resume reads decrypt strictly + fail loud (durable twin of #202) ---
+
+function insertDurableRunRow(string $runId, string $status = 'running'): void
+{
+    $now = Carbon::now('UTC');
+    DB::table('swarm_durable_runs')->insert([
+        'run_id' => $runId,
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'parallel',
+        'status' => $status,
+        'next_step_index' => 1,
+        'current_step_index' => null,
+        'current_node_id' => null,
+        'total_steps' => 1,
+        'timeout_at' => $now->copy()->addHour(),
+        'step_timeout_seconds' => 300,
+        'execution_token' => null,
+        'leased_until' => null,
+        'pause_requested_at' => null,
+        'cancel_requested_at' => null,
+        'queue_connection' => null,
+        'queue_name' => null,
+        'finished_at' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+}
+
+function insertDurableBranchRow(string $runId, string $branchId, string $input, ?string $output = null, string $status = 'completed'): void
+{
+    $now = Carbon::now('UTC');
+    DB::table('swarm_durable_branches')->insert([
+        'run_id' => $runId,
+        'branch_id' => $branchId,
+        'step_index' => 0,
+        'node_id' => null,
+        'agent_class' => FakeResearcher::class,
+        'parent_node_id' => 'parallel',
+        'status' => $status,
+        'input' => $input,
+        'output' => $output,
+        'usage' => json_encode([]),
+        'metadata' => json_encode([]),
+        'failure' => null,
+        'duration_ms' => 1,
+        'execution_token' => null,
+        'lease_acquired_at' => null,
+        'leased_until' => null,
+        'attempts' => 0,
+        'queue_connection' => null,
+        'queue_name' => null,
+        'started_at' => null,
+        'finished_at' => $now,
+        'expires_at' => $now->copy()->addHour(),
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+}
+
+function insertDurableChildRunRow(string $parentRunId, string $childRunId, string $contextPayloadJson): void
+{
+    $now = Carbon::now('UTC');
+    DB::table('swarm_durable_child_runs')->insert([
+        'parent_run_id' => $parentRunId,
+        'child_run_id' => $childRunId,
+        'child_swarm_class' => 'App\\Swarms\\Child',
+        'wait_name' => 'child:'.$childRunId,
+        'context_payload' => $contextPayloadJson,
+        'status' => 'pending',
+        'output' => null,
+        'failure' => null,
+        'dispatched_at' => null,
+        'terminal_event_dispatched_at' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+}
+
+// `sw0:`+base64 is a sealed value no APP_KEY can decrypt — the rotated/wrong-key case.
+function undecryptableSealedValue(): string
+{
+    return 'sw0:'.base64_encode('not-real-ciphertext');
+}
+
+function freshDurableRunStore(): DatabaseDurableRunStore
+{
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    return app(DatabaseDurableRunStore::class);
+}
+
+test('hierarchicalNodeOutputsFor fails loud with SwarmException on an undecryptable node output (#212)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $store = freshDurableRunStore();
+    $runId = (string) str()->uuid();
+
+    insertDurableRunRow($runId);
+    DB::table('swarm_durable_node_outputs')->insert([
+        'run_id' => $runId,
+        'node_id' => 'researcher',
+        'output' => undecryptableSealedValue(),
+        'expires_at' => now()->addHour(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    expect(fn () => $store->hierarchicalNodeOutputsFor($runId, ['researcher']))
+        ->toThrow(SwarmException::class);
+});
+
+test('findBranch fails loud with SwarmException on an undecryptable branch input (#212)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $store = freshDurableRunStore();
+    $runId = (string) str()->uuid();
+
+    insertDurableRunRow($runId);
+    insertDurableBranchRow($runId, 'parallel:researcher', undecryptableSealedValue());
+
+    expect(fn () => $store->findBranch($runId, 'parallel:researcher'))
+        ->toThrow(SwarmException::class);
+});
+
+test('branchesFor fails loud with SwarmException on an undecryptable branch output (#212)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $store = freshDurableRunStore();
+    $runId = (string) str()->uuid();
+
+    insertDurableRunRow($runId);
+    // input is plaintext (decryptable), output is the undecryptable sealed value —
+    // proves branch OUTPUT is strict on the operational path too (it feeds the join).
+    insertDurableBranchRow($runId, 'parallel:researcher', 'plain-input', undecryptableSealedValue());
+
+    expect(fn () => $store->branchesFor($runId))
+        ->toThrow(SwarmException::class);
+});
+
+test('childRunForChild fails loud with SwarmException on an undecryptable context payload (#212)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $store = freshDurableRunStore();
+    $parentRunId = (string) str()->uuid();
+    $childRunId = (string) str()->uuid();
+
+    insertDurableRunRow($parentRunId);
+    // Only the nested `input` key is sealed (createChildRun seals via sealContextTopLevelInput).
+    insertDurableChildRunRow($parentRunId, $childRunId, json_encode(['input' => undecryptableSealedValue()]));
+
+    expect(fn () => $store->childRunForChild($childRunId))
+        ->toThrow(SwarmException::class);
+});
+
+test('inspector branch read honors decrypt_failure_policy on an undecryptable input (#212)', function (string $policy, $assert) {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.persistence.decrypt_failure_policy', $policy);
+    $store = freshDurableRunStore();
+    $runId = (string) str()->uuid();
+
+    insertDurableRunRow($runId);
+    insertDurableBranchRow($runId, 'parallel:researcher', undecryptableSealedValue());
+
+    $assert($store, $runId);
+})->with([
+    'null_with_log returns null' => ['null_with_log', function (DatabaseDurableRunStore $store, string $runId) {
+        expect($store->branchesForInspection($runId)[0]['input'])->toBeNull();
+    }],
+    'legacy surfaces ciphertext' => ['legacy', function (DatabaseDurableRunStore $store, string $runId) {
+        expect($store->branchesForInspection($runId)[0]['input'])->toStartWith('sw0:');
+    }],
+    'throw rethrows the raw DecryptException' => ['throw', function (DatabaseDurableRunStore $store, string $runId) {
+        expect(fn () => $store->branchesForInspection($runId))->toThrow(DecryptException::class);
+    }],
+]);
+
+test('inspector child read honors null_with_log policy on an undecryptable context payload (#212)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.persistence.decrypt_failure_policy', 'null_with_log');
+    $store = freshDurableRunStore();
+    $parentRunId = (string) str()->uuid();
+    $childRunId = (string) str()->uuid();
+
+    insertDurableRunRow($parentRunId);
+    insertDurableChildRunRow($parentRunId, $childRunId, json_encode(['input' => undecryptableSealedValue()]));
+
+    expect($store->childRunsForInspection($parentRunId)[0]['context_payload']['input'])->toBeNull();
+});
+
+test('strict durable reads round-trip a value that legitimately starts with the sealed prefix (#212)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+    $cipher = app(SwarmPersistenceCipher::class);
+    $store = app(DatabaseDurableRunStore::class);
+
+    $runId = (string) str()->uuid();
+    $childRunId = (string) str()->uuid();
+    insertDurableRunRow($runId);
+
+    // Each value is real plaintext that happens to begin with the `sw0:` sentinel,
+    // sealed on write — the strict read must decrypt cleanly and NOT fail loud.
+    DB::table('swarm_durable_node_outputs')->insert([
+        'run_id' => $runId, 'node_id' => 'researcher',
+        'output' => $cipher->seal('sw0:node'),
+        'expires_at' => now()->addHour(), 'created_at' => now(), 'updated_at' => now(),
+    ]);
+    insertDurableBranchRow($runId, 'parallel:researcher', $cipher->seal('sw0:input'), $cipher->seal('sw0:output'));
+    insertDurableChildRunRow($runId, $childRunId, json_encode(['input' => $cipher->seal('sw0:child')]));
+
+    expect($store->hierarchicalNodeOutputsFor($runId, ['researcher'])['researcher'])->toBe('sw0:node');
+    $branch = $store->findBranch($runId, 'parallel:researcher');
+    expect($branch['input'])->toBe('sw0:input')
+        ->and($branch['output'])->toBe('sw0:output');
+    expect($store->childRunForChild($childRunId)['context_payload']['input'])->toBe('sw0:child');
+});
+
+test('strict and inspection reads on the same store instance do not interfere (#212 octane safety)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.persistence.decrypt_failure_policy', 'legacy');
+    $store = freshDurableRunStore();
+    $runId = (string) str()->uuid();
+
+    insertDurableRunRow($runId);
+    insertDurableBranchRow($runId, 'parallel:researcher', undecryptableSealedValue());
+
+    // Strict op throws; the subsequent policy-aware inspection read on the SAME instance
+    // still surfaces ciphertext under the legacy policy — the strict path never mutated
+    // policy resolution (no shared mutable state).
+    expect(fn () => $store->findBranch($runId, 'parallel:researcher'))->toThrow(SwarmException::class);
+    expect($store->branchesForInspection($runId)[0]['input'])->toStartWith('sw0:');
+});
+
+test('contextStore find fails loud with SwarmException on an undecryptable resume input (#212)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+    $store = app(DatabaseContextStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+    DB::table('swarm_contexts')->insert([
+        'run_id' => $runId,
+        'input' => undecryptableSealedValue(),
+        'data' => json_encode([]),
+        'metadata' => json_encode([]),
+        'artifacts' => json_encode([]),
+        'expires_at' => now()->addHour(),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    expect(fn () => $store->find($runId))->toThrow(SwarmException::class);
+});
+
+test('contextStore find round-trips a sealed resume input that starts with the sealed prefix (#212)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+    $store = app(DatabaseContextStore::class);
+    $runId = (string) str()->uuid();
+
+    insertMinimalHistoryRow($runId, 'running');
+    $store->put(RunContext::from('sw0:resume-me', $runId), 3600);
+
+    expect($store->find($runId)['input'])->toBe('sw0:resume-me');
+});
+
+test('recoverableBranches tolerates one undecryptable row instead of aborting the cross-run sweep (#212 F1)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.persistence.decrypt_failure_policy', 'null_with_log');
+    $store = freshDurableRunStore();
+    $runId = (string) str()->uuid();
+    insertDurableRunRow($runId);
+
+    // A poison branch that matches the recovery criteria (pending, stale updated_at,
+    // no retry/lease). The sweep reads only status/queue/ids, so it must NOT abort.
+    $stale = now()->subHour();
+    DB::table('swarm_durable_branches')->insert([
+        'run_id' => $runId, 'branch_id' => 'parallel:researcher', 'step_index' => 0,
+        'node_id' => null, 'agent_class' => FakeResearcher::class, 'parent_node_id' => 'parallel',
+        'status' => 'pending', 'input' => undecryptableSealedValue(), 'output' => null,
+        'usage' => json_encode([]), 'metadata' => json_encode([]), 'failure' => null,
+        'duration_ms' => null, 'execution_token' => null, 'lease_acquired_at' => null,
+        'leased_until' => null, 'attempts' => 0, 'queue_connection' => null, 'queue_name' => null,
+        'started_at' => null, 'finished_at' => null, 'next_retry_at' => null,
+        'expires_at' => now()->addHour(), 'created_at' => $stale, 'updated_at' => $stale,
+    ]);
+
+    $branches = $store->recoverableBranches();
+    expect($branches)->toHaveCount(1)
+        ->and($branches[0]['branch_id'])->toBe('parallel:researcher')
+        ->and($branches[0]['input'])->toBeNull(); // non-strict → display policy → null, no throw
+});
+
+test('undispatchedChildRuns tolerates one undecryptable child instead of aborting the cross-run sweep (#212 F2)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.persistence.decrypt_failure_policy', 'null_with_log');
+    $store = freshDurableRunStore();
+    $parentRunId = (string) str()->uuid();
+    $childRunId = (string) str()->uuid();
+    insertDurableRunRow($parentRunId);
+    insertDurableChildRunRow($parentRunId, $childRunId, json_encode(['input' => undecryptableSealedValue()]));
+
+    $children = $store->undispatchedChildRuns();
+    expect($children)->toHaveCount(1)
+        ->and($children[0]['child_run_id'])->toBe($childRunId)
+        ->and($children[0]['context_payload']['input'])->toBeNull(); // non-strict, no throw
+});
+
+test('durable strict reads do not throw when encrypt at rest is disabled (#212 F6)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', false);
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+    $store = app(DatabaseDurableRunStore::class);
+    $runId = (string) str()->uuid();
+    insertDurableRunRow($runId);
+
+    // Encryption disabled → values stored as plaintext; openStrict passes them through.
+    insertDurableBranchRow($runId, 'parallel:researcher', 'plain-input', 'plain-output');
+    DB::table('swarm_durable_node_outputs')->insert([
+        'run_id' => $runId, 'node_id' => 'researcher', 'output' => 'plain-node',
+        'expires_at' => now()->addHour(), 'created_at' => now(), 'updated_at' => now(),
+    ]);
+
+    $branch = $store->findBranch($runId, 'parallel:researcher');
+    expect($branch['input'])->toBe('plain-input')
+        ->and($branch['output'])->toBe('plain-output')
+        ->and($store->hierarchicalNodeOutputsFor($runId, ['researcher'])['researcher'])->toBe('plain-node');
+});
+
+test('durable strict read tolerates an empty/NULL branch input without throwing (#212 F7)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $store = freshDurableRunStore();
+    $runId = (string) str()->uuid();
+    insertDurableRunRow($runId);
+
+    // NULL input column → (string) null === '' → openStrict('') returns '' (no throw).
+    DB::table('swarm_durable_branches')->insert([
+        'run_id' => $runId, 'branch_id' => 'parallel:researcher', 'step_index' => 0,
+        'node_id' => null, 'agent_class' => FakeResearcher::class, 'parent_node_id' => 'parallel',
+        'status' => 'completed', 'input' => '', 'output' => null,
+        'usage' => json_encode([]), 'metadata' => json_encode([]), 'failure' => null,
+        'duration_ms' => 1, 'execution_token' => null, 'lease_acquired_at' => null,
+        'leased_until' => null, 'attempts' => 0, 'queue_connection' => null, 'queue_name' => null,
+        'started_at' => null, 'finished_at' => now(), 'expires_at' => now()->addHour(),
+        'created_at' => now(), 'updated_at' => now(),
+    ]);
+
+    $branch = $store->findBranch($runId, 'parallel:researcher');
+    expect($branch['input'])->toBe('')
+        ->and($branch['output'])->toBeNull();
 });
 
 test('per store database override seals context input when global driver is cache', function () {

@@ -4,17 +4,11 @@
 
 Operational resume reads decrypt strictly via `openStrict()`, independent of the display `decrypt_failure_policy`.
 
-### Added
-
-_To be filled in during release wrap-up._
-
-### Changed
-
-_To be filled in during release wrap-up._
-
 ### Fixed
 
-_To be filled in during release wrap-up._
+- **Durable resume reads decrypt strictly and fail loud on a wrong/rotated `APP_KEY` (#212, the durable twin of #202).** The durable runtime read its operational resume state — the run's top-level resume input (`swarm_contexts.input`), hierarchical node outputs (`hierarchicalNodeOutputsFor`), branch input/output (`findBranch`/`branchesFor`), and child-run context payloads (`childRunForChild`/`childRuns`) — back through the display-policy-aware `SwarmPersistenceCipher::open()`. That policy (`null_with_log` / `legacy` / `throw`) is the correct gate for evidence/display reads (audit, history, inspector) but the wrong gate for operational resume state: on a rotated or wrong `APP_KEY` it silently fed `null` or still-sealed ciphertext into a durable resume, so a durable run could continue with a wrong/empty prompt instead of failing visibly and being re-dispatched. These operational reads now decrypt via `openStrict()` / the new `openContextTopLevelInputStrict()` and, on failure, throw a clear `SwarmException` ("Cannot decrypt durable … for run [X] …; verify APP_KEY …") so the durable job fails visibly and is re-dispatchable by the operator. Unlike the streaming twin (#202), which degrades safely by **re-executing** the cheap step, the durable runtime cannot cheaply re-run a completed node mid-resume, so the durable path **fails loud by design**. The `swarm.persistence.decrypt_failure_policy` now governs only the evidence/display reads — the durable run inspector reads through new policy-aware methods so audit/history surfaces still honor it.
+
+  Decrypt-or-throw is applied at the point a value is actually **consumed for resume** (the single-run reads: context input, node outputs, `findBranch`, `childRunForChild`), so a single undecryptable row fails exactly the run it belongs to. The **cross-run recovery sweeps** (`recoverableBranches` / `dueRetryBranches` / `undispatchedChildRuns`, which batch up to 50 unrelated runs and read only status/queue fields) decrypt non-strictly so one run's key mismatch cannot starve recovery of every healthy run in the batch — the strict read still fires per-row when each swept item is actually resumed. The strict-vs-display choice is a method-stack parameter (no instance/static state — Octane-safe), and `openStrict()` passes plaintext / `null` / empty values through unchanged, so `encrypt_at_rest=false` deployments and legitimately-plaintext rows never throw. **No migrations; no application change for apps on the shipped database driver.** `DurableRunStore` is now explicitly marked `@internal` (it is the durable runtime's persistence contract, not a supported extension point) and is no longer listed in `docs/public-surface.md`. See [Compliance & audit](docs/compliance-audit.md).
 
 ## v0.12.0 - 2026-06-12
 
