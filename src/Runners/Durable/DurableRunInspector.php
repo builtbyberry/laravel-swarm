@@ -4,20 +4,26 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
-use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmProgressRecorded;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use Illuminate\Contracts\Events\Dispatcher;
 
 /**
  * @internal
+ *
+ * Depends on the concrete {@see DatabaseDurableRunStore} (not the DurableRunStore
+ * contract) because the evidence/display reads it needs — branchesForInspection() /
+ * childRunsForInspection(), the policy-aware twins of the now-strict operational
+ * branchesFor()/childRuns() — are intentionally NOT on the public contract. The
+ * inspector reads the shipped database durable tables, so this coupling is by design.
  */
 class DurableRunInspector
 {
     public function __construct(
-        protected DurableRunStore $durableRuns,
+        protected DatabaseDurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
         protected Dispatcher $events,
         protected DurablePayloadCapture $payloads,
@@ -49,8 +55,8 @@ class DurableRunInspector
             waits: $this->durableRuns->waits($runId),
             signals: $this->durableRuns->signals($runId),
             progress: $this->durableRuns->progress($runId),
-            children: $this->durableRuns->childRuns($runId),
-            branches: $this->durableRuns->branchesFor($runId),
+            children: $this->durableRuns->childRunsForInspection($runId),
+            branches: $this->durableRuns->branchesForInspection($runId),
         );
     }
 

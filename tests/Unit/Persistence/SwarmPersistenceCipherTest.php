@@ -199,3 +199,50 @@ test('open rethrows when decrypt fails under throw policy', function () {
 
     expect(fn () => $cipherOpen->open($sealed))->toThrow(DecryptException::class);
 });
+
+test('openContextTopLevelInputStrict passes through a plaintext input (#212)', function () {
+    $cipher = makeCipher(true, 'database');
+
+    expect($cipher->openContextTopLevelInputStrict(['input' => 'plain'])['input'])->toBe('plain');
+});
+
+test('openContextTopLevelInputStrict round-trips a sealed input (#212)', function () {
+    $cipher = makeCipher(true);
+
+    $row = $cipher->sealContextTopLevelInput(['input' => 'secret prompt']);
+
+    expect($cipher->openContextTopLevelInputStrict($row)['input'])->toBe('secret prompt');
+});
+
+test('openContextTopLevelInputStrict round-trips an input that legitimately starts with the sealed prefix (#212)', function () {
+    $cipher = makeCipher(true);
+
+    $row = $cipher->sealContextTopLevelInput(['input' => 'sw0:hello']);
+
+    expect($cipher->openContextTopLevelInputStrict($row)['input'])->toBe('sw0:hello');
+});
+
+test('openContextTopLevelInputStrict throws on an undecryptable input regardless of decrypt_failure_policy (#212)', function (string $policy) {
+    $repo = [
+        'swarm.persistence.encrypt_at_rest' => true,
+        'swarm.persistence.driver' => 'database',
+        'swarm.persistence.decrypt_failure_policy' => $policy,
+    ];
+
+    $sealer = new SwarmPersistenceCipher(
+        new Repository($repo),
+        new Encrypter(random_bytes(32), 'aes-256-cbc'),
+        new NullLogger,
+    );
+    $row = $sealer->sealContextTopLevelInput(['input' => 'secret prompt']);
+
+    // A different key cannot decrypt — the strict read must throw under EVERY display
+    // policy (it deliberately ignores decrypt_failure_policy).
+    $opener = new SwarmPersistenceCipher(
+        new Repository($repo),
+        new Encrypter(random_bytes(32), 'aes-256-cbc'),
+        new NullLogger,
+    );
+
+    expect(fn () => $opener->openContextTopLevelInputStrict($row))->toThrow(DecryptException::class);
+})->with(['null_with_log', 'legacy', 'throw']);

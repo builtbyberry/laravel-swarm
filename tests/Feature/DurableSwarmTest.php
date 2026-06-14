@@ -366,6 +366,28 @@ test('dispatch durable supports top level parallel swarms', function () {
         ->and($history['steps'])->toHaveCount(3);
 });
 
+test('a poison branch input fails loud when the branch is advanced on resume (#212 T1)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    $response = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    // Grab a branch id BEFORE corrupting (branchesFor is strict and would itself throw after).
+    $branchId = (string) DB::table('swarm_durable_branches')->where('run_id', $runId)->value('branch_id');
+
+    // Corrupt that branch's input → undecryptable (rotated/wrong APP_KEY).
+    DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', $branchId)
+        ->update(['input' => 'sw0:'.base64_encode('not-real-ciphertext')]);
+
+    // F1's safety claim end-to-end: the recovery sweep tolerated the poison row, but when this
+    // branch is actually advanced/resumed the advancer reads it through the STRICT findBranch and
+    // fails loud — before the agent runs — so the durable job fails visibly and is re-dispatchable.
+    expect(fn () => (new AdvanceDurableBranch($runId, $branchId))->handle($manager))
+        ->toThrow(SwarmException::class, 'verify APP_KEY');
+});
+
 test('durable top level parallel collect failures waits for branch terminal states before failing', function () {
     $response = FakeParallelFailingSwarm::make()->dispatchDurable('parallel-durable-task');
     $runId = $response->runId;
@@ -2534,6 +2556,28 @@ test('durable child lineage context payload is redacted when input capture is di
         ->and($child['context_payload']['data'])->toBe(['input' => '[redacted]']);
 });
 
+test('first dispatch runs the child with the real operational input under capture.inputs=false (#212 R1 guard)', function () {
+    config()->set('swarm.capture.inputs', false);
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('sensitive-parent-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager); // first-dispatches the child
+
+    $childRunId = $manager->inspect($response->runId)->children[0]['child_run_id'];
+
+    // The child's lineage payload is redacted EVIDENCE (asserted above), but the child's OWN
+    // operational resume input (its swarm_contexts.input, retained via activeContext) must carry
+    // the REAL parent task — first dispatch uses the live in-memory payload, NOT the redacted
+    // lineage payload. Reading the stored child evidence/lineage payload here would have regressed
+    // the child to `[redacted]` (the #212 round-2 finding).
+    $childInput = app(ContextStore::class)->find($childRunId)['input'];
+
+    expect($childInput)->toContain('sensitive-parent-task')
+        ->and($childInput)->not->toContain('[redacted]');
+});
+
 test('durable child intent recovers when crash happens before child dispatch', function () {
     FakeResearcher::fake(['parent-step']);
 
@@ -2559,6 +2603,38 @@ test('durable child intent recovers when crash happens before child dispatch', f
 
     expect($child['dispatched_at'])->not->toBeNull()
         ->and($manager->find($child['child_run_id']))->not->toBeNull();
+});
+
+test('recovery skips an undecryptable child and leaves it re-dispatchable, not failed (#212 T2)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+    $manager->afterChildIntentForTesting(function (): void {
+        throw new RuntimeException('crash after child intent');
+    });
+
+    expect(fn () => (new AdvanceDurableSwarm($response->runId, 0))->handle($manager))
+        ->toThrow(RuntimeException::class, 'crash after child intent');
+    $manager->afterChildIntentForTesting(null);
+
+    $childRunId = app(DurableRunStore::class)->childRuns($response->runId)[0]['child_run_id'];
+
+    // Corrupt the child's stored context payload so it can't decrypt (rotated/wrong APP_KEY).
+    DB::table('swarm_durable_child_runs')->where('child_run_id', $childRunId)->update([
+        'context_payload' => json_encode(['input' => 'sw0:'.base64_encode('not-real-ciphertext')]),
+    ]);
+
+    // Recovery must SKIP the poison child — not throw, not mark it failed — and leave it pending +
+    // undispatched so a later pass retries once the operator corrects the key (R2). Read the raw row
+    // (childRunForChild is strict and would itself throw on the poison payload).
+    $manager->recover(runId: $response->runId);
+
+    $row = DB::table('swarm_durable_child_runs')->where('child_run_id', $childRunId)->first();
+    expect($row->status)->toBe('pending')
+        ->and($row->dispatched_at)->toBeNull()
+        ->and($manager->find($childRunId))->toBeNull(); // child run never started
 });
 
 test('durable child start failures release the parent wait with failed child status', function () {

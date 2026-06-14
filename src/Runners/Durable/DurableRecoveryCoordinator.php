@@ -8,10 +8,12 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaitTimedOut;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
+use Psr\Log\LoggerInterface;
 
 /**
  * @internal
@@ -28,6 +30,7 @@ class DurableRecoveryCoordinator
         protected DurableRunContext $runs,
         protected DurableJobDispatcher $jobs,
         protected DurableChildSwarmCoordinator $children,
+        protected LoggerInterface $logger,
     ) {}
 
     /**
@@ -157,7 +160,25 @@ class DurableRecoveryCoordinator
         );
 
         foreach ($undispatchedChildren as $child) {
-            $this->children->dispatchChildIntent($child);
+            // The sweep decrypts non-strictly (so one bad row can't abort the cross-run
+            // batch). Re-read this child strictly here: a wrong/rotated APP_KEY throws and
+            // we SKIP it (it stays pending → re-swept next pass, re-dispatchable once the key
+            // is corrected) rather than feeding a null/ciphertext payload into its resume or
+            // marking it permanently failed.
+            try {
+                $strictChild = $this->durableRuns->childRunForChild((string) $child['child_run_id']);
+            } catch (SwarmException $exception) {
+                $this->logger->warning('laravel-swarm: skipping undecryptable durable child during recovery; it will retry after APP_KEY is corrected.', [
+                    'child_run_id' => $child['child_run_id'] ?? null,
+                    'parent_run_id' => $child['parent_run_id'] ?? null,
+                ]);
+
+                continue;
+            }
+
+            if ($strictChild !== null) {
+                $this->children->dispatchChildIntent($strictChild);
+            }
         }
 
         return array_values(array_unique(array_merge(

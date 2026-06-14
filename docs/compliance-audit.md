@@ -66,6 +66,19 @@ shape.
 > absent and the step **re-executes** — it never surfaces ciphertext or aborts
 > the run, regardless of the policy. That policy still governs the evidence read
 > paths (run history, audit, inspector), which are the auditable surfaces.
+>
+> **The durable runtime's operational reads follow the same rule (#212).** The
+> durable runtime resumes from its own operational state — hierarchical node
+> outputs, branch input/output, and child-run context payloads in the
+> `swarm_durable_*` tables. Those **operational read** paths also bypass
+> `decrypt_failure_policy` and decrypt strictly. The difference from the
+> streaming checkpoint: a completed durable node cannot be cheaply re-executed
+> mid-resume, so an undecryptable operational read **fails loud** — it throws a
+> `SwarmException` so the durable job fails visibly and the operator can re-point
+> `APP_KEY` and re-dispatch — rather than silently feeding `null`/ciphertext into
+> the resume. The display policy still governs the durable run inspector's
+> evidence reads (`branchesForInspection` / `childRunsForInspection`), the
+> auditable surfaces.
 
 ## Memory capture policy
 
