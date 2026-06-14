@@ -205,7 +205,7 @@ Settings for `dispatchDurable()` execution. Durable runs are database-backed and
 The transactional outbox relay (`swarm:relay`) drains `swarm_durable_outbox` rows and dispatches the corresponding queue jobs. **You must schedule this command for durable execution to advance:**
 
 ```php
-// app/Console/Kernel.php or routes/console.php
+// routes/console.php
 Schedule::command('swarm:relay')->everyMinute();
 ```
 
@@ -362,7 +362,7 @@ SWARM_OBSERVABILITY_FAILURE_POLICY=swallow
 SWARM_AUDIT_FAILURE_POLICY=swallow
 ```
 
-Schedule in `routes/console.php` or `app/Console/Kernel.php`:
+Schedule in `routes/console.php`:
 
 ```php
 Schedule::command('swarm:prune')->daily();
@@ -391,7 +391,7 @@ SWARM_WEBHOOK_SECRET=your-secret-here
 SWARM_WEBHOOK_TOLERANCE_SECONDS=300
 ```
 
-Schedule in `routes/console.php` or `app/Console/Kernel.php`:
+Schedule in `routes/console.php`:
 
 ```php
 Schedule::command('swarm:relay')->everyMinute();
