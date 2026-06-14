@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.12.1 - unreleased
+## v0.12.1 - 2026-06-14
 
 Operational resume reads decrypt strictly via `openStrict()`, independent of the display `decrypt_failure_policy`.
 
