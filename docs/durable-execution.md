@@ -83,7 +83,7 @@ next queue job. Without it, the swarm starts but never advances past the first
 step.
 
 ```php
-// bootstrap/app.php or Console/Kernel.php
+// routes/console.php
 Schedule::command('swarm:relay')->everyMinute();
 ```
 

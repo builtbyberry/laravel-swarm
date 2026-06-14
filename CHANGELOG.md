@@ -14,7 +14,7 @@ _To be filled in during release wrap-up._
 
 ### Fixed
 
-_To be filled in during release wrap-up._
+- Standardized scheduler-location docs on `routes/console.php` (the only valid location for this Laravel-13-only package). Removed stale `bootstrap/app.php` and `app/Console/Kernel.php` references from `docs/durable-execution.md`, `docs/configuration.md`, and `docs/execution-modes.md` so copying the relay/recover/prune schedule into the wrong file can no longer leave the scheduler silently non-running. (#218)
 
 ## v0.12.1 - 2026-06-14
 

@@ -322,7 +322,7 @@ Make sure the following is in place before switching to durable execution:
     'driver' => 'database', // required for durable execution
 ],
 
-// app/Console/Kernel.php or routes/console.php
+// routes/console.php
 Schedule::command('swarm:recover')->everyMinute();
 Schedule::command('swarm:prune')->daily();
 ```
