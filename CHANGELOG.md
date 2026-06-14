@@ -10,7 +10,7 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Idiom/immutability nits (#222).** `StreamedSwarmResponse::$events` is now declared `readonly`, closing a value-object immutability hole — its parent `SwarmResponse` already marks every prop `readonly`, and `$events` is never reassigned after construction. The Pulse `SwarmRuns` card's topology/count assembly (`src/Pulse/Livewire/SwarmRuns.php`) is now expressed as Collection chains (`->filter()->sortByDesc()->values()`) instead of procedural `array_filter` + `usort` wrapped in `collect()`, matching the package's Laravel-native idiom. Zero behavior change: same filtering, same sort order, same Pulse card output.
 
 ### Fixed
 
