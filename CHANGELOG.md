@@ -11,6 +11,7 @@ Hardening & hygiene — close the vetted improve-laravel audit findings (against
 ### Changed
 
 - **Added a `composer audit` CI job that surfaces dependency advisories on every push and PR (#219).** The new `.github/workflows/audit.yml` resolves a fresh `--prefer-stable` tree (this package commits no `composer.lock`, so CI always tests against a freshly resolved tree) and runs `composer audit`. It starts non-blocking (`continue-on-error: true`) so a transient upstream advisory landing mid-review never gates a merge; the documented path to gating is to drop `continue-on-error` once the tree has held advisory-clean for a release cycle. The advisory-affected transitive deps flagged at the time (`guzzlehttp/psr7`, `symfony/http-foundation`, `symfony/routing`, `symfony/polyfill-intl-idn`) resolve advisory-clean under the current constraints, so no top-level constraints in `composer.json` changed.
+- Test-determinism: time-boundary durable lease-expiry and stale-run recovery assertions now run inside a frozen clock window (`$this->freezeTime()`), so the past `leased_until`/`updated_at` markers and the runtime's live `now()` resolve to the same instant. Removes the tight sub-second real-clock margin that left the durable/lease/recovery lane vulnerable to execution jitter under load. (Cross-process `tests/ProcessConcurrency` subprocesses keep their generous margins — a frozen clock can't be shared across processes.)
 
 ### Fixed
 

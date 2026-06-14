@@ -229,16 +229,26 @@ function stealDurableLease(string $runId, string $replacementToken = 'replacemen
         ]);
 }
 
+/**
+ * Mark a durable run's lease as expired. Freeze the clock (`$this->freezeTime()`)
+ * before calling so the past `leased_until` and the runtime's live `now()`
+ * resolve to the same instant — no real-clock margin to race against.
+ */
 function expireDurableLease(string $runId): void
 {
     DB::table('swarm_durable_runs')
         ->where('run_id', $runId)
         ->update([
-            'leased_until' => now()->subSecond(),
-            'updated_at' => now(),
+            'leased_until' => now('UTC')->subSeconds(5),
+            'updated_at' => now('UTC'),
         ]);
 }
 
+/**
+ * Mark a durable run as stale enough to clear the recovery grace window
+ * (300s by default). Freeze the clock (`$this->freezeTime()`) before calling so
+ * the past `updated_at` and the recovery threshold share one frozen instant.
+ */
 function staleWaitingRun(string $runId): void
 {
     DB::table('swarm_durable_runs')
@@ -418,6 +428,10 @@ test('durable recovery releases waiting joins after branches checkpoint terminal
 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
 
+    // Freeze the clock so the stale branch/run markers below and the recovery
+    // grace threshold share one instant — no real-clock margin to race against.
+    $this->freezeTime();
+
     foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel') as $branch) {
         DB::table('swarm_durable_branches')
             ->where('run_id', $runId)
@@ -457,6 +471,10 @@ test('durable recovery does not release waiting joins until every branch is term
 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
 
+    // Freeze the clock so the stale branch/run markers below and the recovery
+    // grace threshold share one instant — no real-clock margin to race against.
+    $this->freezeTime();
+
     DB::table('swarm_durable_branches')
         ->where('run_id', $runId)
         ->where('branch_id', 'parallel:0')
@@ -483,6 +501,10 @@ test('durable recovery joins collected branch failures and fails the parent', fu
     $manager = app(DurableSwarmManager::class);
 
     (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    // Freeze the clock so the stale branch/run markers below and the recovery
+    // grace threshold share one instant — no real-clock margin to race against.
+    $this->freezeTime();
 
     DB::table('swarm_durable_branches')
         ->where('run_id', $runId)
@@ -1009,6 +1031,10 @@ test('durable hierarchical recovery reruns the same worker after a crash before 
         ->and(DB::table('swarm_durable_node_outputs')->where('run_id', $runId)->count())->toBe(0)
         ->and(DB::table('swarm_artifacts')->where('run_id', $runId)->count())->toBe(1);
 
+    // Freeze the clock so the expired lease below and the runtime's live now()
+    // resolve to the same instant — no real-clock margin to race against.
+    $this->freezeTime();
+
     expireDurableLease($runId);
 
     (new AdvanceDurableSwarm($runId, 1))->handle($manager);
@@ -1437,6 +1463,10 @@ test('durable workers stop cleanly when the lease expires before context persist
     app()->forgetInstance(DurableSwarmManager::class);
 
     Event::fake([SwarmCompleted::class]);
+
+    // Freeze the clock so the lease expiry triggered inside ContextStore::put()
+    // and the runtime's live now() share one instant — no real-clock margin.
+    $this->freezeTime();
 
     $manager = app(DurableSwarmManager::class);
     $manager->advance($runId, 0);

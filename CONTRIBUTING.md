@@ -106,6 +106,24 @@ persisted payloads without coupling every test to the conservative production
 defaults. If your change depends on either default, set it explicitly inside
 the test rather than relying on the `TestCase` value.
 
+### Freeze the clock on time-boundary tests
+
+Durable lease-expiry and stale-run recovery assertions hinge on comparing a
+past timestamp (`leased_until`, `updated_at`) against the runtime's live
+`now()`. Constructing the past marker with `now()->sub…` and asserting against
+a separate live `now()` leaves a real-clock margin that flakes under execution
+jitter. **Freeze the clock with `$this->freezeTime()` before the time-boundary
+marker** so the marker and every `now()` the runtime reads resolve to the same
+instant — the boundary then holds exactly, with no margin to race against. The
+package `TestCase` extends Laravel's, so `$this->freezeTime()` is available in
+any `tests/Feature` or `tests/Unit` closure and is reset automatically after
+each test. The shared `expireDurableLease()`/`staleWaitingRun()` helpers in
+`tests/Feature/DurableSwarmTest.php` assume a frozen clock at their call site.
+
+This does **not** apply to `tests/ProcessConcurrency/*` subprocesses: a frozen
+clock can't be shared across processes, so keep those time-boundary margins
+generous instead.
+
 ### Writing `tests/ProcessConcurrency/*` worker closures
 
 Tests in this lane that pass anonymous closures to
