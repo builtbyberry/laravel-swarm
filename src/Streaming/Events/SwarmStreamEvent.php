@@ -67,6 +67,17 @@ abstract class SwarmStreamEvent extends StreamEvent
     }
 
     /**
+     * Read a value that may be absent/null because a CaptureDecision::Skip
+     * policy omitted it. Returns null when the key is missing or not a string.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    protected static function nullableStringValue(array $payload, string $key): ?string
+    {
+        return is_string($payload[$key] ?? null) ? $payload[$key] : null;
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      */
     protected static function intValue(array $payload, string $key, int $default = 0): int

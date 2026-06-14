@@ -80,6 +80,18 @@ function seedSnapshotRow(string $runId, int $stepIndex, Carbon $createdAt): int
     ]);
 }
 
+function seedCheckpointRow(string $runId, int $stepIndex, Carbon $createdAt): int
+{
+    return (int) DB::table('swarm_stream_step_checkpoints')->insertGetId([
+        'run_id' => $runId,
+        'step_index' => $stepIndex,
+        'output' => 'primed',
+        'usage' => json_encode([]),
+        'created_at' => $createdAt,
+        'updated_at' => $createdAt,
+    ]);
+}
+
 test('swarm:memory:purge is a no-op when the persistence driver is not database', function (): void {
     config()->set('swarm.persistence.driver', 'cache');
     config()->set('swarm.memory.retention.days.agent', 1);
@@ -272,6 +284,71 @@ test('swarm:memory:purge cascades a run\'s snapshots when any of its Run-scoped 
     // Both snapshots cascade because the run_id matched an aged Run-scoped row,
     // including the 1-day-old snapshot whose memory sibling survived.
     expect(DB::table('swarm_memory_snapshots')->where('run_id', 'run-straddle')->count())->toBe(0);
+});
+
+test('swarm:memory:purge cascades stream step checkpoints for Run-scoped purges by default (#202)', function (): void {
+    config()->set('swarm.memory.retention.days.run', 7);
+
+    seedMemoryRow(MemoryScope::Run, 'run-old', 'k', Carbon::now('UTC')->subDays(30));
+    seedCheckpointRow('run-old', 0, Carbon::now('UTC')->subDays(30));
+    seedCheckpointRow('run-old', 1, Carbon::now('UTC')->subDays(30));
+
+    seedMemoryRow(MemoryScope::Run, 'run-fresh', 'k', Carbon::now('UTC')->subDays(1));
+    seedCheckpointRow('run-fresh', 0, Carbon::now('UTC')->subDays(1));
+
+    Event::fake([MemoryPurged::class]);
+
+    Artisan::call('swarm:memory:purge');
+
+    expect(DB::table('swarm_stream_step_checkpoints')->where('run_id', 'run-old')->count())->toBe(0);
+    expect(DB::table('swarm_stream_step_checkpoints')->where('run_id', 'run-fresh')->count())->toBe(1);
+
+    Event::assertDispatched(MemoryPurged::class, function (MemoryPurged $event): bool {
+        return ($event->counts['checkpoints'] ?? null) === 2
+            && $event->criteria['prune_checkpoints'] === true;
+    });
+});
+
+test('swarm:memory:purge --dry-run reports the checkpoint would-delete count without deleting (#202)', function (): void {
+    config()->set('swarm.memory.retention.days.run', 7);
+
+    seedMemoryRow(MemoryScope::Run, 'run-old', 'k', Carbon::now('UTC')->subDays(30));
+    seedCheckpointRow('run-old', 0, Carbon::now('UTC')->subDays(30));
+    seedCheckpointRow('run-old', 1, Carbon::now('UTC')->subDays(30));
+
+    Event::fake([MemoryPurged::class]);
+
+    Artisan::call('swarm:memory:purge', ['--dry-run' => true]);
+
+    // Dry-run reports the would-delete checkpoint total but deletes nothing.
+    expect(DB::table('swarm_stream_step_checkpoints')->where('run_id', 'run-old')->count())->toBe(2);
+
+    Event::assertDispatched(MemoryPurged::class, function (MemoryPurged $event): bool {
+        return ($event->counts['checkpoints'] ?? null) === 2
+            && $event->criteria['dry_run'] === true
+            && $event->criteria['prune_checkpoints'] === true;
+    });
+});
+
+test('swarm:memory:purge --keep-snapshots also leaves stream step checkpoints intact (#202)', function (): void {
+    config()->set('swarm.memory.retention.days.run', 7);
+
+    seedMemoryRow(MemoryScope::Run, 'run-old', 'k', Carbon::now('UTC')->subDays(30));
+    $checkpointId = seedCheckpointRow('run-old', 0, Carbon::now('UTC')->subDays(30));
+
+    Event::fake([MemoryPurged::class]);
+
+    Artisan::call('swarm:memory:purge', ['--keep-snapshots' => true]);
+
+    // --keep-snapshots also retains checkpoints (one retention decision for the
+    // two per-step run tables); the FK cascade from swarm_run_histories is the
+    // backstop when the run itself is pruned.
+    expect(DB::table('swarm_memories')->where('scope_id', 'run-old')->exists())->toBeFalse();
+    expect(DB::table('swarm_stream_step_checkpoints')->where('id', $checkpointId)->exists())->toBeTrue();
+
+    Event::assertDispatched(MemoryPurged::class, function (MemoryPurged $event): bool {
+        return $event->criteria['prune_checkpoints'] === false;
+    });
 });
 
 test('swarm:memory:purge --keep-snapshots leaves swarm_memory_snapshots intact', function (): void {

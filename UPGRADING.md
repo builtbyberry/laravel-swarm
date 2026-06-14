@@ -268,6 +268,84 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.12.0
+
+v0.12.0 ships breaking changes on the public surface. It includes **one new migration** that makes the run-history step columns nullable so a `CaptureDecision::Skip` can persist `NULL` (see below); run `php artisan migrate`.
+
+### Breaking: `CaptureDecision::Skip` now omits fields instead of redacting them
+
+A `CapturePolicy` returning `CaptureDecision::Skip` for a category used to behave exactly like `Redact` — the value was still persisted and emitted, just as the `[redacted]` string. As of v0.12.0, `Skip` means **true omission on the evidence surfaces** (run history, lifecycle/stream events, audit envelopes):
+
+- **Persisted/emitted arrays** (run-history steps, history `context`, lifecycle and stream events) drop the key entirely instead of carrying `[redacted]`.
+- **Nullable database columns** store `NULL`: `swarm_run_steps.input`/`output` and the already-nullable `swarm_run_histories.output`.
+- **Failures** under `Skip` omit the `error.message` key while keeping `error.class`.
+
+> **Scope: capture governs evidence, not operational state.** The active-context
+> store (`swarm_contexts.input`) is the **only** persisted source of the top-level
+> input that a durable run resumes its first step from, so it is operational
+> runtime state — it always retains the (encrypted) input for the run's TTL and is
+> **never** nulled by a `Skip`. `Skip` omits input from the evidence/history/event/
+> audit surfaces above; it does not erase the operational input. (Durable runs
+> additionally require a `Full` active-context decision at dispatch.)
+
+A new migration (`*_make_swarm_capture_columns_nullable`) makes `swarm_run_steps.input`/`output` nullable. Run `php artisan migrate`. If you have **never** bound a custom `CapturePolicy` that returns `Skip`, no row shape changes — the migration only widens the columns.
+
+**The boolean path is frozen.** The default `BooleanCapturePolicy` (driven by `swarm.capture.*`) only ever returns `Full` or `Redact`, never `Skip`. Every existing `swarm.capture.*=false` install continues to see `[redacted]` exactly as before — only an explicit `Skip` from a custom policy changes the shape.
+
+If you read persisted history/events programmatically, treat the I/O keys as optional and the columns as nullable when a `Skip` policy is in effect:
+
+```php
+// A Skipped output omits the key; a Redacted output is the [redacted] string.
+$output = $step['output'] ?? null;            // may be absent under Skip
+$message = $history['error']['message'] ?? null; // omitted under Skip, class retained
+```
+
+Lifecycle and stream event I/O fields (`SwarmStarted::$input`, `SwarmCompleted::$output`, `SwarmStepStarted`/`SwarmStepCompleted` I/O, and the stream events' `input`/`output`/`delta`/`message`) are now `?string` and emit `null` under `Skip`. Artifacts `Redact`/`Skip` collapse is pre-existing and unchanged; `RedactingMemoryStore` Skip behavior is unchanged.
+
+### Breaking: audit evidence schema version is now `"3"`
+
+Because the `Skip` omission shape changes the audit payload contract, `EvidenceEnvelope::SCHEMA_VERSION` is bumped to `"3"`. Any consumer that pins or asserts the evidence schema version must accept `"3"`. Installs that never return `CaptureDecision::Skip` see no payload-shape change.
+
+### Breaking: `Contracts\HasStructuredOutput` removed
+
+`BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput` has been removed. It was a zero-value wrapper — it added no methods beyond what `Laravel\Ai\Contracts\HasStructuredOutput` already declares. Switch any application code that references the Swarm-owned interface to the upstream contract directly:
+
+```php
+// v0.12 — use the upstream contract
+use Laravel\Ai\Contracts\HasStructuredOutput;
+
+class MyCoordinator implements HasStructuredOutput { /* unchanged */ }
+```
+
+> **Note:** This reverses the migration instruction from the
+> [v0.5.0 upgrade guide](#upgrading-to-v050), which asked coordinator classes
+> to adopt the Swarm marker. The upstream contract was always the runtime
+> requirement; the Swarm marker was a redundant indirection.
+
+Agent classes that implement only `HasStructuredOutput` (with no other Swarm contracts) are unaffected at runtime — method signatures are identical. Only the `use` statement and any `instanceof` checks against the Swarm namespace need updating.
+
+### New: `dispatchDurable()` now supported for static-hierarchical swarms
+
+Previously, calling `dispatchDurable()` on a `Topology::StaticHierarchical` swarm threw a `SwarmException`. As of v0.12.0, static-hierarchical swarms execute durably: the plan is built at dispatch time (fail-fast validation), and execution begins directly with the first worker — there is no LLM coordinator step.
+
+If you had a `catch` block guarding against this exception, remove it.
+
+`swarm_durable_*` rows are now written when `dispatchDurable()` is called on these swarms. The stored `route_cursor` metadata includes `coordinator_agent_class: ''` (empty string) for durable static-hierarchical runs. Guard against absent coordinator data with `!empty($metadata['coordinator_agent_class'])` rather than `isset`.
+
+### Behavior change: streamed static-hierarchical runs now emit `swarm_memory_snapshots` rows
+
+Previously, `SwarmRunner::stream()` on a `StaticHierarchical` swarm produced no `swarm_memory_snapshots` rows — a pre-existing gap tracked in [#159](https://github.com/builtbyberry/laravel-swarm/issues/159). As of v0.12.0, a snapshot is frozen before each worker invocation and tool-call pairs are appended, consistent with all other runners. Applications that explicitly assert a zero-row count in `swarm_memory_snapshots` for these runs — for example, in database-level integration tests — must update those assertions.
+
+No migration is required; the `swarm_memory_snapshots` table already exists from v0.9.0.
+
+### Behavior change: non-final streamed steps no longer re-execute on resume
+
+Previously, re-running an abandoned streamed sequential run with the same run id replayed only the **terminal** step byte-identically (from its frozen `swarm_memory_snapshots` row); every **non-final** step re-executed against live memory — its provider was re-invoked and its tool side effects (memory writes, external calls) re-fired. As of v0.12.0 ([#202](https://github.com/builtbyberry/laravel-swarm/issues/202)), a completed non-final step is **skipped** on resume: its provider is not re-invoked and its side effects do not re-fire — its recorded output is rehydrated from the new `swarm_stream_step_checkpoints` table so the downstream prompt stays byte-identical. This is governed by the memory replay mode (`#[MemoryReplay]` / `swarm.memory.replay_mode`, default `frozen_view`; set `fresh_execution` to opt out) and requires the database persistence driver.
+
+Applications that assert a non-final step runs **twice** across a crash + resume (for example, an invocation counter expecting `2`) must update those assertions to `1`. Behavior under the cache driver, in `fresh_execution` mode, and for fresh (non-resumed) runs is unchanged.
+
+A new migration creates `swarm_stream_step_checkpoints`; run `php artisan migrate` (or `swarm:install:memory --migrate`). On the database driver without the migration, multi-step resume silently degrades to re-execution rather than failing.
+
 ## Upgrading to v0.11.0
 
 **No required action.** v0.11.0 is purely additive — there are no breaking
@@ -1143,10 +1221,13 @@ The boolean capture keys are **deprecated** in v0.4 and are scheduled for
 removal in v0.5. They continue to work through `BooleanCapturePolicy` for the
 duration of the v0.4 line.
 
-`CaptureDecision::Skip` is reserved for the v0.5 audit dispatcher work. In
-v0.4 a `Skip` decision behaves identically to `Redact` at the field level;
-custom policies may return `Skip` today to declare intent ahead of the v0.5
-change.
+> **Historical note:** through the v0.4–v0.11 lines, `CaptureDecision::Skip`
+> behaved identically to `Redact` at the field level (the value was persisted as
+> `[redacted]`). As of **v0.12.0**, `Skip` is true omission on the evidence
+> surfaces — the field is absent from persisted/emitted payloads and `NULL` on
+> the nullable evidence columns. The operational active-context store
+> (`swarm_contexts.input`) retains the input for durable resume. See
+> [Upgrading to v0.12.0](#upgrading-to-v0120).
 
 A minimal custom policy:
 

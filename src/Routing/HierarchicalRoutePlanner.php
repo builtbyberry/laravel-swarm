@@ -5,15 +5,22 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Routing;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
-use BuiltByBerry\LaravelSwarm\Contracts\HasStructuredOutput;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use JsonException;
+use Laravel\Ai\Contracts\HasStructuredOutput;
 
 /**
  * @internal
  */
 class HierarchicalRoutePlanner
 {
+    protected LoopRuleValidator $loopRules;
+
+    public function __construct(?LoopRuleValidator $loopRules = null)
+    {
+        $this->loopRules = $loopRules ?? new LoopRuleValidator;
+    }
+
     /**
      * @param  array<int, Agent>  $workers
      */
@@ -114,6 +121,7 @@ class HierarchicalRoutePlanner
         $this->validateParallelBranches($plan);
         $this->validateReachability($plan);
         $this->validateAcyclic($plan);
+        $this->validateLoops($plan);
         $this->validateDataDependencies($plan);
 
         return $plan;
@@ -155,6 +163,7 @@ class HierarchicalRoutePlanner
         $agentClass = $payload['agent'] ?? null;
         $prompt = $payload['prompt'] ?? null;
         $withOutputs = $this->normalizeWithOutputs($nodeId, $payload['with_outputs'] ?? []);
+        [$loopTo, $loopMaxIterations] = $this->normalizeLoop($nodeId, $payload['loop'] ?? null, $next);
 
         if (! is_string($agentClass) || $agentClass === '') {
             throw new SwarmException("Hierarchical worker node [{$nodeId}] must define a non-empty [agent] class.");
@@ -179,7 +188,42 @@ class HierarchicalRoutePlanner
             withOutputs: $withOutputs,
             metadata: $metadata,
             next: $next,
+            loopTo: $loopTo,
+            loopMaxIterations: $loopMaxIterations,
         );
+    }
+
+    /**
+     * Normalize a worker node's optional bounded loop back-edge.
+     *
+     * @return array{0: string|null, 1: int|null}
+     */
+    protected function normalizeLoop(string $nodeId, mixed $loop, ?string $next): array
+    {
+        if ($loop === null) {
+            return [null, null];
+        }
+
+        if (! is_array($loop) || array_is_list($loop)) {
+            throw new SwarmException("Hierarchical worker node [{$nodeId}] must define [loop] as an object with [to] and [max_iterations].");
+        }
+
+        $to = $loop['to'] ?? null;
+        $maxIterations = $loop['max_iterations'] ?? null;
+
+        if (! is_string($to) || $to === '') {
+            throw new SwarmException("Hierarchical worker node [{$nodeId}] must define [loop.to] as a non-empty node id.");
+        }
+
+        if (! is_int($maxIterations) || $maxIterations < 1) {
+            throw new SwarmException("Hierarchical worker node [{$nodeId}] must define [loop.max_iterations] as a positive integer to bound the loop. Unbounded loops are not supported.");
+        }
+
+        if ($next === null) {
+            throw new SwarmException("Hierarchical worker node [{$nodeId}] with a [loop] must also define [next] as the loop's exit node so termination is always reachable.");
+        }
+
+        return [$to, $maxIterations];
     }
 
     /**
@@ -318,36 +362,15 @@ class HierarchicalRoutePlanner
 
     protected function validateAcyclic(HierarchicalRoutePlan $plan): void
     {
-        $visited = [];
-        $inProgress = [];
-
-        if ($this->hasCycle($plan->startAt, $plan, $visited, $inProgress)) {
-            throw new SwarmException('Hierarchical route plans must be acyclic. Loops are not supported in this release.');
-        }
+        $this->loopRules->assertAcyclic(
+            $plan,
+            'Hierarchical route plans must be acyclic. Loops are not supported in this release.',
+        );
     }
 
-    /**
-     * @param  array<string, bool>  $visited
-     * @param  array<string, bool>  $inProgress
-     */
-    protected function hasCycle(string $nodeId, HierarchicalRoutePlan $plan, array &$visited, array &$inProgress): bool
+    protected function validateLoops(HierarchicalRoutePlan $plan): void
     {
-        $visited[$nodeId] = true;
-        $inProgress[$nodeId] = true;
-
-        foreach ($plan->node($nodeId)->controlEdges() as $nextNodeId) {
-            if (! isset($visited[$nextNodeId])) {
-                if ($this->hasCycle($nextNodeId, $plan, $visited, $inProgress)) {
-                    return true;
-                }
-            } elseif (isset($inProgress[$nextNodeId])) {
-                return true;
-            }
-        }
-
-        unset($inProgress[$nodeId]);
-
-        return false;
+        $this->loopRules->assertLoops($plan, 'Hierarchical');
     }
 
     protected function validateDataDependencies(HierarchicalRoutePlan $plan): void

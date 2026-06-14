@@ -14,7 +14,7 @@ final class SwarmStreamStart extends SwarmStreamEvent
         public string $runId,
         public string $swarmClass,
         public string $topology,
-        public string $input,
+        public ?string $input,
         public array $metadata,
         public int $timestamp,
     ) {}
@@ -47,7 +47,7 @@ final class SwarmStreamStart extends SwarmStreamEvent
             runId: self::stringValue($payload, 'run_id'),
             swarmClass: self::stringValue($payload, 'swarm_class'),
             topology: self::stringValue($payload, 'topology'),
-            input: self::stringValue($payload, 'input'),
+            input: self::nullableStringValue($payload, 'input'),
             metadata: self::arrayValue($payload, 'metadata'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
         );

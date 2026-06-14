@@ -59,6 +59,7 @@ class DurableHierarchicalCoordinator
             $state->context->runId,
             $expectedStepIndex,
             fn (?MemorySnapshot $existing) => $this->hierarchical->runDurableStep($state, $expectedStepIndex, $run),
+            $state->context,
         );
     }
 

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Telemetry;
 
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+
 /**
  * Shared envelope fields for audit evidence and observability telemetry payloads.
  *
@@ -13,16 +15,26 @@ namespace BuiltByBerry\LaravelSwarm\Telemetry;
  */
 final class EvidenceEnvelope
 {
-    public const SCHEMA_VERSION = '2';
+    public const SCHEMA_VERSION = '3';
 
     /**
      * Top-level metadata keys that are always emitted on audit and telemetry
-     * payloads regardless of the configured allowlist. The "actor" key is
-     * reserved for the resolved Actor identity bound at run entry.
+     * payloads regardless of the configured allowlist:
+     *
+     *  - "actor" — the resolved Actor identity bound at run entry.
+     *  - "conversation_id" — the conversation a run belongs to, bound via
+     *    {@see RunContext::withConversationId()}.
+     *    Emitted as provenance so an audit can answer "which conversation was
+     *    this run part of" without the operator having to allowlist it. Keep
+     *    conversation ids opaque (non-PII): the value bypasses the allowlist.
+     *
+     * New reserved keys may be added additively — this is the authoritative
+     * list and the addition does not change the envelope shape, so it carries
+     * no {@see SCHEMA_VERSION} bump.
      *
      * @var array<int, string>
      */
-    public const RESERVED_METADATA_KEYS = ['actor'];
+    public const RESERVED_METADATA_KEYS = ['actor', 'conversation_id'];
 
     /**
      * @param  array<string, mixed>  $payload

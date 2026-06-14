@@ -489,10 +489,21 @@ class DatabaseDurableRunStore implements DurableRunStore
         ?array $routePlan = null,
         ?array $nodeOutput = null,
         ?int $totalSteps = null,
+        array $clearBranchParentNodeIds = [],
     ): void {
-        $this->connection->transaction(function () use ($runId, $executionToken, $nextStepIndex, $context, $ttlSeconds, $routeCursor, $routePlan, $nodeOutput, $totalSteps): void {
+        $this->connection->transaction(function () use ($runId, $executionToken, $nextStepIndex, $context, $ttlSeconds, $routeCursor, $routePlan, $nodeOutput, $totalSteps, $clearBranchParentNodeIds): void {
             $timestamp = Carbon::now('UTC');
             $expiresAt = DatabaseTtl::expiresAt($ttlSeconds);
+
+            // Loop back-edge: drop the prior pass's branch rows for every parallel
+            // fan-out inside the loop body, atomically with the cursor rewind below.
+            // branchesFor() then returns [] next pass and the fan-out re-dispatches.
+            foreach ($clearBranchParentNodeIds as $parentNodeId) {
+                $this->branchTable()
+                    ->where('run_id', $runId)
+                    ->where('parent_node_id', $parentNodeId)
+                    ->delete();
+            }
 
             if ($nodeOutput !== null) {
                 $this->nodeOutputTable()->upsert([
@@ -1893,7 +1904,7 @@ class DatabaseDurableRunStore implements DurableRunStore
     }
 
     /**
-     * @param  array{message: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure
+     * @param  array{message?: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure  `message` is omitted when the capture policy Skips failures.
      */
     protected function markTerminal(string $runId, string $executionToken, string $status, ?array $failure = null): void
     {

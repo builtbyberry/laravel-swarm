@@ -324,6 +324,44 @@ test('withActor survives queue payload serialization roundtrip', function () {
     expect($rehydrated->metadata['actor']['type'])->toBe('user');
 });
 
+test('conversationId() returns null when no conversation is bound', function () {
+    expect(RunContext::fromTask('task')->conversationId())->toBeNull();
+});
+
+test('withConversationId binds and reads back the conversation id', function () {
+    $context = RunContext::fromTask('task')->withConversationId('conv-7');
+
+    expect($context->conversationId())->toBe('conv-7');
+});
+
+test('withConversationId trims and treats empty or whitespace as cleared', function () {
+    expect(RunContext::fromTask('task')->withConversationId('  conv-7  ')->conversationId())->toBe('conv-7');
+    expect(RunContext::fromTask('task')->withConversationId('')->conversationId())->toBeNull();
+    expect(RunContext::fromTask('task')->withConversationId('   ')->conversationId())->toBeNull();
+});
+
+test('withConversationId(null) clears a previously bound id', function () {
+    $context = RunContext::fromTask('task')
+        ->withConversationId('conv-7')
+        ->withConversationId(null);
+
+    expect($context->conversationId())->toBeNull();
+    expect($context->metadata)->not->toHaveKey('conversation_id');
+});
+
+test('withConversationId survives queue payload serialization roundtrip', function () {
+    $context = RunContext::fromTask('task')->withConversationId('conv-7');
+
+    $rehydrated = RunContext::fromPayload($context->toQueuePayload());
+
+    expect($rehydrated->conversationId())->toBe('conv-7');
+});
+
+test('fake applies the conversation_id override', function () {
+    expect(RunContext::fake(['conversation_id' => 'conv-9'])->conversationId())->toBe('conv-9');
+    expect(RunContext::fake()->conversationId())->toBeNull();
+});
+
 test('fake returns a deterministic context with sensible defaults', function () {
     $context = RunContext::fake();
 

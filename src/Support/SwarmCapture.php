@@ -16,16 +16,29 @@ use Throwable;
 /**
  * Adapter over the bound CapturePolicy.
  *
- * v0.4 keeps the v0.3 SwarmCapture surface (input/output/context/step/etc.)
- * but routes every decision through CapturePolicy. Custom policies bound in
- * the service container immediately affect every emit site without changes
- * to call sites. The default BooleanCapturePolicy preserves v0.3 behavior
- * (reads swarm.capture.* booleans).
+ * SwarmCapture is the single chokepoint that turns a CapturePolicy decision
+ * into a captured payload shape for the *evidence* surfaces — run history,
+ * lifecycle/stream events, and audit envelopes. Custom policies bound in the
+ * container affect every emit site without touching call sites. The default
+ * BooleanCapturePolicy reads the swarm.capture.* booleans and only ever returns
+ * Full / Redact, so apps using those booleans see no behavior change.
  *
- * For v0.4, CaptureDecision::Skip behaves identically to ::Redact at the
- * field level — the enum case is reserved for v0.5 audit dispatcher work
- * that adds true per-field omission. Custom policies returning ::Skip today
- * declare intent; the contract is locked.
+ * Capture governs evidence, not operational state: the active-context store
+ * (swarm_contexts) is the only persisted source of the top-level input for
+ * durable resume, so it always retains the true input and is NOT shaped here.
+ *
+ * Per-field decision shapes:
+ *
+ *  - Full   — value as-is.
+ *  - Redact — scalar values become {@see self::REDACTED}; structure/keys
+ *             preserved.
+ *  - Skip   — the field is omitted entirely: absent from persisted/emitted
+ *             arrays and null on the evidence DB columns that allow it
+ *             (run-history step input/output, top-level run output, the
+ *             error `message`). Use the Skip-aware apply and persisted-array
+ *             helpers to obtain that shape; the `capturesX()` predicates stay
+ *             `=== Full` so the execution/storage gates they drive are
+ *             unchanged.
  *
  * @internal
  */
@@ -38,6 +51,50 @@ class SwarmCapture
         protected CapturePolicy $policy,
     ) {}
 
+    // ------------------------------------------------------------------
+    // Per-category decisions
+    // ------------------------------------------------------------------
+
+    public function inputsDecision(?RunContext $context = null): CaptureDecision
+    {
+        return $this->policy->inputs($context, $context?->actor());
+    }
+
+    public function outputsDecision(?RunContext $context = null): CaptureDecision
+    {
+        return $this->policy->outputs($context, $context?->actor());
+    }
+
+    /**
+     * Failure capture is a function of inputs + outputs: Full only when both
+     * are Full, Skip as soon as either category is Skip, otherwise Redact.
+     */
+    public function failuresDecision(?RunContext $context = null): CaptureDecision
+    {
+        $inputs = $this->inputsDecision($context);
+        $outputs = $this->outputsDecision($context);
+
+        if ($inputs === CaptureDecision::Full && $outputs === CaptureDecision::Full) {
+            return CaptureDecision::Full;
+        }
+
+        if ($inputs === CaptureDecision::Skip || $outputs === CaptureDecision::Skip) {
+            return CaptureDecision::Skip;
+        }
+
+        return CaptureDecision::Redact;
+    }
+
+    // ------------------------------------------------------------------
+    // Scalar helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Redact-or-keep helper retained for call sites that require a non-null
+     * string (e.g. the live in-memory {@see SwarmStep} / {@see SwarmResponse}
+     * surface). Skip collapses to {@see self::REDACTED} here; use
+     * {@see applyInput()} where omission is required.
+     */
     public function input(string $input): string
     {
         return $this->capturesInputs() ? $input : self::REDACTED;
@@ -48,14 +105,57 @@ class SwarmCapture
         return $this->capturesOutputs() ? $output : self::REDACTED;
     }
 
+    /**
+     * Skip-aware input helper for persisted/emitted payloads: Full → value,
+     * Redact → REDACTED, Skip → null (caller omits the field).
+     */
+    public function applyInput(string $input, ?RunContext $context = null): ?string
+    {
+        return $this->applyScalar($input, $this->inputsDecision($context));
+    }
+
+    public function applyOutput(string $output, ?RunContext $context = null): ?string
+    {
+        return $this->applyScalar($output, $this->outputsDecision($context));
+    }
+
     public function failureMessage(Throwable $exception): string
     {
         return $this->capturesFailures() ? $exception->getMessage() : self::REDACTED;
     }
 
+    /**
+     * Skip-aware failure message: Full → message, Redact → REDACTED, Skip →
+     * null so the caller omits the `error.message` key while keeping `class`.
+     */
+    public function applyFailureMessage(Throwable $exception, ?RunContext $context = null): ?string
+    {
+        return $this->applyScalar($exception->getMessage(), $this->failuresDecision($context));
+    }
+
     public function failureException(Throwable $exception): Throwable
     {
         return $this->capturesFailures() ? $exception : new SwarmException(self::REDACTED);
+    }
+
+    /**
+     * Build a persisted/structured failure payload. Full/Redact keep a
+     * `message`; Skip omits it (keeping `class` and any provided extras such
+     * as `timed_out`). Use for JSON `failure` columns and durable detail
+     * structures so Skip stays consistent with the error-message contract.
+     *
+     * @param  array{timed_out?: bool}  $extra
+     * @return array{message?: string, class: class-string<Throwable>, timed_out?: bool}
+     */
+    public function failureArray(Throwable $exception, array $extra = [], ?RunContext $context = null): array
+    {
+        $message = $this->applyFailureMessage($exception, $context);
+
+        if ($message === null) {
+            return ['class' => $exception::class] + $extra;
+        }
+
+        return ['message' => $message, 'class' => $exception::class] + $extra;
     }
 
     /**
@@ -66,6 +166,10 @@ class SwarmCapture
     {
         return $this->capturesArtifacts() ? $artifacts : [];
     }
+
+    // ------------------------------------------------------------------
+    // Composite live objects (in-memory + Full/Redact persistence)
+    // ------------------------------------------------------------------
 
     public function context(RunContext $context): RunContext
     {
@@ -151,6 +255,64 @@ class SwarmCapture
         );
     }
 
+    // ------------------------------------------------------------------
+    // Skip-aware persisted-array helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Serialize a step for persistence with Skip omitting input/output keys.
+     * Full keeps the value, Redact replaces scalars with REDACTED. Decoupled
+     * from {@see SwarmStep::toArray()} so persistence does not depend on the
+     * step always carrying `input` / `output` keys.
+     *
+     * @return array<string, mixed>
+     */
+    public function stepToPersistedArray(SwarmStep $step, ?RunContext $context = null): array
+    {
+        $array = $step->toArray();
+
+        $this->applyScalarKey($array, 'input', $step->input, $this->inputsDecision($context));
+        $this->applyScalarKey($array, 'output', $step->output, $this->outputsDecision($context));
+
+        $array['artifacts'] = array_map(
+            static fn (SwarmArtifact $artifact): array => $artifact->toArray(),
+            $this->artifacts($step->artifacts),
+        );
+
+        return $array;
+    }
+
+    /**
+     * Strip Skip-omitted keys from a serialized run-history context payload.
+     * Operates on the array produced from a {@see context()} result so the
+     * boolean Redact path is untouched (no Skip decision means no key removal).
+     *
+     * @param  array<string, mixed>  $contextArray
+     * @return array<string, mixed>
+     */
+    public function omitSkippedHistoryContextKeys(array $contextArray, ?RunContext $context = null): array
+    {
+        if ($this->inputsDecision($context) === CaptureDecision::Skip) {
+            unset($contextArray['input']);
+
+            if (isset($contextArray['data']) && is_array($contextArray['data'])) {
+                unset($contextArray['data']['input']);
+            }
+        }
+
+        if ($this->outputsDecision($context) === CaptureDecision::Skip && isset($contextArray['data']) && is_array($contextArray['data'])) {
+            foreach (['last_output', 'hierarchical_node_outputs', 'durable_hierarchical_cursor'] as $key) {
+                unset($contextArray['data'][$key]);
+            }
+        }
+
+        return $contextArray;
+    }
+
+    // ------------------------------------------------------------------
+    // Full-gated predicates (execution / storage gates — unchanged)
+    // ------------------------------------------------------------------
+
     public function capturesInputs(): bool
     {
         return $this->policy->inputs() === CaptureDecision::Full;
@@ -174,5 +336,30 @@ class SwarmCapture
     public function capturesFailures(): bool
     {
         return $this->capturesInputs() && $this->capturesOutputs();
+    }
+
+    protected function applyScalar(string $value, CaptureDecision $decision): ?string
+    {
+        return match ($decision) {
+            CaptureDecision::Full => $value,
+            CaptureDecision::Redact => self::REDACTED,
+            CaptureDecision::Skip => null,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $array
+     */
+    protected function applyScalarKey(array &$array, string $key, string $value, CaptureDecision $decision): void
+    {
+        $applied = $this->applyScalar($value, $decision);
+
+        if ($applied === null) {
+            unset($array[$key]);
+
+            return;
+        }
+
+        $array[$key] = $applied;
     }
 }

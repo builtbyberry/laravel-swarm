@@ -181,8 +181,22 @@ test('it degrades gracefully outside a swarm run', function () {
 test('it reports an unaddressable scope distinctly while in a run', function () {
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 
-    // The conversation scope is never addressable yet, but the run is active —
-    // so the message must not claim there is no run.
+    // The conversation scope is unaddressable because this run carries no
+    // conversation id, but the run is active — so the message must not claim
+    // there is no run.
     expect(remember(['key' => 'topic', 'value' => 'x', 'scope' => 'conversation']))
         ->toBe('The [conversation] scope is not addressable in this run.');
+});
+
+test('it writes to conversation scope when the run is bound to a conversation', function () {
+    ActiveRunContext::enter(
+        'run-1',
+        FakeSequentialSwarm::class,
+        RunContext::fake(['run_id' => 'run-1', 'input' => 'go', 'conversation_id' => 'conv-5']),
+    );
+
+    $result = remember(['key' => 'topic', 'value' => 'launch plan', 'scope' => 'conversation']);
+
+    expect($result)->toBe('Stored [topic] in conversation memory.');
+    expect(app(SwarmMemory::class)->get(MemoryScope::Conversation, 'conv-5', 'topic'))->toBe('launch plan');
 });

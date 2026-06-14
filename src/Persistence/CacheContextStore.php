@@ -25,7 +25,14 @@ class CacheContextStore implements ContextStore
 
     public function put(RunContext $context, int $ttlSeconds): void
     {
-        $this->store()->put($this->key($context->runId), $context->toArray(), $ttlSeconds);
+        // The active-context store is operational runtime state needed for
+        // durable resume, so it always retains the true input. Skip is honored
+        // on the evidence surfaces (run history, events, audit), not here.
+        $this->store()->put(
+            $this->key($context->runId),
+            $context->toArray(),
+            $ttlSeconds,
+        );
     }
 
     /**

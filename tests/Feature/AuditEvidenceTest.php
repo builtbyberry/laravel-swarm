@@ -294,6 +294,30 @@ test('audit metadata allowlist emits only configured top-level metadata values',
     expect(json_encode($sink->allRecords()) ?: '')->not->toContain('SENSITIVE_METADATA_VALUE');
 });
 
+test('a conversation-bound run emits the conversation_id as reserved provenance under an empty allowlist', function (): void {
+    FakeResearcher::fake(['research-out']);
+    FakeWriter::fake(['writer-out']);
+    FakeEditor::fake(['editor-out']);
+
+    // Empty allowlist: only reserved keys surface their value. conversation_id is
+    // reserved, so audit evidence carries it as run provenance while a
+    // non-reserved sibling value stays withheld.
+    config()->set('swarm.audit.metadata_allowlist', []);
+
+    $context = RunContext::from([
+        'input' => 'task',
+        'metadata' => ['secret_note' => 'SENSITIVE_METADATA_VALUE'],
+    ])->withConversationId('conv-42');
+
+    $sink = bindRecordingSink();
+    FakeSequentialSwarm::make()->run($context);
+
+    $started = $sink->recordsForCategory('run.started')[0];
+    expect($started['metadata_keys'])->toContain('conversation_id', 'secret_note');
+    expect($started['metadata'])->toBe(['conversation_id' => 'conv-42']);
+    expect(json_encode($sink->allRecords()) ?: '')->not->toContain('SENSITIVE_METADATA_VALUE');
+});
+
 // ---------------------------------------------------------------------------
 // Prune command
 // ---------------------------------------------------------------------------

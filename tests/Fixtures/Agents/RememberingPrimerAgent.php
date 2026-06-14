@@ -29,6 +29,14 @@ use Stringable;
  */
 class RememberingPrimerAgent implements Agent
 {
+    /**
+     * Count of prompt() invocations across a test. The F2 boundary test asserts
+     * this reaches 2 across a crash + resume — proving the non-final primer step
+     * RE-EXECUTES on resume (it is not replayed from the frozen snapshot; only
+     * the terminal streamed step is). Reset it in the test's beforeEach.
+     */
+    public static int $invocations = 0;
+
     public function instructions(): Stringable|string
     {
         return 'You seed shared memory for later agents.';
@@ -40,6 +48,8 @@ class RememberingPrimerAgent implements Agent
      */
     public function prompt(string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
+        self::$invocations++;
+
         Container::getInstance()->make(Remember::class)->handle(new Request([
             'key' => 'finding',
             'value' => 'primed-answer',

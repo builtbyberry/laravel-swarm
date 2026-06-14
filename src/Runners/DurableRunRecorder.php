@@ -36,11 +36,9 @@ class DurableRunRecorder
     public function fail(string $runId, string $token, Throwable $exception, RunContext $context, int $stepLeaseSeconds): void
     {
         $this->connection->transaction(function () use ($runId, $token, $exception, $context, $stepLeaseSeconds): void {
-            $this->durableRuns->markFailed($runId, $token, [
-                'message' => $this->capture->failureMessage($exception),
-                'class' => $exception::class,
+            $this->durableRuns->markFailed($runId, $token, $this->capture->failureArray($exception, [
                 'timed_out' => str_contains(strtolower($exception->getMessage()), 'timeout'),
-            ]);
+            ], $context));
             $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             $historyRow = $this->historyStore->find($runId);
             $historyToken = is_array($historyRow) ? ($historyRow['execution_token'] ?? null) : null;
@@ -136,6 +134,7 @@ class DurableRunRecorder
                 routePlan: $result->routePlan,
                 nodeOutput: $result->nodeOutput,
                 totalSteps: $result->totalSteps,
+                clearBranchParentNodeIds: $result->clearBranchParentNodeIds,
             );
             if ($withTransaction !== null) {
                 ($withTransaction)();

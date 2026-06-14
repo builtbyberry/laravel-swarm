@@ -12,7 +12,7 @@ final class SwarmStepStart extends SwarmStreamEvent
         public int $stepIndex,
         public string $agentClass,
         public string $agent,
-        public string $input,
+        public ?string $input,
         public int $timestamp,
     ) {}
 
@@ -45,7 +45,7 @@ final class SwarmStepStart extends SwarmStreamEvent
             stepIndex: self::intValue($payload, 'step_index'),
             agentClass: self::stringValue($payload, 'agent_class'),
             agent: self::stringValue($payload, 'agent'),
-            input: self::stringValue($payload, 'input'),
+            input: self::nullableStringValue($payload, 'input'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
         );
     }

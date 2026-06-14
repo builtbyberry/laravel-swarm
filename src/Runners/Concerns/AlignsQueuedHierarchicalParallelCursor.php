@@ -20,6 +20,11 @@ trait AlignsQueuedHierarchicalParallelCursor
      * Build a durable-style route cursor positioned at a parallel node before branch rows exist.
      *
      * @param  array<string, string>  $nodeOutputs
+     * @param  array<string, int>  $loopIterations  Per-node loop counters carried from the live
+     *                                              in-process walk so a parallel fan-out reached on
+     *                                              a later loop pass persists its real iteration —
+     *                                              without this the resumed cursor restarts the loop
+     *                                              from iteration 1 and the run never converges.
      * @return array<string, mixed>
      */
     protected function cursorAtQueueParallelBoundary(
@@ -28,8 +33,10 @@ trait AlignsQueuedHierarchicalParallelCursor
         string $coordinatorClass,
         HierarchicalParallelNode $parallel,
         array $nodeOutputs,
+        array $loopIterations = [],
     ): array {
         $cursor = $this->buildDurableCursor($plan, $coordinatorClass);
+        $cursor['loop_iterations'] = $loopIterations;
 
         while (isset($cursor['entries'][$cursor['offset']])) {
             $entry = $cursor['entries'][$cursor['offset']];

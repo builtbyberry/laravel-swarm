@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Container\Container;
 
@@ -58,17 +59,24 @@ final class AgentVisibleMemoryView
      * the declared order — so a policy never pays to load a scope it will not
      * look at, and the default policy (Run only) reads nothing extra.
      *
-     * The Agent scope is gathered only when the concrete agent instance is
-     * known; on the durable and hierarchical-parallel paths only the
-     * class-string is in hand, so a declared Agent scope is skipped there. The
-     * Conversation scope has no scope-id to key on yet (the runtime exposes no
-     * conversation handle), so it is skipped if declared.
+     * The Agent scope requires a concrete agent instance; callers that hold
+     * only a class-string must resolve it before calling {@see present()}.
+     * When {@see $agent} is null the Agent scope is skipped. The
+     * Conversation scope keys on the conversation id bound to the run via
+     * {@see RunContext::withConversationId()}; when no conversation id is bound
+     * the scope has no id to key on and is skipped if declared.
      *
      * @param  array<int, MemoryScope>  $scopes
      * @return array<int, MemoryEntry>
      */
     protected function gatherCandidates(array $scopes, Swarm $swarm, RunContext $context, ?Agent $agent): array
     {
+        // Prefer the per-invocation frozen view when a crash-resume replay is in
+        // effect for this run (carried on the ActiveRunContext frame, not the
+        // container), so concurrent in-process streams each read their own frozen
+        // snapshot. Falls back to the live, constructor-injected memory otherwise.
+        $memory = ActiveRunContext::currentMemory() ?? $this->memory;
+
         $entries = [];
 
         foreach ($scopes as $scope) {
@@ -76,14 +84,14 @@ final class AgentVisibleMemoryView
                 MemoryScope::Run => $context->runId,
                 MemoryScope::Swarm => $swarm::class,
                 MemoryScope::Agent => $agent !== null ? $agent::class : null,
-                MemoryScope::Conversation => null,
+                MemoryScope::Conversation => $context->conversationId(),
             };
 
             if ($scopeId === null) {
                 continue;
             }
 
-            $entries = [...$entries, ...$this->memory->all($scope, $scopeId)];
+            $entries = [...$entries, ...$memory->all($scope, $scopeId)];
         }
 
         return $entries;

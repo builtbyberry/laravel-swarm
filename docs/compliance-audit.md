@@ -34,6 +34,39 @@ with only the **address** of the data (scope and key), never its value, so the
 policy code itself can never become a leak path and can never couple to payload
 shape.
 
+> **Run-history / evidence capture is a sibling control.** `MemoryCapturePolicy`
+> governs the **memory** write boundary; the audit `CapturePolicy` (inputs,
+> outputs, artifacts, active context) governs what lands in **run history,
+> lifecycle/stream events, and audit evidence**. Both return the same
+> `Full` / `Redact` / `Skip` decision. As of **v0.12.0**, a `Skip` from the audit
+> `CapturePolicy` is true omission on the **evidence** surfaces — the field is
+> absent from persisted/emitted payloads and `NULL` on the nullable evidence
+> columns, and a failure under `Skip` drops `error.message` while keeping
+> `error.class`. The operational active-context store (`swarm_contexts.input`)
+> retains the encrypted input for durable resume and is never nulled by `Skip`.
+> The default boolean policy never returns `Skip`, so `swarm.capture.*=false`
+> installs still record `[redacted]`.
+> See the [audit evidence contract](audit-evidence-contract.md#capture-policy).
+>
+> **Streamed multi-step resume checkpoints are operational state too.** The
+> `swarm_stream_step_checkpoints` table (#202) records a completed non-final
+> streamed step's raw output so an abandoned `stream()` run can resume without
+> re-executing it. Like `swarm_contexts.input`, it is operational resume state,
+> **not** an evidence surface: the output is stored untouched (not gated by
+> `swarm.capture.*`), **encrypted at rest** when `encrypt_at_rest` is enabled
+> (the default under the database driver), never audited or emitted, and pruned
+> with the run (the `swarm_run_histories` FK cascade, plus early-prune under
+> `swarm:memory:purge`). A capture-sensitive deployment that must not retain
+> non-final outputs at all should set `swarm.memory.replay_mode=fresh_execution`,
+> which disables checkpoint storage entirely (steps then re-execute on resume).
+>
+> Because the checkpoint is recomputable operational state, its **read** path
+> deliberately bypasses `swarm.persistence.decrypt_failure_policy`: an
+> undecryptable checkpoint (e.g. after an `APP_KEY` rotation) is treated as
+> absent and the step **re-executes** — it never surfaces ciphertext or aborts
+> the run, regardless of the policy. That policy still governs the evidence read
+> paths (run history, audit, inspector), which are the auditable surfaces.
+
 ## Memory capture policy
 
 Retention ([below](#memory-retention)) ages PII *out* after it lands. The
@@ -230,11 +263,18 @@ when `swarm:prune` ages out the parent run. In short, `swarm:memory:purge`
 removes snapshots *early* when their memory ages out first; `swarm:prune` is
 the backstop that guarantees no snapshot outlives its run history.
 
+`swarm_stream_step_checkpoints` (the #202 multi-step-resume store) follows the
+identical rule: `swarm:memory:purge` early-prunes a run's checkpoints alongside
+its snapshots under the same `--keep-snapshots` decision, and its own
+`cascadeOnDelete` foreign key to `swarm_run_histories` is the `swarm:prune`
+backstop — so no checkpoint outlives its run history either.
+
 ### Audit evidence
 
-Every run dispatches a `MemoryPurged` event with per-scope counts and the
-criteria the operator ran with (retention windows, scope filter, snapshot
-flag, dry-run flag, prevent-prune flag, ISO-8601 cutoffs per scope).
+Every run dispatches a `MemoryPurged` event with per-scope counts (plus
+`snapshots` and `checkpoints` cascade counts) and the criteria the operator ran
+with (retention windows, scope filter, snapshot flag, checkpoint flag, dry-run
+flag, prevent-prune flag, ISO-8601 cutoffs per scope).
 Listeners that record audit evidence should filter on
 `criteria.dry_run === false` to avoid treating preview runs as deletion
 events, and inspect `criteria.prevent_prune` to tell a compliance-suppressed

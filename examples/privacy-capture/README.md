@@ -9,7 +9,9 @@ workflows where logs and history should not contain raw prompts or outputs.
 This example teaches:
 
 - capture flags affect events and persisted inspection data;
-- disabled capture uses `[redacted]` instead of changing payload shape;
+- disabled boolean capture uses `[redacted]` instead of changing payload shape;
+- a custom `CapturePolicy` returning `CaptureDecision::Skip` omits the field
+  entirely (absent key / `NULL` column) as of v0.12.0;
 - metadata is not redacted and should not contain secrets.
 
 ## Prerequisites
@@ -135,6 +137,24 @@ Policies never see the payload itself — decisions are made from the
 `RunContext` and resolved `Actor` only. The default binding
 (`BooleanCapturePolicy`) preserves today's behavior; bind your own to opt into
 per-category decisions.
+
+The three decisions differ in **shape**, not just content:
+
+| Decision | Persisted / emitted shape |
+| --- | --- |
+| `Full` | The value, as-is. |
+| `Redact` | Scalar values replaced with `[redacted]`; keys and structure preserved. |
+| `Skip` | The field is **omitted entirely** from the evidence surfaces (v0.12.0+) — the key is absent from history/events and the column is `NULL` (`swarm_run_steps.input`/`output`, `swarm_run_histories.output`). A failure under `Skip` drops `error.message` but keeps `error.class`. The operational active-context store (`swarm_contexts.input`) is runtime state for durable resume and always retains the input — `Skip` never nulls it. |
+
+Use `Skip` (not `Redact`) when even a `[redacted]` placeholder would leak that
+a field existed, or when downstream consumers must distinguish "deliberately
+not captured" from "captured but masked". The boolean flags above can never
+produce `Skip` — only an explicit policy can.
+
+> **Failure messages follow inputs *and* outputs.** A failure's `error.message`
+> is omitted whenever **either** `inputs` or `outputs` is `Skip` (a thrown
+> message can echo either side), so a policy that `Skip`s only inputs while
+> capturing outputs still drops `error.message` — `error.class` is always kept.
 
 ### Sign Audit Evidence
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
@@ -98,6 +99,72 @@ class StaticHierarchicalRunner extends HierarchicalRunner
                 'execution_mode' => $state->executionMode->value,
             ],
         );
+    }
+
+    public function buildPlanForSwarm(Swarm $swarm): HierarchicalRoutePlan
+    {
+        assert($swarm instanceof HasRoutePlan);
+
+        $agents = $swarm->agents();
+        $this->ensureUniqueWorkerClasses($swarm::class, $agents);
+
+        return $this->planner->fromStaticPlan($agents, $swarm->plan(), $swarm::class);
+    }
+
+    public function runDurableStep(SwarmExecutionState $state, int $stepIndex, array $run): DurableHierarchicalStepResult
+    {
+        if ($stepIndex === 0) {
+            return $this->runStaticDurableInitStep($state);
+        }
+
+        $agents = $state->swarm->agents();
+
+        return $this->runDurableWorkerStep($state, $stepIndex, $run, $this->workerMap($agents));
+    }
+
+    private function runStaticDurableInitStep(SwarmExecutionState $state): DurableHierarchicalStepResult
+    {
+        assert($state->swarm instanceof HasRoutePlan);
+
+        $agents = $state->swarm->agents();
+        $this->ensureUniqueWorkerClasses($state->swarm::class, $agents);
+        $plan = $this->planner->fromStaticPlan($agents, $state->swarm->plan(), $state->swarm::class);
+        $this->ensureStaticPlanWithinExecutionBudget($state, $plan);
+        $cursor = $this->buildStaticDurableCursor($plan);
+        $nodeOutputs = [];
+        $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
+        $this->applyDurableCursorToContext($state, $cursor);
+
+        return new DurableHierarchicalStepResult(
+            step: null,
+            routeCursor: $cursor,
+            routePlan: $plan->toArray(),
+            complete: $this->isDurableCursorComplete($cursor),
+            totalSteps: (int) $cursor['total_steps'],
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function buildStaticDurableCursor(HierarchicalRoutePlan $plan): array
+    {
+        $entries = $this->durableEntries($plan);
+
+        return [
+            'entries' => $entries,
+            'offset' => 0,
+            'current_node_id' => null,
+            'completed_node_ids' => [],
+            'executed_node_ids' => [],
+            'executed_agent_classes' => [],
+            'parallel_groups' => [],
+            'loop_iterations' => [],
+            'final_output' => null,
+            'coordinator_agent_class' => '',
+            'route_plan_start' => $plan->startAt,
+            'total_steps' => $plan->reachableWorkerCount(),
+        ];
     }
 
     protected function ensureStaticPlanWithinExecutionBudget(SwarmExecutionState $state, HierarchicalRoutePlan $plan): void

@@ -121,6 +121,12 @@ a tenant's run-scoped memory is invisible to every other run. The trap is
 > readable by every run — and every tenant — of that class. See the
 > [multi-tenant note](memory.md#scopes-and-addressing) on the tools reference.
 
+The same trap applies to `conversation` scope: it is addressed by the
+app-supplied conversation id, so a reused id (per-tenant sequential numbers, raw
+thread ids) leaks one tenant's conversation memory into another's. Namespace
+conversation ids per tenant or bound them in the policy below — see the
+[conversation-scope multi-tenant note](memory.md#conversation-scoped-memory).
+
 So for cross-run state that must stay tenant-private, pick one of two honest
 approaches:
 

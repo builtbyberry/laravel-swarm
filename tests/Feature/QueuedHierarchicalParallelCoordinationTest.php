@@ -168,6 +168,99 @@ function qhpcPreParallelFinishOutputPlan(): array
     ];
 }
 
+function qhpcParallelInLoopPlan(): array
+{
+    return [
+        'start_at' => 'gather_node',
+        'nodes' => [
+            'gather_node' => [
+                'type' => 'worker',
+                'agent' => FakeResearcher::class,
+                'prompt' => 'gather',
+                'next' => 'parallel_node',
+            ],
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['writer_node', 'editor_node'],
+                'next' => 'join_node',
+            ],
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'write-branch',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'edit-branch',
+            ],
+            'join_node' => [
+                'type' => 'worker',
+                'agent' => FakeResearcher::class,
+                'prompt' => 'join',
+                'with_outputs' => [
+                    'draft' => 'writer_node',
+                    'edit' => 'editor_node',
+                ],
+                'next' => 'finish_node',
+                'loop' => [
+                    'to' => 'gather_node',
+                    'max_iterations' => 3,
+                ],
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'join_node',
+            ],
+        ],
+    ];
+}
+
+/**
+ * Drive a queued multi_worker run with a parallel-in-loop plan to a terminal
+ * state, dispatching branch jobs and resuming across each loop pass. Returns the
+ * number of real branch jobs dispatched (one AdvanceDurableBranch per pending
+ * branch row), which equals 2 branches × 3 passes = 6 when the fan-out genuinely
+ * re-runs every iteration.
+ */
+function driveQueuedParallelInLoop(string $runId): int
+{
+    $manager = app(DurableSwarmManager::class);
+    $dispatched = 0;
+    $guard = 0;
+
+    while (true) {
+        if ($guard++ > 200) {
+            throw new RuntimeException('Queued parallel-in-loop run did not converge.');
+        }
+
+        $run = $manager->find($runId);
+
+        if (in_array($run['status'], ['completed', 'failed', 'cancelled'], true)) {
+            break;
+        }
+
+        if ($run['status'] === 'waiting') {
+            $branches = app(DurableRunStore::class)->branchesFor($runId, $run['current_node_id']);
+
+            foreach ($branches as $branch) {
+                if (($branch['status'] ?? null) === 'pending' || ($branch['status'] ?? null) === null) {
+                    $dispatched++;
+                    (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
+                }
+            }
+
+            (new ResumeQueuedHierarchicalSwarm($runId))->handle(app(QueuedHierarchicalCoordinator::class));
+
+            continue;
+        }
+
+        throw new RuntimeException("Unexpected queued run status [{$run['status']}] for run [{$runId}].");
+    }
+
+    return $dispatched;
+}
+
 beforeEach(function () {
     configureQueuedHierarchicalParallelRuntime();
     FakeHierarchicalCoordinator::fake([qhpcParallelPlan()]);
@@ -361,4 +454,45 @@ test('queued hierarchical parallel multi_worker can be cancelled while waiting o
 
     $history = app(RunHistoryStore::class)->find('qhpc-cancel-1');
     expect($history['status'])->toBe('cancelled');
+});
+
+test('queued hierarchical parallel multi_worker re-runs the fan-out branch agents on every loop pass', function () {
+    // 3 passes × (gather + 2 branches + join) + coordinator = 13 executions.
+    config()->set('swarm.max_agent_steps', 20);
+    FakeHierarchicalCoordinator::fake([qhpcParallelInLoopPlan()]);
+
+    // Count REAL branch-agent invocations via closure fakes — the load-bearing
+    // signal that the fan-out actually re-executed each pass (executed_node_ids and
+    // parallel_groups are re-appended on the join even when the agents do not run).
+    $writeRuns = 0;
+    $editRuns = 0;
+    FakeResearcher::fake(array_fill(0, 10, 'gather-out'));
+    FakeWriter::fake(function () use (&$writeRuns): string {
+        $writeRuns++;
+
+        return 'write-out';
+    });
+    FakeEditor::fake(function () use (&$editRuns): string {
+        $editRuns++;
+
+        return 'edit-out';
+    });
+
+    $runId = 'qhpc-parallel-in-loop-1';
+    $context = RunContext::from('queued-parallel-in-loop', $runId);
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+
+    $dispatched = driveQueuedParallelInLoop($runId);
+
+    // The decisive correctness signal: every branch agent ran once per pass × 3
+    // passes (2 × 3 = 6 real branch dispatches). Pre-fix the queued resume restarted
+    // the join loop from iteration 1 on every pass and never reached the bound, so
+    // the run failed to converge (an infinite re-fan-out) — the queued manifestation
+    // of the same parallel-in-loop defect as H1. These assertions count actual agent
+    // execution, not executed_node_ids bookkeeping, so a green run cannot mask a
+    // fan-out that silently stopped re-running.
+    expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed')
+        ->and($writeRuns)->toBe(3)
+        ->and($editRuns)->toBe(3)
+        ->and($dispatched)->toBe(6);
 });

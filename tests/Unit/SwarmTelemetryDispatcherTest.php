@@ -160,3 +160,19 @@ test('dispatcher metadata helper emits allowlisted top-level values', function (
         'workflow' => 'approval',
     ]);
 });
+
+test('dispatcher metadata helper always emits the reserved conversation_id value', function (): void {
+    // conversation_id is reserved (EvidenceEnvelope::RESERVED_METADATA_KEYS), so
+    // its value surfaces as run provenance even with an empty allowlist, while a
+    // non-reserved sibling key is omitted.
+    config(['swarm.observability.metadata_allowlist' => []]);
+    app()->forgetInstance(SwarmTelemetryDispatcher::class);
+
+    $metadata = app(SwarmTelemetryDispatcher::class)->metadata([
+        'conversation_id' => 'conv-42',
+        'secret_note' => 'do-not-export',
+    ]);
+
+    expect($metadata['metadata_keys'])->toBe(['conversation_id', 'secret_note']);
+    expect($metadata['metadata'])->toBe(['conversation_id' => 'conv-42']);
+});

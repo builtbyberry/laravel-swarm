@@ -15,7 +15,7 @@ final class SwarmReasoningDelta extends SwarmStreamEvent
         public int $stepIndex,
         public string $agentClass,
         public string $reasoningId,
-        public string $delta,
+        public ?string $delta,
         public int $timestamp,
         public ?array $summary,
     ) {}
@@ -52,7 +52,7 @@ final class SwarmReasoningDelta extends SwarmStreamEvent
             stepIndex: self::intValue($payload, 'step_index'),
             agentClass: self::stringValue($payload, 'agent_class'),
             reasoningId: self::stringValue($payload, 'reasoning_id'),
-            delta: self::stringValue($payload, 'delta'),
+            delta: self::nullableStringValue($payload, 'delta'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
             summary: is_array($summary) ? $summary : null,
         );

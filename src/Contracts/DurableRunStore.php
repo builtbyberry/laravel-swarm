@@ -45,6 +45,9 @@ interface DurableRunStore
      * @param  array<string, mixed>  $routeCursor
      * @param  array<string, mixed>|null  $routePlan
      * @param  array{node_id: string, output: string}|null  $nodeOutput
+     * @param  array<int, string>  $clearBranchParentNodeIds  Parallel node ids whose persisted
+     *                                                        branch rows are deleted atomically
+     *                                                        with this checkpoint (loop back-edge).
      */
     public function checkpointHierarchicalStep(
         string $runId,
@@ -56,6 +59,7 @@ interface DurableRunStore
         ?array $routePlan = null,
         ?array $nodeOutput = null,
         ?int $totalSteps = null,
+        array $clearBranchParentNodeIds = [],
     ): void;
 
     /**
@@ -85,7 +89,7 @@ interface DurableRunStore
     public function markBranchCompleted(string $runId, string $branchId, string $executionToken, string $output, array $usage, int $durationMs): void;
 
     /**
-     * @param  array{message: string, class: class-string<\Throwable>}  $failure
+     * @param  array{message?: string, class: class-string<\Throwable>}  $failure  `message` is omitted when the capture policy Skips failures.
      */
     public function markBranchFailed(string $runId, string $branchId, string $executionToken, array $failure): void;
 
@@ -109,7 +113,7 @@ interface DurableRunStore
     public function markCompleted(string $runId, string $executionToken): void;
 
     /**
-     * @param  array{message: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure
+     * @param  array{message?: string, class: class-string<\Throwable>, timed_out?: bool}|null  $failure  `message` is omitted when the capture policy Skips failures.
      */
     public function markFailed(string $runId, string $executionToken, ?array $failure = null): void;
 

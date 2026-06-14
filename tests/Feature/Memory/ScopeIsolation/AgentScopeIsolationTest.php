@@ -7,9 +7,13 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelWideViewSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeWideViewPropagationSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
 
 /**
@@ -62,5 +66,76 @@ test('a wide-view swarm surfaces only the running agent class Agent-scoped entri
     foreach ($agentScoped as $entry) {
         expect($entry->scopeId)->toBe(FakeResearcher::class)
             ->and($entry->value)->not->toBe('writer-secret');
+    }
+});
+
+test('hierarchical-parallel branches include Agent-scoped entries in their snapshots', function () {
+    // Regression for the bug where resolveParallelWorker() return value was
+    // discarded and null was passed to view->present(), causing MemoryScope::Agent
+    // to be silently skipped on the concurrent hierarchical path.
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('parallel_node', [
+            'parallel_node' => [
+                'type' => 'parallel',
+                'branches' => ['writer_node', 'editor_node'],
+                'next' => 'finish_node',
+            ],
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-branch',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-branch',
+            ],
+            'finish_node' => [
+                'type' => 'finish',
+                'output_from' => 'editor_node',
+            ],
+        ]),
+    ]);
+    FakeWriter::fake(['writer-out']);
+    FakeEditor::fake(['editor-out']);
+
+    app(SwarmMemory::class)->put(MemoryScope::Agent, FakeWriter::class, 'speciality', 'writing');
+    app(SwarmMemory::class)->put(MemoryScope::Agent, FakeEditor::class, 'speciality', 'editing');
+
+    FakeHierarchicalParallelWideViewSwarm::make()->run(RunContext::from('task', 'hier-par-agent-scope'));
+
+    $agentScoped = array_filter(
+        capturedEntries($this->recorder),
+        static fn (MemoryEntry $entry): bool => $entry->scope === MemoryScope::Agent,
+    );
+
+    $scopeIds = array_unique(array_map(
+        static fn (MemoryEntry $entry): string => $entry->scopeId,
+        $agentScoped,
+    ));
+
+    expect($agentScoped)->not->toBeEmpty()
+        ->and($scopeIds)->toContain(FakeWriter::class)
+        ->and($scopeIds)->toContain(FakeEditor::class);
+
+    // Per-branch isolation: each snapshot that holds Agent-scoped entries must
+    // carry entries for exactly one agent class — the writer and editor branches
+    // must not bleed into each other's frozen view.
+    foreach ($this->recorder->snapshotCalls as $call) {
+        $agentScopedInStep = array_values(array_filter(
+            $call['entries'] ?? [],
+            static fn (MemoryEntry $entry): bool => $entry->scope === MemoryScope::Agent,
+        ));
+
+        if (empty($agentScopedInStep)) {
+            continue;
+        }
+
+        $uniqueIds = array_unique(array_map(
+            static fn (MemoryEntry $entry): string => $entry->scopeId,
+            $agentScopedInStep,
+        ));
+
+        expect($uniqueIds)->toHaveCount(1);
     }
 });

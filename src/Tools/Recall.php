@@ -33,8 +33,10 @@ use Throwable;
  * policy withholds.
  *
  * The scope id is never accepted from the model. It is resolved from the
- * ambient {@see ActiveRunContext} (Run → run id, Swarm → swarm class), so an
- * agent cannot read another run's or swarm's memory by guessing an id.
+ * ambient {@see ActiveRunContext} (Run → run id, Swarm → swarm class,
+ * Conversation → the run's bound conversation id when present), so an agent
+ * cannot read another run's, swarm's, or conversation's memory by guessing an
+ * id.
  *
  * Outside a swarm run (no active context) the tool degrades gracefully: it
  * returns a short "memory is not available" string instead of throwing, so an

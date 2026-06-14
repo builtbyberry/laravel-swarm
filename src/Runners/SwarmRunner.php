@@ -217,7 +217,7 @@ class SwarmRunner
                 runId: $context->runId,
                 swarmClass: $swarm::class,
                 topology: $topology->value,
-                input: $this->capture->input($context->input),
+                input: $this->capture->applyInput($context->input, $context),
                 metadata: $context->metadata,
                 executionMode: $executionMode->value,
             ));
@@ -404,12 +404,6 @@ class SwarmRunner
 
         $topology = $this->resolver->resolveTopology($swarm);
 
-        if ($topology === Topology::StaticHierarchical) {
-            throw new SwarmException(
-                $swarm::class.': static hierarchical swarms do not yet support dispatchDurable(). Use prompt(), queue(), or stream() instead.'
-            );
-        }
-
         $this->validator->ensureDatabaseDurableInfrastructure();
 
         if ($topology === Topology::Parallel) {
@@ -420,9 +414,13 @@ class SwarmRunner
             $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
         }
 
+        if ($topology === Topology::StaticHierarchical) {
+            $this->staticHierarchical->buildPlanForSwarm($swarm);
+        }
+
         $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);
         $maxAgentExecutions = $this->resolver->resolveMaxAgentExecutions($swarm);
-        $totalSteps = $topology === Topology::Hierarchical
+        $totalSteps = in_array($topology, [Topology::Hierarchical, Topology::StaticHierarchical], true)
             ? $maxAgentExecutions
             : min(count($swarm->agents()), $maxAgentExecutions);
         $context = RunContext::fromTask($task);
@@ -686,7 +684,7 @@ class SwarmRunner
             runId: $context->runId,
             swarmClass: $swarm::class,
             topology: $topology->value,
-            output: $capturedResponse->output,
+            output: $this->capture->applyOutput($capturedResponse->output, $context),
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $capturedResponse->metadata,
             artifacts: $capturedResponse->artifacts,
