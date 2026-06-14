@@ -153,9 +153,13 @@ test('durable nested loop survives a crash before checkpoint mid inner loop', fu
     expect($manager->find($runId)['next_step_index'])->toBe(2)
         ->and($manager->find($runId)['route_cursor']['loop_iterations']['inner_loop'] ?? 0)->toBe(0);
 
+    // Freeze the clock so the expired lease below and the runtime's live now()
+    // resolve to the same instant — no real-clock margin to race against.
+    $this->freezeTime();
+
     DB::table('swarm_durable_runs')
         ->where('run_id', $runId)
-        ->update(['leased_until' => now()->subSecond()]);
+        ->update(['leased_until' => now('UTC')->subSeconds(5)]);
 
     // Resume and drive to completion — per-scope counts recompute exactly.
     $innerCounters = driveNestedDurableRun($runId, $manager, 'inner_loop');

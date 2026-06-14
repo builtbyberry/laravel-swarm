@@ -10,7 +10,7 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- Test-determinism: time-boundary durable lease-expiry and stale-run recovery assertions now run inside a frozen clock window (`$this->freezeTime()`), so the past `leased_until`/`updated_at` markers and the runtime's live `now()` resolve to the same instant. Removes the tight sub-second real-clock margin that left the durable/lease/recovery lane vulnerable to execution jitter under load. (Cross-process `tests/ProcessConcurrency` subprocesses keep their generous margins — a frozen clock can't be shared across processes.)
 
 ### Fixed
 
