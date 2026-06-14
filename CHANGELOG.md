@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.12.2 - unreleased
+
+Hardening & hygiene — close the vetted improve-laravel audit findings (against 66b8f42).
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
+### Fixed
+
+_To be filled in during release wrap-up._
+
 ## v0.12.1 - 2026-06-14
 
 Operational resume reads decrypt strictly via `openStrict()`, independent of the display `decrypt_failure_policy`.
