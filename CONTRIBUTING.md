@@ -43,6 +43,14 @@ fast path without coverage. If workflow runtime becomes prohibitive, maintainers
 split **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
 until then, pull requests validate both matrices equally.
 
+**Dependency advisories** — a separate `audit` workflow runs `composer audit` on
+every push and pull request against a freshly resolved `--prefer-stable` tree (this
+package commits no `composer.lock`, so CI always audits the same resolution it tests).
+It is **non-blocking** today (`continue-on-error: true`) so a transient upstream
+advisory landing mid-review never gates a merge; the path to gating is to drop
+`continue-on-error` once the tree has held advisory-clean for a release cycle. Run
+`composer audit` locally to match it.
+
 **Process concurrency validation** — CI runs `composer test:process-concurrency:ci`
 on every matrix row. That script is like `composer test:process-concurrency` but adds
 Pest’s `--fail-on-skipped`, so the workflow **fails** if any test in that folder is

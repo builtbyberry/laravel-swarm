@@ -10,7 +10,7 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Added a `composer audit` CI job that surfaces dependency advisories on every push and PR (#219).** The new `.github/workflows/audit.yml` resolves a fresh `--prefer-stable` tree (this package commits no `composer.lock`, so CI always tests against a freshly resolved tree) and runs `composer audit`. It starts non-blocking (`continue-on-error: true`) so a transient upstream advisory landing mid-review never gates a merge; the documented path to gating is to drop `continue-on-error` once the tree has held advisory-clean for a release cycle. The advisory-affected transitive deps flagged at the time (`guzzlehttp/psr7`, `symfony/http-foundation`, `symfony/routing`, `symfony/polyfill-intl-idn`) resolve advisory-clean under the current constraints, so no top-level constraints in `composer.json` changed.
 
 ### Fixed
 
