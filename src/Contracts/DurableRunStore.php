@@ -4,16 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
-use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
-/**
- * @internal The durable runtime's persistence contract. This is a large, fast-moving
- * internal surface — its method set evolves with the durable runtime and may change in
- * any release, including patches. It is not a supported extension point; the shipped
- * {@see DatabaseDurableRunStore} is the only intended implementation.
- */
 interface DurableRunStore
 {
     /**
@@ -82,21 +75,11 @@ interface DurableRunStore
     /**
      * Operational branch read: decrypts branch input/output strictly (decrypt-or-throw,
      * independent of swarm.persistence.decrypt_failure_policy) so a wrong/rotated APP_KEY
-     * fails a durable resume loudly rather than feeding null/ciphertext into it. For
-     * evidence/display reads, use {@see branchesForInspection()}.
+     * fails a durable resume loudly rather than feeding null/ciphertext into it.
      *
      * @return array<int, array<string, mixed>>
      */
     public function branchesFor(string $runId, ?string $parentNodeId = null): array;
-
-    /**
-     * Evidence/display branch read: honors swarm.persistence.decrypt_failure_policy on a
-     * decrypt failure (the policy-aware twin of {@see branchesFor()}). Used by the durable
-     * run inspector — not the operational resume path.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public function branchesForInspection(string $runId, ?string $parentNodeId = null): array;
 
     public function acquireBranchLease(string $runId, string $branchId, int $stepTimeoutSeconds): ?string;
 
@@ -283,22 +266,9 @@ interface DurableRunStore
     public function parentsWaitingOnTerminalChildren(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;
 
     /**
-     * Operational child-run read: decrypts the child context payload strictly
-     * (decrypt-or-throw) so a wrong/rotated APP_KEY fails a durable child resume loudly.
-     * For evidence/display reads, use {@see childRunsForInspection()}.
-     *
      * @return array<int, array<string, mixed>>
      */
     public function childRuns(string $runId): array;
-
-    /**
-     * Evidence/display child-run read: honors swarm.persistence.decrypt_failure_policy on
-     * a decrypt failure (the policy-aware twin of {@see childRuns()}). Used by the durable
-     * run inspector — not the operational resume path.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public function childRunsForInspection(string $runId): array;
 
     /**
      * @return array{reserved: bool, duplicate: bool, conflict: bool, in_flight: bool, record: array<string, mixed>|null}

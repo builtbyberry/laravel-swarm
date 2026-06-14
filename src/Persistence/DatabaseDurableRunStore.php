@@ -607,6 +607,13 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->all();
     }
 
+    /**
+     * Evidence/display branch read (concrete-only, used by DurableRunInspector): honors
+     * swarm.persistence.decrypt_failure_policy — the policy-aware twin of the now-strict
+     * operational branchesFor(). Intentionally not on the DurableRunStore contract.
+     *
+     * @return array<int, array<string, mixed>>
+     */
     public function branchesForInspection(string $runId, ?string $parentNodeId = null): array
     {
         return $this->branchRowsFor($runId, $parentNodeId)
@@ -1631,10 +1638,10 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('parents.swarm_class', $swarmClass);
         }
 
-        // Cross-run recovery sweep: non-strict so one child's key mismatch cannot
-        // abort the whole batch. The operational consumer (dispatchChildIntent)
-        // re-reads each child strictly via childRunForChild() before resuming it, so
-        // an undecryptable child fails loud on its own dispatch, not the sweep.
+        // Cross-run recovery sweep: non-strict so one child's key mismatch cannot abort the
+        // whole batch. DurableRecoveryCoordinator re-reads each swept child strictly via
+        // childRunForChild() before dispatch, so an undecryptable child is skipped (and
+        // retried next pass) rather than failing the sweep.
         return $query->get()
             ->map(fn (object $record): array => $this->mapChildRun($record, strict: false))
             ->all();
@@ -1667,11 +1674,22 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function childRuns(string $runId): array
     {
+        // Non-strict: the operational consumers of childRuns() (reconcile/cancel) read only
+        // status/wait_name/failure, never the child context payload. The operational child
+        // resume input is read strictly per-row via childRunForChild() at dispatch, so a
+        // wrong-key child need not throw here.
         return $this->childRunRowsFor($runId)
-            ->map(fn (object $record): array => $this->mapChildRun($record))
+            ->map(fn (object $record): array => $this->mapChildRun($record, strict: false))
             ->all();
     }
 
+    /**
+     * Evidence/display child-run read (concrete-only, used by DurableRunInspector): honors
+     * swarm.persistence.decrypt_failure_policy — the policy-aware twin of the now-strict
+     * operational childRuns(). Intentionally not on the DurableRunStore contract.
+     *
+     * @return array<int, array<string, mixed>>
+     */
     public function childRunsForInspection(string $runId): array
     {
         return $this->childRunRowsFor($runId)

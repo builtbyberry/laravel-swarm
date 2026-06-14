@@ -128,6 +128,13 @@ class DurableChildSwarmCoordinator
     {
         $childRunId = (string) $child['child_run_id'];
         $childSwarmClass = (string) $child['child_swarm_class'];
+        // Use the caller-provided payload. First dispatch passes the live in-memory
+        // RunContext (the real, unsealed input); the recovery path passes a child that
+        // DurableRecoveryCoordinator already re-read strictly (decrypt-or-throw) so a
+        // wrong/rotated APP_KEY is isolated to that child before we ever get here. Do NOT
+        // re-read the stored context_payload for the operational input — that column is the
+        // capture/evidence view and is `[redacted]` under swarm.capture.inputs=false.
+        $contextPayload = is_array($child['context_payload'] ?? null) ? $child['context_payload'] : [];
 
         if ($this->durableRuns->find($childRunId) === null) {
             try {
@@ -136,17 +143,6 @@ class DurableChildSwarmCoordinator
                 if (! $swarm instanceof Swarm) {
                     throw new SwarmException("Unable to resolve child swarm [{$childSwarmClass}] from the container.");
                 }
-
-                // Re-read the child strictly at the point of resume. The recovery sweep
-                // (undispatchedChildRuns) decrypts non-strictly so one undecryptable row
-                // cannot abort the whole batch; here a wrong/rotated APP_KEY surfaces as a
-                // failed dispatch for THIS child (caught below) instead of silently resuming
-                // it from a null/ciphertext payload. On first dispatch the row was just
-                // written with the current key, so the strict read decrypts cleanly.
-                $persisted = $this->durableRuns->childRunForChild($childRunId);
-                $contextPayload = is_array($persisted['context_payload'] ?? null)
-                    ? $persisted['context_payload']
-                    : (is_array($child['context_payload'] ?? null) ? $child['context_payload'] : []);
 
                 $response = $this->application->make(SwarmRunner::class)->dispatchDurable($swarm, RunContext::fromPayload($contextPayload));
                 unset($response);

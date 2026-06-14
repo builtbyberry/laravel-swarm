@@ -1586,7 +1586,7 @@ test('hierarchicalNodeOutputsFor fails loud with SwarmException on an undecrypta
     ]);
 
     expect(fn () => $store->hierarchicalNodeOutputsFor($runId, ['researcher']))
-        ->toThrow(SwarmException::class);
+        ->toThrow(SwarmException::class, 'verify APP_KEY');
 });
 
 test('findBranch fails loud with SwarmException on an undecryptable branch input (#212)', function () {
@@ -1598,7 +1598,7 @@ test('findBranch fails loud with SwarmException on an undecryptable branch input
     insertDurableBranchRow($runId, 'parallel:researcher', undecryptableSealedValue());
 
     expect(fn () => $store->findBranch($runId, 'parallel:researcher'))
-        ->toThrow(SwarmException::class);
+        ->toThrow(SwarmException::class, 'verify APP_KEY');
 });
 
 test('branchesFor fails loud with SwarmException on an undecryptable branch output (#212)', function () {
@@ -1612,7 +1612,7 @@ test('branchesFor fails loud with SwarmException on an undecryptable branch outp
     insertDurableBranchRow($runId, 'parallel:researcher', 'plain-input', undecryptableSealedValue());
 
     expect(fn () => $store->branchesFor($runId))
-        ->toThrow(SwarmException::class);
+        ->toThrow(SwarmException::class, 'verify APP_KEY');
 });
 
 test('childRunForChild fails loud with SwarmException on an undecryptable context payload (#212)', function () {
@@ -1626,7 +1626,7 @@ test('childRunForChild fails loud with SwarmException on an undecryptable contex
     insertDurableChildRunRow($parentRunId, $childRunId, json_encode(['input' => undecryptableSealedValue()]));
 
     expect(fn () => $store->childRunForChild($childRunId))
-        ->toThrow(SwarmException::class);
+        ->toThrow(SwarmException::class, 'verify APP_KEY');
 });
 
 test('inspector branch read honors decrypt_failure_policy on an undecryptable input (#212)', function (string $policy, $assert) {
@@ -1703,7 +1703,7 @@ test('strict and inspection reads on the same store instance do not interfere (#
     // Strict op throws; the subsequent policy-aware inspection read on the SAME instance
     // still surfaces ciphertext under the legacy policy — the strict path never mutated
     // policy resolution (no shared mutable state).
-    expect(fn () => $store->findBranch($runId, 'parallel:researcher'))->toThrow(SwarmException::class);
+    expect(fn () => $store->findBranch($runId, 'parallel:researcher'))->toThrow(SwarmException::class, 'verify APP_KEY');
     expect($store->branchesForInspection($runId)[0]['input'])->toStartWith('sw0:');
 });
 
@@ -1725,7 +1725,7 @@ test('contextStore find fails loud with SwarmException on an undecryptable resum
         'updated_at' => now(),
     ]);
 
-    expect(fn () => $store->find($runId))->toThrow(SwarmException::class);
+    expect(fn () => $store->find($runId))->toThrow(SwarmException::class, 'verify APP_KEY');
 });
 
 test('contextStore find round-trips a sealed resume input that starts with the sealed prefix (#212)', function () {
@@ -1780,6 +1780,50 @@ test('undispatchedChildRuns tolerates one undecryptable child instead of abortin
     expect($children)->toHaveCount(1)
         ->and($children[0]['child_run_id'])->toBe($childRunId)
         ->and($children[0]['context_payload']['input'])->toBeNull(); // non-strict, no throw
+});
+
+test('dueRetryBranches tolerates one undecryptable row instead of aborting the cross-run sweep (#212 T5)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.persistence.decrypt_failure_policy', 'null_with_log');
+    $store = freshDurableRunStore();
+    $runId = (string) str()->uuid();
+    insertDurableRunRow($runId);
+
+    // Poison branch matching the due-retry criteria (pending, next_retry_at due, no lease).
+    DB::table('swarm_durable_branches')->insert([
+        'run_id' => $runId, 'branch_id' => 'parallel:researcher', 'step_index' => 0,
+        'node_id' => null, 'agent_class' => FakeResearcher::class, 'parent_node_id' => 'parallel',
+        'status' => 'pending', 'input' => undecryptableSealedValue(), 'output' => null,
+        'usage' => json_encode([]), 'metadata' => json_encode([]), 'failure' => null,
+        'duration_ms' => null, 'execution_token' => null, 'lease_acquired_at' => null,
+        'leased_until' => null, 'attempts' => 1, 'queue_connection' => null, 'queue_name' => null,
+        'started_at' => null, 'finished_at' => null, 'next_retry_at' => now()->subMinute(),
+        'expires_at' => now()->addHour(), 'created_at' => now(), 'updated_at' => now(),
+    ]);
+
+    $branches = $store->dueRetryBranches();
+    expect($branches)->toHaveCount(1)
+        ->and($branches[0]['branch_id'])->toBe('parallel:researcher')
+        ->and($branches[0]['input'])->toBeNull(); // non-strict, no throw
+});
+
+test('childRuns is non-strict so reconcile/cancel never throw on a wrong-key child (#212 B-LOW)', function () {
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.persistence.decrypt_failure_policy', 'null_with_log');
+    $store = freshDurableRunStore();
+    $parentRunId = (string) str()->uuid();
+    $childRunId = (string) str()->uuid();
+    insertDurableRunRow($parentRunId);
+    insertDurableChildRunRow($parentRunId, $childRunId, json_encode(['input' => undecryptableSealedValue()]));
+
+    // childRuns() (consumed by reconcile/cancel, which read only status) must not throw on an
+    // undecryptable child context payload — only childRunForChild (the per-row resume read) is strict.
+    $children = $store->childRuns($parentRunId);
+    expect($children)->toHaveCount(1)
+        ->and($children[0]['child_run_id'])->toBe($childRunId)
+        ->and($children[0]['context_payload']['input'])->toBeNull();
+
+    expect(fn () => $store->childRunForChild($childRunId))->toThrow(SwarmException::class, 'verify APP_KEY');
 });
 
 test('durable strict reads do not throw when encrypt at rest is disabled (#212 F6)', function () {
