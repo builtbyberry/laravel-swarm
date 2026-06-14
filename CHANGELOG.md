@@ -6,7 +6,7 @@ Hardening & hygiene — close the vetted improve-laravel audit findings (against
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **Isolated serialization round-trip coverage for every `Streaming/Events/*` event (#221).** The 12 streaming event classes' `toArray()`/`fromArray()` were only exercised end-to-end via the crash-replay feature tests, where a silently dropped field (e.g. an error event losing `recoverable` or its `exception_class`) would surface only on a real replay. A new `tests/Unit/Streaming/EventSerializationRoundTripTest.php` asserts, per class over representative null/empty/full payloads, that `toArray()` → `SwarmStreamEvent::fromArray()` → `toArray()` round-trips identically and that every field — including the base-class `invocation_id` — survives. A directory-enumeration guard fails the suite if a new `src/Streaming/Events/*` class is added without a round-trip payload case. Coverage only — no event serialization shape changed.
 
 ### Changed
 
