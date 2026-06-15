@@ -15,9 +15,15 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
  * The signer receives the fully enriched envelope (schema_version, category,
  * occurred_at, actor metadata if bound) and returns a new payload array.
  * Implementations MUST NOT mutate or remove existing keys — they add
- * signature fields (conventionally "signature", "signature_algorithm",
- * "signed_at", and optionally "previous_signature_id" for chain-signing
- * audit trails).
+ * signature fields ("signature", "signature_algorithm", "signed_at", and
+ * optionally "previous_signature_id" for chain-signing audit trails).
+ *
+ * When an implementation adds a non-empty "signature", it MUST also add a
+ * non-empty "signature_algorithm": the package signs on emit but never
+ * verifies on read (verification is the sink's responsibility), so the
+ * algorithm name is what makes a stored record verifiable and rotatable. The
+ * dispatcher enforces this — a signature without an algorithm name is treated
+ * as a signing failure and routed through the bound SinkFailureHandler.
  *
  * Signing failures route through the bound SinkFailureHandler exactly like
  * sink failures, so callers who want strict halt-on-signing-failure semantics

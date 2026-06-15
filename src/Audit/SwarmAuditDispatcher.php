@@ -73,6 +73,7 @@ class SwarmAuditDispatcher
         if ($this->signer !== null) {
             try {
                 $enriched = $this->signer->sign($category, $enriched);
+                $this->assertSignedPayloadIsVerifiable($category, $enriched);
             } catch (Throwable $exception) {
                 $decision = $this->failureHandler->handle($this->sink, $category, $enriched, $exception);
 
@@ -136,6 +137,48 @@ class SwarmAuditDispatcher
                 }
             }
         }
+    }
+
+    /**
+     * Enforce that a signed payload carries the algorithm name needed to verify
+     * and rotate it.
+     *
+     * The package signs on emit but never verifies on read — that is the sink's
+     * responsibility (see docs/audit-evidence-contract.md "Audit Signing"). A
+     * signer that adds a `signature` but no `signature_algorithm` produces a
+     * record that can never be re-verified after a key or algorithm change, so
+     * we treat it as a signing failure and route it through the
+     * SinkFailureHandler rather than letting it silently reach the sink.
+     *
+     * An unsigned payload — the documented per-category opt-out, where the
+     * signer returns the input unchanged — passes through untouched.
+     *
+     * @param  array<string, mixed>  $payload
+     *
+     * @throws SwarmException When a non-empty signature is present without a
+     *                        non-empty signature_algorithm.
+     */
+    protected function assertSignedPayloadIsVerifiable(string $category, array $payload): void
+    {
+        $signature = $payload['signature'] ?? null;
+
+        if (! is_string($signature) || $signature === '') {
+            // Unsigned, or the signer opted out of this category — nothing to enforce.
+            return;
+        }
+
+        $algorithm = $payload['signature_algorithm'] ?? null;
+
+        if (is_string($algorithm) && $algorithm !== '') {
+            return;
+        }
+
+        throw new SwarmException(sprintf(
+            'SwarmAuditSigner signed [%s] without a non-empty "signature_algorithm". '
+            .'Verification and key rotation require the algorithm name; have your signer '
+            .'add it alongside "signature" (see docs/audit-evidence-contract.md "Audit Signing").',
+            $category,
+        ));
     }
 
     /**

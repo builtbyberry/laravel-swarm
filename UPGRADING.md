@@ -268,6 +268,16 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.12.2
+
+v0.12.2 is a hardening release with **no migrations**. The only application-code change applies to operators who bind a custom `SwarmAuditSigner` (the default binding is absent — if you do not sign audit evidence, **no action is required**).
+
+### Audit signing now requires a `signature_algorithm` (#223)
+
+The package signs audit evidence on emit but, by design, never verifies a signature on read — verification is the responsibility of the sink that persists the records. To keep stored signatures verifiable and rotatable, `SwarmAuditDispatcher` now enforces one rule: if your signer adds a non-empty `signature`, it **must** also add a non-empty `signature_algorithm`.
+
+A signer that returns a `signature` without an algorithm name is treated as a signing failure and routed through your bound `SinkFailureHandler` — under `swarm.audit.failure_policy=halt` the run throws `AuditSinkHaltedException`; under `swallow` the record is dropped — instead of letting an unverifiable record reach the sink. **Action:** if your signer sets `signature`, confirm it also sets `signature_algorithm` (e.g. `'hmac-sha256'`). The per-category opt-out (returning the payload unchanged for categories you do not sign) is unaffected. See `docs/audit-evidence-contract.md` → "Audit Signing".
+
 ## Upgrading to v0.12.1
 
 v0.12.1 is a patch release with **no migrations** and **no application-code changes**. It hardens how the durable runtime decrypts its operational resume state (#212).
