@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\AuditSinkHaltedException;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 
 class FakeHmacSigner implements SwarmAuditSigner
@@ -42,6 +43,17 @@ class CategoryFilteringSigner implements SwarmAuditSigner
             return $payload;
         }
 
+        $payload['signature'] = 'signed';
+        $payload['signature_algorithm'] = 'sha256';
+
+        return $payload;
+    }
+}
+
+class SignatureWithoutAlgorithmSigner implements SwarmAuditSigner
+{
+    public function sign(string $category, array $payload): array
+    {
         $payload['signature'] = 'signed';
 
         return $payload;
@@ -99,7 +111,121 @@ test('signer can choose not to sign a category by returning the payload unchange
     $stepRecord = $sink->recordsForCategory('step.started')[0];
 
     expect($runRecord)->toHaveKey('signature');
+    expect($runRecord['signature_algorithm'])->toBe('sha256');
     expect($stepRecord)->not->toHaveKey('signature');
+    expect($stepRecord)->not->toHaveKey('signature_algorithm');
+});
+
+test('a signature without a signature_algorithm is treated as a signing failure and never reaches the sink', function (): void {
+    $sink = new CountingSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new SignatureWithoutAlgorithmSigner);
+
+    $handler = new class implements SinkFailureHandler
+    {
+        public int $calls = 0;
+
+        public ?Throwable $lastException = null;
+
+        public function handle(SwarmAuditSink $sink, string $category, array $payload, Throwable $exception): SinkFailureDecision
+        {
+            $this->calls++;
+            $this->lastException = $exception;
+
+            return SinkFailureDecision::Swallow;
+        }
+    };
+    app()->instance(SinkFailureHandler::class, $handler);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', []);
+
+    expect($handler->calls)->toBe(1);
+    expect($handler->lastException)->toBeInstanceOf(SwarmException::class);
+    expect($handler->lastException->getMessage())->toContain('signature_algorithm');
+    expect($sink->emits)->toBe(0); // unverifiable record never reached the sink
+});
+
+test('a signature without a signature_algorithm halts under a Halt decision', function (): void {
+    app()->instance(SwarmAuditSink::class, new NoOpSwarmAuditSink);
+    app()->instance(SwarmAuditSigner::class, new SignatureWithoutAlgorithmSigner);
+
+    $handler = new class implements SinkFailureHandler
+    {
+        public function handle(SwarmAuditSink $sink, string $category, array $payload, Throwable $exception): SinkFailureDecision
+        {
+            return SinkFailureDecision::Halt;
+        }
+    };
+    app()->instance(SinkFailureHandler::class, $handler);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    try {
+        app(SwarmAuditDispatcher::class)->emit('run.failed', []);
+        $this->fail('Expected AuditSinkHaltedException.');
+    } catch (AuditSinkHaltedException $halt) {
+        expect($halt)->toBeInstanceOf(HaltsSwarmExecution::class);
+        expect($halt->getPrevious())->toBeInstanceOf(SwarmException::class);
+        expect($halt->getPrevious()->getMessage())->toContain('signature_algorithm');
+    }
+});
+
+test('a signature with an empty signature_algorithm is rejected like a missing one', function (): void {
+    $sink = new CountingSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature'] = 'signed';
+            $payload['signature_algorithm'] = '';
+
+            return $payload;
+        }
+    });
+
+    $handler = new class implements SinkFailureHandler
+    {
+        public ?Throwable $lastException = null;
+
+        public function handle(SwarmAuditSink $sink, string $category, array $payload, Throwable $exception): SinkFailureDecision
+        {
+            $this->lastException = $exception;
+
+            return SinkFailureDecision::Swallow;
+        }
+    };
+    app()->instance(SinkFailureHandler::class, $handler);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', []);
+
+    expect($handler->lastException)->toBeInstanceOf(SwarmException::class);
+    expect($sink->emits)->toBe(0); // empty algorithm is not a valid algorithm name
+});
+
+test('an empty signature is treated as unsigned and reaches the sink untouched', function (): void {
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            // No real signature produced — an empty string is not "signed",
+            // so the algorithm-name guard must not fire and the record flows
+            // to the sink as an unsigned payload.
+            $payload['signature'] = '';
+
+            return $payload;
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', []);
+
+    $record = $sink->allRecords()[0];
+    expect($record['signature'])->toBe('');
+    expect($record)->not->toHaveKey('signature_algorithm');
 });
 
 test('signing failure routes through SinkFailureHandler and Swallow stops the emit', function (): void {
