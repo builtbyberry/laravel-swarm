@@ -924,9 +924,17 @@ expected outbox backlog (see [Signer rotation](#signer-rotation)). Because of
 this, the dispatcher enforces one rule: if your signer adds a non-empty
 `signature`, it must also add a non-empty `signature_algorithm`. A signature
 without an algorithm name can never be re-verified after a key or algorithm
-change, so it is treated as a signing failure and routed through the
-`SinkFailureHandler` rather than silently reaching the sink. Returning the
-payload unchanged (the per-category opt-out above) is unaffected.
+change, so it is treated as a signing failure and routed through your
+`SinkFailureHandler` like any other signing failure. Returning the payload
+unchanged (the per-category opt-out above) is unaffected.
+
+How far that prevents an unverifiable record from being stored depends on your
+`failure_policy`: under `halt` (the run aborts) or `swallow` (the record is
+dropped) it never reaches the sink, so **compliance deployments that must never
+persist an unverifiable record should use `halt`**. Under a `queue`/`dead-letter`
+policy the record follows the [outbox](#audit-outbox) path and is delivered to
+the sink on the next drain — the outbox replays the stored payload directly and
+does not re-run this guard.
 
 One subtle footgun the package does **not** police for you: canonicalization.
 If the byte form your signer signs differs from the byte form your sink

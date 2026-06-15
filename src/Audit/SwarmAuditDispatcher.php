@@ -148,7 +148,10 @@ class SwarmAuditDispatcher
      * signer that adds a `signature` but no `signature_algorithm` produces a
      * record that can never be re-verified after a key or algorithm change, so
      * we treat it as a signing failure and route it through the
-     * SinkFailureHandler rather than letting it silently reach the sink.
+     * SinkFailureHandler like any other signing failure. Under halt/swallow the
+     * record never reaches the sink; under a queue/dead-letter policy it follows
+     * the outbox path and is delivered on the next drain (the outbox replays the
+     * stored payload directly and does not re-run this guard).
      *
      * An unsigned payload — the documented per-category opt-out, where the
      * signer returns the input unchanged — passes through untouched.
