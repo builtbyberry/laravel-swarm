@@ -12,16 +12,27 @@ permissions:
 
 jobs:
   audit:
-    name: composer audit (advisories)
+    name: composer audit (${{ matrix.resolution.name }})
     runs-on: ubuntu-24.04
     # Non-blocking for now: surfaces dependency advisories on every push/PR
     # without gating merges on a transient upstream advisory that may land
     # mid-review. Path to gating: drop `continue-on-error` once the tree has
     # held advisory-clean for a release cycle (tracked alongside the v0.12.2
-    # hardening work). This package commits no composer.lock, so the audit
-    # runs against a freshly resolved --prefer-stable tree — the same
-    # resolution CI tests against in tests.yml.
+    # hardening work). This package commits no composer.lock, so the audit runs
+    # against a freshly resolved tree. We audit BOTH resolutions CI tests in
+    # tests.yml — prefer-stable (latest in-range) and prefer-lowest (oldest
+    # in-range) — because an advisory can exist only in the lowest tree. The
+    # matrix job name shows which resolution flagged a given advisory.
     continue-on-error: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        resolution:
+          - name: prefer-stable
+            flags: '--prefer-stable'
+          - name: prefer-lowest
+            flags: '--prefer-lowest --prefer-stable'
 
     steps:
       - name: Checkout code
@@ -35,8 +46,8 @@ jobs:
           coverage: none
           ini-values: memory_limit=1G
 
-      - name: Resolve dependencies
-        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+      - name: Resolve dependencies (${{ matrix.resolution.name }})
+        run: composer update ${{ matrix.resolution.flags }} --prefer-dist --no-interaction --no-progress
 
       - name: Audit dependencies for known advisories
         run: composer audit
