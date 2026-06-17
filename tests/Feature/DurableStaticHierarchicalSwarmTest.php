@@ -223,7 +223,7 @@ test('durable static hierarchical crash-replay is idempotent at worker step', fu
     // Expire the lease so step-1 can re-run
     DB::table('swarm_durable_runs')
         ->where('run_id', $runId)
-        ->update(['leased_until' => now('UTC')->subSeconds(5)]);
+        ->update(['leased_until' => now()->subSeconds(5)]);
 
     // Re-advance step-1 — researcher_node re-executes (no snapshot was persisted on crash)
     (new AdvanceDurableSwarm($runId, 1))->handle($manager);
@@ -336,7 +336,7 @@ test('durable static hierarchical loop iteration is idempotent across a crash-re
 
     DB::table('swarm_durable_runs')
         ->where('run_id', $runId)
-        ->update(['leased_until' => now('UTC')->subSeconds(5)]);
+        ->update(['leased_until' => now()->subSeconds(5)]);
 
     // Re-run step 2 — the loop iteration accounting is replayed exactly once.
     (new AdvanceDurableSwarm($runId, 2))->handle($manager);

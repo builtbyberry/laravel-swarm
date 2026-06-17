@@ -239,8 +239,8 @@ function expireDurableLease(string $runId): void
     DB::table('swarm_durable_runs')
         ->where('run_id', $runId)
         ->update([
-            'leased_until' => now('UTC')->subSeconds(5),
-            'updated_at' => now('UTC'),
+            'leased_until' => now()->subSeconds(5),
+            'updated_at' => now(),
         ]);
 }
 
