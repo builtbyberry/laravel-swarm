@@ -159,7 +159,7 @@ test('durable nested loop survives a crash before checkpoint mid inner loop', fu
 
     DB::table('swarm_durable_runs')
         ->where('run_id', $runId)
-        ->update(['leased_until' => now('UTC')->subSeconds(5)]);
+        ->update(['leased_until' => now()->subSeconds(5)]);
 
     // Resume and drive to completion — per-scope counts recompute exactly.
     $innerCounters = driveNestedDurableRun($runId, $manager, 'inner_loop');
