@@ -272,6 +272,46 @@ stability settings while Laravel AI remains pre-stable.
 
 v0.12.2 is a hardening release with **no migrations**. Two changes may require operator attention: the audit signing guard (#223) described below, and the durable advance-job timeout correction (#243) described below that.
 
+### `swarm:health --json` `ok` field now mirrors the exit-code contract (#247)
+
+The `ok` key in `swarm:health --json` output previously returned `false` whenever any row had a status other than `ok` — including `note` (e.g. relay not scheduled) and `warning` (e.g. stale outbox rows). A healthy deployment that had a relay-scheduling note or a stale-outbox warning therefore emitted `{"ok": false}` while exiting 0, making the `ok` field useless for automated monitoring.
+
+**New behavior:** `ok` is `true` if and only if no row has `status=failed`, which is the exact complement of the non-zero exit code. Note and warning rows no longer flip `ok`.
+
+**Action:** scripts that keyed on `ok: false` to detect note or warning rows (e.g. to alert on a missing relay schedule) must now inspect the `checks` array for individual row statuses. Scripts that used `ok: false` only to detect failures continue to work correctly.
+
+Also, audit-outbox checks (`runAuditOutboxChecks()`) are now skipped for failure policies that do not use the outbox (`swallow`, `log`, `halt`). Those configurations now return a single `note` row and exit 0 instead of potentially erroring if the audit-outbox migration has not been run. Scripts monitoring these configurations should expect a `note` row rather than the outbox table/staleness/dead-letter rows.
+
+### `DurableRunStore` interface: `recoverableQueuedResumes()` added (#246)
+
+`DurableRunStore` gained a new required method in v0.12.2:
+
+```php
+public function recoverableQueuedResumes(
+    ?string $runId = null,
+    ?string $swarmClass = null,
+    int $limit = 50,
+    int $graceSeconds = 300,
+): array;
+```
+
+**Who is affected:** applications that implement `DurableRunStore` directly with a custom store class. The shipped `DatabaseDurableRunStore` already implements the method.
+
+**Who is not affected:** applications that only *call* the store (via `app(DurableRunStore::class)->...`), use the default database driver, or interact with the store through the `DurableSwarmManager` facade methods.
+
+**Action required:** custom store implementations must add this method. A minimal stub for stores that do not use `QueueHierarchicalParallel` coordination is sufficient:
+
+```php
+public function recoverableQueuedResumes(
+    ?string $runId = null,
+    ?string $swarmClass = null,
+    int $limit = 50,
+    int $graceSeconds = 300,
+): array {
+    return [];
+}
+```
+
 ### Durable advance jobs now pin their timeout to `step_timeout + margin` (#243)
 
 Previously `AdvanceDurableSwarm` and `AdvanceDurableBranch` exposed a `timeout()` method, but Laravel's queue layer reads timeout from the job's `$timeout` **property** — the method was never called. Both jobs silently inherited the worker `--timeout` (default 60 s), which could prematurely kill long-running steps and churn leases.
