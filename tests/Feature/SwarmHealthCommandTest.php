@@ -469,3 +469,144 @@ describe('audit outbox checks', function (): void {
             ->toContain('no dead-letter rows');
     });
 });
+
+// ---------------------------------------------------------------------------
+// Fix 1 — ok/exit-code consistency (#247)
+// ---------------------------------------------------------------------------
+
+describe('json ok mirrors exit code (fix #247)', function (): void {
+    beforeEach(function (): void {
+        config()->set('swarm.persistence.driver', 'database');
+        config()->set('swarm.capture.active_context', true);
+    });
+
+    test('healthy --durable --json run emits ok:true and exits 0', function (): void {
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
+
+        $payload = json_decode(Artisan::output(), true);
+
+        expect($exitCode)->toBe(0)
+            ->and($payload['ok'])->toBeTrue();
+    });
+
+    test('run with only warning rows emits ok:true and exits 0', function (): void {
+        // Insert a stale durable outbox row so the staleness check returns 'warning'.
+        DB::statement('PRAGMA foreign_keys = OFF');
+        DB::table('swarm_durable_outbox')->insert([
+            'run_id' => (string) Str::uuid(),
+            'dispatch_type' => 'step',
+            'payload' => '{}',
+            'queue_connection' => null,
+            'queue_name' => null,
+            'available_at' => now()->subMinutes(3),
+            'reserved_at' => null,
+            'created_at' => now()->subMinutes(3),
+        ]);
+        DB::statement('PRAGMA foreign_keys = ON');
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
+
+        $payload = json_decode(Artisan::output(), true);
+
+        expect($exitCode)->toBe(0)
+            ->and($payload['ok'])->toBeTrue();
+    });
+
+    test('run with a failed row emits ok:false and exits 1', function (): void {
+        config()->set('swarm.capture.active_context', false);
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
+
+        $payload = json_decode(Artisan::output(), true);
+
+        expect($exitCode)->toBe(1)
+            ->and($payload['ok'])->toBeFalse();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 2 — policy-aware audit outbox scoping (#247)
+// ---------------------------------------------------------------------------
+
+describe('policy-aware audit outbox scoping (fix #247)', function (): void {
+    beforeEach(function (): void {
+        config()->set('swarm.persistence.driver', 'database');
+    });
+
+    test('swallow policy with missing outbox table emits note and exits 0', function (): void {
+        config()->set('swarm.audit.failure_policy', 'swallow');
+        config()->set('swarm.tables.audit_outbox', 'nonexistent_audit_outbox_xyz');
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        $output = Artisan::output();
+        expect($output)
+            ->toContain('Audit outbox')
+            ->toContain('note')
+            ->not->toContain('failed');
+    });
+
+    test('log policy with missing outbox table emits note and exits 0', function (): void {
+        config()->set('swarm.audit.failure_policy', 'log');
+        config()->set('swarm.tables.audit_outbox', 'nonexistent_audit_outbox_xyz');
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        $output = Artisan::output();
+        expect($output)
+            ->toContain('Audit outbox')
+            ->toContain('note')
+            ->not->toContain('failed');
+    });
+
+    test('halt policy with missing outbox table emits note and exits 0', function (): void {
+        config()->set('swarm.audit.failure_policy', 'halt');
+        config()->set('swarm.tables.audit_outbox', 'nonexistent_audit_outbox_xyz');
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        $output = Artisan::output();
+        expect($output)
+            ->toContain('Audit outbox')
+            ->toContain('note')
+            ->not->toContain('failed');
+    });
+
+    test('queue policy (default) with missing outbox table emits failed and exits 1', function (): void {
+        config()->set('swarm.audit.failure_policy', 'queue');
+        config()->set('swarm.tables.audit_outbox', 'nonexistent_audit_outbox_xyz');
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(1);
+        expect(Artisan::output())
+            ->toContain('Audit outbox')
+            ->toContain('failed');
+    });
+
+    test('dead_letter policy with missing outbox table emits failed and exits 1', function (): void {
+        config()->set('swarm.audit.failure_policy', 'dead_letter');
+        config()->set('swarm.tables.audit_outbox', 'nonexistent_audit_outbox_xyz');
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(1);
+        expect(Artisan::output())
+            ->toContain('Audit outbox')
+            ->toContain('failed');
+    });
+
+    test('note row from non-outbox policy does not flip ok to false in --json output', function (): void {
+        config()->set('swarm.audit.failure_policy', 'swallow');
+
+        $exitCode = Artisan::call('swarm:health', ['--json' => true]);
+
+        $payload = json_decode(Artisan::output(), true);
+
+        expect($exitCode)->toBe(0)
+            ->and($payload['ok'])->toBeTrue();
+    });
+});
