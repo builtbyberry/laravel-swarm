@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.12.2 - unreleased
+## v0.12.2 - 2026-06-18
 
 Hardening & hygiene — close the vetted improve-laravel audit findings (against 66b8f42).
 
