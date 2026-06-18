@@ -457,6 +457,17 @@ return [
         'connection' => env('SWARM_QUEUE_CONNECTION'),
         'name' => env('SWARM_QUEUE'),
         /*
+         * Queued swarm jobs (InvokeSwarm, BroadcastSwarm, ResumeQueuedHierarchicalSwarm) are attempted
+         * ONCE by default, regardless of the worker's global --tries flag. A retry restarts the entire
+         * swarm run from step 0 — re-dispatching tools and re-spending LLM tokens — so blind retries
+         * are unsafe. Set SWARM_QUEUE_TRIES > 1 only if your swarms are idempotent and the token cost
+         * of a full restart is acceptable.
+         * SWARM_QUEUE_TIMEOUT is intentionally null (inherit worker --timeout) — a low package default
+         * would kill legitimately long LLM runs; the safety concern is retries, not timeout.
+         */
+        'tries' => (int) env('SWARM_QUEUE_TRIES', 1),
+        'timeout' => env('SWARM_QUEUE_TIMEOUT'),   // null = inherit worker --timeout
+        /*
          * Hierarchical swarms dispatched with queue() can coordinate parallel route nodes across workers
          * when coordination is multi_worker (requires database-backed persistence and durable tables).
          */

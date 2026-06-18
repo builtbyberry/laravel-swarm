@@ -92,6 +92,33 @@ ContentPipelineSwarm::make()
 - Do not use serialized closures with `then()` / `catch()` on the response for real workloads — they can capture excess state, fail serialization, or embed sensitive data in queue payloads. Listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead.
 - Queued swarms are re-resolved from the container; do not rely on runtime instance state. Pass per-run data in the task payload or a `RunContext`.
 
+#### Queue retry & timeout
+
+Queued swarm jobs are attempted **once** by default, regardless of the queue worker's `--tries` flag.
+
+**Why once?** A queued run holds no checkpoint. A retry does not resume from the last completed agent — it re-executes the entire swarm from step 0: re-dispatching all tool calls and re-spending all LLM tokens. Silently inheriting a worker-wide `--tries=3` means a transient worker crash restarts a full, potentially expensive run three times over. Swarm asserts the safe default here because only Swarm knows these runs are not checkpointed.
+
+**Contrast with durable jobs.** `dispatchDurable()` jobs derive explicit tries/timeout/backoff from `swarm.durable.job.*` and are safe to retry because each attempt advances from the last persisted checkpoint, not from the beginning. `SWARM_QUEUE_TRIES` does **not** affect durable advance jobs (`AdvanceDurableSwarm`/`AdvanceDurableBranch`), which always derive their tries from `swarm.durable.job.tries`.
+
+**Opting in.** If your swarms are idempotent and the token cost of a full restart is acceptable, raise the limit via config or env:
+
+```env
+SWARM_QUEUE_TRIES=3
+```
+
+```php
+// config/swarm.php (or override at runtime)
+'queue' => [
+    'tries' => 3,
+],
+```
+
+**Timeout.** The package does not impose a job-level timeout on queued runs. A low ceiling would kill legitimately long LLM pipelines. The safety concern for queued swarms is retries, not timeout. To impose an explicit ceiling, set `SWARM_QUEUE_TIMEOUT` (seconds):
+
+```env
+SWARM_QUEUE_TIMEOUT=600
+```
+
 ### `stream()`
 
 ```php
