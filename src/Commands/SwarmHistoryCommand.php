@@ -56,7 +56,7 @@ class SwarmHistoryCommand extends Command
                 $run['topology'],
                 $run['status'],
                 SwarmRunPhase::cliLabel($run),
-                count($run['steps'] ?? []),
+                $run['step_count'] ?? count($run['steps'] ?? []),
                 isset($run['started_at']) ? Carbon::parse($run['started_at'], 'UTC')->setTimezone(config('app.timezone'))->toDateTimeString() : 'n/a',
             ], $runs),
         );
