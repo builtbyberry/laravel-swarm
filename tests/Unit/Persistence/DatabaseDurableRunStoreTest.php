@@ -351,3 +351,49 @@ test('recoverableWaitingJoins query count is constant across candidate count', f
     expect($result)->toHaveCount(5)
         ->and($queries)->toBe(4);
 });
+
+test('recoverableWaitingJoins uses strict string match for parent_node_id — loosely-equal but distinct ids do not collide', function () {
+    // Regression for F5: the preloaded-branch filter used loose (==) comparison.
+    // "0" == "0.0" in PHP, so a run whose current_node_id is "0.0" could incorrectly
+    // absorb branches filed under parent "0", and vice-versa. The fix uses === so
+    // only an exact-string match gates the terminal check.
+
+    $store = app(DatabaseDurableRunStore::class);
+    $now = now('UTC');
+    $stale = $now->copy()->subSeconds(360);
+
+    // "strict-exact": current_node_id="0.0" — all branches under "0.0" are terminal.
+    // Must be KEPT: its own branches are all done.
+    seedDurableRun('strict-exact', ['status' => 'waiting', 'current_node_id' => '0.0', 'updated_at' => $stale]);
+
+    // "strict-sibling": current_node_id="0" — its own branch is still running.
+    // Must be DROPPED: the in-progress branch under "0" is not terminal.
+    // Without strict matching the "strict-exact" run would absorb "0" branches (since "0" == "0.0")
+    // and "strict-sibling" might look terminal when it should not; the inverse is also true.
+    seedDurableRun('strict-sibling', ['status' => 'waiting', 'current_node_id' => '0', 'updated_at' => $stale]);
+
+    $branchRow = function (string $runId, string $branchId, string $parent, string $status) use ($now): array {
+        return [
+            'run_id' => $runId, 'branch_id' => $branchId, 'step_index' => 0, 'node_id' => 'n',
+            'agent_class' => 'A', 'parent_node_id' => $parent, 'status' => $status,
+            'input' => 'x', 'created_at' => $now, 'updated_at' => $now,
+        ];
+    };
+
+    DB::table('swarm_durable_branches')->insert([
+        // "strict-exact" run: branches under "0.0" (exact match) — all terminal.
+        $branchRow('strict-exact', 'se-b1', '0.0', 'completed'),
+        $branchRow('strict-exact', 'se-b2', '0.0', 'failed'),
+        // "strict-sibling" run: branch under "0" (sibling id) — still running.
+        $branchRow('strict-sibling', 'ss-b1', '0', 'running'),
+    ]);
+
+    $result = $store->recoverableWaitingJoins();
+    $keptIds = collect($result)->pluck('run_id')->all();
+
+    // "strict-exact" has all terminal branches under its exact parent_node_id "0.0".
+    expect($keptIds)->toContain('strict-exact')
+        // "strict-sibling" has a running branch under "0" — must NOT leak into "strict-exact"
+        // and must NOT be masked by "strict-exact"'s terminal branches.
+        ->and($keptIds)->not->toContain('strict-sibling');
+});

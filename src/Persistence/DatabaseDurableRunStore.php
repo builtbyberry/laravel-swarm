@@ -1210,6 +1210,10 @@ class DatabaseDurableRunStore implements DurableRunStore
      * the terminal-status rule. Empty-after-filter → false. Branches under other
      * parent nodes are never collapsed in.
      *
+     * The filter uses strict identity (===) to match the exact-string SQL semantics of
+     * branchesFor(): loosely-equal but distinct ids (e.g. "0" vs "0.0") must never
+     * collapse a sibling parent's branches into this run's terminal check.
+     *
      * @param  array<string, mixed>  $run
      * @param  Collection<int, \stdClass>  $branchesForRun
      */
@@ -1221,7 +1225,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             return false;
         }
 
-        $branches = $branchesForRun->where('parent_node_id', $parentNodeId);
+        $branches = $branchesForRun->filter(fn (object $b): bool => ($b->parent_node_id ?? null) === $parentNodeId);
 
         if ($branches->isEmpty()) {
             return false;
