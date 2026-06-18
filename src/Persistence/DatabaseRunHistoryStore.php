@@ -340,8 +340,22 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             $query->where('status', $status);
         }
 
-        return $query->get()
-            ->map(fn (object $record): array => $this->mapRecord($record))
+        $records = $query->get();
+
+        // List views render only the step COUNT per run, so we skip the
+        // per-step cipher decryption full hydration performs. The count is
+        // the size of the union of the legacy-JSON step indices and the
+        // normalized-row step indices — never COUNT(*), which would
+        // under-count legacy-only runs and mis-count overlapping indices.
+        $normalizedIndexSets = $this->normalizedStepIndexSets(
+            $records->pluck('run_id')->all(),
+        );
+
+        return $records
+            ->map(fn (object $record): array => $this->mapRecordLean(
+                $record,
+                $this->stepCountForRecord($record, $normalizedIndexSets[$record->run_id] ?? []),
+            ))
             ->all();
     }
 
@@ -403,6 +417,81 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'leased_until' => $record->leased_until ?? null,
             'updated_at' => $record->updated_at,
         ];
+    }
+
+    /**
+     * Lean projection for list views (swarm:history, multi-run swarm:status):
+     * the columns operators see plus a precomputed step count, with NO cipher
+     * calls. Step IO, context, and output are never decrypted here — listing
+     * never renders their plaintext. `metadata` is retained because
+     * {@see SwarmRunPhase::cliLabel()} reads it for the Phase column.
+     *
+     * @return array<string, mixed>
+     */
+    protected function mapRecordLean(object $record, int $stepCount): array
+    {
+        return [
+            'run_id' => $record->run_id,
+            'swarm_class' => $record->swarm_class,
+            'topology' => $record->topology,
+            'status' => $record->status,
+            'metadata' => $this->decodeJson($record->metadata, []),
+            'started_at' => $record->created_at,
+            'finished_at' => $record->finished_at,
+            'step_count' => $stepCount,
+        ];
+    }
+
+    /**
+     * Batch-load the normalized `(run_id, step_index)` pairs for every listed
+     * run in a single query, grouped by run_id, so the list path issues one
+     * step query regardless of run count.
+     *
+     * @param  array<int, mixed>  $runIds
+     * @return array<string, array<int, int>>
+     */
+    protected function normalizedStepIndexSets(array $runIds): array
+    {
+        if ($runIds === [] || ! $this->hasNormalizedStepTable()) {
+            return [];
+        }
+
+        $sets = [];
+
+        foreach ($this->stepTable()->whereIn('run_id', $runIds)->get(['run_id', 'step_index']) as $row) {
+            $sets[$row->run_id][] = (int) $row->step_index;
+        }
+
+        return $sets;
+    }
+
+    /**
+     * Reproduce the step count {@see stepsForRecord()} would yield without
+     * hydrating or decrypting any step: the size of the union of the legacy
+     * JSON step indices and the normalized step indices. Mirrors the
+     * stepsForRecord index keying exactly (same index overwrites), so the
+     * lean count matches full hydration for legacy-only, normalized-only, and
+     * overlapping-index runs.
+     *
+     * @param  array<int, int>  $normalizedIndices
+     */
+    protected function stepCountForRecord(object $record, array $normalizedIndices): int
+    {
+        $indices = [];
+
+        foreach ($this->decodeJson($record->steps, []) as $step) {
+            if (! is_array($step)) {
+                continue;
+            }
+
+            $indices[$this->stepSortIndex($step, count($indices))] = true;
+        }
+
+        foreach ($normalizedIndices as $stepIndex) {
+            $indices[$stepIndex] = true;
+        }
+
+        return count($indices);
     }
 
     /**

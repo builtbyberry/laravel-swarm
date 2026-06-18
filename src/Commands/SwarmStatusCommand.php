@@ -40,7 +40,7 @@ class SwarmStatusCommand extends Command
                 $run['topology'],
                 $run['status'],
                 SwarmRunPhase::cliLabel($run),
-                count($run['steps'] ?? []),
+                $run['step_count'] ?? count($run['steps'] ?? []),
                 $this->formatDuration($run),
             ], $runs),
         );
