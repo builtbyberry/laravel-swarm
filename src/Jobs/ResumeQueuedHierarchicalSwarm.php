@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Jobs;
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Jobs\Concerns\ConfiguresQueuedSwarmJob;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\EmitsSwarmJobTelemetry;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use Illuminate\Bus\Queueable;
@@ -18,6 +19,7 @@ use Illuminate\Queue\SerializesModels;
  */
 class ResumeQueuedHierarchicalSwarm implements ShouldQueue
 {
+    use ConfiguresQueuedSwarmJob;
     use EmitsSwarmJobTelemetry;
     use InteractsWithQueue;
     use Queueable;

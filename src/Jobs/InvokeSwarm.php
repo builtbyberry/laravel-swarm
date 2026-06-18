@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Jobs;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Jobs\Concerns\ConfiguresQueuedSwarmJob;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\EmitsSwarmJobTelemetry;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -20,6 +21,7 @@ use Illuminate\Queue\SerializesModels;
  */
 class InvokeSwarm implements ShouldQueue
 {
+    use ConfiguresQueuedSwarmJob;
     use EmitsSwarmJobTelemetry;
     use InteractsWithQueue;
     use Queueable;
