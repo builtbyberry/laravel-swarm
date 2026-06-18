@@ -270,7 +270,7 @@ Controls the audit evidence sink. Bind `SwarmAuditSink` in your service containe
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
-| `swarm.audit.failure_policy` | string | `queue` | `SWARM_AUDIT_FAILURE_POLICY` | What happens when the audit sink throws. `swallow` — silently discard. `log` — log via the application logger, then continue. `queue` (default) — enqueue the failed record to the audit outbox for retry via `swarm:relay`. `dead_letter` — route the failed record to the outbox dead-letter status (no retry). `halt` — log and halt the swarm run. Only `queue` and `dead_letter` use the audit outbox table. `halt` is the one policy that propagates into run execution. |
+| `swarm.audit.failure_policy` | string | `queue` | `SWARM_AUDIT_FAILURE_POLICY` | What happens when the audit sink throws. `swallow` — silently discard. `log` — log via the application logger, then continue. `queue` (default) — enqueue the failed record to the audit outbox for retry via `swarm:relay`. `dead_letter` — route the failed record to the outbox dead-letter status (no retry). `halt` — log and halt the swarm run. Only `queue` and `dead_letter` use the audit outbox table. `halt` is the one policy that propagates into run execution. This policy governs **both** sink failures and audit-signing failures — a signer that omits `signature_algorithm` when `signature` is set is treated as a signing failure and routed through this same handler. See [Audit Signing](audit-evidence-contract.md#audit-signing). |
 | `swarm.audit.metadata_allowlist` | array | `[]` | `SWARM_AUDIT_METADATA_ALLOWLIST` | Comma-separated list of run metadata keys forwarded to audit evidence payloads. Only listed keys are included. |
 
 ---
@@ -361,7 +361,7 @@ SWARM_CAPTURE_ARTIFACTS=false
 SWARM_CAPTURE_ACTIVE_CONTEXT=false
 SWARM_OBSERVABILITY_ENABLED=true
 SWARM_OBSERVABILITY_FAILURE_POLICY=swallow
-SWARM_AUDIT_FAILURE_POLICY=swallow
+SWARM_AUDIT_FAILURE_POLICY=queue
 ```
 
 Schedule in `routes/console.php`:
