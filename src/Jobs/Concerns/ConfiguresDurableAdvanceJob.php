@@ -9,23 +9,25 @@ namespace BuiltByBerry\LaravelSwarm\Jobs\Concerns;
  */
 trait ConfiguresDurableAdvanceJob
 {
+    // timeout MUST be a property — Laravel reads $job->timeout directly via
+    // getAttributeValue(); a timeout() method is never called. tries/backoff
+    // stay methods because getJobTries/getJobBackoff are method-aware.
+    public int $timeout;
+
+    /**
+     * Set $this->timeout from config. Call in the job constructor after
+     * $this->enqueuedAtMs is assigned so the property is ready before the
+     * job is serialized into the queue payload.
+     */
+    public function applyDurableAdvanceJobTimeout(): void
+    {
+        $this->timeout = max(1, (int) config('swarm.durable.step_timeout', 300))
+            + max(0, (int) config('swarm.durable.job.timeout_margin_seconds', 60));
+    }
+
     public function tries(): int
     {
         return max(1, (int) config('swarm.durable.job.tries', 3));
-    }
-
-    /**
-     * Queue worker timeout (seconds) for one attempt. This is
-     * `swarm.durable.step_timeout` plus `swarm.durable.job.timeout_margin_seconds`
-     * so the worker outlives the orchestration step window by a small buffer.
-     * It does not hard-cancel an in-flight provider call.
-     */
-    public function timeout(): int
-    {
-        $stepTimeout = max(1, (int) config('swarm.durable.step_timeout', 300));
-        $margin = max(0, (int) config('swarm.durable.job.timeout_margin_seconds', 60));
-
-        return $stepTimeout + $margin;
     }
 
     /**
