@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Illuminate\Support\Collection;
 
 /**
  * Opt-in {@see MemoryPropagationPolicy} that surfaces the reserved
@@ -50,31 +51,26 @@ final class ConversationPropagationPolicy implements MemoryPropagationPolicy
 
     public function present(array $candidateEntries, RunContext $context, ?Agent $agent): array
     {
-        $runEntries = array_values(array_filter(
-            $candidateEntries,
-            static fn (MemoryEntry $entry): bool => $entry->scope === MemoryScope::Run,
-        ));
+        $partitioned = collect($candidateEntries)
+            ->filter(static fn (MemoryEntry $entry): bool => $entry->scope === MemoryScope::Run)
+            ->partition(static fn (MemoryEntry $entry): bool => SwarmMemoryKeys::isStepOutput($entry->key));
 
-        $transcript = array_values(array_filter(
-            $runEntries,
-            static fn (MemoryEntry $entry): bool => SwarmMemoryKeys::isStepOutput($entry->key),
-        ));
+        /** @var Collection<int, MemoryEntry> $transcriptEntries */
+        $transcriptEntries = $partitioned->first();
+        /** @var Collection<int, MemoryEntry> $restEntries */
+        $restEntries = $partitioned->last();
 
-        usort(
-            $transcript,
-            static fn (MemoryEntry $a, MemoryEntry $b): int => SwarmMemoryKeys::stepIndexOf($a->key)
-                <=> SwarmMemoryKeys::stepIndexOf($b->key),
-        );
+        $transcript = $transcriptEntries
+            // partition(isStepOutput) guarantees every entry here has a valid step-output
+            // key, so stepIndexOf() is non-null; ?int reflects the method's declared return.
+            ->sortBy(static fn (MemoryEntry $entry): ?int => SwarmMemoryKeys::stepIndexOf($entry->key))
+            ->values()
+            ->all();
 
         if (! $this->includeRunMemory) {
             return $transcript;
         }
 
-        $rest = array_values(array_filter(
-            $runEntries,
-            static fn (MemoryEntry $entry): bool => ! SwarmMemoryKeys::isStepOutput($entry->key),
-        ));
-
-        return array_merge($transcript, $rest);
+        return array_merge($transcript, $restEntries->values()->all());
     }
 }
