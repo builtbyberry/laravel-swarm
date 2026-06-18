@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use Illuminate\Queue\SyncQueue;
 
@@ -107,4 +108,32 @@ test('durable advance job timeout is at least one second', function () {
 
     expect($swarm->timeout)->toBeGreaterThanOrEqual(1)
         ->and($branch->timeout)->toBeGreaterThanOrEqual(1);
+});
+
+test('resume queued hierarchical swarm job exposes timeout from config', function () {
+    $job = new ResumeQueuedHierarchicalSwarm('run-1');
+
+    expect($job->timeout)->toBe(165);
+});
+
+test('resume queued hierarchical swarm job timeout property reaches the queue payload', function () {
+    // Regression guard: proves the $timeout property propagates into the serialized
+    // queue payload. This is the assertion that catches the missing
+    // applyDurableAdvanceJobTimeout() constructor call — the test FAILS without F1.
+    $job = new ResumeQueuedHierarchicalSwarm('run-1');
+
+    expect($job->timeout)->toBe(165);
+
+    $queue = new class extends SyncQueue
+    {
+        public function buildPayload(object $job, string $queue): array
+        {
+            return json_decode($this->createPayload($job, $queue), true);
+        }
+    };
+    $queue->setContainer(app());
+
+    $payload = $queue->buildPayload($job, 'default');
+
+    expect($payload['timeout'])->toBe(165);
 });
