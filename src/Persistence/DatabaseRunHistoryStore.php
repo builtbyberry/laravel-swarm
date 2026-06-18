@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
@@ -116,7 +117,34 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             /** @var object|null $record */
             $record = $this->table()->where('run_id', $runId)->lockForUpdate()->first();
 
-            if ($record === null || ($record->status ?? null) !== 'waiting') {
+            if ($record === null) {
+                return QueuedRunAcquisition::duplicateRunning();
+            }
+
+            // Crash-recovery reclaim: a worker that died after acquiring the
+            // continuation lease leaves the run stranded in 'running'. Once the
+            // lease expires, re-drive it under a fresh token — but only for the
+            // queued-hierarchical coordination profile, whose post-join writes are
+            // all execution-token-guarded (recordStep/complete) or outbox-transactional
+            // (the parallel boundary). Rotating the token here makes the stale worker's
+            // first guarded write fail with LostSwarmLeaseException, so a reclaim of a
+            // merely-slow worker can never let two run the continuation concurrently.
+            if (($record->status ?? null) === 'running'
+                && ($record->leased_until ?? null) !== null
+                && $timestamp->gt(Carbon::parse((string) $record->leased_until))
+                && $this->isQueueHierarchicalParallelRun($runId)
+            ) {
+                $this->table()->where('run_id', $runId)->update([
+                    'execution_token' => $executionToken,
+                    'leased_until' => $timestamp->copy()->addSeconds($leaseSeconds),
+                    'updated_at' => $timestamp,
+                    'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+                ]);
+
+                return QueuedRunAcquisition::reclaimed($executionToken);
+            }
+
+            if (($record->status ?? null) !== 'waiting') {
                 return QueuedRunAcquisition::duplicateRunning();
             }
 
@@ -385,6 +413,22 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     protected function table(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.history', 'swarm_run_histories'));
+    }
+
+    /**
+     * Scope the continuation-lease reclaim narrowly to the queued-hierarchical
+     * coordination profile. The profile lives on the durable runs table (the
+     * history row has no coordination_profile column), so confirm it there with a
+     * single indexed read — other profiles resume through the durable lease path
+     * and must never be reclaimed here.
+     */
+    protected function isQueueHierarchicalParallelRun(string $runId): bool
+    {
+        return $this->connection
+            ->table((string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs'))
+            ->where('run_id', $runId)
+            ->where('coordination_profile', CoordinationProfile::QueueHierarchicalParallel->value)
+            ->exists();
     }
 
     protected function stepTable(): Builder

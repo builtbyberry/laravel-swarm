@@ -151,6 +151,17 @@ interface DurableRunStore
      */
     public function recoverableWaitingJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array;
 
+    /**
+     * Queued-hierarchical resumes stranded after a worker died while holding the
+     * continuation lease. That lease lives on the run-history row (status flips to
+     * 'running' with a stamped leased_until) while the durable run stays 'pending',
+     * so this joins the unfinished QueueHierarchicalParallel durable run to its
+     * history row that is 'running' with a lease expired past the grace window.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function recoverableQueuedResumes(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array;
+
     public function markRecoveryDispatched(string $runId): void;
 
     public function markRetryRecoveryDispatched(string $runId): void;

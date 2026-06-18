@@ -589,7 +589,17 @@ class SwarmRunner
         }
 
         if ($outcome instanceof QueueHierarchicalParallelBoundary) {
-            $this->durable->enterQueueHierarchicalParallelCoordination($state, $outcome);
+            // The boundary's branch fan-out is enqueued inside enter()'s DB transaction,
+            // ordered after a token-guarded syncDurableState write. If this worker's
+            // continuation lease was reclaimed (its token rotated), that guarded write
+            // fails, the whole transaction rolls back — no branches dispatched — and we
+            // bail here, mirroring the LostSwarmLeaseException handling above. This is the
+            // F-D1 guarantee for the deferral path: a reclaim never double-dispatches.
+            try {
+                $this->durable->enterQueueHierarchicalParallelCoordination($state, $outcome);
+            } catch (LostSwarmLeaseException) {
+                return null;
+            }
 
             return null;
         }
