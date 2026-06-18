@@ -122,7 +122,7 @@ adding a new public API.
 | `ArtifactRepository` | Store step and run artifacts. | [Persistence And History](persistence-and-history.md) |
 | `RunHistoryStore` | Store run and step history. | [Persistence And History](persistence-and-history.md) |
 | `StreamEventStore` | Store replayable stream events. | [Streaming](streaming.md), [Persistence And History](persistence-and-history.md#replaying-stream-events) |
-| `DurableRunStore` | Durable runtime persistence and operational reads (e.g. `find()`, `runIdsForLabels()`). | [Durable Runtime Architecture](durable-runtime-architecture.md), [Durable Execution](durable-execution.md) |
+| `DurableRunStore` | Durable runtime persistence and operational reads (e.g. `find()`, `runIdsForLabels()`, `recoverableQueuedResumes()` — added v0.12.2, see [Upgrading](../UPGRADING.md#upgrading-to-v0122)). | [Durable Runtime Architecture](durable-runtime-architecture.md), [Durable Execution](durable-execution.md) |
 | `SwarmInputGuardrail` | Validate task input before any agent runs. | [Guardrails](guardrails.md), [Guardrails Policy](../examples/guardrails-policy/README.md) |
 | `SwarmStepGuardrail` | Validate each agent output before the step is recorded. | [Guardrails](guardrails.md), [Guardrails Policy](../examples/guardrails-policy/README.md) |
 | `SwarmOutputGuardrail` | Validate final output before completion is persisted. | [Guardrails](guardrails.md), [Guardrails Policy](../examples/guardrails-policy/README.md) |
@@ -169,3 +169,12 @@ adding a new public API.
 | `Tools\Recall` | `laravel/ai` `Tool` an agent uses mid-prompt to read run memory. Args: `key` (single value), `prefix` (key prefix), `scope` (default `run`). Reads through the active swarm's `MemoryPropagationPolicy`, so it can only surface what the policy permits; degrades to a graceful message outside a run. Subclass to override `description()` or bind a specific agent. (v0.11.0+) | [Swarm Memory](memory.md#recall-and-remember-tools) |
 | `Tools\Remember` | `laravel/ai` `Tool` an agent uses mid-prompt to write run memory. Args: `key`, `value`, `scope` (default `run`). Writes through `SwarmMemory::put()`, so the `MemoryCapturePolicy` redacts/drops at the boundary; scope id is resolved from the active run (never the model) and reserved `swarm:` keys are rejected. Graceful no-op outside a run. (v0.11.0+) | [Swarm Memory](memory.md#recall-and-remember-tools) |
 | `Concerns\HasSwarmMemoryTools` | Opt-in trait exposing `swarmMemoryTools(): array` for an agent's `tools()`. Returns the `Recall`/`Remember` tools only when `swarm.memory.tools.enabled` is true, honouring the per-tool `recall`/`remember` toggles; resolves the tool classes from the container so a bound subclass is used. The "optional default-on registration" surface. (v0.11.0+) | [Swarm Memory](memory.md#recall-and-remember-tools) |
+
+## Configuration Keys
+
+Notable configuration keys that affect observable behavior or operational decisions. See [Configuration](configuration.md) for the full reference.
+
+| Key | Default | Env Var | Description | Since |
+| --- | --- | --- | --- | --- |
+| `swarm.queue.tries` | `1` | `SWARM_QUEUE_TRIES` | Attempt count for `InvokeSwarm` and `BroadcastSwarm` jobs. Defaults to `1` — a retry restarts the full swarm run from step 0 (no checkpoint). Raise only for idempotent swarms. | v0.12.2+ |
+| `swarm.queue.timeout` | `null` (inherit worker `--timeout`) | `SWARM_QUEUE_TIMEOUT` | Hard timeout (seconds) for queued swarm jobs. `null` inherits the worker's `--timeout` — set explicitly only when you need a hard ceiling. | v0.12.2+ |

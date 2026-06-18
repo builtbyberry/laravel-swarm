@@ -34,6 +34,7 @@ class ResumeQueuedHierarchicalSwarm implements ShouldQueue
         ?int $enqueuedAtMs = null,
     ) {
         $this->enqueuedAtMs = $enqueuedAtMs ?? self::telemetryEpochMilliseconds();
+        $this->applyDurableAdvanceJobTimeout();
     }
 
     public function handle(QueuedHierarchicalCoordinator $coordinator): void

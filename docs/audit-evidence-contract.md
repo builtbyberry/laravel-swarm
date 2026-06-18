@@ -1250,6 +1250,9 @@ These controls apply to **sink and telemetry payloads only**. They do not affect
   from your authentication surface.
 - [ ] Bind a `SwarmAuditSigner` if evidence records must be cryptographically
   signed before they reach the sink.
+- [ ] If a `SwarmAuditSigner` is bound, set `swarm.audit.failure_policy=halt` (or
+  bind a custom `SinkFailureHandler`) so an unverifiable record (missing
+  `signature_algorithm`) cannot reach the sink via the outbox under `queue`/`dead_letter`.
 - [ ] Bind a `CapturePolicy` if capture decisions need to vary per run or
   actor rather than via the static `swarm.capture.*` booleans.
 - [ ] Confirm that your sink does not expose raw prompt/output content; evidence
