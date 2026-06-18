@@ -70,9 +70,11 @@ class SwarmHealthCommand extends Command
             $results[] = $result;
         }
 
+        $hasFailure = collect($results)->contains(fn (array $result): bool => $result['status'] === 'failed');
+
         if ($this->option('json') === true) {
             $this->line((string) json_encode([
-                'ok' => collect($results)->every(fn (array $result): bool => $result['status'] === 'ok'),
+                'ok' => ! $hasFailure,
                 'checks' => $results,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         } else {
@@ -88,7 +90,7 @@ class SwarmHealthCommand extends Command
             );
         }
 
-        return collect($results)->contains(fn (array $result): bool => $result['status'] === 'failed')
+        return $hasFailure
             ? self::FAILURE
             : self::SUCCESS;
     }
@@ -252,9 +254,10 @@ class SwarmHealthCommand extends Command
     }
 
     /**
-     * Audit outbox health checks. Always run by default (audit failure policy
-     * defaults to queue in v0.5, so every database-backed install has the
-     * outbox in scope). Skip silently on the cache driver — the outbox isn't
+     * Audit outbox health checks. Scoped to the configured failure policy: only
+     * `queue` and `dead_letter` write to the audit outbox, so the table/staleness/
+     * dead-letter checks are skipped for `swallow`, `log`, and `halt` (which never
+     * touch the outbox). Skip silently on the cache driver — the outbox isn't
      * available there and the dispatcher degrades to log-and-swallow.
      *
      * @return array<int, array{component: string, driver: string, store: string, status: string, details: string}>
@@ -263,6 +266,18 @@ class SwarmHealthCommand extends Command
     {
         if ($config->get('swarm.persistence.driver') !== 'database') {
             return [];
+        }
+
+        $policy = (string) $config->get('swarm.audit.failure_policy', 'queue');
+
+        if (! in_array($policy, ['queue', 'dead_letter'], true)) {
+            return [[
+                'component' => 'Audit outbox',
+                'driver' => 'database',
+                'store' => 'n/a',
+                'status' => 'note',
+                'details' => "audit failure_policy=[{$policy}] does not use the outbox; checks skipped",
+            ]];
         }
 
         $outboxTable = (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox');
