@@ -38,6 +38,7 @@ class InvokeSwarm implements ShouldQueue
         ?int $enqueuedAtMs = null,
     ) {
         $this->enqueuedAtMs = $enqueuedAtMs ?? self::telemetryEpochMilliseconds();
+        $this->applyQueuedSwarmJobTimeout();
     }
 
     /**

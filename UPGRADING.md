@@ -272,6 +272,28 @@ stability settings while Laravel AI remains pre-stable.
 
 v0.12.2 is a hardening release with **no migrations**. The only application-code change applies to operators who bind a custom `SwarmAuditSigner` (the default binding is absent — if you do not sign audit evidence, **no action is required**).
 
+### Queued runs are attempted once by default
+
+`InvokeSwarm` and `BroadcastSwarm` now attempt **once** regardless of the queue worker's `--tries` flag. A retry restarts the entire swarm run from step 0 — re-dispatching all tool calls and re-spending all LLM tokens — because these jobs hold no checkpoint. Previously they declared no `$tries` property and silently inherited the worker's global `--tries`, so a common `queue:work --tries=3` setup blind-retried expensive non-durable runs three times.
+
+**Most operators need no action.** The new default (`SWARM_QUEUE_TRIES=1`) is the safe choice for all non-idempotent swarms.
+
+**To opt back in:** if your swarms are idempotent and the token cost of a full restart is acceptable, restore the previous behavior by setting:
+
+```env
+SWARM_QUEUE_TRIES=3
+```
+
+or in `config/swarm.php`:
+
+```php
+'queue' => [
+    'tries' => 3,
+],
+```
+
+`SWARM_QUEUE_TIMEOUT` now also takes effect as expected. Previously the `timeout()` method was silently ignored by the queue worker (Laravel reads the `$timeout` property, not a `timeout()` method); `SWARM_QUEUE_TIMEOUT` is now wired through the property and reaches the serialized job payload. No action required unless you were relying on the setting having no effect.
+
 ### Audit signing now requires a `signature_algorithm` (#223)
 
 The package signs audit evidence on emit but, by design, never verifies a signature on read — verification is the responsibility of the sink that persists the records. To keep stored signatures verifiable and rotatable, `SwarmAuditDispatcher` now enforces one rule: if your signer adds a non-empty `signature`, it **must** also add a non-empty `signature_algorithm`.

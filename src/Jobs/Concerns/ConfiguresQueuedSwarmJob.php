@@ -9,6 +9,11 @@ namespace BuiltByBerry\LaravelSwarm\Jobs\Concerns;
  */
 trait ConfiguresQueuedSwarmJob
 {
+    // Laravel reads the $timeout PROPERTY via getAttributeValue() — it never calls a timeout() method.
+    // tries() stays a method because Laravel's getJobTries() adds an explicit method_exists() check;
+    // there is no equivalent getJobTimeout(), so a timeout() method would be silently ignored.
+    public ?int $timeout = null;
+
     /**
      * Queued swarm runs are attempted once by default, regardless of the worker's
      * global --tries. A retry restarts the entire swarm run from step 0, re-dispatching
@@ -21,14 +26,14 @@ trait ConfiguresQueuedSwarmJob
     }
 
     /**
-     * Timeout is inherited from the worker's --timeout by default. A low package-level
-     * cap would kill legitimately long LLM runs — the safety concern for queued swarms
-     * is retries, not timeout. Set SWARM_QUEUE_TIMEOUT to impose an explicit ceiling.
+     * Apply the configured queue timeout to the $timeout property so Laravel's
+     * queue payload builder picks it up. Must be called in the job constructor.
+     * Timeout is inherited from the worker's --timeout by default; set
+     * SWARM_QUEUE_TIMEOUT to impose an explicit ceiling.
      */
-    public function timeout(): ?int
+    protected function applyQueuedSwarmJobTimeout(): void
     {
         $t = config('swarm.queue.timeout');
-
-        return $t === null ? null : (int) $t;
+        $this->timeout = $t === null ? null : (int) $t;
     }
 }
