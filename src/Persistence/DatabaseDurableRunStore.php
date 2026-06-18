@@ -79,6 +79,25 @@ class DatabaseDurableRunStore implements DurableRunStore
         $runState = $this->runStateRow($runId);
         $nodeStates = $this->loadNodeStatesMap($runId);
 
+        return $this->hydrateRunRecord($record, $runState, $nodeStates);
+    }
+
+    /**
+     * Assemble the public hydrated-run array from a main run row plus its two
+     * side-table inputs. Single source of truth for the run shape: find() and the
+     * recovery sweeps (recoverable/dueRetries/recoverableWaitingJoins) call this
+     * with identical inputs — find() loaded per-run, the sweeps batch-loaded — so
+     * the byte-for-byte shape can never drift between the two paths.
+     *
+     * The side-table columns (route_plan/failure/retry_policy/node_states) are JSON,
+     * not ciphertext: this path uses decodeJson only and performs no decryption.
+     *
+     * @param  object|null  $runState  The swarm_durable_run_state row, or null when absent.
+     * @param  array<string, array<string, mixed>>  $nodeStatesMap  node_id => state, ordered by id (last write wins).
+     * @return array<string, mixed>
+     */
+    protected function hydrateRunRecord(object $record, ?object $runState, array $nodeStatesMap): array
+    {
         return [
             'run_id' => $record->run_id,
             'swarm_class' => $record->swarm_class,
@@ -94,7 +113,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             'route_start_node_id' => $record->route_start_node_id ?? null,
             'current_node_id' => $record->current_node_id ?? null,
             'completed_node_ids' => $this->decodeJson($record->completed_node_ids ?? null, []),
-            'node_states' => $nodeStates,
+            'node_states' => $nodeStatesMap,
             'failure' => $runState !== null ? $this->decodeJson($runState->failure ?? null, null) : null,
             'timeout_at' => $record->timeout_at,
             'step_timeout_seconds' => (int) $record->step_timeout_seconds,
@@ -1022,7 +1041,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('swarm_class', $swarmClass);
         }
 
-        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+        return $this->hydrateSweepRecords($query->get());
     }
 
     public function dueRetries(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
@@ -1046,7 +1065,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('swarm_class', $swarmClass);
         }
 
-        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+        return $this->hydrateSweepRecords($query->get());
     }
 
     public function recoverableWaitingJoins(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
@@ -1069,11 +1088,152 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('swarm_class', $swarmClass);
         }
 
-        return $query->get()
-            ->map(fn (object $record): ?array => $this->find($record->run_id))
-            ->filter(fn (?array $run): bool => $run !== null && $this->branchesAreTerminalForWaitingRun($run))
+        $records = $query->get();
+
+        if ($records->isEmpty()) {
+            return [];
+        }
+
+        $ids = $records->pluck('run_id')->all();
+
+        [$runStates, $nodeStates] = $this->loadSweepSideTables($ids);
+
+        // Branch terminal-status filtering reads only run_id/parent_node_id/status,
+        // so load just those columns (no input/output → no decryption) and group by
+        // run_id. The terminal check below filters each run's preloaded branches by
+        // parent_node_id, exactly as branchesFor() does, so semantics are preserved.
+        $branchesByRun = $this->branchTable()
+            ->whereIn('run_id', $ids)
+            ->orderBy('step_index')
+            ->orderBy('id')
+            ->get(['run_id', 'parent_node_id', 'status'])
+            ->groupBy('run_id');
+
+        return $records
+            ->map(fn (object $record): array => $this->hydrateRunRecord(
+                $record,
+                $runStates->get($record->run_id),
+                $this->nodeStatesMapFor($nodeStates->get($record->run_id)),
+            ))
+            ->filter(fn (array $run): bool => $this->branchesAreTerminalFromPreloaded(
+                $run,
+                $branchesByRun->get($run['run_id'], collect()),
+            ))
             ->values()
             ->all();
+    }
+
+    /**
+     * Hydrate a recovery-sweep candidate collection in O(1) side-table queries.
+     *
+     * Returns early with no side-table round-trip when there are no candidates,
+     * then batch-loads run_state and node_states for all candidate run_ids in one
+     * pass each and maps the records — in their original sweep order — through the
+     * same {@see hydrateRunRecord()} assembler that find() uses, so the output is
+     * byte-for-byte identical to a find()-per-record sweep.
+     *
+     * @param  Collection<int, \stdClass>  $records
+     * @return array<int, array<string, mixed>>
+     */
+    protected function hydrateSweepRecords(Collection $records): array
+    {
+        if ($records->isEmpty()) {
+            return [];
+        }
+
+        $ids = $records->pluck('run_id')->all();
+
+        [$runStates, $nodeStates] = $this->loadSweepSideTables($ids);
+
+        return $records
+            ->map(fn (object $record): array => $this->hydrateRunRecord(
+                $record,
+                $runStates->get($record->run_id),
+                $this->nodeStatesMapFor($nodeStates->get($record->run_id)),
+            ))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Batch-load the run_state and node_states side tables for a set of candidate
+     * run_ids. A run missing its run_state row is simply absent from the keyed
+     * collection (→ get() returns null → assembler applies find()'s null handling).
+     * node_states are ordered by id and grouped so each group preserves the same
+     * last-write-wins ordering loadNodeStatesMap() relies on.
+     *
+     * @param  array<int, string>  $ids
+     * @return array{0: Collection<array-key, \stdClass>, 1: Collection<array-key, Collection<int, \stdClass>>}
+     */
+    protected function loadSweepSideTables(array $ids): array
+    {
+        $runStates = $this->runStateTable()
+            ->whereIn('run_id', $ids)
+            ->get()
+            ->keyBy('run_id');
+
+        $nodeStates = $this->nodeStateTable()
+            ->whereIn('run_id', $ids)
+            ->orderBy('id')
+            ->get()
+            ->groupBy('run_id');
+
+        return [$runStates, $nodeStates];
+    }
+
+    /**
+     * Reduce a run's preloaded node_state rows to the node_id => state map exactly as
+     * loadNodeStatesMap() does: rows arrive ordered by id and mapWithKeys keeps the
+     * last write for a duplicated node_id (highest id wins).
+     *
+     * @param  Collection<int, \stdClass>|null  $rows
+     * @return array<string, array<string, mixed>>
+     */
+    protected function nodeStatesMapFor(?Collection $rows): array
+    {
+        if ($rows === null) {
+            return [];
+        }
+
+        return $rows->mapWithKeys(function (object $row): array {
+            $decoded = $this->decodeJson($row->state ?? null, []);
+
+            return [(string) $row->node_id => is_array($decoded) ? $decoded : []];
+        })->all();
+    }
+
+    /**
+     * Preloaded-branch twin of branchesAreTerminalForWaitingRun(): reproduces its
+     * branchesFor() semantics from an already-loaded per-run branch collection.
+     * branchesFor() filters by BOTH run_id and parent_node_id, so this filters the
+     * preloaded rows by the run's current_node_id (the parent node) before applying
+     * the terminal-status rule. Empty-after-filter → false. Branches under other
+     * parent nodes are never collapsed in.
+     *
+     * @param  array<string, mixed>  $run
+     * @param  Collection<int, \stdClass>  $branchesForRun
+     */
+    protected function branchesAreTerminalFromPreloaded(array $run, Collection $branchesForRun): bool
+    {
+        $parentNodeId = $run['current_node_id'] ?? null;
+
+        if (! is_string($parentNodeId)) {
+            return false;
+        }
+
+        $branches = $branchesForRun->where('parent_node_id', $parentNodeId);
+
+        if ($branches->isEmpty()) {
+            return false;
+        }
+
+        foreach ($branches as $branch) {
+            if (! in_array($branch->status ?? null, ['completed', 'failed', 'cancelled'], true)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public function markRecoveryDispatched(string $runId): void
