@@ -31,6 +31,7 @@ class AdvanceDurableBranch implements ShouldQueue
         ?int $enqueuedAtMs = null,
     ) {
         $this->enqueuedAtMs = $enqueuedAtMs ?? self::telemetryEpochMilliseconds();
+        $this->applyDurableAdvanceJobTimeout();
     }
 
     public function handle(DurableSwarmManager $manager): void
