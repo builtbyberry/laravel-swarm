@@ -35,10 +35,10 @@ final class DefaultPropagationPolicy implements MemoryPropagationPolicy
 
     public function present(array $candidateEntries, RunContext $context, ?Agent $agent): array
     {
-        return array_values(array_filter(
-            $candidateEntries,
-            static fn (MemoryEntry $entry): bool => $entry->scope === MemoryScope::Run
-                && ! SwarmMemoryKeys::isStepOutput($entry->key),
-        ));
+        return collect($candidateEntries)
+            ->filter(static fn (MemoryEntry $entry): bool => $entry->scope === MemoryScope::Run
+                && ! SwarmMemoryKeys::isStepOutput($entry->key))
+            ->values()
+            ->all();
     }
 }
