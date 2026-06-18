@@ -1076,6 +1076,67 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->all();
     }
 
+    public function recoverableQueuedResumes(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $graceSeconds = 300): array
+    {
+        $now = Carbon::now('UTC');
+        $threshold = $now->copy()->subSeconds($graceSeconds);
+        $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+        $historyTable = (string) $this->config->get('swarm.tables.history', 'swarm_run_histories');
+
+        // The queued-hierarchical continuation lease lives on the HISTORY row, not the
+        // durable row: acquireQueuedRunContinuationLease flips the history status
+        // waiting->running and stamps history.leased_until, while the durable run stays
+        // 'pending'. A worker that dies after acquiring that lease therefore strands the
+        // *history* row in 'running' with an expired lease. Detect that by joining the
+        // queued-hierarchical durable run (the coordination_profile + routing source of
+        // truth) to its stranded history row. Scoped to QueueHierarchicalParallel so no
+        // other profile — all of which resume through the durable lease path — is touched.
+        $query = $this->connection->table($durableTable.' as runs')
+            ->join($historyTable.' as histories', 'runs.run_id', '=', 'histories.run_id')
+            ->where('runs.coordination_profile', CoordinationProfile::QueueHierarchicalParallel->value)
+            ->whereNull('runs.finished_at')
+            ->where('histories.status', 'running')
+            ->whereNotNull('histories.leased_until')
+            ->where('histories.leased_until', '<', $threshold)
+            ->orderBy('histories.leased_until')
+            ->limit($limit)
+            ->select([
+                'runs.run_id',
+                'runs.swarm_class',
+                'runs.topology',
+                'runs.execution_mode',
+                'runs.coordination_profile',
+                'runs.next_step_index',
+                'runs.queue_connection',
+                'runs.queue_name',
+            ]);
+
+        if ($runId !== null) {
+            $query->where('runs.run_id', $runId);
+        }
+
+        if ($swarmClass !== null) {
+            $query->where('runs.swarm_class', $swarmClass);
+        }
+
+        // Batched, O(1): a single join carries every field the recovery coordinator needs
+        // (it re-dispatches by run_id and reads only routing). No per-candidate find() and
+        // no side-table hydration — the redispatched resume re-reads run state strictly
+        // when it runs. The query naturally returns [] for an empty candidate set.
+        return $query->get()
+            ->map(fn (object $record): array => [
+                'run_id' => $record->run_id,
+                'swarm_class' => $record->swarm_class,
+                'topology' => $record->topology,
+                'execution_mode' => $record->execution_mode ?? 'durable',
+                'coordination_profile' => $record->coordination_profile ?? CoordinationProfile::StepDurable->value,
+                'next_step_index' => (int) $record->next_step_index,
+                'queue_connection' => $record->queue_connection,
+                'queue_name' => $record->queue_name,
+            ])
+            ->all();
+    }
+
     public function markRecoveryDispatched(string $runId): void
     {
         $timestamp = Carbon::now('UTC');
