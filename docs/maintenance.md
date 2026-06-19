@@ -224,8 +224,8 @@ When to use: no durable execution, or a short-lived pilot where worker isolation
 # Application workers
 php artisan queue:work --queue=default --timeout=60
 
-# Durable workers — timeout must exceed swarm.durable.step_timeout + swarm.durable.job.timeout_margin_seconds
-php artisan queue:work --queue=swarm-durable --timeout=120 --tries=3
+# Durable workers — timeout must exceed swarm.durable.step_timeout + swarm.durable.job.timeout_margin_seconds (default 360s)
+php artisan queue:work --queue=swarm-durable --timeout=400 --tries=3
 ```
 
 Set `SWARM_DURABLE_QUEUE=swarm-durable`. The queue connection `retry_after` must exceed the worker `--timeout`; set it in `config/queue.php` for the connection your durable queue uses.
@@ -236,8 +236,8 @@ When to use: any production durable workflow. Keeps durable step jobs off the ap
 
 ```bash
 php artisan queue:work --queue=default --timeout=60
-php artisan queue:work --queue=swarm-durable --timeout=120 --tries=3
-php artisan queue:work --queue=swarm-branches --timeout=120 --tries=3
+php artisan queue:work --queue=swarm-durable --timeout=400 --tries=3
+php artisan queue:work --queue=swarm-branches --timeout=400 --tries=3
 ```
 
 Set `SWARM_DURABLE_PARALLEL_QUEUE=swarm-branches`. Without this separation, branch jobs queue behind sequential step jobs on the same connection. On a saturated step queue, branches can never start — a deadlock that silently stalls the entire parallel group.
