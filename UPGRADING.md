@@ -282,7 +282,7 @@ The `ok` key in `swarm:health --json` output previously returned `false` wheneve
 
 Also, audit-outbox checks (`runAuditOutboxChecks()`) are now skipped for failure policies that do not use the outbox (`swallow`, `log`, `halt`). Those configurations now return a single `note` row and exit 0 instead of potentially erroring if the audit-outbox migration has not been run. Scripts monitoring these configurations should expect a `note` row rather than the outbox table/staleness/dead-letter rows.
 
-### `DurableRunStore` interface: `recoverableQueuedResumes()` added (#246)
+### `DurableRunStore` interface: `recoverableQueuedResumes()` added (#244)
 
 `DurableRunStore` gained a new required method in v0.12.2:
 
