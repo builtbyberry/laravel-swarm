@@ -906,6 +906,41 @@ no-unsigned-evidence semantics are achieved by setting
 inspects `$exception` to differentiate signing exceptions from sink
 exceptions.
 
+#### Verification is the sink's responsibility
+
+Laravel Swarm signs evidence on emit but **never verifies a signature on
+read** — there is no first-party path that re-checks a stored signature, by
+design. The package cannot verify what it did not encode: the algorithm, key,
+and canonical byte form are all yours. Verification is the symmetric half of
+the immutability boundary described under
+[compliance considerations](compliance-audit.md) — a sink that persists signed
+records must re-verify `signature` against the stored `signature_algorithm`
+(and your key) before trusting a record. `swarm:trace` is a forensic timeline,
+not a cryptographic check.
+
+To keep rotation possible, **persist `signature_algorithm` (and a key id)
+alongside the signature**, and accept old keys for at least the longest
+expected outbox backlog (see [Signer rotation](#signer-rotation)). Because of
+this, the dispatcher enforces one rule: if your signer adds a non-empty
+`signature`, it must also add a non-empty `signature_algorithm`. A signature
+without an algorithm name can never be re-verified after a key or algorithm
+change, so it is treated as a signing failure and routed through your
+`SinkFailureHandler` like any other signing failure. Returning the payload
+unchanged (the per-category opt-out above) is unaffected.
+
+How far that prevents an unverifiable record from being stored depends on your
+`failure_policy`: under `halt` (the run aborts) or `swallow` (the record is
+dropped) it never reaches the sink, so **compliance deployments that must never
+persist an unverifiable record should use `halt`**. Under a `queue`/`dead-letter`
+policy the record follows the [outbox](#audit-outbox) path and is delivered to
+the sink on the next drain — the outbox replays the stored payload directly and
+does not re-run this guard.
+
+One subtle footgun the package does **not** police for you: canonicalization.
+If the byte form your signer signs differs from the byte form your sink
+verifies — key ordering, float formatting, Unicode escaping — verification
+fails on untampered data. Pin a single canonical serialization on both sides.
+
 ### Sink Failure Handler
 
 Sink and signing exceptions are arbitrated by the `SinkFailureHandler`
@@ -1215,6 +1250,9 @@ These controls apply to **sink and telemetry payloads only**. They do not affect
   from your authentication surface.
 - [ ] Bind a `SwarmAuditSigner` if evidence records must be cryptographically
   signed before they reach the sink.
+- [ ] If a `SwarmAuditSigner` is bound, set `swarm.audit.failure_policy=halt` (or
+  bind a custom `SinkFailureHandler`) so an unverifiable record (missing
+  `signature_algorithm`) cannot reach the sink via the outbox under `queue`/`dead_letter`.
 - [ ] Bind a `CapturePolicy` if capture decisions need to vary per run or
   actor rather than via the static `swarm.capture.*` booleans.
 - [ ] Confirm that your sink does not expose raw prompt/output content; evidence

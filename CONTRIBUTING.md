@@ -43,6 +43,16 @@ fast path without coverage. If workflow runtime becomes prohibitive, maintainers
 split **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
 until then, pull requests validate both matrices equally.
 
+**Dependency advisories** — a separate `audit` workflow runs `composer audit` on
+every push and pull request. Because this package commits no `composer.lock`, CI
+audits both resolutions it tests in `tests.yml`: `--prefer-stable` (latest in-range)
+and `--prefer-lowest` (oldest in-range), so an advisory present only in the lowest
+tree is still caught. The matrix job name shows which resolution flagged a given
+advisory. It is **non-blocking** today (`continue-on-error: true`) so a transient
+upstream advisory landing mid-review never gates a merge; the path to gating is to
+drop `continue-on-error` once both trees have held advisory-clean for a release
+cycle. Run `composer audit` locally to match it.
+
 **Process concurrency validation** — CI runs `composer test:process-concurrency:ci`
 on every matrix row. That script is like `composer test:process-concurrency` but adds
 Pest’s `--fail-on-skipped`, so the workflow **fails** if any test in that folder is
@@ -97,6 +107,24 @@ The package `TestCase` sets `swarm.capture.*` to **true** and
 persisted payloads without coupling every test to the conservative production
 defaults. If your change depends on either default, set it explicitly inside
 the test rather than relying on the `TestCase` value.
+
+### Freeze the clock on time-boundary tests
+
+Durable lease-expiry and stale-run recovery assertions hinge on comparing a
+past timestamp (`leased_until`, `updated_at`) against the runtime's live
+`now()`. Constructing the past marker with `now()->sub…` and asserting against
+a separate live `now()` leaves a real-clock margin that flakes under execution
+jitter. **Freeze the clock with `$this->freezeTime()` before the time-boundary
+marker** so the marker and every `now()` the runtime reads resolve to the same
+instant — the boundary then holds exactly, with no margin to race against. The
+package `TestCase` extends Laravel's, so `$this->freezeTime()` is available in
+any `tests/Feature` or `tests/Unit` closure and is reset automatically after
+each test. The shared `expireDurableLease()`/`staleWaitingRun()` helpers in
+`tests/Feature/DurableSwarmTest.php` assume a frozen clock at their call site.
+
+This does **not** apply to `tests/ProcessConcurrency/*` subprocesses: a frozen
+clock can't be shared across processes, so keep those time-boundary margins
+generous instead.
 
 ### Writing `tests/ProcessConcurrency/*` worker closures
 
@@ -316,10 +344,10 @@ contributing here:
   category names.
 - **Breaking change → `schema_version` bump.** Removing, renaming, or
   retyping a frozen field, or removing/renaming a frozen category, requires
-  incrementing `schema_version` (currently `"2"`) and an `UPGRADING.md` entry.
+  incrementing `schema_version` (currently `"3"`) and an `UPGRADING.md` entry.
   The v0.4-to-v0.5 `command.*` envelope unification (`actor` moved into
   `metadata.actor`, `schema_version` bumped from `"1"` to `"2"`) is the
-  reference example.
+  reference example; it was bumped again from `"2"` to `"3"` in v0.12.0.
 - **Update the frozen-fields tables.** Any change to a category’s correlation
   fields needs the matching row updated in the
   "Frozen Categories" section of `docs/audit-evidence-contract.md`. The doc

@@ -53,13 +53,14 @@ class SwarmRuns extends Card
             $durationSamples = (int) ($row->swarm_run_duration_samples ?? 0);
             $totalRuns = (int) ($row->swarm_run_total ?? 0);
             $failures = (int) ($row->swarm_run_failed ?? 0);
-            $topologyMix = array_filter([
+            $topologyMix = collect([
                 (object) ['topology' => 'sequential', 'count' => (int) ($row->swarm_topology_sequential ?? 0)],
                 (object) ['topology' => 'parallel', 'count' => (int) ($row->swarm_topology_parallel ?? 0)],
                 (object) ['topology' => 'hierarchical', 'count' => (int) ($row->swarm_topology_hierarchical ?? 0)],
-            ], fn (object $topology): bool => $topology->count > 0);
-
-            usort($topologyMix, fn (object $left, object $right): int => $right->count <=> $left->count);
+            ])
+                ->filter(fn (object $topology): bool => $topology->count > 0)
+                ->sortByDesc('count')
+                ->values();
 
             $counts[] = (object) [
                 'swarmClass' => $row->key,
@@ -67,12 +68,12 @@ class SwarmRuns extends Card
                 'failures' => $failures,
                 'failureRate' => $totalRuns === 0 ? 0.0 : round(($failures / $totalRuns) * 100, 1),
                 'averageRunDurationMs' => $durationSamples === 0 ? 0 : (int) round($durationTotalMs / $durationSamples),
-                'topologyMix' => collect($topologyMix),
+                'topologyMix' => $topologyMix,
             ];
         }
 
-        usort($counts, fn (object $left, object $right): int => $right->totalRuns <=> $left->totalRuns);
-
-        return collect($counts);
+        return collect($counts)
+            ->sortByDesc('totalRuns')
+            ->values();
     }
 }

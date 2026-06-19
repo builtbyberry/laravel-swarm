@@ -17,7 +17,7 @@ class StreamedSwarmResponse extends SwarmResponse
      */
     public function __construct(
         SwarmResponse $response,
-        public Collection $events,
+        public readonly Collection $events,
     ) {
         parent::__construct(
             output: $response->output,

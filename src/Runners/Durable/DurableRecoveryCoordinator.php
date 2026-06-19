@@ -109,6 +109,18 @@ class DurableRecoveryCoordinator
             }
         }
 
+        $queuedResumes = $this->durableRuns->recoverableQueuedResumes(
+            runId: $runId,
+            swarmClass: $swarmClass,
+            limit: $limit,
+            graceSeconds: (int) $this->config->get('swarm.durable.recovery.grace_seconds', 300),
+        );
+
+        foreach ($queuedResumes as $run) {
+            $this->jobs->dispatchQueuedHierarchicalResume($run);
+            $this->durableRuns->markRecoveryDispatched($run['run_id']);
+        }
+
         $timedOutWaits = $this->durableRuns->recoverableTimedOutWaits(
             runId: $runId,
             swarmClass: $swarmClass,
@@ -187,6 +199,7 @@ class DurableRecoveryCoordinator
             array_map(static fn (array $run): string => $run['run_id'], $dueRetryRuns),
             array_map(static fn (array $branch): string => $branch['run_id'], $dueRetryBranches),
             array_map(static fn (array $run): string => $run['run_id'], $waitingJoins),
+            array_map(static fn (array $run): string => $run['run_id'], $queuedResumes),
             array_map(static fn (array $run): string => $run['run_id'], $timedOutWaits),
             array_map(static fn (array $run): string => $run['run_id'], $childParents),
             array_map(static fn (array $child): string => $child['parent_run_id'], $undispatchedChildren),

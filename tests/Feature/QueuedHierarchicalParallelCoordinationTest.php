@@ -3,14 +3,18 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
+use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -22,7 +26,9 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 
@@ -519,4 +525,209 @@ test('queued hierarchical parallel multi_worker re-runs the fan-out branch agent
         ->and($writeRuns)->toBe(3)
         ->and($editRuns)->toBe(3)
         ->and($dispatched)->toBe(6);
+});
+
+/**
+ * Drive a queued multi_worker run to the post-join continuation point: invoke the
+ * swarm, advance every parallel branch to completion, then acquire the continuation
+ * lease so the history row sits in 'running'. Returns the acquisition token. The run
+ * is now exactly where a worker would crash after grabbing the continuation lease.
+ */
+function driveToContinuationLease(string $runId): string
+{
+    $context = RunContext::from('queued-hierarchical-task', $runId);
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+
+    $manager = app(DurableSwarmManager::class);
+    foreach (DB::table('swarm_durable_branches')->where('run_id', $runId)->get() as $branch) {
+        (new AdvanceDurableBranch($runId, (string) $branch->branch_id))->handle($manager);
+    }
+
+    /** @var ClaimsQueuedRunExecution $store */
+    $store = app(RunHistoryStore::class);
+    $acquisition = $store->acquireQueuedRunContinuationLease($runId, 3600, 300);
+
+    expect($acquisition->outcome)->toBe('fresh');
+
+    return (string) $acquisition->executionToken;
+}
+
+/** Expire the queued continuation lease on the stranded history row. */
+function expireContinuationLease(string $runId): void
+{
+    DB::table('swarm_run_histories')
+        ->where('run_id', $runId)
+        ->update(['leased_until' => now('UTC')->subMinutes(10)]);
+}
+
+test('acquireQueuedRunContinuationLease reclaims a stranded running run with a fresh token', function () {
+    $runId = 'qhpc-reclaim-1';
+    $deadToken = driveToContinuationLease($runId);
+    expireContinuationLease($runId);
+
+    /** @var ClaimsQueuedRunExecution $store */
+    $store = app(RunHistoryStore::class);
+    $reclaim = $store->acquireQueuedRunContinuationLease($runId, 3600, 300);
+
+    expect($reclaim->outcome)->toBe('reclaimed')
+        ->and($reclaim->executionToken)->not->toBe($deadToken)
+        ->and($reclaim->acquired())->toBeTrue();
+
+    // Status stays 'running', the token rotated, and the lease is freshly extended.
+    $row = DB::table('swarm_run_histories')->where('run_id', $runId)->first();
+    expect($row->status)->toBe('running')
+        ->and($row->execution_token)->toBe($reclaim->executionToken)
+        ->and($row->execution_token)->not->toBe($deadToken)
+        ->and(now('UTC')->lt(Carbon::parse($row->leased_until)))->toBeTrue();
+});
+
+test('resumeQueuedHierarchicalAfterJoin reclaims a stranded run and drives it to completion', function () {
+    $runId = 'qhpc-reclaim-resume-1';
+    driveToContinuationLease($runId);
+
+    // The first worker died holding the lease. Once it expires, the redispatched
+    // resume job re-enters resumeQueuedHierarchicalAfterJoin, whose internal
+    // acquireQueuedRunContinuationLease hits the reclaim branch (running + expired)
+    // and drives the post-join continuation to completion.
+    expireContinuationLease($runId);
+
+    expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->not->toBeNull();
+    expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
+});
+
+test('acquireQueuedRunContinuationLease does not reclaim a non-expired running run (F-D2 single-reclaim)', function () {
+    $runId = 'qhpc-reclaim-fd2-1';
+    driveToContinuationLease($runId);
+    expireContinuationLease($runId);
+
+    /** @var ClaimsQueuedRunExecution $store */
+    $store = app(RunHistoryStore::class);
+
+    // Two back-to-back recovery sweeps race on the same stranded run. lockForUpdate
+    // serializes them: the first reclaims (rotating the token + extending the lease),
+    // the second sees a now-non-expired lease and reports duplicate_running.
+    $first = $store->acquireQueuedRunContinuationLease($runId, 3600, 300);
+    $second = $store->acquireQueuedRunContinuationLease($runId, 3600, 300);
+
+    expect($first->outcome)->toBe('reclaimed')
+        ->and($second->outcome)->toBe('duplicate_running');
+
+    // Exactly one live token owns the run.
+    $row = DB::table('swarm_run_histories')->where('run_id', $runId)->first();
+    expect($row->execution_token)->toBe($first->executionToken);
+});
+
+test('reclaim never lets a stale worker double-drive the continuation (F-D1)', function () {
+    $runId = 'qhpc-reclaim-fd1-1';
+    $staleToken = driveToContinuationLease($runId);
+    expireContinuationLease($runId);
+
+    /** @var ClaimsQueuedRunExecution $store */
+    $store = app(RunHistoryStore::class);
+    $reclaim = $store->acquireQueuedRunContinuationLease($runId, 3600, 300);
+    expect($reclaim->outcome)->toBe('reclaimed');
+
+    // The stale worker (still holding $staleToken) now tries to record a step. Its
+    // lease-guarded write matches zero rows because the token rotated, so it aborts
+    // with LostSwarmLeaseException instead of double-driving the post-join continuation.
+    $step = new SwarmStep(
+        agentClass: FakeWriter::class,
+        input: 'stale-input',
+        output: 'stale-output',
+        artifacts: [],
+        metadata: ['index' => 99],
+    );
+
+    expect(fn () => $store->recordStep($runId, $step, 3600, $staleToken, 300))
+        ->toThrow(LostSwarmLeaseException::class);
+
+    // The reclaim left no double-dispatch behind: the run is still 'running' under the
+    // fresh token (not corrupted by the stale write) and resumes cleanly to completion.
+    expect(DB::table('swarm_run_histories')->where('run_id', $runId)->value('status'))->toBe('running');
+
+    expireContinuationLease($runId);
+    expect(app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($runId))->not->toBeNull();
+    expect(app(RunHistoryStore::class)->find($runId)['status'])->toBe('completed');
+});
+
+test('recoverableQueuedResumes finds only the stranded running queued-hierarchical run', function () {
+    // Three InvokeSwarm calls in this test each consume one coordinator plan.
+    FakeHierarchicalCoordinator::fake([qhpcParallelPlan(), qhpcParallelPlan(), qhpcParallelPlan()]);
+    FakeWriter::fake(['writer-out', 'writer-out', 'writer-out']);
+    FakeEditor::fake(['editor-out', 'editor-out', 'editor-out']);
+
+    $strandedId = 'qhpc-sweep-stranded-1';
+    driveToContinuationLease($strandedId);
+    expireContinuationLease($strandedId);
+
+    // A still-leased (non-expired) stranded run must be excluded.
+    $freshLeaseId = 'qhpc-sweep-fresh-lease-1';
+    driveToContinuationLease($freshLeaseId);
+
+    // A run still in 'waiting' (branches not yet joined) must be excluded.
+    $waitingId = 'qhpc-sweep-waiting-1';
+    $context = RunContext::from('queued-hierarchical-task', $waitingId);
+    (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+    expect(app(RunHistoryStore::class)->find($waitingId)['status'])->toBe('waiting');
+
+    $store = app(DurableRunStore::class);
+
+    $queries = 0;
+    DB::listen(function () use (&$queries): void {
+        $queries++;
+    });
+
+    $recoverable = $store->recoverableQueuedResumes(graceSeconds: 300);
+
+    // O(1): a single SELECT, no per-candidate find() fan-out.
+    expect($queries)->toBe(1);
+
+    $runIds = array_map(static fn (array $run): string => $run['run_id'], $recoverable);
+    expect($runIds)->toBe([$strandedId])
+        ->and($runIds)->not->toContain($freshLeaseId)
+        ->and($runIds)->not->toContain($waitingId);
+
+    // The hydrated shape carries the routing the recovery coordinator dispatches by.
+    expect($recoverable[0]['coordination_profile'])->toBe(CoordinationProfile::QueueHierarchicalParallel->value);
+});
+
+test('recoverableQueuedResumes excludes finished runs and returns [] with no candidates', function () {
+    $store = app(DurableRunStore::class);
+
+    // Empty candidate set short-circuits to [] in a single query.
+    $queries = 0;
+    DB::listen(function () use (&$queries): void {
+        $queries++;
+    });
+    expect($store->recoverableQueuedResumes(graceSeconds: 300))->toBe([]);
+    expect($queries)->toBe(1);
+
+    // A completed run (finished_at set) is never recoverable, even with an expired lease.
+    $finishedId = 'qhpc-sweep-finished-1';
+    driveToContinuationLease($finishedId);
+    expireContinuationLease($finishedId);
+    app(SwarmRunner::class)->resumeQueuedHierarchicalAfterJoin($finishedId);
+    expect(app(RunHistoryStore::class)->find($finishedId)['status'])->toBe('completed');
+
+    expect($store->recoverableQueuedResumes(graceSeconds: 300))->toBe([]);
+});
+
+test('swarm recover re-dispatches a queued-hierarchical resume stranded in running', function () {
+    Bus::fake([ResumeQueuedHierarchicalSwarm::class]);
+
+    $runId = 'qhpc-recover-stranded-1';
+    driveToContinuationLease($runId);
+    expireContinuationLease($runId);
+
+    Artisan::call('swarm:recover');
+
+    Bus::assertDispatched(
+        ResumeQueuedHierarchicalSwarm::class,
+        fn (ResumeQueuedHierarchicalSwarm $job): bool => $job->runId === $runId,
+    );
+
+    // The recovery sweep bumped the run's recovery bookkeeping.
+    $history = DB::table('swarm_run_histories')->where('run_id', $runId)->first();
+    expect($history->status)->toBe('running');
+    expect((int) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('recovery_count'))->toBeGreaterThanOrEqual(1);
 });

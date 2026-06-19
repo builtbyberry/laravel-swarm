@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
@@ -116,7 +117,34 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             /** @var object|null $record */
             $record = $this->table()->where('run_id', $runId)->lockForUpdate()->first();
 
-            if ($record === null || ($record->status ?? null) !== 'waiting') {
+            if ($record === null) {
+                return QueuedRunAcquisition::duplicateRunning();
+            }
+
+            // Crash-recovery reclaim: a worker that died after acquiring the
+            // continuation lease leaves the run stranded in 'running'. Once the
+            // lease expires, re-drive it under a fresh token — but only for the
+            // queued-hierarchical coordination profile, whose post-join writes are
+            // all execution-token-guarded (recordStep/complete) or outbox-transactional
+            // (the parallel boundary). Rotating the token here makes the stale worker's
+            // first guarded write fail with LostSwarmLeaseException, so a reclaim of a
+            // merely-slow worker can never let two run the continuation concurrently.
+            if (($record->status ?? null) === 'running'
+                && ($record->leased_until ?? null) !== null
+                && $timestamp->gt(Carbon::parse((string) $record->leased_until))
+                && $this->isQueueHierarchicalParallelRun($runId)
+            ) {
+                $this->table()->where('run_id', $runId)->update([
+                    'execution_token' => $executionToken,
+                    'leased_until' => $timestamp->copy()->addSeconds($leaseSeconds),
+                    'updated_at' => $timestamp,
+                    'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+                ]);
+
+                return QueuedRunAcquisition::reclaimed($executionToken);
+            }
+
+            if (($record->status ?? null) !== 'waiting') {
                 return QueuedRunAcquisition::duplicateRunning();
             }
 
@@ -340,8 +368,22 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             $query->where('status', $status);
         }
 
-        return $query->get()
-            ->map(fn (object $record): array => $this->mapRecord($record))
+        $records = $query->get();
+
+        // List views render only the step COUNT per run, so we skip the
+        // per-step cipher decryption full hydration performs. The count is
+        // the size of the union of the legacy-JSON step indices and the
+        // normalized-row step indices — never COUNT(*), which would
+        // under-count legacy-only runs and mis-count overlapping indices.
+        $normalizedIndexSets = $this->normalizedStepIndexSets(
+            $records->pluck('run_id')->all(),
+        );
+
+        return $records
+            ->map(fn (object $record): array => $this->mapRecordLean(
+                $record,
+                $this->stepCountForRecord($record, $normalizedIndexSets[$record->run_id] ?? []),
+            ))
             ->all();
     }
 
@@ -371,6 +413,22 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     protected function table(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.history', 'swarm_run_histories'));
+    }
+
+    /**
+     * Scope the continuation-lease reclaim narrowly to the queued-hierarchical
+     * coordination profile. The profile lives on the durable runs table (the
+     * history row has no coordination_profile column), so confirm it there with a
+     * single indexed read — other profiles resume through the durable lease path
+     * and must never be reclaimed here.
+     */
+    protected function isQueueHierarchicalParallelRun(string $runId): bool
+    {
+        return $this->connection
+            ->table((string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs'))
+            ->where('run_id', $runId)
+            ->where('coordination_profile', CoordinationProfile::QueueHierarchicalParallel->value)
+            ->exists();
     }
 
     protected function stepTable(): Builder
@@ -403,6 +461,81 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'leased_until' => $record->leased_until ?? null,
             'updated_at' => $record->updated_at,
         ];
+    }
+
+    /**
+     * Lean projection for list views (swarm:history, multi-run swarm:status):
+     * the columns operators see plus a precomputed step count, with NO cipher
+     * calls. Step IO, context, and output are never decrypted here — listing
+     * never renders their plaintext. `metadata` is retained because
+     * {@see SwarmRunPhase::cliLabel()} reads it for the Phase column.
+     *
+     * @return array<string, mixed>
+     */
+    protected function mapRecordLean(object $record, int $stepCount): array
+    {
+        return [
+            'run_id' => $record->run_id,
+            'swarm_class' => $record->swarm_class,
+            'topology' => $record->topology,
+            'status' => $record->status,
+            'metadata' => $this->decodeJson($record->metadata, []),
+            'started_at' => $record->created_at,
+            'finished_at' => $record->finished_at,
+            'step_count' => $stepCount,
+        ];
+    }
+
+    /**
+     * Batch-load the normalized `(run_id, step_index)` pairs for every listed
+     * run in a single query, grouped by run_id, so the list path issues one
+     * step query regardless of run count.
+     *
+     * @param  array<int, mixed>  $runIds
+     * @return array<string, array<int, int>>
+     */
+    protected function normalizedStepIndexSets(array $runIds): array
+    {
+        if ($runIds === [] || ! $this->hasNormalizedStepTable()) {
+            return [];
+        }
+
+        $sets = [];
+
+        foreach ($this->stepTable()->whereIn('run_id', $runIds)->get(['run_id', 'step_index']) as $row) {
+            $sets[$row->run_id][] = (int) $row->step_index;
+        }
+
+        return $sets;
+    }
+
+    /**
+     * Reproduce the step count {@see stepsForRecord()} would yield without
+     * hydrating or decrypting any step: the size of the union of the legacy
+     * JSON step indices and the normalized step indices. Mirrors the
+     * stepsForRecord index keying exactly (same index overwrites), so the
+     * lean count matches full hydration for legacy-only, normalized-only, and
+     * overlapping-index runs.
+     *
+     * @param  array<int, int>  $normalizedIndices
+     */
+    protected function stepCountForRecord(object $record, array $normalizedIndices): int
+    {
+        $indices = [];
+
+        foreach ($this->decodeJson($record->steps, []) as $step) {
+            if (! is_array($step)) {
+                continue;
+            }
+
+            $indices[$this->stepSortIndex($step, count($indices))] = true;
+        }
+
+        foreach ($normalizedIndices as $stepIndex) {
+            $indices[$stepIndex] = true;
+        }
+
+        return count($indices);
     }
 
     /**

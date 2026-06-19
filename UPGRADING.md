@@ -268,6 +268,90 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.12.2
+
+v0.12.2 is a hardening release with **no migrations**. Two changes may require operator attention: the audit signing guard (#223) described below, and the durable advance-job timeout correction (#243) described below that.
+
+### `swarm:health --json` `ok` field now mirrors the exit-code contract (#247)
+
+The `ok` key in `swarm:health --json` output previously returned `false` whenever any row had a status other than `ok` — including `note` (e.g. relay not scheduled) and `warning` (e.g. stale outbox rows). A healthy deployment that had a relay-scheduling note or a stale-outbox warning therefore emitted `{"ok": false}` while exiting 0, making the `ok` field useless for automated monitoring.
+
+**New behavior:** `ok` is `true` if and only if no row has `status=failed`, which is the exact complement of the non-zero exit code. Note and warning rows no longer flip `ok`.
+
+**Action:** scripts that keyed on `ok: false` to detect note or warning rows (e.g. to alert on a missing relay schedule) must now inspect the `checks` array for individual row statuses. Scripts that used `ok: false` only to detect failures continue to work correctly.
+
+Also, audit-outbox checks (`runAuditOutboxChecks()`) are now skipped for failure policies that do not use the outbox (`swallow`, `log`, `halt`). Those configurations now return a single `note` row and exit 0 instead of potentially erroring if the audit-outbox migration has not been run. Scripts monitoring these configurations should expect a `note` row rather than the outbox table/staleness/dead-letter rows.
+
+### `DurableRunStore` interface: `recoverableQueuedResumes()` added (#244)
+
+`DurableRunStore` gained a new required method in v0.12.2:
+
+```php
+public function recoverableQueuedResumes(
+    ?string $runId = null,
+    ?string $swarmClass = null,
+    int $limit = 50,
+    int $graceSeconds = 300,
+): array;
+```
+
+**Who is affected:** applications that implement `DurableRunStore` directly with a custom store class. The shipped `DatabaseDurableRunStore` already implements the method.
+
+**Who is not affected:** applications that only *call* the store (via `app(DurableRunStore::class)->...`), use the default database driver, or interact with the store through the `DurableSwarmManager` facade methods.
+
+**Action required:** custom store implementations must add this method. A minimal stub for stores that do not use `QueueHierarchicalParallel` coordination is sufficient:
+
+```php
+public function recoverableQueuedResumes(
+    ?string $runId = null,
+    ?string $swarmClass = null,
+    int $limit = 50,
+    int $graceSeconds = 300,
+): array {
+    return [];
+}
+```
+
+### Durable advance jobs now pin their timeout to `step_timeout + margin` (#243)
+
+Previously `AdvanceDurableSwarm` and `AdvanceDurableBranch` exposed a `timeout()` method, but Laravel's queue layer reads timeout from the job's `$timeout` **property** — the method was never called. Both jobs silently inherited the worker `--timeout` (default 60 s), which could prematurely kill long-running steps and churn leases.
+
+As of v0.12.2 the jobs set `$this->timeout = step_timeout + timeout_margin_seconds` in their constructors, so the computed value is serialized directly into the queue payload and the worker honors it.
+
+**Action required in most deployments:** confirm your queue worker `--timeout` is at least `SWARM_DURABLE_STEP_TIMEOUT + SWARM_DURABLE_JOB_TIMEOUT_MARGIN_SECONDS` (defaults: 300 + 60 = 360 s). Workers that were already running with a high `--timeout` continue to work; workers running at the default 60 s will now correctly time out jobs whose steps exceed the window rather than silently abandoning them.
+
+**No application-code change is required.** `ConfiguresDurableAdvanceJob` is `@internal`; if you subclass it (unsupported), remove any `$timeout` property you declared and call `$this->applyDurableAdvanceJobTimeout()` in your constructor instead.
+
+Note: the job timeout does not hard-cancel an in-flight provider call — it signals the worker to stop waiting for the job process. Raise `SWARM_DURABLE_STEP_TIMEOUT` if your steps routinely take longer than the default 300 s.
+
+### Queued runs are attempted once by default
+
+`InvokeSwarm` and `BroadcastSwarm` now attempt **once** regardless of the queue worker's `--tries` flag. A retry restarts the entire swarm run from step 0 — re-dispatching all tool calls and re-spending all LLM tokens — because these jobs hold no checkpoint. Previously they declared no `$tries` property and silently inherited the worker's global `--tries`, so a common `queue:work --tries=3` setup blind-retried expensive non-durable runs three times.
+
+**Most operators need no action.** The new default (`SWARM_QUEUE_TRIES=1`) is the safe choice for all non-idempotent swarms.
+
+**To opt back in:** if your swarms are idempotent and the token cost of a full restart is acceptable, restore the previous behavior by setting:
+
+```env
+SWARM_QUEUE_TRIES=3
+```
+
+or in `config/swarm.php`:
+
+```php
+'queue' => [
+    'tries' => 3,
+],
+```
+
+`SWARM_QUEUE_TIMEOUT` now also takes effect as expected. Previously the `timeout()` method was silently ignored by the queue worker (Laravel reads the `$timeout` property, not a `timeout()` method); `SWARM_QUEUE_TIMEOUT` is now wired through the property and reaches the serialized job payload. No action required unless you were relying on the setting having no effect.
+
+### Audit signing now requires a `signature_algorithm` (#223)
+
+The package signs audit evidence on emit but, by design, never verifies a signature on read — verification is the responsibility of the sink that persists the records. To keep stored signatures verifiable and rotatable, `SwarmAuditDispatcher` now enforces one rule: if your signer adds a non-empty `signature`, it **must** also add a non-empty `signature_algorithm`.
+
+A signer that returns a `signature` without an algorithm name is treated as a signing failure and routed through your bound `SinkFailureHandler`, exactly like any other signing failure. Under `swarm.audit.failure_policy=halt` the run throws `AuditSinkHaltedException`; under `swallow` the record is dropped — either way it never reaches the sink. Under a `queue`/`dead-letter` policy the record follows the configured audit-outbox path and is delivered to the sink on the next drain (the outbox replays the stored payload directly and does not re-run the guard), so **a deployment that must never persist an unverifiable record should use `halt`**. **Action:** if your signer sets `signature`, confirm it also sets `signature_algorithm` (e.g. `'hmac-sha256'`). The per-category opt-out (returning the payload unchanged for categories you do not sign) is unaffected. See `docs/audit-evidence-contract.md` → "Audit Signing".
+
 ## Upgrading to v0.12.1
 
 v0.12.1 is a patch release with **no migrations** and **no application-code changes**. It hardens how the durable runtime decrypts its operational resume state (#212).

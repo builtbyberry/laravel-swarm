@@ -5,6 +5,11 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Jobs;
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+// This job is lease-guarded durable coordination (DurableRunStore + continuation lease,
+// re-dispatched by the durable recovery sweep) — not a fire-and-forget queued run.
+// The tries=1 "blind retry re-spends tokens" rationale applies only to InvokeSwarm/BroadcastSwarm.
+// Here we want the durable retry profile (tries=3 + backoff) from swarm.durable.job.*.
+use BuiltByBerry\LaravelSwarm\Jobs\Concerns\ConfiguresDurableAdvanceJob;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\EmitsSwarmJobTelemetry;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use Illuminate\Bus\Queueable;
@@ -18,6 +23,7 @@ use Illuminate\Queue\SerializesModels;
  */
 class ResumeQueuedHierarchicalSwarm implements ShouldQueue
 {
+    use ConfiguresDurableAdvanceJob;
     use EmitsSwarmJobTelemetry;
     use InteractsWithQueue;
     use Queueable;
@@ -28,6 +34,7 @@ class ResumeQueuedHierarchicalSwarm implements ShouldQueue
         ?int $enqueuedAtMs = null,
     ) {
         $this->enqueuedAtMs = $enqueuedAtMs ?? self::telemetryEpochMilliseconds();
+        $this->applyDurableAdvanceJobTimeout();
     }
 
     public function handle(QueuedHierarchicalCoordinator $coordinator): void

@@ -137,6 +137,8 @@ Queue connection and name used for `queue()` execution and hierarchical parallel
 |-----|------|---------|---------|-------------|
 | `swarm.queue.connection` | string\|null | `null` | `SWARM_QUEUE_CONNECTION` | Laravel queue connection for queued swarm jobs. `null` uses the application's default queue connection. |
 | `swarm.queue.name` | string\|null | `null` | `SWARM_QUEUE` | Queue name for queued swarm jobs. `null` uses the connection's default queue. |
+| `swarm.queue.tries` | int | `1` | `SWARM_QUEUE_TRIES` | Number of attempts for `InvokeSwarm` and `BroadcastSwarm` jobs. Defaults to `1` regardless of the worker's `--tries` flag — a retry restarts the full swarm run (no checkpoint), re-dispatching all tools and re-spending LLM tokens. Raise only if your swarms are idempotent and the token cost of a full restart is acceptable. Does **not** affect durable advance jobs (`AdvanceDurableSwarm`/`AdvanceDurableBranch`), which derive their tries from `swarm.durable.job.tries`. |
+| `swarm.queue.timeout` | int\|null | `null` | `SWARM_QUEUE_TIMEOUT` | Queue worker timeout (seconds) for queued swarm jobs. `null` inherits the worker's `--timeout` — a package-level default would kill legitimately long LLM runs. Set explicitly only when you need a hard ceiling. |
 | `swarm.queue.hierarchical_parallel.coordination` | string | `in_process` | `SWARM_QUEUE_HIERARCHICAL_PARALLEL_COORDINATION` | How hierarchical parallel route nodes coordinate when dispatched with `queue()`. `in_process` — parallel groups execute sequentially in declaration order within the same job. `multi_worker` — branches are dispatched as separate jobs and coordinated across workers (requires database-backed persistence and durable tables). |
 | `swarm.queue.hierarchical_parallel.connection` | string\|null | `null` | `SWARM_QUEUE_HIERARCHICAL_PARALLEL_CONNECTION` | Queue connection for hierarchical parallel coordination jobs. |
 | `swarm.queue.hierarchical_parallel.name` | string\|null | `null` | `SWARM_QUEUE_HIERARCHICAL_PARALLEL_NAME` | Queue name for hierarchical parallel coordination jobs. |
@@ -205,7 +207,7 @@ Settings for `dispatchDurable()` execution. Durable runs are database-backed and
 The transactional outbox relay (`swarm:relay`) drains `swarm_durable_outbox` rows and dispatches the corresponding queue jobs. **You must schedule this command for durable execution to advance:**
 
 ```php
-// app/Console/Kernel.php or routes/console.php
+// routes/console.php
 Schedule::command('swarm:relay')->everyMinute();
 ```
 
@@ -268,7 +270,7 @@ Controls the audit evidence sink. Bind `SwarmAuditSink` in your service containe
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
-| `swarm.audit.failure_policy` | string | `swallow` | `SWARM_AUDIT_FAILURE_POLICY` | What happens when the audit sink throws. `swallow` — silently discard (default, safest for production). `log` — record via application logger, then continue. Sink failures never propagate into swarm execution regardless of policy. |
+| `swarm.audit.failure_policy` | string | `queue` | `SWARM_AUDIT_FAILURE_POLICY` | What happens when the audit sink throws. `swallow` — silently discard. `log` — log via the application logger, then continue. `queue` (default) — enqueue the failed record to the audit outbox for retry via `swarm:relay`. `dead_letter` — route the failed record to the outbox dead-letter status (no retry). `halt` — log and halt the swarm run. Only `queue` and `dead_letter` use the audit outbox table. `halt` is the one policy that propagates into run execution. This policy governs **both** sink failures and audit-signing failures — a signer that omits `signature_algorithm` when `signature` is set is treated as a signing failure and routed through this same handler. See [Audit Signing](audit-evidence-contract.md#audit-signing). |
 | `swarm.audit.metadata_allowlist` | array | `[]` | `SWARM_AUDIT_METADATA_ALLOWLIST` | Comma-separated list of run metadata keys forwarded to audit evidence payloads. Only listed keys are included. |
 
 ---
@@ -359,10 +361,10 @@ SWARM_CAPTURE_ARTIFACTS=false
 SWARM_CAPTURE_ACTIVE_CONTEXT=false
 SWARM_OBSERVABILITY_ENABLED=true
 SWARM_OBSERVABILITY_FAILURE_POLICY=swallow
-SWARM_AUDIT_FAILURE_POLICY=swallow
+SWARM_AUDIT_FAILURE_POLICY=queue
 ```
 
-Schedule in `routes/console.php` or `app/Console/Kernel.php`:
+Schedule in `routes/console.php`:
 
 ```php
 Schedule::command('swarm:prune')->daily();
@@ -391,7 +393,7 @@ SWARM_WEBHOOK_SECRET=your-secret-here
 SWARM_WEBHOOK_TOLERANCE_SECONDS=300
 ```
 
-Schedule in `routes/console.php` or `app/Console/Kernel.php`:
+Schedule in `routes/console.php`:
 
 ```php
 Schedule::command('swarm:relay')->everyMinute();
