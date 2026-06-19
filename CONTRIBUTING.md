@@ -344,10 +344,10 @@ contributing here:
   category names.
 - **Breaking change → `schema_version` bump.** Removing, renaming, or
   retyping a frozen field, or removing/renaming a frozen category, requires
-  incrementing `schema_version` (currently `"2"`) and an `UPGRADING.md` entry.
+  incrementing `schema_version` (currently `"3"`) and an `UPGRADING.md` entry.
   The v0.4-to-v0.5 `command.*` envelope unification (`actor` moved into
   `metadata.actor`, `schema_version` bumped from `"1"` to `"2"`) is the
-  reference example.
+  reference example; it was bumped again from `"2"` to `"3"` in v0.12.0.
 - **Update the frozen-fields tables.** Any change to a category’s correlation
   fields needs the matching row updated in the
   "Frozen Categories" section of `docs/audit-evidence-contract.md`. The doc
