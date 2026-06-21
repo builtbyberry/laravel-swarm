@@ -268,6 +268,20 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.12.3
+
+v0.12.3 is a review-follow-up release with **no migrations** and no config or API changes. One change affects `swarm:health` output.
+
+### `swarm:health` now warns on aged unclaimed audit-outbox rows
+
+The audit-outbox staleness check previously warned only on pending rows whose relay *reservation* had expired. Pending rows the relay had never claimed (e.g. the relay is unscheduled, misrouted, or starved before claim) were not aged, so a backlog could accumulate while the check reported `relay appears active`. The check now also warns when unclaimed pending rows age past `swarm.durable.relay.stale_warning_threshold_seconds` (default `2 × reservation_timeout_seconds`), reporting it as a distinct signal.
+
+**Exit code and `--json` `ok` are unchanged:** a `warning` row is not a `failed` row, so the command still exits `0` and `ok` stays `true`. Monitoring that keys on the exit code or the `ok` field needs no change.
+
+**Action:** only operators who parse the `swarm:health` *table text* (rather than the exit code / `ok` field) and treat the presence of a `warning` as actionable may see a new warning after upgrade — in which case the warning is a true positive: audit evidence is backing up and `swarm:relay` scheduling should be verified.
+
+The same staleness thresholds (audit and durable) are now computed in UTC to match how the outbox stores its timestamps; on deployments with a non-UTC `app.timezone` this corrects a boundary skew that could previously hide or prematurely flag aged rows. No action required.
+
 ## Upgrading to v0.12.2
 
 v0.12.2 is a hardening release with **no migrations**. Two changes may require operator attention: the audit signing guard (#223) described below, and the durable advance-job timeout correction (#243) described below that.

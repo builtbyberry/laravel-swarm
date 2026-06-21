@@ -57,14 +57,24 @@ trait SafeReporting
 
     /**
      * Last-resort sink for a suppressed failure. Never throws.
+     *
+     * Emits only non-sensitive provenance — the exception *class* and the
+     * (always-static) log message — never `getMessage()`. Exception messages on
+     * these paths can embed the audit payload the caller was handling, and
+     * error_log() is an ungoverned sink (PHP's system error log) with different
+     * retention/access than the app's configured logger. The full detail is
+     * still persisted sealed in the outbox row's last_error for the normal case;
+     * this breadcrumb only needs to say "something was suppressed here, and the
+     * reporting stack was also unavailable."
      */
     private function lastResortLog(Throwable $primary, ?Throwable $secondary = null, ?string $message = null): void
     {
         try {
+            $primaryClass = $primary::class;
             $note = $message !== null ? " while logging \"{$message}\"" : '';
-            $detail = $secondary !== null ? " (reporting also failed: {$secondary->getMessage()})" : '';
+            $detail = $secondary !== null ? ' (reporting also failed: '.$secondary::class.')' : '';
 
-            error_log("[laravel-swarm] degrade-safe path suppressed an exception{$note}: {$primary->getMessage()}{$detail}");
+            error_log("[laravel-swarm] degrade-safe path suppressed a {$primaryClass}{$note}{$detail}");
         } catch (Throwable) {
             // error_log() itself failed; there is nothing safe left to do.
         }

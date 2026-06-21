@@ -520,6 +520,45 @@ describe('audit outbox checks', function (): void {
             ->toContain('relay appears active');
     });
 
+    test('staleness warning reports stale-reserved and aged-unclaimed signals together (F4)', function (): void {
+        // One row the relay claimed then abandoned (reservation expired)...
+        DB::table('swarm_audit_outbox')->insert([
+            'category' => 'run.failed',
+            'run_id' => 'r-stale-reserved',
+            'payload' => '{}',
+            'attempts' => 1,
+            'status' => 'pending',
+            'last_error' => null,
+            'last_attempted_at' => now()->subMinutes(5),
+            'reserved_at' => now()->subMinutes(5),
+            'created_at' => now()->subMinutes(5),
+            'updated_at' => now()->subMinutes(5),
+        ]);
+        // ...and one the relay never claimed, aged past the warning threshold.
+        DB::table('swarm_audit_outbox')->insert([
+            'category' => 'run.failed',
+            'run_id' => 'r-aged-unclaimed',
+            'payload' => '{}',
+            'attempts' => 0,
+            'status' => 'pending',
+            'last_error' => null,
+            'last_attempted_at' => null,
+            'reserved_at' => null,
+            'created_at' => now()->subMinutes(10),
+            'updated_at' => now()->subMinutes(10),
+        ]);
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        // Both signals must appear in the single joined warning detail.
+        expect(Artisan::output())
+            ->toContain('Audit outbox staleness')
+            ->toContain('warning')
+            ->toContain('stale reservations')
+            ->toContain('unclaimed pending row(s) aging');
+    });
+
     test('dead-letter audit rows produce a warning status (Part 11 compliance signal)', function (): void {
         DB::table('swarm_audit_outbox')->insert([
             'category' => 'run.failed',

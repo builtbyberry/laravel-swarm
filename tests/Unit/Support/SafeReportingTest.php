@@ -67,6 +67,33 @@ test('safeReport swallows a throwing report() handler', function (): void {
     expect(fn () => $subject->report(new RuntimeException('original')))->not->toThrow(Throwable::class);
 });
 
+test('the error_log breadcrumb emits the exception class but never its message (F2 leak boundary)', function (): void {
+    // When report() ALSO fails, the error_log() fallback is the only breadcrumb.
+    // It must carry provenance (the class) but never the exception message, which
+    // on these paths can embed the audit payload the caller was handling.
+    $tmp = (string) tempnam(sys_get_temp_dir(), 'swarm-errlog-');
+    $originalErrorLog = ini_get('error_log');
+    ini_set('error_log', $tmp);
+
+    try {
+        $handler = Mockery::mock(ExceptionHandler::class);
+        $handler->shouldReceive('report')->andThrow(new RuntimeException('reporting stack down'));
+        app()->instance(ExceptionHandler::class, $handler);
+
+        safeReportingSubject()->report(new RuntimeException('SENSITIVE-PAYLOAD-9f83'));
+
+        $contents = (string) file_get_contents($tmp);
+
+        expect($contents)
+            ->toContain('RuntimeException')              // class provenance is kept
+            ->not->toContain('SENSITIVE-PAYLOAD-9f83')   // caller-supplied message never leaks
+            ->not->toContain('reporting stack down');    // nor the reporting failure's message
+    } finally {
+        ini_set('error_log', $originalErrorLog === false ? '' : $originalErrorLog);
+        @unlink($tmp);
+    }
+});
+
 // ---------------------------------------------------------------------------
 // ConfiguredSinkFailureHandler — degrade-safe even with a hostile logger
 // ---------------------------------------------------------------------------
