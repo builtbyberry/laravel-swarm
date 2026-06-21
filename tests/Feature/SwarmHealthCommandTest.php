@@ -434,6 +434,55 @@ describe('audit outbox checks', function (): void {
         expect(Artisan::output())->toContain('staleness')->toContain('warning');
     });
 
+    test('aged unclaimed audit rows produce a warning status (F1 — relay down before claim)', function (): void {
+        // Never reserved (relay never claimed it), but old: the relay is unscheduled,
+        // misrouted, or starved. Must not report "relay appears active".
+        DB::table('swarm_audit_outbox')->insert([
+            'category' => 'run.failed',
+            'run_id' => 'r-unclaimed',
+            'payload' => '{}',
+            'attempts' => 0,
+            'status' => 'pending',
+            'last_error' => null,
+            'last_attempted_at' => null,
+            'reserved_at' => null,
+            'created_at' => now()->subMinutes(10),
+            'updated_at' => now()->subMinutes(10),
+        ]);
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('Audit outbox staleness')
+            ->toContain('warning')
+            ->toContain('unclaimed pending row(s) aging')
+            ->not->toContain('relay appears active');
+    });
+
+    test('recent unclaimed audit rows stay ok (relay running normally)', function (): void {
+        // Freshly enqueued, not yet claimed — normal between relay runs.
+        DB::table('swarm_audit_outbox')->insert([
+            'category' => 'run.failed',
+            'run_id' => 'r-fresh',
+            'payload' => '{}',
+            'attempts' => 0,
+            'status' => 'pending',
+            'last_error' => null,
+            'last_attempted_at' => null,
+            'reserved_at' => null,
+            'created_at' => now()->subSeconds(5),
+            'updated_at' => now()->subSeconds(5),
+        ]);
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('Audit outbox staleness')
+            ->toContain('relay appears active');
+    });
+
     test('dead-letter audit rows produce a warning status (Part 11 compliance signal)', function (): void {
         DB::table('swarm_audit_outbox')->insert([
             'category' => 'run.failed',

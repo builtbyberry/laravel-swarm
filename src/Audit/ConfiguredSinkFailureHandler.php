@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Audit;
 
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -36,6 +37,8 @@ use Throwable;
  */
 class ConfiguredSinkFailureHandler implements SinkFailureHandler
 {
+    use SafeReporting;
+
     public function __construct(
         protected ConfigRepository $config,
         protected LoggerInterface $logger,
@@ -61,7 +64,7 @@ class ConfiguredSinkFailureHandler implements SinkFailureHandler
 
     protected function logAndSwallow(string $category, Throwable $exception): SinkFailureDecision
     {
-        $this->logger->error('Swarm audit sink failed.', [
+        $this->safeLog($this->logger, 'error', 'Swarm audit sink failed.', [
             'category' => $category,
             'exception' => $exception->getMessage(),
             'class' => $exception::class,
@@ -72,7 +75,7 @@ class ConfiguredSinkFailureHandler implements SinkFailureHandler
 
     protected function logAndHalt(string $category, Throwable $exception): SinkFailureDecision
     {
-        $this->logger->error('Swarm audit sink failed; halting run per swarm.audit.failure_policy=halt.', [
+        $this->safeLog($this->logger, 'error', 'Swarm audit sink failed; halting run per swarm.audit.failure_policy=halt.', [
             'category' => $category,
             'exception' => $exception->getMessage(),
             'class' => $exception::class,
@@ -83,7 +86,7 @@ class ConfiguredSinkFailureHandler implements SinkFailureHandler
 
     protected function logAndQueue(string $category, Throwable $exception): SinkFailureDecision
     {
-        $this->logger->warning('Swarm audit sink failed; queuing for retry via swarm:relay --type=audit.', [
+        $this->safeLog($this->logger, 'warning', 'Swarm audit sink failed; queuing for retry via swarm:relay --type=audit.', [
             'category' => $category,
             'exception' => $exception->getMessage(),
             'class' => $exception::class,
@@ -94,7 +97,7 @@ class ConfiguredSinkFailureHandler implements SinkFailureHandler
 
     protected function logAndDeadLetter(string $category, Throwable $exception): SinkFailureDecision
     {
-        $this->logger->error('Swarm audit sink failed; routing to dead-letter per swarm.audit.failure_policy=dead_letter.', [
+        $this->safeLog($this->logger, 'error', 'Swarm audit sink failed; routing to dead-letter per swarm.audit.failure_policy=dead_letter.', [
             'category' => $category,
             'exception' => $exception->getMessage(),
             'class' => $exception::class,
@@ -105,7 +108,7 @@ class ConfiguredSinkFailureHandler implements SinkFailureHandler
 
     protected function logUnknownPolicyAndSwallow(string $policy, string $category, Throwable $exception): SinkFailureDecision
     {
-        $this->logger->warning('Unknown swarm.audit.failure_policy value; defaulting to swallow.', [
+        $this->safeLog($this->logger, 'warning', 'Unknown swarm.audit.failure_policy value; defaulting to swallow.', [
             'configured_policy' => $policy,
             'category' => $category,
             'exception' => $exception->getMessage(),

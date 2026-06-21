@@ -284,6 +284,15 @@ class SwarmHealthCommand extends Command
         $reservationTimeoutSeconds = (int) $config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
         $staleThreshold = now()->subSeconds($reservationTimeoutSeconds * 2);
 
+        // Resolve the warning threshold for *unclaimed* pending rows; 0 means
+        // "use 2× reservation_timeout_seconds". The audit outbox shares the durable
+        // relay timeout (see DatabaseAuditOutbox), so it reuses the same warning key.
+        $warningThresholdSeconds = (int) $config->get('swarm.durable.relay.stale_warning_threshold_seconds', 0);
+        if ($warningThresholdSeconds <= 0) {
+            $warningThresholdSeconds = $reservationTimeoutSeconds * 2;
+        }
+        $warningThreshold = now()->subSeconds($warningThresholdSeconds);
+
         try {
             if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
                 return [[
@@ -305,30 +314,56 @@ class SwarmHealthCommand extends Command
         }
 
         return [
-            $this->runAuditOutboxStalenessCheck($connection, $outboxTable, $staleThreshold),
+            $this->runAuditOutboxStalenessCheck($connection, $outboxTable, $staleThreshold, $warningThreshold, $warningThresholdSeconds),
             $this->runAuditOutboxDeadLetterCheck($connection, $outboxTable),
         ];
     }
 
     /**
+     * Two distinct backlog signals, reported separately:
+     *
+     *   - stale-reserved: the relay claimed a row but died mid-flight, so its
+     *     reservation expired. Reclaimable next run; a standing count means the
+     *     relay isn't completing cycles.
+     *   - aged-unclaimed: pending rows the relay has *never* claimed, older than
+     *     the warning threshold. These never trip the stale-reservation check
+     *     (reserved_at is null), so without aging them by created_at an
+     *     unscheduled, misrouted, or starved relay would report "active" while
+     *     audit evidence silently backs up — a false clean signal in a regulated
+     *     deployment. (F1)
+     *
      * @return array{component: string, driver: string, store: string, status: string, details: string}
      */
-    protected function runAuditOutboxStalenessCheck(Connection $connection, string $outboxTable, CarbonInterface $staleThreshold): array
+    protected function runAuditOutboxStalenessCheck(Connection $connection, string $outboxTable, CarbonInterface $staleThreshold, CarbonInterface $warningThreshold, int $warningThresholdSeconds): array
     {
         try {
-            $stalePending = $connection->table($outboxTable)
+            $staleReserved = $connection->table($outboxTable)
                 ->where('status', 'pending')
                 ->whereNotNull('reserved_at')
                 ->where('reserved_at', '<', $staleThreshold)
                 ->count();
 
-            if ($stalePending > 0) {
+            $agedUnclaimed = $connection->table($outboxTable)
+                ->where('status', 'pending')
+                ->whereNull('reserved_at')
+                ->where('created_at', '<', $warningThreshold)
+                ->count();
+
+            if ($staleReserved > 0 || $agedUnclaimed > 0) {
+                $signals = [];
+                if ($staleReserved > 0) {
+                    $signals[] = "{$staleReserved} pending row(s) with stale reservations";
+                }
+                if ($agedUnclaimed > 0) {
+                    $signals[] = "{$agedUnclaimed} unclaimed pending row(s) aging past {$warningThresholdSeconds}s";
+                }
+
                 return [
                     'component' => 'Audit outbox staleness',
                     'driver' => 'database',
                     'store' => 'n/a',
                     'status' => 'warning',
-                    'details' => "{$stalePending} pending row(s) with stale reservations — is swarm:relay scheduled?",
+                    'details' => implode('; ', $signals).' — is swarm:relay scheduled?',
                 ];
             }
 
