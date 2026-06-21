@@ -14,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -458,6 +459,42 @@ describe('audit outbox checks', function (): void {
             ->toContain('warning')
             ->toContain('unclaimed pending row(s) aging')
             ->not->toContain('relay appears active');
+    });
+
+    test('aged unclaimed audit rows warn under a non-UTC app timezone (F1 — UTC-stored columns)', function (): void {
+        // Production stores created_at via Carbon::now('UTC'); the health check must read it
+        // in the same frame. Under a non-UTC default timezone a bare now() compares app-local
+        // wall-clock against the UTC column and skews the boundary by the offset, hiding a
+        // genuinely-aged row. This test fails if any health threshold reverts to bare now().
+        $originalTz = date_default_timezone_get();
+        date_default_timezone_set('America/New_York');
+
+        try {
+            DB::table('swarm_audit_outbox')->insert([
+                'category' => 'run.failed',
+                'run_id' => 'r-tz',
+                'payload' => '{}',
+                'attempts' => 0,
+                'status' => 'pending',
+                'last_error' => null,
+                'last_attempted_at' => null,
+                'reserved_at' => null,
+                // UTC, exactly as DatabaseAuditOutbox stores it — well past the default 120s threshold.
+                'created_at' => Carbon::now('UTC')->subMinutes(10),
+                'updated_at' => Carbon::now('UTC')->subMinutes(10),
+            ]);
+
+            $exitCode = Artisan::call('swarm:health');
+
+            expect($exitCode)->toBe(0);
+            expect(Artisan::output())
+                ->toContain('Audit outbox staleness')
+                ->toContain('warning')
+                ->toContain('unclaimed pending row(s) aging')
+                ->not->toContain('relay appears active');
+        } finally {
+            date_default_timezone_set($originalTz);
+        }
     });
 
     test('recent unclaimed audit rows stay ok (relay running normally)', function (): void {

@@ -132,14 +132,17 @@ class SwarmHealthCommand extends Command
         // 2× the reservation timeout: gives the relay at least one full reclaim cycle
         // before alerting. A single missed relay run reclaims stale reservations on the
         // next run; two missed cycles indicates the relay is not running at all.
-        $staleThreshold = now()->subSeconds($reservationTimeoutSeconds * 2);
+        // UTC to match how the outbox stores created_at/reserved_at (Carbon::now('UTC'));
+        // a bare now() would compare app-timezone wall-clock against UTC columns and skew
+        // the boundary by the UTC offset on any non-UTC app.timezone.
+        $staleThreshold = now('UTC')->subSeconds($reservationTimeoutSeconds * 2);
 
         // Resolve the warning threshold; 0 means "use 2× reservation_timeout_seconds".
         $warningThresholdSeconds = (int) $config->get('swarm.durable.relay.stale_warning_threshold_seconds', 0);
         if ($warningThresholdSeconds <= 0) {
             $warningThresholdSeconds = $reservationTimeoutSeconds * 2;
         }
-        $warningThreshold = now()->subSeconds($warningThresholdSeconds);
+        $warningThreshold = now('UTC')->subSeconds($warningThresholdSeconds);
 
         try {
             if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
@@ -282,7 +285,10 @@ class SwarmHealthCommand extends Command
 
         $outboxTable = (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox');
         $reservationTimeoutSeconds = (int) $config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
-        $staleThreshold = now()->subSeconds($reservationTimeoutSeconds * 2);
+        // UTC to match how the outbox stores created_at/reserved_at (Carbon::now('UTC'));
+        // a bare now() would compare app-timezone wall-clock against UTC columns and skew
+        // the boundary by the UTC offset on any non-UTC app.timezone.
+        $staleThreshold = now('UTC')->subSeconds($reservationTimeoutSeconds * 2);
 
         // Resolve the warning threshold for *unclaimed* pending rows; 0 means
         // "use 2× reservation_timeout_seconds". The audit outbox shares the durable
@@ -291,7 +297,7 @@ class SwarmHealthCommand extends Command
         if ($warningThresholdSeconds <= 0) {
             $warningThresholdSeconds = $reservationTimeoutSeconds * 2;
         }
-        $warningThreshold = now()->subSeconds($warningThresholdSeconds);
+        $warningThreshold = now('UTC')->subSeconds($warningThresholdSeconds);
 
         try {
             if (! $connection->getSchemaBuilder()->hasTable($outboxTable)) {
