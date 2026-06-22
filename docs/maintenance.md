@@ -277,8 +277,15 @@ falls back to log-and-swallow automatically; no migration required.
 
 `swarm:health` runs two audit-outbox checks on every invocation by default:
 
-- **Staleness** — pending rows whose `reserved_at` aged past 2× the relay
-  reservation timeout. A warning here means `swarm:relay` is not running.
+- **Staleness** — warns on two distinct backlog signals, reported separately:
+  *stale-reserved* pending rows (the relay claimed a row but died mid-flight, so
+  its `reserved_at` aged past 2× the relay reservation timeout) and
+  *aged-unclaimed* pending rows (the relay has never claimed them — `reserved_at`
+  is `NULL` — and their `created_at` aged past
+  `swarm.durable.relay.stale_warning_threshold_seconds`, default 2× the
+  reservation timeout). Either warning means `swarm:relay` is not draining: the
+  stale-reserved case points at a relay dying mid-cycle, the aged-unclaimed case
+  at a relay that is unscheduled, misrouted, or starved before it ever claims.
 - **Dead-letter count** — any non-zero count of `status='dead_letter'`
   rows. For Part 11 / regulated callers, every dead-letter row is a
   compliance signal: an audit event that was supposed to land in the sink

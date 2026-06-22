@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
 use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
+use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
@@ -20,6 +21,8 @@ use UnexpectedValueException;
  */
 class DatabaseDurableOutbox implements DurableOutbox
 {
+    use SafeReporting;
+
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
@@ -132,13 +135,13 @@ class DatabaseDurableOutbox implements DurableOutbox
                 // Permanently invalid entry — cannot succeed on retry. Delete it to
                 // prevent it from clogging the outbox indefinitely, and route it through
                 // the application error handler so it appears in Sentry / logs.
-                report($e);
+                $this->safeReport($e);
                 $this->table()->where('id', $entry->id)->delete();
                 $skipped++;
             } catch (Throwable $e) {
                 // Transient failure: preserve reserved_at so the entry is re-claimable.
                 // Report so the outage surfaces in the error tracker.
-                report($e);
+                $this->safeReport($e);
                 $failed++;
             }
         }

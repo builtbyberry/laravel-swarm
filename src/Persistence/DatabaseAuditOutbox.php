@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\AuditDrainResult;
+use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
@@ -30,6 +31,8 @@ use Throwable;
  */
 class DatabaseAuditOutbox implements AuditOutbox
 {
+    use SafeReporting;
+
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
@@ -49,7 +52,7 @@ class DatabaseAuditOutbox implements AuditOutbox
         } catch (\JsonException $exception) {
             // We can't queue what we can't serialize. Surface to the application
             // error handler so the broken payload is investigable rather than lost.
-            report($exception);
+            $this->safeReport($exception);
 
             return;
         }
@@ -127,7 +130,7 @@ class DatabaseAuditOutbox implements AuditOutbox
             } catch (\JsonException $exception) {
                 // Permanently invalid stored payload; route to dead-letter and
                 // surface via the error handler so it's investigable.
-                report($exception);
+                $this->safeReport($exception);
                 $this->markDeadLetter((int) $entry->id, (string) $entry->category, $entry->run_id, $attempts, 'invalid_json');
                 $deadLettered++;
 
@@ -146,7 +149,7 @@ class DatabaseAuditOutbox implements AuditOutbox
                 $replayedIds[] = (int) $entry->id;
                 $replayed++;
             } catch (Throwable $exception) {
-                report($exception);
+                $this->safeReport($exception);
                 $error = mb_substr($exception->getMessage(), 0, 1000);
 
                 if ($attempts >= $maxAttempts) {
@@ -188,7 +191,7 @@ class DatabaseAuditOutbox implements AuditOutbox
             'updated_at' => Carbon::now('UTC'),
         ]);
 
-        $this->logger->error('Swarm audit record reached dead_letter status.', [
+        $this->safeLog($this->logger, 'error', 'Swarm audit record reached dead_letter status.', [
             'category' => $category,
             'run_id' => $runId,
             'attempts' => $attempts,

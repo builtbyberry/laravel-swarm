@@ -217,7 +217,7 @@ Without the relay, durable runs stall permanently after the first step completes
 |-----|------|---------|---------|-------------|
 | `swarm.durable.relay.reservation_timeout_seconds` | int | `60` | `SWARM_DURABLE_RELAY_RESERVATION_TIMEOUT_SECONDS` | How long a relay worker's claim on an outbox entry is valid. Entries whose `reserved_at` is older than this are treated as abandoned and become eligible for re-claim by the next relay run. |
 | `swarm.durable.relay.limit` | int | `100` | `SWARM_DURABLE_RELAY_LIMIT` | Maximum outbox entries drained per relay invocation. The `--limit` option on `swarm:relay` overrides this at runtime, capped at 10,000. |
-| `swarm.durable.relay.stale_warning_threshold_seconds` | int | `0` | `SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS` | How old an unclaimed outbox row must be before `swarm:health --durable` reports a warning. `0` uses `2 × reservation_timeout_seconds` as the threshold. |
+| `swarm.durable.relay.stale_warning_threshold_seconds` | int | `0` | `SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS` | How old an unclaimed outbox row must be before `swarm:health` reports a warning — applies to both the durable outbox (`swarm:health --durable`) and the audit outbox (checked on bare `swarm:health`). `0` uses `2 × reservation_timeout_seconds` as the threshold. |
 
 ### Durable Webhooks
 

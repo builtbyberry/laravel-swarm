@@ -540,8 +540,10 @@ return [
             'limit' => (int) env('SWARM_DURABLE_RELAY_LIMIT', 100),
 
             /*
-             * How old an unclaimed outbox row must be before swarm:health --durable reports a
-             * warning. Set to 0 to use 2 × reservation_timeout_seconds (the default).
+             * How old an unclaimed outbox row must be before swarm:health reports a warning —
+             * applies to both the durable outbox (swarm:health --durable) and the audit outbox
+             * (checked on bare swarm:health). Set to 0 to use 2 × reservation_timeout_seconds
+             * (the default).
              */
             'stale_warning_threshold_seconds' => (int) env('SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS', 0),
         ],
