@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
+use BuiltByBerry\LaravelSwarm\Support\ToolResultEncoding;
 use Laravel\Ai\Responses\Data\ToolResult;
 
 final class SwarmToolResult extends SwarmStreamEvent
@@ -24,6 +25,26 @@ final class SwarmToolResult extends SwarmStreamEvent
      */
     public function toArray(): array
     {
+        // Degrade at the tool-result boundary, NOT by loosening the strict
+        // stream-event store (which also persists non-tool events/checkpoints
+        // that must stay strict). A tool result and its arguments are typed
+        // `mixed`; if either cannot be JSON-encoded, swap that one value for a
+        // typed placeholder + class-only breadcrumb so the strict
+        // DatabaseStreamEventStore encode of this event never throws and the
+        // live run is not crashed by a single unencodable tool value.
+        $toolResult = $this->toolResult->toArray();
+        $toolResult['result'] = ToolResultEncoding::degradeToolResult(
+            $toolResult['result'] ?? null,
+            $this->toolResult->name,
+        );
+
+        if (array_key_exists('arguments', $toolResult)) {
+            $toolResult['arguments'] = ToolResultEncoding::degradeToolArguments(
+                $toolResult['arguments'],
+                $this->toolResult->name,
+            );
+        }
+
         return [
             'id' => $this->id,
             'invocation_id' => $this->invocationId,
@@ -31,7 +52,7 @@ final class SwarmToolResult extends SwarmStreamEvent
             'run_id' => $this->runId,
             'step_index' => $this->stepIndex,
             'agent_class' => $this->agentClass,
-            'tool_result' => $this->toolResult->toArray(),
+            'tool_result' => $toolResult,
             'successful' => $this->successful,
             'error' => $this->error,
             'timestamp' => $this->timestamp,

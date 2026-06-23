@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemorySnapshotted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SnapshotFrozenException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
+use BuiltByBerry\LaravelSwarm\Support\ToolResultEncoding;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
@@ -109,7 +110,7 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
             ->where('run_id', $updated->runId)
             ->where('step_index', $updated->stepIndex)
             ->update([
-                'tool_calls' => $this->encodeJson($updated->toolCalls),
+                'tool_calls' => $this->encodeJson($this->safeToolCalls($updated->toolCalls)),
                 'updated_at' => CarbonImmutable::now('UTC'),
             ]);
 
@@ -205,7 +206,7 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
         $now = CarbonImmutable::now('UTC');
 
         $encodedPayload = $this->encodeJson($snapshot->toPayloadArray());
-        $encodedToolCalls = $this->encodeJson($snapshot->toolCalls);
+        $encodedToolCalls = $this->encodeJson($this->safeToolCalls($snapshot->toolCalls));
 
         $this->table()->upsert(
             [[
@@ -229,6 +230,25 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
             bytes: strlen((string) $encodedPayload) + strlen((string) $encodedToolCalls),
             entryCount: count($snapshot->entries),
         ));
+    }
+
+    /**
+     * Degrade any tool-call entry whose `result` or `arguments` cannot be
+     * JSON-encoded to a typed placeholder before the strict `tool_calls` encode
+     * runs.
+     *
+     * This is the snapshot tool I/O boundary: a structured MCP tool result or
+     * its arguments (typed `mixed`) that JSON cannot represent must not throw a
+     * `JsonException` up through the runner and crash a live run. The shared
+     * `encodeJson()` stays strict for the `payload` column and every other
+     * audit/durable store — only the tool-call I/O fields degrade, and only here.
+     *
+     * @param  array<int, array<string, mixed>>  $toolCalls
+     * @return array<int, array<string, mixed>>
+     */
+    protected function safeToolCalls(array $toolCalls): array
+    {
+        return ToolResultEncoding::degradeToolCalls($toolCalls, $this->logger);
     }
 
     protected function table(): Builder
