@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Enums\PersistenceDecryptFailurePolicy;
+use Closure;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Encryption\Encrypter;
@@ -14,6 +15,16 @@ use Psr\Log\LoggerInterface;
  * Application-level encryption for sensitive string columns written by database
  * persistence drivers, mirroring Laravel's Encrypter usage (same as encrypted casts).
  *
+ * The encrypter is resolved **lazily** (the constructor accepts a
+ * `Closure(): Encrypter` from the container binding, or a ready instance for
+ * tests). Laravel's encrypter binding throws `MissingAppKeyException` when no
+ * `APP_KEY` is set, and `package:discover` boots service providers during a
+ * fresh `composer install` *before* the consumer has generated a key — so
+ * resolving this cipher (e.g. while booting) must not force the encrypter.
+ * Encryption is opt-in (`encrypt_at_rest`), and `seal()`/`open()` only touch the
+ * encrypter when they actually have a value to (de)cipher; a genuinely missing
+ * key therefore still fails loud at use time, never at boot. See #122.
+ *
  * @internal
  */
 class SwarmPersistenceCipher
@@ -22,11 +33,34 @@ class SwarmPersistenceCipher
 
     protected ?PersistenceDecryptFailurePolicy $resolvedDecryptFailurePolicy = null;
 
+    /**
+     * @param  (Closure(): Encrypter)|Encrypter  $encrypter  A ready encrypter,
+     *                                                       or a resolver
+     *                                                       invoked on first
+     *                                                       (de)cipher use.
+     */
     public function __construct(
         protected ConfigRepository $config,
-        protected Encrypter $encrypter,
+        protected Closure|Encrypter $encrypter,
         protected LoggerInterface $logger,
     ) {}
+
+    /**
+     * Resolve (once) and return the encrypter. When constructed with a resolver
+     * closure, the encrypter — and thus the `APP_KEY` requirement — is not
+     * touched until the first seal/open actually needs it.
+     */
+    protected function encrypter(): Encrypter
+    {
+        $encrypter = $this->encrypter;
+
+        if ($encrypter instanceof Closure) {
+            $encrypter = $encrypter();
+            $this->encrypter = $encrypter;
+        }
+
+        return $encrypter;
+    }
 
     public function enabled(): bool
     {
@@ -39,7 +73,7 @@ class SwarmPersistenceCipher
             return $value;
         }
 
-        return self::PREFIX.$this->encrypter->encryptString($value);
+        return self::PREFIX.$this->encrypter()->encryptString($value);
     }
 
     /**
@@ -64,7 +98,7 @@ class SwarmPersistenceCipher
         }
 
         try {
-            return $this->encrypter->decryptString(substr($value, strlen(self::PREFIX)));
+            return $this->encrypter()->decryptString(substr($value, strlen(self::PREFIX)));
         } catch (DecryptException $e) {
             return match ($this->decryptFailurePolicy()) {
                 PersistenceDecryptFailurePolicy::Legacy => $value,
@@ -99,7 +133,7 @@ class SwarmPersistenceCipher
             return $value;
         }
 
-        return $this->encrypter->decryptString(substr($value, strlen(self::PREFIX)));
+        return $this->encrypter()->decryptString(substr($value, strlen(self::PREFIX)));
     }
 
     /**
