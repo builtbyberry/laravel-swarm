@@ -133,6 +133,28 @@ Swarm streams emit typed events, including:
 preserves upstream event **IDs** and **timestamps** in typed replay. **Invocation
 IDs** are passed through when the upstream provider includes them.
 
+### Tool calls (including MCP tools)
+
+Swarm's tool model is **pure passthrough**. A `laravel/ai` `ToolCall` /
+`ToolResult` is carried as an opaque object through tool-call capture, the step
+memory snapshot, and the streamed `swarm_tool_call` / `swarm_tool_result`
+events — Swarm does not interpret the tool's arguments or result. That means the
+**MCP client/server tools** added in `laravel/ai` 0.8 are supported with no
+MCP-specific configuration: an MCP-backed tool's call and result flow through the
+stream and the durable snapshot exactly like any other tool, including a
+**structured** (non-scalar) MCP result, which is preserved intact.
+
+A tool result is typed `mixed`, so at the edges it can be a value JSON cannot
+represent (for example, a binary-ish MCP result with invalid UTF-8). Such a
+result **degrades safely at the tool-result boundary**: that one value is
+replaced by a typed placeholder
+(`{"__swarm_unencodable_tool_result__": true, "tool": "<name>"}`) and a
+**class-only** breadcrumb is logged (the tool name and exception class, never the
+payload bytes). The run is never crashed by a single unencodable tool result,
+and the strict encoder the audit/durable/resume stores depend on is left
+untouched. The placeholder is a faithful record that the original result was not
+representable — it is not a tamper signal, and the strict read path stays strict.
+
 ## Persisted Replay
 
 In-memory replay is always available after a successful synchronous stream
