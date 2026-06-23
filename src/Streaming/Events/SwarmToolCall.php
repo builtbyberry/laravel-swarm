@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
+use BuiltByBerry\LaravelSwarm\Support\ToolResultEncoding;
 use Laravel\Ai\Responses\Data\ToolCall;
 
 final class SwarmToolCall extends SwarmStreamEvent
@@ -38,7 +39,15 @@ final class SwarmToolCall extends SwarmStreamEvent
             'tool_call' => [
                 'id' => $this->toolCall->id,
                 'name' => $this->toolCall->name,
-                'arguments' => $this->toolCall->arguments,
+                // Degrade at the tool-call boundary: `arguments` is the same
+                // `mixed` shape as a tool result, so an unencodable value here
+                // would otherwise throw through the strict DatabaseStreamEventStore
+                // and crash the live run. Reasoning fields below are
+                // provider-decoded text and stay as-is.
+                'arguments' => ToolResultEncoding::degradeToolArguments(
+                    $this->toolCall->arguments,
+                    $this->toolCall->name,
+                ),
                 'result_id' => $this->toolCall->resultId,
                 'reasoning_id' => $this->toolCall->reasoningId,
                 'reasoning_summary' => $this->toolCall->reasoningSummary,

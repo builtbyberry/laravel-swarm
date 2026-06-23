@@ -27,16 +27,23 @@ final class SwarmToolResult extends SwarmStreamEvent
     {
         // Degrade at the tool-result boundary, NOT by loosening the strict
         // stream-event store (which also persists non-tool events/checkpoints
-        // that must stay strict). A structured MCP tool result is typed `mixed`;
-        // if its `result` payload cannot be JSON-encoded, swap that one value
-        // for a typed placeholder + class-only breadcrumb so the strict
+        // that must stay strict). A tool result and its arguments are typed
+        // `mixed`; if either cannot be JSON-encoded, swap that one value for a
+        // typed placeholder + class-only breadcrumb so the strict
         // DatabaseStreamEventStore encode of this event never throws and the
-        // live run is not crashed by a single unencodable tool output.
+        // live run is not crashed by a single unencodable tool value.
         $toolResult = $this->toolResult->toArray();
         $toolResult['result'] = ToolResultEncoding::degradeToolResult(
             $toolResult['result'] ?? null,
             $this->toolResult->name,
         );
+
+        if (array_key_exists('arguments', $toolResult)) {
+            $toolResult['arguments'] = ToolResultEncoding::degradeToolArguments(
+                $toolResult['arguments'],
+                $this->toolResult->name,
+            );
+        }
 
         return [
             'id' => $this->id,

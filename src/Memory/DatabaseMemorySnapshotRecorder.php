@@ -233,14 +233,15 @@ final class DatabaseMemorySnapshotRecorder implements SnapshotsMemory
     }
 
     /**
-     * Degrade any tool-call entry whose `result` cannot be JSON-encoded to a
-     * typed placeholder before the strict `tool_calls` encode runs.
+     * Degrade any tool-call entry whose `result` or `arguments` cannot be
+     * JSON-encoded to a typed placeholder before the strict `tool_calls` encode
+     * runs.
      *
-     * This is the snapshot tool-result boundary: a structured MCP tool result
-     * (typed `mixed`) that JSON cannot represent must not throw a
+     * This is the snapshot tool I/O boundary: a structured MCP tool result or
+     * its arguments (typed `mixed`) that JSON cannot represent must not throw a
      * `JsonException` up through the runner and crash a live run. The shared
      * `encodeJson()` stays strict for the `payload` column and every other
-     * audit/durable store — only the tool-call results degrade, and only here.
+     * audit/durable store — only the tool-call I/O fields degrade, and only here.
      *
      * @param  array<int, array<string, mixed>>  $toolCalls
      * @return array<int, array<string, mixed>>

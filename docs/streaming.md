@@ -144,16 +144,20 @@ MCP-specific configuration: an MCP-backed tool's call and result flow through th
 stream and the durable snapshot exactly like any other tool, including a
 **structured** (non-scalar) MCP result, which is preserved intact.
 
-A tool result is typed `mixed`, so at the edges it can be a value JSON cannot
-represent (for example, a binary-ish MCP result with invalid UTF-8). Such a
-result **degrades safely at the tool-result boundary**: that one value is
-replaced by a typed placeholder
-(`{"__swarm_unencodable_tool_result__": true, "tool": "<name>"}`) and a
-**class-only** breadcrumb is logged (the tool name and exception class, never the
-payload bytes). The run is never crashed by a single unencodable tool result,
-and the strict encoder the audit/durable/resume stores depend on is left
-untouched. The placeholder is a faithful record that the original result was not
-representable — it is not a tamper signal, and the strict read path stays strict.
+A tool's `result` and its `arguments` are both typed `mixed`, so at the edges
+either can be a value JSON cannot represent (for example, a binary-ish MCP result
+with invalid UTF-8). Such a value **degrades safely at the tool boundary**: that
+one field is replaced by a typed placeholder and a **class-only** breadcrumb is
+logged (the tool name and exception class, never the payload bytes). An
+unencodable result becomes
+`{"__swarm_unencodable_tool_result__": true, "tool": "<name>"}`; unencodable call
+arguments become `{"__swarm_unencodable_tool_arguments__": true, "tool": "<name>"}`.
+The run is never crashed by a single unencodable tool value, and the strict
+encoder the audit/durable/resume stores depend on is left untouched. The
+placeholder is a faithful record that the original value was not representable —
+it is not a tamper signal, and the strict read path stays strict. (A tool result
+is the field that realistically carries such a value; arguments share the same
+type and degrade path for safety.)
 
 ## Persisted Replay
 
