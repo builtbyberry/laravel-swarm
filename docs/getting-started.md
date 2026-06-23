@@ -14,9 +14,13 @@ the manual equivalent of every step the installer performs.
 
 ## Prerequisites
 
-- PHP **8.5+**
-- Laravel **13+**
-- `laravel/ai` **^0.6** (a transitive dependency, installed by Composer)
+- PHP **^8.5** (a deliberate floor — the package builds on 8.5 language features)
+- Laravel **13** (`illuminate/*` **^13.0**)
+- `laravel/ai` **^0.8** (a transitive dependency, installed by Composer)
+
+As of **v0.13.0** the `laravel/ai` floor is **^0.8**; support for **0.6 / 0.7**
+was dropped. Applications pinned below `laravel/ai` 0.8 must upgrade before
+taking this release.
 
 Because `laravel/ai` is still pre-1.0 and ships dev-tagged releases, your
 application's `composer.json` must allow dev-stability resolution. Add the
