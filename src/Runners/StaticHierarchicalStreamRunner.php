@@ -869,7 +869,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         $stepUsage = [];
         /** @var array<string, ToolCallData> $pendingToolCalls */
         $pendingToolCalls = [];
-        /** @var array<class-string, true> $unknownStreamEventClasses */
+        /** @var array<string, true> $unknownStreamEventClasses */
         $unknownStreamEventClasses = [];
 
         // Publish the active run for the agent's RemembersRunContext trait while
@@ -999,11 +999,14 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         providerErrorType: $event->type,
                     );
                 } else {
-                    // An event type this chain does not map. Record its class
+                    // An event type this chain does not map. Record its type
                     // (never its payload) so the silent snapshot drop becomes a
                     // visible breadcrumb; never throw — a harmless new provider
                     // event must not abort an otherwise-successful run.
-                    $unknownStreamEventClasses[$event::class] = true;
+                    // get_debug_type, not ::class: the branch exists to catch
+                    // contract violations, so it must not itself fatal on a
+                    // non-object event.
+                    $unknownStreamEventClasses[get_debug_type($event)] = true;
                 }
             }
 

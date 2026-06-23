@@ -40,12 +40,21 @@ use Psr\Log\LoggerInterface;
  */
 trait RecordsUnknownStreamEvents
 {
+    use SafeReporting;
+
     /**
-     * Emit a single warning naming the unrecognized event classes seen during a
-     * streamed step. No-op when the set is empty. Class names only — the event
+     * Emit a single warning naming the unrecognized event types seen during a
+     * streamed step. No-op when the set is empty. Type names only — the event
      * payload is never logged.
      *
-     * @param  array<class-string, true>  $seen  per-step accumulator, keyed by event class
+     * The emit runs from the step's `finally`, often while a stream exception is
+     * already unwinding, so it must not throw: a throwing logger would replace
+     * (mask) the original exception. It is routed through {@see SafeReporting}'s
+     * never-throw `safeLog()` — the same containment the other degrade-safe
+     * paths use — so a hostile or misconfigured logger can never turn a
+     * breadcrumb into a second failure surface.
+     *
+     * @param  array<string, true>  $seen  per-step accumulator, keyed by event type
      */
     protected function breadcrumbUnknownStreamEvents(array $seen, string $runId, int $stepIndex): void
     {
@@ -53,17 +62,19 @@ trait RecordsUnknownStreamEvents
             return;
         }
 
-        $eventClasses = array_keys($seen);
+        $eventTypes = array_keys($seen);
 
-        $this->logger->warning(
+        $this->safeLog(
+            $this->logger,
+            'warning',
             sprintf(
                 'laravel-swarm: %d unrecognized stream event type(s) were dropped from the snapshot; the durable record is incomplete for this step.',
-                count($eventClasses),
+                count($eventTypes),
             ),
             [
                 'run_id' => $runId,
                 'step_index' => $stepIndex,
-                'event_classes' => $eventClasses,
+                'event_types' => $eventTypes,
             ],
         );
     }

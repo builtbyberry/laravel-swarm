@@ -218,7 +218,7 @@ class SequentialRunner
                     $output = '';
                     /** @var array<string, ToolCallData> $pendingToolCalls */
                     $pendingToolCalls = [];
-                    /** @var array<class-string, true> $unknownStreamEventClasses */
+                    /** @var array<string, true> $unknownStreamEventClasses */
                     $unknownStreamEventClasses = [];
 
                     try {
@@ -333,11 +333,14 @@ class SequentialRunner
                                 );
                             } else {
                                 // An event type this chain does not map. Record
-                                // its class (never its payload) so the silent
+                                // its type (never its payload) so the silent
                                 // snapshot drop becomes a visible breadcrumb;
                                 // never throw — a harmless new provider event
                                 // must not abort an otherwise-successful run.
-                                $unknownStreamEventClasses[$event::class] = true;
+                                // get_debug_type, not ::class: the branch exists
+                                // to catch contract violations, so it must not
+                                // itself fatal on a non-object event.
+                                $unknownStreamEventClasses[get_debug_type($event)] = true;
                             }
                         }
                     } finally {

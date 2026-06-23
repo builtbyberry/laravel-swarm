@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\StaticHierarchicalStreamRunner;
@@ -13,9 +14,22 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRichStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingleRichWorkerSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalUnknownStreamEventSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeUnknownStreamEventSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeUnknownThenErrorStreamingSwarm;
 use Illuminate\Support\Facades\Artisan;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LoggerInterface;
+
+/**
+ * A logger whose every call throws — a misconfigured or hostile logging stack.
+ * AbstractLogger routes all level methods through log().
+ */
+class ThrowingBreadcrumbLogger extends AbstractLogger
+{
+    public function log($level, $message, array $context = []): void
+    {
+        throw new RuntimeException('hostile logger exploded');
+    }
+}
 
 /**
  * Collects every log record so the breadcrumb can be asserted on without
@@ -71,7 +85,7 @@ test('SequentialRunner breadcrumbs an unrecognized stream event', function () {
     $breadcrumbs = $this->logger->unknownEventBreadcrumbs();
 
     expect($breadcrumbs)->toHaveCount(1);
-    expect($breadcrumbs[0]['context']['event_classes'])->toBe([UnknownStreamEvent::class]);
+    expect($breadcrumbs[0]['context']['event_types'])->toBe([UnknownStreamEvent::class]);
     expect($breadcrumbs[0]['context'])->toHaveKey('run_id');
     expect($breadcrumbs[0]['context']['step_index'])->toBe(0);
 });
@@ -82,7 +96,7 @@ test('StaticHierarchicalStreamRunner breadcrumbs an unrecognized stream event', 
     $breadcrumbs = $this->logger->unknownEventBreadcrumbs();
 
     expect($breadcrumbs)->toHaveCount(1);
-    expect($breadcrumbs[0]['context']['event_classes'])->toBe([UnknownStreamEvent::class]);
+    expect($breadcrumbs[0]['context']['event_types'])->toBe([UnknownStreamEvent::class]);
     expect($breadcrumbs[0]['context'])->toHaveKey('run_id');
     expect($breadcrumbs[0]['context']['step_index'])->toBe(0);
 });
@@ -111,6 +125,30 @@ test('the breadcrumb records the event class only, never its payload', function 
     // never serialize the body — only the class name (a type identifier).
     $serialized = json_encode([$breadcrumbs[0]['message'], $breadcrumbs[0]['context']]);
     expect($serialized)->not->toContain('super-secret-unredacted-payload');
+});
+
+// ---------------------------------------------------------------------------
+// Never-throw: a hostile logger cannot become a second failure surface
+// ---------------------------------------------------------------------------
+
+test('a throwing logger does not abort a run that drops an unknown event', function () {
+    app()->instance(LoggerInterface::class, new ThrowingBreadcrumbLogger);
+
+    // The breadcrumb emit (in the step finally) hits the throwing logger but is
+    // contained by safeLog, so the run still drains to completion.
+    expect(fn () => iterator_to_array(FakeUnknownStreamEventSwarm::make()->stream('stream-task')))
+        ->not->toThrow(Throwable::class);
+});
+
+test('a throwing logger does not mask an in-flight stream exception', function () {
+    app()->instance(LoggerInterface::class, new ThrowingBreadcrumbLogger);
+
+    // The worker streams an unknown event (non-empty unknown set) then a
+    // provider error (the runner throws SwarmStreamProviderException from the
+    // try). The breadcrumb's finally emit must not replace that exception with
+    // the hostile logger's — the original provider error must surface.
+    expect(fn () => iterator_to_array(FakeUnknownThenErrorStreamingSwarm::make()->stream('stream-task')))
+        ->toThrow(SwarmStreamProviderException::class);
 });
 
 // ---------------------------------------------------------------------------
