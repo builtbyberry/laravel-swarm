@@ -241,7 +241,8 @@ changes even when the application-facing swarm API stays the same.
 
 ## Dependency Upgrades
 
-`laravel/ai` is required in the **^0.6** range today and is **pre-1.0**. Public
+`laravel/ai` is required in the **^0.8** range as of v0.13.0 (support for 0.6 /
+0.7 was dropped) and is **pre-1.0**. Public
 contracts, streaming behavior, and provider integrations can change between
 releases without the stability guarantees of a stable major line.
 
@@ -257,7 +258,7 @@ You may pin `laravel/ai` to an exact or narrower range in your application’s
 `composer.json` when you need reproducible builds or a slower upgrade cadence:
 
 ```bash
-composer require laravel/ai:0.6.2
+composer require laravel/ai:0.8.1
 ```
 
 That pins your application’s dependency resolution. It does not change the semver
