@@ -2,7 +2,11 @@
 
 ## v0.12.4 - 2026-06-23
 
-Hotfix: the persistence cipher no longer requires an `APP_KEY` at boot, so a fresh `composer install` (and Laravel Cloud builds) succeed before a key is generated.
+Hotfix: the persistence cipher no longer requires an `APP_KEY` at boot, so a fresh `composer install` (and Laravel Cloud builds) succeed before a key is generated. Also floors the transitive `guzzlehttp/guzzle` above two medium advisories.
+
+### Changed
+
+- **Refuse known-vulnerable `guzzlehttp/guzzle` (`< 7.12.1`) via a `conflict` constraint.** The `composer audit` CI job flagged two medium advisories — CVE-2026-55767 (dot-only cookie domains match all hosts) and CVE-2026-55568 (silent HTTPS proxy downgrade to cleartext) — both fixed in guzzle `7.12.1`. Guzzle is a purely transitive dependency here (pulled by `laravel/framework` and `aws/aws-sdk-php`), and only the `--prefer-lowest` resolution picked the vulnerable range; `--prefer-stable` already resolved a patched version. A root `conflict` on `guzzlehttp/guzzle: <7.12.1` floors the transitive resolution above the advisory without taking a direct runtime dependency on a package Swarm does not use, so the lowest-resolution audit is advisory-clean. No `require` constraint changed. (Mirrors the same floor on the v0.13.0 line, #262.)
 
 ### Fixed
 
