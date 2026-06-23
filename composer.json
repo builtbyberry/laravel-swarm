@@ -33,11 +33,11 @@
         "laravel/ai": "^0.8"
     },
     "require-dev": {
-        "larastan/larastan": "^3.0",
-        "laravel/pint": "^1.0",
+        "larastan/larastan": "^3.10",
+        "laravel/pint": "^1.29",
         "laravel/pulse": "^1.7",
-        "orchestra/testbench": "^11.0",
-        "pestphp/pest": "^4.4",
+        "orchestra/testbench": "^11.1",
+        "pestphp/pest": "^4.7",
         "pestphp/pest-plugin-laravel": "^4.1"
     },
     "conflict": {
