@@ -40,6 +40,9 @@
         "pestphp/pest": "^4.4",
         "pestphp/pest-plugin-laravel": "^4.1"
     },
+    "conflict": {
+        "guzzlehttp/guzzle": "<7.12.1"
+    },
     "suggest": {
         "laravel/pulse": "Optional Pulse cards and recorders for swarm observability."
     },
