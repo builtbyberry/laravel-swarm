@@ -35,6 +35,7 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalParallelNode;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
+use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
@@ -70,6 +71,7 @@ use Laravel\Ai\Streaming\Events\TextDelta;
 use Laravel\Ai\Streaming\Events\TextEnd;
 use Laravel\Ai\Streaming\Events\ToolCall;
 use Laravel\Ai\Streaming\Events\ToolResult;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -100,6 +102,7 @@ use Throwable;
 class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 {
     use MergesAgentUsage;
+    use RecordsUnknownStreamEvents;
 
     public function __construct(
         ConfigRepository $config,
@@ -115,6 +118,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         SwarmAuditDispatcher $audit,
         SwarmTelemetryDispatcher $telemetry,
         SwarmGuardrailRunner $guardrails,
+        LoggerInterface $logger,
         protected HierarchicalRoutePlanner $planner,
         protected ConcurrencyManager $concurrency,
         protected SwarmStepRecorder $stepsRecorder,
@@ -136,6 +140,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             $audit,
             $telemetry,
             $guardrails,
+            $logger,
         );
     }
 
@@ -864,6 +869,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         $stepUsage = [];
         /** @var array<string, ToolCallData> $pendingToolCalls */
         $pendingToolCalls = [];
+        /** @var array<string, true> $unknownStreamEventClasses */
+        $unknownStreamEventClasses = [];
 
         // Publish the active run for the agent's RemembersRunContext trait while
         // its stream is consumed; cleared in finally so it never leaks past the
@@ -991,6 +998,15 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                         providerErrorType: $event->type,
                     );
+                } else {
+                    // An event type this chain does not map. Record its type
+                    // (never its payload) so the silent snapshot drop becomes a
+                    // visible breadcrumb; never throw — a harmless new provider
+                    // event must not abort an otherwise-successful run.
+                    // get_debug_type, not ::class: the branch exists to catch
+                    // contract violations, so it must not itself fatal on a
+                    // non-object event.
+                    $unknownStreamEventClasses[get_debug_type($event)] = true;
                 }
             }
 
@@ -1015,6 +1031,15 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             // snapshot append runs.
             $this->coordinator->end($boundary);
             ActiveRunContext::exit();
+
+            // One breadcrumb per step for any stream events this chain did not
+            // recognize (also fires if the generator was abandoned mid-stream).
+            // Logs the dropped event classes; never throws.
+            $this->breadcrumbUnknownStreamEvents(
+                $unknownStreamEventClasses,
+                $context->runId,
+                $stepIndex,
+            );
         }
     }
 
