@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.13.0 - unreleased
+
+Adopt laravel/ai 0.8 (floor raise from `^0.6 || ^0.7`) + dependency hygiene — surfaces MCP client/server tool support and OpenAI ZDR encrypted reasoning, hardens the streaming-event mapping against silent drops, and refreshes dev-tooling floors and the supported matrix.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
+### Fixed
+
+_To be filled in during release wrap-up._
+
 ## v0.12.3 - 2026-06-21
 
 CTO review follow-ups on the v0.12.2 tree — truthful audit-backlog health signal and degrade-safe failure-path hardening.
