@@ -1,6 +1,16 @@
 # Changelog
 
-## v0.12.3 - 2026-06-21
+## v0.12.4 - 2026-06-23
+
+Hotfix: the persistence cipher no longer requires an `APP_KEY` at boot, so a fresh `composer install` (and Laravel Cloud builds) succeed before a key is generated. Also floors the transitive `guzzlehttp/guzzle` above two medium advisories.
+
+### Changed
+
+- **Refuse known-vulnerable `guzzlehttp/guzzle` (`< 7.12.1`) via a `conflict` constraint.** The `composer audit` CI job flagged two medium advisories — CVE-2026-55767 (dot-only cookie domains match all hosts) and CVE-2026-55568 (silent HTTPS proxy downgrade to cleartext) — both fixed in guzzle `7.12.1`. Guzzle is a purely transitive dependency here (pulled by `laravel/framework` and `aws/aws-sdk-php`), and only the `--prefer-lowest` resolution picked the vulnerable range; `--prefer-stable` already resolved a patched version. A root `conflict` on `guzzlehttp/guzzle: <7.12.1` floors the transitive resolution above the advisory without taking a direct runtime dependency on a package Swarm does not use, so the lowest-resolution audit is advisory-clean. No `require` constraint changed. (Mirrors the same floor on the v0.13.0 line, #262.)
+
+### Fixed
+
+- **`SwarmServiceProvider` no longer forces an `APP_KEY` at boot / `package:discover` time (#122).** `SwarmPersistenceCipher` autowired Laravel's `Encrypter` into its constructor, so merely *resolving* the cipher resolved the encrypter — which throws `Illuminate\Encryption\MissingAppKeyException` when no `APP_KEY` is set. Because `composer install` runs `package:discover` (which boots every service provider) on a fresh checkout *before* the consumer has generated a key, every fresh install and the Laravel Cloud build threw (the build previously needed a throwaway build-time `APP_KEY` workaround). The provider now binds the cipher with a lazy `Closure(): Encrypter` resolver instead of autowiring the encrypter, and the cipher resolves it only when a `seal()`/`open()` actually needs it. Encryption is opt-in (`encrypt_at_rest`) and the (de)cipher methods early-return before touching the encrypter when there is nothing to process, so booting without a key is safe — while a genuinely missing key still **fails loud at use time** (a real `seal()` with encryption enabled throws `MissingAppKeyException`), never silently. No public API or configuration change; the cipher is `@internal`. Covered by a regression test that resolves the cipher through the container with no `APP_KEY` and asserts no exception, plus fail-loud-at-use and key-present round-trip cases.
 
 CTO review follow-ups on the v0.12.2 tree — truthful audit-backlog health signal and degrade-safe failure-path hardening.
 

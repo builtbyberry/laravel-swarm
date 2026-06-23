@@ -133,6 +133,7 @@ use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryEventListener;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Octane\Contracts\OperationTerminated;
@@ -210,7 +211,16 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(SwarmTelemetryDispatcher::class);
         $this->app->singleton(PackageJobTelemetryState::class);
 
-        $this->app->singleton(SwarmPersistenceCipher::class);
+        // Bind the cipher with a lazy encrypter resolver rather than autowiring
+        // the Encrypter into its constructor: resolving the encrypter throws
+        // MissingAppKeyException when no APP_KEY is set, and package:discover
+        // boots providers during a fresh `composer install` before a key exists
+        // (#122). The resolver is invoked only when the cipher first seals/opens.
+        $this->app->singleton(SwarmPersistenceCipher::class, fn (Application $app): SwarmPersistenceCipher => new SwarmPersistenceCipher(
+            config: $app->make(ConfigRepository::class),
+            encrypter: static fn (): Encrypter => $app->make(Encrypter::class),
+            logger: $app->make(LoggerInterface::class),
+        ));
         $this->app->singleton(SwarmAttributeResolver::class);
         $this->app->singleton(SequentialRunner::class);
         $this->app->singleton(SequentialStreamRunner::class);
