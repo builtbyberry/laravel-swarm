@@ -29,7 +29,20 @@ final class SwarmToolCall extends SwarmStreamEvent
             'run_id' => $this->runId,
             'step_index' => $this->stepIndex,
             'agent_class' => $this->agentClass,
-            'tool_call' => $this->toolCall->toArray(),
+            // Pin the nested shape to the fields this event round-trips through
+            // fromArray(), rather than delegating to ToolCall::toArray(). This
+            // keeps the broadcast/persisted event contract swarm-owned and
+            // insulated from upstream provider DTO drift — laravel/ai 0.8 added
+            // reasoning_encrypted_content (opaque OpenAI ZDR reasoning), which
+            // swarm never echoes back and deliberately omits from its stream.
+            'tool_call' => [
+                'id' => $this->toolCall->id,
+                'name' => $this->toolCall->name,
+                'arguments' => $this->toolCall->arguments,
+                'result_id' => $this->toolCall->resultId,
+                'reasoning_id' => $this->toolCall->reasoningId,
+                'reasoning_summary' => $this->toolCall->reasoningSummary,
+            ],
             'timestamp' => $this->timestamp,
         ];
     }

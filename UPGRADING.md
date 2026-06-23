@@ -268,6 +268,22 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.13.0
+
+v0.13.0 raises the **minimum `laravel/ai` to `^0.8`** (dropping `^0.6 || ^0.7`). There are **no migrations** and no `config/swarm.php` changes. The durable persistence shapes (the `tool_calls` snapshot column and the audit envelope) are unchanged, so existing runs replay across the upgrade.
+
+### Minimum `laravel/ai` is now 0.8
+
+`laravel/ai` is not isolated from your application by Swarm. Update your own constraint to a version that resolves `laravel/ai ^0.8`, then re-run your integration tests. If your application is pinned to `laravel/ai` `0.6` or `0.7`, that pin must be raised before upgrading Swarm — Composer will refuse the resolution otherwise.
+
+**Action:** `composer require builtbyberry/laravel-swarm:^0.13` (or `composer update`) and confirm `laravel/ai` resolves to `0.8.x`. Treat it as an integration-test event for your app, per the note at the top of this guide.
+
+### `swarm_tool_call` stream events no longer carry `reasoning_encrypted_content`
+
+laravel/ai 0.8 added a `reasoning_encrypted_content` field to its `ToolCall` DTO (the opaque OpenAI ZDR reasoning blob). Swarm's streamed/persisted `swarm_tool_call` event is deliberately pinned to the fields it owns — `id`, `name`, `arguments`, `result_id`, `reasoning_id`, `reasoning_summary` — and does **not** surface the encrypted blob. This is the same field set previous versions round-tripped, so consumers of the swarm event stream see no new keys.
+
+**Action:** none for the documented event surface. Only code that reached *through* `swarm_tool_call` into a raw `laravel/ai` `ToolCall::toArray()` to read provider-internal reasoning fields (never a supported path) would notice; ZDR encrypted reasoning is the provider's contract and Swarm does not persist or echo it.
+
 ## Upgrading to v0.12.3
 
 v0.12.3 is a review-follow-up release with **no migrations** and no config or API changes. One change affects `swarm:health` output.

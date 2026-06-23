@@ -1,0 +1,23 @@
+[
+    {
+        "id": "call_abc123",
+        "name": "search_docs",
+        "arguments": {
+            "query": "durable wait"
+        },
+        "result": {
+            "hits": 3,
+            "top": "DurableWait"
+        },
+        "result_id": "result_abc123"
+    },
+    {
+        "id": "call_def456",
+        "name": "write_note",
+        "arguments": {
+            "body": "remember this"
+        },
+        "result": null,
+        "result_id": null
+    }
+]
