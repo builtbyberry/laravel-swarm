@@ -16,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
@@ -52,6 +53,7 @@ use Throwable;
 class SequentialRunner
 {
     use MergesAgentUsage;
+    use RecordsUnknownStreamEvents;
 
     public function __construct(
         protected SwarmStepRecorder $steps,
@@ -216,6 +218,8 @@ class SequentialRunner
                     $output = '';
                     /** @var array<string, ToolCallData> $pendingToolCalls */
                     $pendingToolCalls = [];
+                    /** @var array<class-string, true> $unknownStreamEventClasses */
+                    $unknownStreamEventClasses = [];
 
                     try {
                         foreach ($stream as $event) {
@@ -327,6 +331,13 @@ class SequentialRunner
                                     timestamp: $event->timestamp,
                                     providerErrorType: $event->type,
                                 );
+                            } else {
+                                // An event type this chain does not map. Record
+                                // its class (never its payload) so the silent
+                                // snapshot drop becomes a visible breadcrumb;
+                                // never throw — a harmless new provider event
+                                // must not abort an otherwise-successful run.
+                                $unknownStreamEventClasses[$event::class] = true;
                             }
                         }
                     } finally {
@@ -350,6 +361,16 @@ class SequentialRunner
                         // was abandoned mid-flight. No-op on the fresh-execution
                         // path (begin() never swapped).
                         $this->coordinator->end($boundary);
+
+                        // One breadcrumb per step for any stream events this
+                        // chain did not recognize (also fires if the generator
+                        // was abandoned mid-stream). Logs the dropped event
+                        // classes; never throws.
+                        $this->breadcrumbUnknownStreamEvents(
+                            $unknownStreamEventClasses,
+                            $state->context->runId,
+                            $index,
+                        );
                     }
 
                     $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);

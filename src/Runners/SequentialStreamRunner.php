@@ -33,6 +33,7 @@ use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -56,6 +57,7 @@ class SequentialStreamRunner
         protected SwarmAuditDispatcher $audit,
         protected SwarmTelemetryDispatcher $telemetry,
         protected SwarmGuardrailRunner $guardrails,
+        protected LoggerInterface $logger,
     ) {}
 
     /**
