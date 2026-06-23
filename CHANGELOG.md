@@ -10,7 +10,7 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Refuse known-vulnerable `guzzlehttp/guzzle` (`< 7.12.1`) via a `conflict` constraint.** The `composer audit` CI job (added in v0.12.2, non-blocking) flagged two medium advisories — CVE-2026-55767 (dot-only cookie domains match all hosts) and CVE-2026-55568 (silent HTTPS proxy downgrade to cleartext) — both fixed in guzzle `7.12.1`. Guzzle is a purely transitive dependency here (pulled by `laravel/framework` and `aws/aws-sdk-php`), and only the `--prefer-lowest` resolution picked the vulnerable range; `--prefer-stable` already resolved a patched version. A root `conflict` on `guzzlehttp/guzzle: <7.12.1` floors the transitive resolution above the advisory without taking a direct runtime dependency on a package Swarm does not use, so the lowest-resolution audit is advisory-clean. No `require` constraint changed; the full suite passes under `--prefer-lowest` with guzzle `7.12.1`.
 
 ### Fixed
 
