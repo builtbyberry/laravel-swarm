@@ -49,7 +49,7 @@ For background execution, streaming, and durable workflows, see [Choosing An Exe
 - Laravel **13** (`illuminate/*` **^13.0**)
 - `laravel/ai` **^0.8**
 
-The PHP **^8.5** floor is a deliberate requirement — the package builds on 8.5 language features. As of **v0.13.0** the `laravel/ai` floor is **^0.8**; support for **0.6 / 0.7** was dropped. Consumers pinned below `laravel/ai` 0.8 must upgrade. See the [changelog](CHANGELOG.md#v0130---unreleased) for what the 0.8 adoption changes.
+The PHP **^8.5** floor is a deliberate requirement — the package builds on 8.5 language features. As of **v0.13.0** the `laravel/ai` floor is **^0.8**; support for **0.6 / 0.7** was dropped. Consumers pinned below `laravel/ai` 0.8 must upgrade. See the [changelog](CHANGELOG.md#v0130---2026-06-23) for what the 0.8 adoption changes.
 
 This package declares `"minimum-stability": "dev"` with `"prefer-stable": true` because `laravel/ai` is still pre-1.0 and ships dev-tagged releases. Composer will not resolve a pre-stable transitive dependency from a stable consuming project, so your application's `composer.json` must also set:
 
@@ -310,6 +310,10 @@ return ArticlePipeline::make()->stream(RunContext::from($task, $runId));
 ```
 
 On resume, already-completed non-final steps are **skipped** (their providers are not re-invoked and tool side effects do not re-fire — their output is rehydrated from a per-step checkpoint), and the terminal streamed step **replays byte-identically** from its frozen memory snapshot. Governed by the memory replay mode (`frozen_view` default; `fresh_execution` opts out) and the database persistence driver. See [Streaming — Crash-Replay Durability](docs/streaming.md#crash-replay-durability).
+
+### Tool calls (including MCP tools) (v0.13.0)
+
+Swarm carries `laravel/ai` `ToolCall` / `ToolResult` objects through the stream and the durable snapshot as **opaque passthrough**, so the **MCP client/server tools** added in `laravel/ai` 0.8 flow through with no MCP-specific configuration — including structured (non-scalar) MCP results, preserved intact. A tool value JSON cannot represent degrades to a typed placeholder at the tool boundary rather than crashing the run. See [Streaming — Tool calls (including MCP tools)](docs/streaming.md#tool-calls-including-mcp-tools).
 
 ## Durable Execution
 
