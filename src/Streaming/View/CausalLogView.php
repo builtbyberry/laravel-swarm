@@ -14,8 +14,8 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
  * The log is the truth; this view never writes to it. Every shaping a consumer
  * asks for is a pure fold of the same stored events along two independent axes —
  * {@see ViewOrder} (causal vs. presentation order) and {@see ViewSupersession}
- * (clean vs. everything). The same log yields every view, deterministically and
- * idempotently.
+ * (clean vs. everything). The fold is a deterministic function of the log: the
+ * same log always folds to the same view.
  *
  * The fold reads *structure* from each event's `toArray()` payload by string key
  * (`node_id`, `parent_node_id`, `child_node_ids`, the void-edge fields) rather
@@ -57,6 +57,17 @@ final class CausalLogView
     private array $declaredChildren = [];
 
     /**
+     * The `node_id` each event belongs to, keyed by the event's own id, built
+     * once in {@see index()}. A null value means the event carries no node;
+     * an absent key means no event with that id is in the window (dangling). This
+     * is what lets {@see nodeOfEvent()} resolve an abandon target's node without
+     * re-scanning the log per edge.
+     *
+     * @var array<string, ?string>
+     */
+    private array $nodeIdByEventId = [];
+
+    /**
      * @param  iterable<SwarmStreamEvent>  $events  Typically `StreamEventStore::events($runId)`.
      */
     public function __construct(iterable $events)
@@ -92,39 +103,26 @@ final class CausalLogView
             ? $this->presentationOrdered()
             : $this->events;
 
-        $suppressed = $this->suppressedEventIds();
+        $annotations = $this->voidAnnotations();
 
         $folded = [];
 
         foreach ($ordered as $event) {
             $id = $this->eventId($event);
-            $void = $id !== null ? ($this->voidsByTarget[$id] ?? null) : null;
+            $annotation = $id !== null ? ($annotations[$id] ?? null) : null;
 
-            if ($void === null) {
+            if ($annotation === null) {
                 $folded[] = $event;
 
                 continue;
             }
 
             if ($supersession === ViewSupersession::Clean) {
-                // Suppressed by its own void-edge; subtree members are handled
-                // by the $suppressed membership check below.
+                // Voided (directly, or as a member of an abandoned subtree) — hidden.
                 continue;
             }
 
-            $last = $void[count($void) - 1];
-            $folded[] = new VoidedEvent($event, $last['type'], $last['reason']);
-        }
-
-        if ($supersession === ViewSupersession::Clean && $suppressed !== []) {
-            $folded = array_values(array_filter(
-                $folded,
-                function (SwarmStreamEvent|VoidedEvent $row) use ($suppressed): bool {
-                    $event = $row instanceof VoidedEvent ? $row->event : $row;
-
-                    return ! isset($suppressed[$this->eventId($event) ?? '']);
-                },
-            ));
+            $folded[] = new VoidedEvent($event, $annotation['type'], $annotation['reason']);
         }
 
         return $folded;
@@ -138,6 +136,12 @@ final class CausalLogView
         foreach ($this->events as $event) {
             $payload = $event->toArray();
             $type = is_string($payload['type'] ?? null) ? $payload['type'] : null;
+
+            $id = is_string($payload['id'] ?? null) ? $payload['id'] : null;
+
+            if ($id !== null) {
+                $this->nodeIdByEventId[$id] = is_string($payload['node_id'] ?? null) ? $payload['node_id'] : null;
+            }
 
             match ($type) {
                 'swarm_causal_void_edge' => $this->indexVoidEdge($payload),
@@ -197,51 +201,88 @@ final class CausalLogView
     }
 
     /**
-     * The full set of event ids suppressed in the clean view: every void-edge
-     * target, plus — for an `abandons` edge — every event belonging to the
-     * abandoned node's subtree (resolved through the parent map). Degrades to the
-     * single target when no `node_id` structure is present.
+     * Every event id a void-edge annotates, mapped to the type and reason it was
+     * voided under. A direct target takes its last (most recent) edge in causal
+     * order; an `abandons` edge additionally annotates every event in the
+     * abandoned node's subtree with that same type and reason, so the whole branch
+     * reads as abandoned — both in the clean view (all hidden) and the everything
+     * view (all surfaced as {@see VoidedEvent}). A direct annotation wins over an
+     * inherited subtree one. Degrades to the single target when no `node_id`
+     * structure is present.
      *
-     * @return array<string, true>
+     * @return array<string, array{type: CausalVoidEdgeType, reason: string}>
      */
-    private function suppressedEventIds(): array
+    private function voidAnnotations(): array
     {
-        $suppressed = [];
-        $abandonedNodes = [];
+        $annotations = [];
+
+        // node_id => reason it was directly abandoned under.
+        $abandoned = [];
 
         foreach ($this->voidsByTarget as $targetId => $edges) {
-            $suppressed[$targetId] = true;
-
             $last = $edges[count($edges) - 1];
+            $annotations[$targetId] = ['type' => $last['type'], 'reason' => $last['reason']];
 
             if ($last['type'] === CausalVoidEdgeType::Abandons) {
                 $node = $this->nodeOfEvent($targetId);
 
                 if ($node !== null) {
-                    $abandonedNodes[$node] = true;
+                    $abandoned[$node] = $last['reason'];
                 }
             }
         }
 
-        if ($abandonedNodes === []) {
-            return $suppressed;
+        if ($abandoned === []) {
+            return $annotations;
         }
 
-        $subtree = $this->subtreeNodeIds(array_keys($abandonedNodes));
+        $subtree = $this->subtreeNodeIds(array_keys($abandoned));
 
         foreach ($this->events as $event) {
             $node = $this->nodeIdOf($event);
 
-            if ($node !== null && isset($subtree[$node])) {
-                $id = $this->eventId($event);
-
-                if ($id !== null) {
-                    $suppressed[$id] = true;
-                }
+            if ($node === null || ! isset($subtree[$node])) {
+                continue;
             }
+
+            $id = $this->eventId($event);
+
+            // A direct edge on this event (e.g. its own supersede) is more
+            // specific than the inherited abandonment, so it is left untouched.
+            if ($id === null || isset($annotations[$id])) {
+                continue;
+            }
+
+            $annotations[$id] = [
+                'type' => CausalVoidEdgeType::Abandons,
+                'reason' => $this->abandonReasonFor($node, $abandoned),
+            ];
         }
 
-        return $suppressed;
+        return $annotations;
+    }
+
+    /**
+     * The reason a node inherits from the nearest abandoned ancestor (or itself),
+     * climbing the parent map. Returns '' if no abandoned ancestor is found — a
+     * defensive fallback the subtree membership check makes unreachable.
+     *
+     * @param  array<string, string>  $abandoned  node_id => reason
+     */
+    private function abandonReasonFor(string $node, array $abandoned): string
+    {
+        $cursor = $node;
+        $guard = 0;
+
+        while ($cursor !== null && $guard++ <= count($this->parentOf)) {
+            if (isset($abandoned[$cursor])) {
+                return $abandoned[$cursor];
+            }
+
+            $cursor = $this->parentOf[$cursor] ?? null;
+        }
+
+        return '';
     }
 
     /**
@@ -375,13 +416,7 @@ final class CausalLogView
      */
     private function nodeOfEvent(string $eventId): ?string
     {
-        foreach ($this->events as $event) {
-            if ($this->eventId($event) === $eventId) {
-                return $this->nodeIdOf($event);
-            }
-        }
-
-        return null;
+        return $this->nodeIdByEventId[$eventId] ?? null;
     }
 
     /**

@@ -162,7 +162,7 @@ test('abandons suppresses its target AND its subtree in the clean view', functio
     expect($clean)->toBe(['o-root', 'o-2', 'leaf-2', 'v']);
 });
 
-test('everything view keeps abandoned subtree events and wraps only the direct target', function () {
+test('everything view surfaces the whole abandoned subtree, each wrapped under the void reason', function () {
     $events = [
         SyntheticCausalEvent::nodeOpened('o-1', 'n1', 'root'),
         SyntheticCausalEvent::leaf('leaf-1', 'n1'),
@@ -171,12 +171,16 @@ test('everything view keeps abandoned subtree events and wraps only the direct t
 
     $everything = (new CausalLogView($events))->fold(ViewOrder::Causal, ViewSupersession::Everything);
 
+    // Nothing is dropped, and the void-edge itself stays a plain event.
     expect(ids($everything))->toBe(['o-1', 'leaf-1', 'v']);
 
+    // Both the direct target AND its subtree member are surfaced as abandoned,
+    // so an audit view never shows a retracted event without its mark.
     $wrapped = collect($everything)->filter(fn ($row) => $row instanceof VoidedEvent)->values();
-    expect($wrapped)->toHaveCount(1)
-        ->and($wrapped->first()->event->toArray()['id'])->toBe('o-1')
-        ->and($wrapped->first()->voidType)->toBe(CausalVoidEdgeType::Abandons);
+    expect($wrapped)->toHaveCount(2)
+        ->and($wrapped->pluck('event')->map(fn ($e) => $e->toArray()['id'])->all())->toBe(['o-1', 'leaf-1'])
+        ->and($wrapped->every(fn ($w) => $w->voidType === CausalVoidEdgeType::Abandons))->toBeTrue()
+        ->and($wrapped->every(fn ($w) => $w->reason === 'cancelled'))->toBeTrue();
 });
 
 // ---------------------------------------------------------------------------
