@@ -2462,23 +2462,24 @@ class DatabaseDurableRunStore implements DurableRunStore
      * it reaches this method, so two writers can never both have an in-flight
      * read-merge-write against the same run_state row:
      *
-     *   - The advance callers (markTerminal/markFailed/markCompleted/
-     *     markCancelled :2234, releaseWaitingRunForJoin :438, the join release
-     *     :578, scheduleRetry :862) each run inside a connection->transaction()
-     *     paired with guardedUpdate(), which requires the live execution lease.
-     *     acquireLease() is an atomic conditional UPDATE, so only one
-     *     execution_token is ever valid for a run at a time — two advancers are
-     *     mutually excluded on the main row and so on run_state too.
-     *   - cancel() (:994) is the only caller NOT gated by the execution_token.
-     *     But it flips status pending|paused|waiting -> cancelled and nulls the
-     *     lease under the main-row write lock: a racing advancer's guardedUpdate
-     *     then matches 0 rows -> LostDurableLeaseException -> its transaction
-     *     (and its run_state upsert) rolls back; and an advancer that already
-     *     reached a terminal status makes cancel()'s whereIn[pending,paused,
-     *     waiting] guard a no-op that never reaches this method. Either way the
-     *     two never both commit.
-     *   - create() (:53) runs exactly once at run creation; the unique run_id
-     *     insert means there is no prior run_state row to lose.
+     *   - The advance callers (waitForBranches(), checkpointHierarchicalStep(),
+     *     scheduleRetry(), and the markTerminal() family — markFailed() /
+     *     markCompleted() / markCancelled()) each run inside a
+     *     connection->transaction() paired with guardedUpdate(), which requires
+     *     the live execution lease. acquireLease() is an atomic conditional
+     *     UPDATE, so only one execution_token is ever valid for a run at a time
+     *     — two advancers are mutually excluded on the main row and so on
+     *     run_state too.
+     *   - cancel() is the only caller NOT gated by the execution_token. But it
+     *     flips status pending|paused|waiting -> cancelled and nulls the lease
+     *     under the main-row write lock: a racing advancer's guardedUpdate then
+     *     matches 0 rows -> LostDurableLeaseException -> its transaction (and its
+     *     run_state upsert) rolls back; and an advancer that already reached a
+     *     terminal status makes cancel()'s whereIn[pending,paused,waiting] guard
+     *     a no-op that never reaches this method. Either way the two never both
+     *     commit.
+     *   - create() runs exactly once at run creation; the unique run_id insert
+     *     means there is no prior run_state row to lose.
      *
      * The READ COMMITTED lost-update window between the first() read and the
      * updateOrInsert() write is therefore never *opened*: the two callers can

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -396,4 +397,87 @@ test('recoverableWaitingJoins uses strict string match for parent_node_id — lo
         // "strict-sibling" has a running branch under "0" — must NOT leak into "strict-exact"
         // and must NOT be masked by "strict-exact"'s terminal branches.
         ->and($keptIds)->not->toContain('strict-sibling');
+});
+
+/**
+ * Deterministic guard for the unguarded run_state read-modify-write in
+ * upsertRunState() (#273). These stage the exact cancel-vs-advance interleaving
+ * sequentially — no process driver, no timing — so they prove the serialization
+ * the upsertRunState() docblock claims, run on the default SQLite connection in
+ * CI, and never go vacuous. The multi-process counterpart
+ * (tests/ProcessConcurrency/DurableRunStateConcurrencyTest.php) confirms the
+ * same invariant under genuine concurrent load on MySQL/Postgres.
+ */
+function seedRunStateRow(string $runId): void
+{
+    $now = now('UTC');
+
+    DB::table('swarm_durable_run_state')->insert([
+        'run_id' => $runId,
+        'route_plan' => json_encode(['start_at' => 'node:0', 'nodes' => []]),
+        'route_plan_projected' => false,
+        'failure' => null,
+        'retry_policy' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+}
+
+test('cancel between lease acquisition and the terminal write forces the advancer to roll back', function () {
+    seedDurableRun('serial-cancel-wins', ['status' => 'pending']);
+    seedRunStateRow('serial-cancel-wins');
+
+    $store = app(DatabaseDurableRunStore::class);
+
+    // Advancer takes the lease; the run row is still `pending` (a lease does not
+    // change status), so cancel() can still flip it.
+    $token = $store->acquireLease('serial-cancel-wins', 0, 300);
+    expect($token)->not->toBeNull();
+
+    // cancel() flips pending -> cancelled and nulls the lease under the main-row
+    // write — the advancer's token is now stale.
+    expect($store->cancel('serial-cancel-wins'))->toBeTrue();
+
+    // The advancer's terminal write therefore loses its lease and rolls back the
+    // whole transaction, including its run_state upsert.
+    expect(fn () => $store->markFailed('serial-cancel-wins', $token, [
+        'class' => RuntimeException::class,
+        'message' => 'advance-sentinel',
+    ]))->toThrow(LostDurableLeaseException::class);
+
+    $run = DB::table('swarm_durable_runs')->where('run_id', 'serial-cancel-wins')->first();
+    $state = DB::table('swarm_durable_run_state')->where('run_id', 'serial-cancel-wins')->first();
+
+    // cancel-win, with no torn merge: the advancer's failure never landed.
+    expect($run->status)->toBe('cancelled')
+        ->and($state->failure)->toBeNull();
+});
+
+test('an advancer that commits before cancel makes cancel a no-op', function () {
+    seedDurableRun('serial-advance-wins', ['status' => 'pending']);
+    seedRunStateRow('serial-advance-wins');
+
+    $store = app(DatabaseDurableRunStore::class);
+
+    $token = $store->acquireLease('serial-advance-wins', 0, 300);
+    expect($token)->not->toBeNull();
+
+    // Advancer commits first: status -> failed, failure written to run_state.
+    $store->markFailed('serial-advance-wins', $token, [
+        'class' => RuntimeException::class,
+        'message' => 'advance-sentinel',
+    ]);
+
+    // cancel() now finds the run terminal (status `failed` is not in
+    // [pending, paused, waiting], nor `running`) — it never reaches the
+    // run_state upsert and reports no cancellation.
+    expect($store->cancel('serial-advance-wins'))->toBeFalse();
+
+    $run = DB::table('swarm_durable_runs')->where('run_id', 'serial-advance-wins')->first();
+    $state = DB::table('swarm_durable_run_state')->where('run_id', 'serial-advance-wins')->first();
+    $failure = json_decode((string) $state->failure, true);
+
+    // advance-win preserved: cancel did not clobber the committed failure.
+    expect($run->status)->toBe('failed')
+        ->and($failure['message'] ?? null)->toBe('advance-sentinel');
 });

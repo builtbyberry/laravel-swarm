@@ -341,6 +341,16 @@ test('cancel racing a lease-holding advance never tears the run_state row', func
 
     expect($results)->toHaveCount(2);
 
+    // Note: this multi-process test does NOT assert that contention occurred on
+    // any given run — the process driver gives no interleaving guarantee, and
+    // empirically one worker sometimes completes its whole 24-run loop before
+    // the other starts (a perfectly legal, contention-free pass). The guarantee
+    // that the cancel-vs-advance serialization guard actually closes the
+    // lost-update window is proven deterministically, independent of timing, in
+    // tests/Unit/Persistence/DatabaseDurableRunStoreTest.php. This test's job is
+    // the complementary one: under genuine multi-process load on a real engine,
+    // no run ever lands in a torn state.
+
     // A run_state row is "torn" if its (status, failure) pair matches neither
     // legal serial outcome:
     //   - cancel-wins:  status = cancelled AND failure IS NULL (the advancer
@@ -414,6 +424,13 @@ test('a stale lease holder never overwrites a re-acquired advance on run_state',
     ]);
 
     expect($results)->toHaveCount(2);
+
+    // Non-vacuity guard: positively prove the stale worker actually attempted
+    // and was rejected on every run — its guardedUpdate() must throw, so its
+    // outcome is uniformly 'lost-lease'. Without this a silent stale-worker
+    // no-op (e.g. markFailed() short-circuiting) would let the clobber check
+    // below pass for the wrong reason.
+    expect($results[0])->each->toBe('lost-lease');
 
     // The stale worker's guardedUpdate() can never match (expired lease / token
     // replaced on re-acquire), so the only failure that may land is the fresh
