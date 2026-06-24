@@ -10,18 +10,18 @@ use JsonSerializable;
 /**
  * @implements Arrayable<string, mixed>
  */
-final class SwarmStep implements Arrayable, JsonSerializable
+final readonly class SwarmStep implements Arrayable, JsonSerializable
 {
     /**
      * @param  array<int, SwarmArtifact>  $artifacts
      * @param  array<string, mixed>  $metadata
      */
     public function __construct(
-        public readonly string $agentClass,
-        public readonly string $input,
-        public readonly string $output,
-        public readonly array $artifacts = [],
-        public readonly array $metadata = [],
+        public string $agentClass,
+        public string $input,
+        public string $output,
+        public array $artifacts = [],
+        public array $metadata = [],
     ) {}
 
     /**

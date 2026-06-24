@@ -10,7 +10,7 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Finish the `final readonly class` / Collection idiom adoption on the response DTOs (#274).** Pure internal polish, no behavior change. The three response DTOs that are already `final` — `DrainResult`, `SwarmStep`, and `AuditDrainResult` — are promoted to `final readonly class` (the per-property `readonly` keyword is dropped in favour of the class-level modifier). The non-final / extensible response DTOs (`SwarmResponse`, `StreamedSwarmResponse`, `DurableRunDetail`, `DurableChildRun`, `DurableRetryPolicy`, `DurableSignalResult`, `DurableWaitOutcome`, `SwarmArtifact`, `HierarchicalRoutePlan`, and the `HierarchicalRouteNode` hierarchy) are **intentionally left** as per-property `readonly`, because `readonly class` is breaking for an external non-readonly subclass — completing the convention there is a separate public-surface decision. Alongside it, a handful of `array_values(array_filter(...))` / `array_map(...->toArray())` round-trips across the response, tool, memory, and persistence paths are rewritten as `collect(...)->filter()/->map()/->unique()->values()->all()` chains; every site still returns an identical array (each chain ends in `->all()`), so no public output type changes.
 
 ### Fixed
 
