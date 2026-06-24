@@ -1663,7 +1663,7 @@ the full map and testing notes.
 
 ## Audit exception messages redacted by default (minor)
 
-As of v0.13.1, the free-text **message** of an exception thrown on an audit
+As of v0.14.0, the free-text **message** of an exception thrown on an audit
 sink-failure, signing, or outbox path is redacted to `[redacted]` in the audit
 log context by default. The exception **class/type is always logged**, so failure
 diagnosability by type is unchanged. Provider, driver, and tool exception messages
