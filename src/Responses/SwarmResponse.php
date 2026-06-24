@@ -43,9 +43,9 @@ class SwarmResponse implements Arrayable, JsonSerializable
     {
         return [
             'output' => $this->output,
-            'steps' => array_map(fn (SwarmStep $s): array => $s->toArray(), $this->steps),
+            'steps' => collect($this->steps)->map(fn (SwarmStep $s): array => $s->toArray())->all(),
             'usage' => $this->usage,
-            'artifacts' => array_map(fn (SwarmArtifact $a): array => $a->toArray(), $this->artifacts),
+            'artifacts' => collect($this->artifacts)->map(fn (SwarmArtifact $a): array => $a->toArray())->all(),
             'metadata' => $this->metadata,
         ];
     }

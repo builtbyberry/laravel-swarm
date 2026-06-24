@@ -75,7 +75,7 @@ class CacheRunHistoryStore implements RunHistoryStore
         $history['context'] = $response->context !== null
             ? $this->capture->omitSkippedHistoryContextKeys($response->context->toArray(), $response->context)
             : null;
-        $history['artifacts'] = array_map(static fn ($artifact): array => $artifact->toArray(), $response->artifacts);
+        $history['artifacts'] = collect($response->artifacts)->map(static fn ($artifact): array => $artifact->toArray())->all();
         $history['metadata'] = $response->metadata;
         $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
         $history['updated_at'] = $history['finished_at'];

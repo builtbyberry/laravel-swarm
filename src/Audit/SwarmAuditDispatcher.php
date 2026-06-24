@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\AuditSinkHaltedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Telemetry\EvidenceEnvelope;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Psr\Log\LoggerInterface;
@@ -49,6 +50,7 @@ class SwarmAuditDispatcher
         protected SwarmAuditSink $sink,
         protected ConfigRepository $config,
         protected SinkFailureHandler $failureHandler,
+        protected SwarmCapture $capture,
         protected ?SwarmAuditSigner $signer = null,
         protected ?AuditOutbox $outbox = null,
         protected ?LoggerInterface $logger = null,
@@ -195,7 +197,7 @@ class SwarmAuditDispatcher
                 [
                     'category' => $category,
                     'decision' => $deadLetter ? 'dead_letter' : 'queue',
-                    'exception' => $cause->getMessage(),
+                    'exception' => $this->capture->auditExceptionMessage($cause),
                     'class' => $cause::class,
                 ],
             );
@@ -213,9 +215,9 @@ class SwarmAuditDispatcher
                 [
                     'category' => $category,
                     'decision' => $deadLetter ? 'dead_letter' : 'queue',
-                    'original_exception' => $cause->getMessage(),
+                    'original_exception' => $this->capture->auditExceptionMessage($cause),
                     'original_class' => $cause::class,
-                    'outbox_exception' => $outboxException->getMessage(),
+                    'outbox_exception' => $this->capture->auditExceptionMessage($outboxException),
                     'outbox_class' => $outboxException::class,
                 ],
             );

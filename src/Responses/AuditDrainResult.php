@@ -19,14 +19,14 @@ namespace BuiltByBerry\LaravelSwarm\Responses;
  *
  * total() returns replayed + dead_lettered (records that left the pending state).
  */
-final class AuditDrainResult
+final readonly class AuditDrainResult
 {
     public function __construct(
-        public readonly int $replayed,
-        public readonly int $deadLettered = 0,
-        public readonly int $failed = 0,
-        public readonly int $claimed = 0,
-        public readonly int $reclaimed = 0,
+        public int $replayed,
+        public int $deadLettered = 0,
+        public int $failed = 0,
+        public int $claimed = 0,
+        public int $reclaimed = 0,
     ) {}
 
     public function total(): int
