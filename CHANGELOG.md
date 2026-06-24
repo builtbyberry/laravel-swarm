@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.13.1 - unreleased
+
+Durable runtime hardening & idiom polish — batches the durable recovery sweeps off per-row hydration, investigates and guards the durable run-state write path, finishes the `readonly class` / Collection idiom adoption, and redacts exception messages on the audit event/log paths.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
+### Fixed
+
+_To be filled in during release wrap-up._
+
 ## v0.13.0 - 2026-06-23
 
 Adopt laravel/ai 0.8 (floor raise from `^0.6 || ^0.7`) + dependency hygiene — surfaces MCP client/server tool support and OpenAI ZDR encrypted reasoning, hardens the streaming-event mapping against silent drops, and refreshes dev-tooling floors and the supported matrix.
