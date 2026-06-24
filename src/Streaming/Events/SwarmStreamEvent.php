@@ -43,6 +43,7 @@ abstract class SwarmStreamEvent extends StreamEvent
             'swarm_step_end' => SwarmStepEnd::fromArray($payload),
             'swarm_stream_end' => SwarmStreamEnd::fromArray($payload),
             'swarm_stream_error' => SwarmStreamError::fromArray($payload),
+            'swarm_causal_void_edge' => SwarmCausalVoidEdge::fromArray($payload),
             default => throw new SwarmException('Unknown persisted swarm stream event type ['.($payload['type'] ?? 'null').'].'),
         };
 

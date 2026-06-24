@@ -43,6 +43,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
@@ -79,11 +80,11 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
-use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\AuditOutbox as AuditOutboxCard;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmMemory as SwarmMemoryCard;
@@ -311,12 +312,23 @@ class SwarmServiceProvider extends ServiceProvider
             CacheRunHistoryStore::class,
             DatabaseRunHistoryStore::class,
         ));
+        // The database stream-event store IS the causal log (#282). Register it as
+        // one shared singleton so the StreamEventStore DB branch and the
+        // CausalLogStore contract resolve the same instance — never two.
+        $this->app->singleton(DatabaseCausalLogStore::class);
+
         $this->app->singleton(StreamEventStore::class, fn (Application $app): StreamEventStore => $this->resolvePersistenceStore(
             $app,
             'streaming.replay',
             CacheStreamEventStore::class,
-            DatabaseStreamEventStore::class,
+            DatabaseCausalLogStore::class,
         ));
+
+        // CausalLogStore is database-only: void-edges need indexed UUID lookup and
+        // row locking the cache driver cannot provide. It always resolves the
+        // database store; under the cache driver, appendVoidEdge() fails loud via
+        // assertReady() rather than emitting a raw query error.
+        $this->app->singleton(CausalLogStore::class, DatabaseCausalLogStore::class);
 
         $this->app->singleton(MemoryStore::class, fn (Application $app): MemoryStore => $this->resolvePersistenceStore(
             $app,
