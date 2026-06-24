@@ -158,10 +158,10 @@ final class CacheMemoryStore implements MemoryStore
 
     protected function removeFromIndex(MemoryScope $scope, string $scopeId, string $key): void
     {
-        $index = array_values(array_filter(
-            $this->index($scope, $scopeId),
-            static fn (string $candidate): bool => $candidate !== $key,
-        ));
+        $index = collect($this->index($scope, $scopeId))
+            ->filter(static fn (string $candidate): bool => $candidate !== $key)
+            ->values()
+            ->all();
 
         if ($index === []) {
             $this->store()->forget($this->indexKey($scope, $scopeId));

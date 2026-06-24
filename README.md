@@ -560,6 +560,8 @@ Two environment knobs control strict-mode behavior:
 
 The full `SWARM_AUDIT_FAILURE_POLICY` matrix (since v0.5): `swallow` (drop silently — v0.4 default), `log` (log and continue), `queue` (persist to `swarm_audit_outbox` for retry — v0.5 default), `dead_letter` (persist directly to dead-letter status, no retry), `halt` (fail the run). The audit outbox is monitored by default via `swarm:health` (or `swarm:health --audit` for focused investigation).
 
+Audit-path exception **messages** are redacted to `[redacted]` by default since v0.14.0 (`SWARM_AUDIT_REDACT_EXCEPTION_MESSAGES=true`) unless capture already permits failure free-text; the exception **class/type is always logged**, so failures stay diagnosable.
+
 See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full reference. When responding to an audit-outbox page, see the [Operator Runbook: Audit Outbox Triage](docs/operator-runbook-audit-outbox.md).
 
 ## Documentation

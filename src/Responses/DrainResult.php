@@ -23,14 +23,14 @@ namespace BuiltByBerry\LaravelSwarm\Responses;
  * total() returns dispatched + skipped (entries removed from the outbox). It does not include
  * failed, because failed entries remain in the outbox and are not "done".
  */
-final class DrainResult
+final readonly class DrainResult
 {
     public function __construct(
-        public readonly int $dispatched,
-        public readonly int $skipped,
-        public readonly int $failed = 0,
-        public readonly int $claimed = 0,
-        public readonly int $reclaimed = 0,
+        public int $dispatched,
+        public int $skipped,
+        public int $failed = 0,
+        public int $claimed = 0,
+        public int $reclaimed = 0,
     ) {}
 
     /**

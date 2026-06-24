@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\BooleanCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Audit\ConfiguredSinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\SinkFailureDecision;
@@ -9,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Support\Facades\DB;
@@ -99,9 +101,11 @@ test('the error_log breadcrumb emits the exception class but never its message (
 // ---------------------------------------------------------------------------
 
 test('failure handler does not propagate a throwing logger (log policy still Swallows)', function (): void {
+    $config = new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'log']]]);
     $handler = new ConfiguredSinkFailureHandler(
-        new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'log']]]),
+        $config,
         new HostileLogger,
+        new SwarmCapture($config, new BooleanCapturePolicy($config)),
     );
 
     $decision = null;
@@ -113,9 +117,11 @@ test('failure handler does not propagate a throwing logger (log policy still Swa
 });
 
 test('halt policy still returns Halt even when the logger throws', function (): void {
+    $config = new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'halt']]]);
     $handler = new ConfiguredSinkFailureHandler(
-        new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'halt']]]),
+        $config,
         new HostileLogger,
+        new SwarmCapture($config, new BooleanCapturePolicy($config)),
     );
 
     expect($handler->handle(new NoOpSwarmAuditSink, 'run.failed', [], new RuntimeException('x')))

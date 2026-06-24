@@ -23,8 +23,8 @@ class DurableRetryPolicy
     {
         return new self(
             maxAttempts: max(1, (int) ($payload['max_attempts'] ?? 1)),
-            backoffSeconds: array_values(array_map('intval', is_array($payload['backoff_seconds'] ?? null) ? $payload['backoff_seconds'] : [])),
-            nonRetryable: array_values(array_filter(is_array($payload['non_retryable'] ?? null) ? $payload['non_retryable'] : [], 'is_string')),
+            backoffSeconds: collect(is_array($payload['backoff_seconds'] ?? null) ? $payload['backoff_seconds'] : [])->map(static fn (mixed $value): int => (int) $value)->values()->all(),
+            nonRetryable: collect(is_array($payload['non_retryable'] ?? null) ? $payload['non_retryable'] : [])->filter(static fn (mixed $value): bool => is_string($value))->values()->all(),
         );
     }
 

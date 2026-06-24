@@ -469,7 +469,11 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function hierarchicalNodeOutputsFor(string $runId, array $nodeIds): array
     {
-        $nodeIds = array_values(array_unique(array_filter($nodeIds, static fn (string $nodeId): bool => $nodeId !== '')));
+        $nodeIds = collect($nodeIds)
+            ->filter(static fn (string $nodeId): bool => $nodeId !== '')
+            ->unique()
+            ->values()
+            ->all();
 
         if ($nodeIds === []) {
             return [];
@@ -1647,7 +1651,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('swarm_class', $swarmClass);
         }
 
-        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+        return $this->hydrateSweepRecords($query->get());
     }
 
     public function recoverableTimedOutWaits(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
@@ -1894,7 +1898,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('parents.swarm_class', $swarmClass);
         }
 
-        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+        return $this->hydrateSweepRecords($query->get());
     }
 
     public function childRuns(string $runId): array
@@ -2371,7 +2375,11 @@ class DatabaseDurableRunStore implements DurableRunStore
         $completed = is_array($run['completed_node_ids'] ?? null) ? $run['completed_node_ids'] : [];
         $completed[] = $nodeId;
 
-        return array_values(array_unique(array_filter($completed, 'is_string')));
+        return collect($completed)
+            ->filter(static fn (mixed $value): bool => is_string($value))
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**
@@ -2453,6 +2461,46 @@ class DatabaseDurableRunStore implements DurableRunStore
     }
 
     /**
+     * Read-modify-write the run_state side-table row: read the current row,
+     * overlay the patched fields in PHP, write the whole row back.
+     *
+     * This is a deliberately *unguarded* read-merge-write — no lockForUpdate()
+     * and no surrounding transaction here — and that is safe because every
+     * caller is already serialized on the *main* swarm_durable_runs row before
+     * it reaches this method, so two writers can never both have an in-flight
+     * read-merge-write against the same run_state row:
+     *
+     *   - The advance callers (waitForBranches(), checkpointHierarchicalStep(),
+     *     scheduleRetry(), and the markTerminal() family — markFailed() /
+     *     markCompleted() / markCancelled()) each run inside a
+     *     connection->transaction() paired with guardedUpdate(), which requires
+     *     the live execution lease. acquireLease() is an atomic conditional
+     *     UPDATE, so only one execution_token is ever valid for a run at a time
+     *     — two advancers are mutually excluded on the main row and so on
+     *     run_state too.
+     *   - cancel() is the only caller NOT gated by the execution_token. But it
+     *     flips status pending|paused|waiting -> cancelled and nulls the lease
+     *     under the main-row write lock: a racing advancer's guardedUpdate then
+     *     matches 0 rows -> LostDurableLeaseException -> its transaction (and its
+     *     run_state upsert) rolls back; and an advancer that already reached a
+     *     terminal status makes cancel()'s whereIn[pending,paused,waiting] guard
+     *     a no-op that never reaches this method. Either way the two never both
+     *     commit.
+     *   - create() runs exactly once at run creation; the unique run_id insert
+     *     means there is no prior run_state row to lose.
+     *
+     * The READ COMMITTED lost-update window between the first() read and the
+     * updateOrInsert() write is therefore never *opened*: the two callers can
+     * never both pass their main-row guard concurrently. This was investigated,
+     * not assumed — tests/ProcessConcurrency/DurableRunStateConcurrencyTest.php
+     * (#273) drove 360 cancel-vs-advance and 360 lease-expiry races against real
+     * MySQL 8 and PostgreSQL 17 and observed zero torn run_state rows.
+     *
+     * INVARIANT FOR FUTURE CHANGES: if you add a caller that writes run_state
+     * WITHOUT first taking the main-row lease/status guard, this serialization
+     * no longer holds — wrap this read-merge-write in connection->transaction()
+     * + lockForUpdate() on the run_state row before doing so.
+     *
      * @param  array{
      *     route_plan?: mixed,
      *     failure?: mixed,

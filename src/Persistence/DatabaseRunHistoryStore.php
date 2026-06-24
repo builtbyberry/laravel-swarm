@@ -217,7 +217,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'output' => $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $this->cipher->seal($response->output),
             'usage' => $this->encodeJson($response->usage),
             'context' => $this->encodeJson($response->context !== null ? $this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($response->context->toArray(), $response->context)) : null),
-            'artifacts' => $this->encodeJson(array_map(static fn ($artifact): array => $artifact->toArray(), $response->artifacts)),
+            'artifacts' => $this->encodeJson(collect($response->artifacts)->map(static fn ($artifact): array => $artifact->toArray())->all()),
             'metadata' => $this->encodeJson($response->metadata),
             'finished_at' => Carbon::now('UTC'),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
@@ -282,7 +282,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'status' => $status,
             'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context))),
             'metadata' => $this->encodeJson($metadata),
-            'artifacts' => $this->encodeJson(array_map(static fn ($artifact): array => $artifact->toArray(), $context->artifacts)),
+            'artifacts' => $this->encodeJson(collect($context->artifacts)->map(static fn ($artifact): array => $artifact->toArray())->all()),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
         ];
 
