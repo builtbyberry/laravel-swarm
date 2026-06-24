@@ -1660,3 +1660,25 @@ application code should keep using `dispatchDurable()` and operator methods on
 the manager; see
 [docs/durable-runtime-architecture.md](docs/durable-runtime-architecture.md) for
 the full map and testing notes.
+
+## Audit exception messages redacted by default (minor)
+
+As of v0.13.1, the free-text **message** of an exception thrown on an audit
+sink-failure, signing, or outbox path is redacted to `[redacted]` in the audit
+log context by default. The exception **class/type is always logged**, so failure
+diagnosability by type is unchanged. Provider, driver, and tool exception messages
+can carry prompt fragments or PII, so this routes them through the same capture
+authority as the rest of the runtime.
+
+Controlled by **`swarm.audit.redact_exception_messages`** (env
+**`SWARM_AUDIT_REDACT_EXCEPTION_MESSAGES`**), default **`true`**:
+
+- **`true`** (default) — the message is logged as `[redacted]` unless capture already
+  permits failure free-text (`swarm.capture.inputs` **and** `swarm.capture.outputs`
+  both enabled).
+- **`false`** — the raw message is always logged, regardless of capture posture (for
+  trusted internal-only deployments that need full diagnostic detail in audit logs).
+
+**Action:** none required. If your monitoring or incident tooling greps audit failure
+logs for raw exception text, either enable capture for those runs or set
+`SWARM_AUDIT_REDACT_EXCEPTION_MESSAGES=false` to restore the prior verbatim behavior.
