@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
+
+/**
+ * The kind of causal void-edge appended to the log (#282).
+ *
+ * A void-edge never deletes the event it points at; it records, in causal order,
+ * that a later event voids an earlier one. The fold layer (#283) interprets these
+ * at read time. The three cases are deliberately distinct so a reader can tell a
+ * deliberate plan revision from a mechanical crash-retry from an abandonment:
+ *
+ * - Supersedes — a semantic revision: the workflow chose a different path, so the
+ *   earlier event no longer reflects intent (e.g. a coordinator re-routes).
+ * - Replaces — a crash-retry of the same logical step: same intent, fresh attempt
+ *   after a failed/abandoned execution.
+ * - Abandons — terminal cancellation of an event (and, by fold convention, its
+ *   subtree); no replacement follows.
+ */
+enum CausalVoidEdgeType: string
+{
+    case Supersedes = 'supersedes';
+    case Replaces = 'replaces';
+    case Abandons = 'abandons';
+}

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
@@ -39,6 +40,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
  * @var array<class-string<SwarmStreamEvent>>
  */
 const ROUND_TRIP_EVENT_CLASSES = [
+    SwarmCausalVoidEdge::class,
     SwarmReasoningDelta::class,
     SwarmReasoningEnd::class,
     SwarmStepEnd::class,
@@ -347,6 +349,28 @@ function event_payload_cases(): array
         'timestamp' => 1_700_000_020,
     ]];
 
+    // SwarmCausalVoidEdge — two void types; no nullable fields (run-scoped edge).
+    $cases['causal_void_edge supersedes'] = [SwarmCausalVoidEdge::class, [
+        'id' => 'evt-cve-1',
+        'invocation_id' => 'inv-cve-1',
+        'type' => 'swarm_causal_void_edge',
+        'run_id' => 'run-1',
+        'void_type' => 'supersedes',
+        'target_event_id' => 'evt-target-1',
+        'reason' => 'coordinator re-routed',
+        'timestamp' => 1_700_000_021,
+    ]];
+    $cases['causal_void_edge replaces'] = [SwarmCausalVoidEdge::class, [
+        'id' => 'evt-cve-2',
+        'invocation_id' => 'inv-cve-2',
+        'type' => 'swarm_causal_void_edge',
+        'run_id' => 'run-1',
+        'void_type' => 'replaces',
+        'target_event_id' => 'evt-target-2',
+        'reason' => 'crash-retry of the same step',
+        'timestamp' => 1_700_000_022,
+    ]];
+
     return $cases;
 }
 
@@ -394,10 +418,13 @@ test('round-trip coverage list stays in lock-step with the events directory', fu
     $directory = dirname(__DIR__, 3).'/src/Streaming/Events';
 
     $discovered = collect(glob($directory.'/*.php'))
-        ->map(fn (string $path): string => basename($path, '.php'))
-        // SwarmStreamEvent is the abstract base/dispatcher, not a serializable leaf event.
-        ->reject(fn (string $name): bool => $name === 'SwarmStreamEvent')
-        ->map(fn (string $name): string => 'BuiltByBerry\\LaravelSwarm\\Streaming\\Events\\'.$name)
+        ->map(fn (string $path): string => 'BuiltByBerry\\LaravelSwarm\\Streaming\\Events\\'.basename($path, '.php'))
+        // Keep only concrete serializable leaf events. This drops the abstract
+        // SwarmStreamEvent base/dispatcher AND any supporting types that live
+        // beside the events (e.g. the CausalVoidEdgeType enum) — neither is a
+        // serializable event, while every concrete SwarmStreamEvent subclass
+        // still must carry round-trip coverage.
+        ->filter(fn (string $class): bool => is_subclass_of($class, SwarmStreamEvent::class))
         ->sort()
         ->values()
         ->all();
