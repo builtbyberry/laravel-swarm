@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.15.0 - unreleased
+
+Legible self-structuring streaming: an append-only causal-log substrate that makes dynamic swarms streamable, with background-compacted hot/cold durability and author-owned context bounding.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.14.0 - 2026-06-23
 
 Durable runtime hardening & idiom polish — batches the durable recovery sweeps off per-row hydration, investigates and guards the durable run-state write path, finishes the `readonly class` / Collection idiom adoption, and redacts exception messages on the audit event/log paths.
