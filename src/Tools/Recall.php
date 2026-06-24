@@ -95,10 +95,10 @@ class Recall implements Tool
         }
 
         if ($prefix !== null) {
-            $entries = array_values(array_filter(
-                $entries,
-                static fn (MemoryEntry $entry): bool => str_starts_with($entry->key, $prefix),
-            ));
+            $entries = collect($entries)
+                ->filter(static fn (MemoryEntry $entry): bool => str_starts_with($entry->key, $prefix))
+                ->values()
+                ->all();
         }
 
         return $this->renderList($entries);
@@ -165,10 +165,10 @@ class Recall implements Tool
 
         $presented = $view->present($swarm, $record->context, $this->agent());
 
-        return array_values(array_filter(
-            $presented,
-            static fn (MemoryEntry $entry): bool => $entry->scope === $scope,
-        ));
+        return collect($presented)
+            ->filter(static fn (MemoryEntry $entry): bool => $entry->scope === $scope)
+            ->values()
+            ->all();
     }
 
     /**

@@ -469,7 +469,11 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function hierarchicalNodeOutputsFor(string $runId, array $nodeIds): array
     {
-        $nodeIds = array_values(array_unique(array_filter($nodeIds, static fn (string $nodeId): bool => $nodeId !== '')));
+        $nodeIds = collect($nodeIds)
+            ->filter(static fn (string $nodeId): bool => $nodeId !== '')
+            ->unique()
+            ->values()
+            ->all();
 
         if ($nodeIds === []) {
             return [];
@@ -2371,7 +2375,11 @@ class DatabaseDurableRunStore implements DurableRunStore
         $completed = is_array($run['completed_node_ids'] ?? null) ? $run['completed_node_ids'] : [];
         $completed[] = $nodeId;
 
-        return array_values(array_unique(array_filter($completed, 'is_string')));
+        return collect($completed)
+            ->filter(static fn (mixed $value): bool => is_string($value))
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**
