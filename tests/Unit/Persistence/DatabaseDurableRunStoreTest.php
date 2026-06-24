@@ -397,3 +397,241 @@ test('recoverableWaitingJoins uses strict string match for parent_node_id — lo
         // and must NOT be masked by "strict-exact"'s terminal branches.
         ->and($keptIds)->not->toContain('strict-sibling');
 });
+
+test('recoverableWaitTimeouts batch-loads side tables and is byte-for-byte equal to find() per record', function () {
+    $store = app(DatabaseDurableRunStore::class);
+    $now = now('UTC');
+    // A wait_timeout_at in the past makes the run a recovery candidate.
+    $expired = $now->copy()->subSeconds(60);
+
+    $seedWait = fn (string $runId) => seedDurableRun($runId, [
+        'status' => 'waiting',
+        'wait_timeout_at' => $expired,
+    ]);
+
+    // wt-a: run_state present + duplicated node_id (highest id must win).
+    $seedWait('wt-a');
+    DB::table('swarm_durable_run_state')->insert([
+        'run_id' => 'wt-a',
+        'route_plan' => json_encode(['start_at' => 'writer_node', 'nodes' => []]),
+        'route_plan_projected' => false,
+        'failure' => null,
+        'retry_policy' => json_encode(['max' => 3]),
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    DB::table('swarm_durable_node_states')->insert([
+        ['run_id' => 'wt-a', 'node_id' => 'step:0', 'state' => json_encode(['status' => 'first']), 'created_at' => $now, 'updated_at' => $now],
+        ['run_id' => 'wt-a', 'node_id' => 'step:1', 'state' => json_encode(['status' => 'pending']), 'created_at' => $now, 'updated_at' => $now],
+    ]);
+    DB::table('swarm_durable_node_states')
+        ->where('run_id', 'wt-a')->where('node_id', 'step:0')
+        ->update(['state' => json_encode(['status' => 'last']), 'updated_at' => $now]);
+
+    // wt-b: no run_state row at all (null side-table fields).
+    $seedWait('wt-b');
+    DB::table('swarm_durable_node_states')->insert([
+        'run_id' => 'wt-b', 'node_id' => 'step:0', 'state' => json_encode(['status' => 'solo']), 'created_at' => $now, 'updated_at' => $now,
+    ]);
+
+    // wt-c: run_state present, no node_states.
+    $seedWait('wt-c');
+    DB::table('swarm_durable_run_state')->insert([
+        'run_id' => 'wt-c',
+        'route_plan' => null,
+        'route_plan_projected' => false,
+        'failure' => json_encode(['message' => 'boom']),
+        'retry_policy' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    $result = $store->recoverableWaitTimeouts();
+
+    expect($result)->toHaveCount(3)
+        ->and($result)->toEqual(legacyFindPerRecord($store, $result));
+
+    // Duplicated node_id resolves to the highest-id row (last write wins).
+    $recA = collect($result)->firstWhere('run_id', 'wt-a');
+    expect($recA['node_states']['step:0']['status'])->toBe('last')
+        ->and($recA['node_states']['step:1']['status'])->toBe('pending');
+
+    // Missing run_state → null side-table fields, as find() produces.
+    $recB = collect($result)->firstWhere('run_id', 'wt-b');
+    expect($recB['route_plan'])->toBeNull()
+        ->and($recB['failure'])->toBeNull()
+        ->and($recB['retry_policy'])->toBeNull()
+        ->and($recB['node_states']['step:0']['status'])->toBe('solo');
+});
+
+test('recoverableWaitTimeouts issues a constant 3 queries regardless of candidate count', function () {
+    $store = app(DatabaseDurableRunStore::class);
+    $now = now('UTC');
+    $expired = $now->copy()->subSeconds(60);
+
+    foreach (range(1, 6) as $i) {
+        seedDurableRun("wt-count-$i", ['status' => 'waiting', 'wait_timeout_at' => $expired]);
+        DB::table('swarm_durable_run_state')->insert([
+            'run_id' => "wt-count-$i", 'route_plan' => null, 'route_plan_projected' => false,
+            'failure' => null, 'retry_policy' => null, 'created_at' => $now, 'updated_at' => $now,
+        ]);
+        DB::table('swarm_durable_node_states')->insert([
+            'run_id' => "wt-count-$i", 'node_id' => 'step:0', 'state' => json_encode(['s' => $i]),
+            'created_at' => $now, 'updated_at' => $now,
+        ]);
+    }
+
+    $queries = 0;
+    DB::listen(function () use (&$queries): void {
+        $queries++;
+    });
+
+    $result = $store->recoverableWaitTimeouts();
+
+    expect($result)->toHaveCount(6)
+        ->and($queries)->toBe(3);
+});
+
+test('recoverableWaitTimeouts issues a single query when there are no candidates', function () {
+    $store = app(DatabaseDurableRunStore::class);
+
+    $queries = 0;
+    DB::listen(function () use (&$queries): void {
+        $queries++;
+    });
+
+    expect($store->recoverableWaitTimeouts())->toBe([])
+        ->and($queries)->toBe(1);
+});
+
+/**
+ * Seed a terminal child run linked to a waiting parent. The parent_run_id FK
+ * requires the parent durable run to exist first.
+ */
+function seedTerminalChild(string $parentRunId, string $childRunId, string $status = 'completed'): void
+{
+    $now = now('UTC');
+
+    DB::table('swarm_durable_child_runs')->insert([
+        'parent_run_id' => $parentRunId,
+        'child_run_id' => $childRunId,
+        'child_swarm_class' => 'ChildSwarm',
+        'wait_name' => 'children',
+        'context_payload' => json_encode([]),
+        'status' => $status,
+        'output' => null,
+        'failure' => null,
+        'dispatched_at' => $now->copy()->subMinute(),
+        'terminal_event_dispatched_at' => null,
+        'created_at' => $now->copy()->subMinute(),
+        'updated_at' => $now->copy()->subMinute(),
+    ]);
+}
+
+test('parentsWaitingOnTerminalChildren batch-loads side tables and is byte-for-byte equal to find() per record', function () {
+    $store = app(DatabaseDurableRunStore::class);
+    $now = now('UTC');
+
+    // pw-a: run_state present + duplicated node_id (highest id must win).
+    seedDurableRun('pw-a', ['status' => 'waiting']);
+    seedTerminalChild('pw-a', 'pw-a-child-1', 'completed');
+    DB::table('swarm_durable_run_state')->insert([
+        'run_id' => 'pw-a',
+        'route_plan' => json_encode(['start_at' => 'writer_node', 'nodes' => []]),
+        'route_plan_projected' => false,
+        'failure' => null,
+        'retry_policy' => json_encode(['max' => 3]),
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    DB::table('swarm_durable_node_states')->insert([
+        ['run_id' => 'pw-a', 'node_id' => 'step:0', 'state' => json_encode(['status' => 'first']), 'created_at' => $now, 'updated_at' => $now],
+        ['run_id' => 'pw-a', 'node_id' => 'step:1', 'state' => json_encode(['status' => 'pending']), 'created_at' => $now, 'updated_at' => $now],
+    ]);
+    DB::table('swarm_durable_node_states')
+        ->where('run_id', 'pw-a')->where('node_id', 'step:0')
+        ->update(['state' => json_encode(['status' => 'last']), 'updated_at' => $now]);
+
+    // pw-b: no run_state row at all (null side-table fields).
+    seedDurableRun('pw-b', ['status' => 'waiting']);
+    seedTerminalChild('pw-b', 'pw-b-child-1', 'failed');
+    DB::table('swarm_durable_node_states')->insert([
+        'run_id' => 'pw-b', 'node_id' => 'step:0', 'state' => json_encode(['status' => 'solo']), 'created_at' => $now, 'updated_at' => $now,
+    ]);
+
+    $result = $store->parentsWaitingOnTerminalChildren();
+
+    expect($result)->toHaveCount(2)
+        ->and($result)->toEqual(legacyFindPerRecord($store, $result));
+
+    // Duplicated node_id resolves to the highest-id row (last write wins).
+    $recA = collect($result)->firstWhere('run_id', 'pw-a');
+    expect($recA['node_states']['step:0']['status'])->toBe('last')
+        ->and($recA['node_states']['step:1']['status'])->toBe('pending');
+
+    // Missing run_state → null side-table fields, as find() produces.
+    $recB = collect($result)->firstWhere('run_id', 'pw-b');
+    expect($recB['route_plan'])->toBeNull()
+        ->and($recB['failure'])->toBeNull()
+        ->and($recB['retry_policy'])->toBeNull()
+        ->and($recB['node_states']['step:0']['status'])->toBe('solo');
+});
+
+test('parentsWaitingOnTerminalChildren issues a constant query count regardless of candidate count', function () {
+    $store = app(DatabaseDurableRunStore::class);
+    $now = now('UTC');
+
+    foreach (range(1, 6) as $i) {
+        seedDurableRun("pw-count-$i", ['status' => 'waiting']);
+        seedTerminalChild("pw-count-$i", "pw-count-$i-child", 'completed');
+        DB::table('swarm_durable_run_state')->insert([
+            'run_id' => "pw-count-$i", 'route_plan' => null, 'route_plan_projected' => false,
+            'failure' => null, 'retry_policy' => null, 'created_at' => $now, 'updated_at' => $now,
+        ]);
+        DB::table('swarm_durable_node_states')->insert([
+            'run_id' => "pw-count-$i", 'node_id' => 'step:0', 'state' => json_encode(['s' => $i]),
+            'created_at' => $now, 'updated_at' => $now,
+        ]);
+    }
+
+    $queries = 0;
+    DB::listen(function () use (&$queries): void {
+        $queries++;
+    });
+
+    $result = $store->parentsWaitingOnTerminalChildren();
+
+    expect($result)->toHaveCount(6)
+        ->and($queries)->toBe(3);
+});
+
+test('parentsWaitingOnTerminalChildren returns one row per terminal child (no dedup) and stays constant in side-table loads', function () {
+    $store = app(DatabaseDurableRunStore::class);
+    $now = now('UTC');
+
+    // A single waiting parent with three terminal children → three identical rows.
+    seedDurableRun('pw-dup', ['status' => 'waiting']);
+    seedTerminalChild('pw-dup', 'pw-dup-c1', 'completed');
+    seedTerminalChild('pw-dup', 'pw-dup-c2', 'failed');
+    seedTerminalChild('pw-dup', 'pw-dup-c3', 'cancelled');
+    DB::table('swarm_durable_node_states')->insert([
+        'run_id' => 'pw-dup', 'node_id' => 'step:0', 'state' => json_encode(['status' => 'solo']),
+        'created_at' => $now, 'updated_at' => $now,
+    ]);
+
+    $queries = 0;
+    DB::listen(function () use (&$queries): void {
+        $queries++;
+    });
+
+    $result = $store->parentsWaitingOnTerminalChildren();
+
+    // N terminal children → N identical parent rows (preserved, not deduped).
+    // Assert the sweep's own query count BEFORE the find()-equality check, whose
+    // per-record find() calls would otherwise be counted by the same listener.
+    expect($result)->toHaveCount(3)
+        ->and(collect($result)->pluck('run_id')->all())->toBe(['pw-dup', 'pw-dup', 'pw-dup'])
+        // Candidate select + two side-table loads, regardless of the duplicate rows.
+        ->and($queries)->toBe(3)
+        ->and($result)->toEqual(legacyFindPerRecord($store, $result));
+});

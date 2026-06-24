@@ -14,7 +14,7 @@ _To be filled in during release wrap-up._
 
 ### Fixed
 
-_To be filled in during release wrap-up._
+- **Batch-hydrate the durable recovery sweeps to kill a per-row `find()` N+1 (#272).** `DatabaseDurableRunStore::recoverableWaitTimeouts()` and `parentsWaitingOnTerminalChildren()` previously hydrated each candidate row with a per-row `find()` — and `find()` itself issues three queries (main row + `run_state` + `node_states`) — so a bounded sweep of N candidates fanned out to `1 + 3N` queries. Both now route their candidate collection through the existing batched `hydrateSweepRecords()` helper (the same single-source-of-truth assembler `find()` and the `recoverable()` / `dueRetries()` / `recoverableWaitingJoins()` sweeps already use), which loads `run_state` and `node_states` for all candidates in one `whereIn` pass each: a sweep is now a constant **three** queries (candidate select + two side-table loads), and an empty candidate set short-circuits to the single candidate-select query with zero side-table round-trips. The hydrated output shape is byte-for-byte identical to the old `find()`-per-row path (asserted by new equality tests). Two intentional, acceptable behavior deltas come with the shared path: (1) a candidate run concurrently deleted between the candidate-select and hydration is no longer silently dropped (the old `.filter()` removed runs that vanished mid-sweep) — this now matches the rest of the sweep family, which never re-fetches; and (2) `parentsWaitingOnTerminalChildren()` JOINs children→parents with `select('parents.*')`, so a parent with N terminal children still yields N identical rows (no dedup was added — preserving the prior behavior). Internal performance fix; no public-surface or contract change.
 
 ## v0.13.0 - 2026-06-23
 
