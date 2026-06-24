@@ -36,6 +36,9 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeOpened;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
@@ -345,6 +348,9 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             $executedAgentClasses = [];
             $parallelGroups = [];
             $loopIterations = [];
+            // The enclosing node id for the next node opened (#284): null at the
+            // root, then the most-recent decider once it declares its child.
+            $parentNodeId = null;
             $currentNodeId = $plan->startAt;
 
             while ($currentNodeId !== null) {
@@ -366,9 +372,26 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         $stepMetadata['loop_iteration'] = $iteration;
                     }
 
+                    // Open this node on the causal log (#284) before any event
+                    // tagged with its id — causal completeness. The node is
+                    // self-identifying (node_id == id); only the first iteration
+                    // of a looping node opens, so the open brackets the node once.
+                    if ($iteration === 1) {
+                        $nodeOpenedEvent = (new SwarmNodeOpened(
+                            id: $node->id,
+                            runId: $context->runId,
+                            parentNodeId: $parentNodeId,
+                            role: $this->nodeRole($node->metadata),
+                            rationale: null,
+                            timestamp: SwarmStreamEvent::timestamp(),
+                        ))->withNodeId($node->id);
+                        yield $nodeOpenedEvent;
+                        $this->recordStreamTelemetry($swarm, $state, $nodeOpenedEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                    }
+
                     $this->stepsRecorder->started($state, $nextIndex, $agent::class, $input);
 
-                    $stepStartEvent = new SwarmStepStart(
+                    $stepStartEvent = (new SwarmStepStart(
                         id: SwarmStreamEvent::newId(),
                         runId: $context->runId,
                         stepIndex: $nextIndex,
@@ -376,7 +399,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         agent: $agentName,
                         input: $this->capture->applyInput($input, $context),
                         timestamp: SwarmStreamEvent::timestamp(),
-                    );
+                    ))->withNodeId($node->id);
                     yield $stepStartEvent;
                     $this->recordStreamTelemetry($swarm, $state, $stepStartEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
@@ -385,8 +408,10 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     // The snapshot is frozen (or replayed) inside streamAgentEvents,
                     // after the run frame is entered, so begin()'s frozen-view
                     // override lands on the same frame the agent reads through.
+                    // The node id is threaded in so every deliberation event the
+                    // node streams (text/reasoning/tool deltas) carries its tag.
                     ['output' => $output, 'usage' => $stepUsage] = yield from $this->streamAgentEvents(
-                        $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart,
+                        $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart, $node->id,
                     );
 
                     $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
@@ -413,7 +438,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
                     $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $context);
 
-                    $stepEndEvent = new SwarmStepEnd(
+                    $stepEndEvent = (new SwarmStepEnd(
                         id: SwarmStreamEvent::newId(),
                         runId: $context->runId,
                         stepIndex: $nextIndex,
@@ -423,7 +448,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         durationMs: $durationMs,
                         metadata: ['usage' => $stepUsage],
                         timestamp: SwarmStreamEvent::timestamp(),
-                    );
+                    ))->withNodeId($node->id);
                     yield $stepEndEvent;
                     $this->recordStreamTelemetry($swarm, $state, $stepEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
@@ -436,6 +461,42 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     // sync path in HierarchicalRunner::executePlan().
                     if ($node->hasLoop() && $currentNodeId === $node->loopTo) {
                         $plan->clearInnerLoopCounters($loopIterations, (string) $node->loopTo, $node->id);
+                    }
+
+                    // The node has finished deliberating. When it routes forward to
+                    // a child node, that fall-through IS its decision: declare the
+                    // chosen child (#284) so a reader (#283) sees the structure as
+                    // payload. A loop back-edge is not a child decision; the
+                    // looping node re-deliberates rather than spawning a child.
+                    $forwardChild = $node->successor($iteration);
+                    if ($forwardChild !== null && $forwardChild !== $node->loopTo) {
+                        $childrenDecidedEvent = (new SwarmNodeChildrenDecided(
+                            id: SwarmStreamEvent::newId(),
+                            runId: $context->runId,
+                            childNodeIds: [$forwardChild],
+                            rationale: null,
+                            timestamp: SwarmStreamEvent::timestamp(),
+                        ))->withNodeId($node->id);
+                        yield $childrenDecidedEvent;
+                        $this->recordStreamTelemetry($swarm, $state, $childrenDecidedEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                        // The decided child becomes the parent of the nodes opened
+                        // beneath it as the plan is walked forward.
+                        $parentNodeId = $node->id;
+                    }
+
+                    // Close the node once it will not loop again (the next hop is
+                    // not its own loop back-edge), bracketing every event tagged
+                    // with its id.
+                    if ($currentNodeId !== $node->loopTo) {
+                        $nodeClosedEvent = (new SwarmNodeClosed(
+                            id: SwarmStreamEvent::newId(),
+                            runId: $context->runId,
+                            result: $stepOutput,
+                            timestamp: SwarmStreamEvent::timestamp(),
+                        ))->withNodeId($node->id);
+                        yield $nodeClosedEvent;
+                        $this->recordStreamTelemetry($swarm, $state, $nodeClosedEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                     }
 
                     continue;
@@ -864,6 +925,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         SwarmExecutionState $state,
         int &$streamSequenceIndex,
         float $streamTelemetryStart,
+        ?string $nodeId = null,
     ): \Generator {
         $output = '';
         $stepUsage = [];
@@ -906,6 +968,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    $this->tagNode($swarmEvent, $nodeId);
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                 } elseif ($event instanceof TextEnd) {
@@ -918,6 +981,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    $this->tagNode($swarmEvent, $nodeId);
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                 } elseif ($event instanceof ReasoningDelta) {
@@ -932,6 +996,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         summary: $this->captureStaticReasoningSummary($event->summary, $context),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    $this->tagNode($swarmEvent, $nodeId);
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                 } elseif ($event instanceof ReasoningEnd) {
@@ -945,6 +1010,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         summary: $this->captureStaticReasoningSummary($event->summary, $context),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    $this->tagNode($swarmEvent, $nodeId);
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                 } elseif ($event instanceof ToolCall) {
@@ -959,6 +1025,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    $this->tagNode($swarmEvent, $nodeId);
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                 } elseif ($event instanceof ToolResult) {
@@ -984,6 +1051,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    $this->tagNode($swarmEvent, $nodeId);
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                 } elseif ($event instanceof StreamEnd) {
@@ -1078,6 +1146,29 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         if (is_string($invocationId)) {
             $swarmEvent->withInvocationId($invocationId);
         }
+    }
+
+    /**
+     * Tag a streamed deliberation event with the structural node it belongs to
+     * (#284). A null node id leaves the event top-level — the same fail-safe as
+     * the invocation-id carry above.
+     */
+    protected function tagNode(SwarmStreamEvent $swarmEvent, ?string $nodeId): void
+    {
+        if (is_string($nodeId)) {
+            $swarmEvent->withNodeId($nodeId);
+        }
+    }
+
+    /**
+     * The structural role a node opens under (#284). A node's plan metadata may
+     * name its role (e.g. 'coordinator'); absent that it is a plain 'worker'.
+     *
+     * @param  array<string, mixed>  $metadata
+     */
+    protected function nodeRole(array $metadata): string
+    {
+        return is_string($metadata['node_role'] ?? null) ? $metadata['node_role'] : 'worker';
     }
 
     protected function captureStaticToolCall(ToolCallData $toolCall, ?RunContext $context = null): ToolCallData

@@ -128,6 +128,14 @@ Swarm streams emit typed events, including:
 | `swarm_step_end` | Step completion with captured or limited output and usage metadata. |
 | `swarm_stream_end` | Terminal completion with final output and aggregate usage. |
 | `swarm_stream_error` | Terminal failure payload for live failure and persisted replay. |
+| `swarm_node_opened` | A run-structure node opening; self-identifying (`node_id == id`), with its `parent_node_id` and `role`. Recorded before any event tagged with that node id. |
+| `swarm_node_children_decided` | A deciding node declaring its children in chosen order (`child_node_ids`); `node_id` is the deciding node's id. |
+| `swarm_node_closed` | A run-structure node closing, with its `result`; the terminal bracket for every event tagged with that node id. |
+
+Every substantive event also carries a nullable `node_id` tagging the
+run-structure node it belongs to (absent/null = a top-level event with no
+enclosing node). The three `swarm_node_*` events make a run's structure
+first-class on the causal log — "structure as payload".
 
 **Provenance:** For upstream final-agent streamed provider events, Laravel Swarm
 preserves upstream event **IDs** and **timestamps** in typed replay. **Invocation
