@@ -13,6 +13,7 @@ Durable runtime hardening & idiom polish — batches the durable recovery sweeps
 ### Changed
 
 - **Audit sink-failure / signing log paths now redact exception messages by default — operator-visible behavior change (#275).** Before this release, the free-text message of a sink, signing, or outbox exception was always written verbatim into the audit failure log context, regardless of `swarm.capture.*`. As of v0.13.1 those messages are redacted to `[redacted]` unless capture permits failure free-text or `swarm.audit.redact_exception_messages` is `false`. The exception **class** is still always logged, so failure diagnosability by exception type is unchanged. **Operator note:** if your monitoring or incident tooling greps audit failure logs for raw exception text, either enable capture for those runs or set `SWARM_AUDIT_REDACT_EXCEPTION_MESSAGES=false` to restore the prior verbatim behavior.
+- The `@internal` audit classes `ConfiguredSinkFailureHandler` and `SwarmAuditDispatcher` gained a required `SwarmCapture` constructor dependency (driving the redaction above); both are container-resolved, so consumers using the service container need take no action.
 
 ### Fixed
 
