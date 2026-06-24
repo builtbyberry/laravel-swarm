@@ -1651,7 +1651,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('swarm_class', $swarmClass);
         }
 
-        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+        return $this->hydrateSweepRecords($query->get());
     }
 
     public function recoverableTimedOutWaits(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
@@ -1898,7 +1898,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             $query->where('parents.swarm_class', $swarmClass);
         }
 
-        return $query->get()->map(fn (object $record): ?array => $this->find($record->run_id))->filter()->values()->all();
+        return $this->hydrateSweepRecords($query->get());
     }
 
     public function childRuns(string $runId): array
