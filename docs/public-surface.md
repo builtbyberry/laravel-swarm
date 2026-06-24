@@ -170,6 +170,15 @@ adding a new public API.
 | `Tools\Remember` | `laravel/ai` `Tool` an agent uses mid-prompt to write run memory. Args: `key`, `value`, `scope` (default `run`). Writes through `SwarmMemory::put()`, so the `MemoryCapturePolicy` redacts/drops at the boundary; scope id is resolved from the active run (never the model) and reserved `swarm:` keys are rejected. Graceful no-op outside a run. (v0.11.0+) | [Swarm Memory](memory.md#recall-and-remember-tools) |
 | `Concerns\HasSwarmMemoryTools` | Opt-in trait exposing `swarmMemoryTools(): array` for an agent's `tools()`. Returns the `Recall`/`Remember` tools only when `swarm.memory.tools.enabled` is true, honouring the per-tool `recall`/`remember` toggles; resolves the tool classes from the container so a bound subclass is used. The "optional default-on registration" surface. (v0.11.0+) | [Swarm Memory](memory.md#recall-and-remember-tools) |
 
+## Causal Log View (v0.15.0+)
+
+| Surface | Purpose | Primary documentation |
+| --- | --- | --- |
+| `Streaming\View\CausalLogView` | Read-time policy/fold layer over the append-only causal log (#283). Pure, read-only, deterministic and idempotent — the same log yields every view, and the fold never writes to the store. Construct from a run (`CausalLogView::forRun(StreamEventStore $store, string $runId)`) or any `iterable<SwarmStreamEvent>`; call `fold(ViewOrder $order = Causal, ViewSupersession $supersession = Clean): list<SwarmStreamEvent\|VoidedEvent>`. Reads node structure from event `toArray()` payloads by string key, so it degrades gracefully on logs with no node structure (presentation order collapses to causal order; `abandons` suppresses only its single target). (v0.15.0+) | [CHANGELOG](../CHANGELOG.md) |
+| `Streaming\View\ViewOrder` | The order axis of a fold. `Causal` keeps stored append order; `Presentation` reorders sibling node open/close into the order their parent declared via `child_node_ids` (stable sort — undeclared nodes keep causal order). (v0.15.0+) | [CHANGELOG](../CHANGELOG.md) |
+| `Streaming\View\ViewSupersession` | The supersession axis of a fold. `Clean` honors void-edges (suppresses a `supersedes`/`replaces` target, and an `abandons` target plus its node subtree); `Everything` exposes voided events as `VoidedEvent` wrappers. (v0.15.0+) | [CHANGELOG](../CHANGELOG.md) |
+| `Streaming\View\VoidedEvent` | Wrapper emitted in the `ViewSupersession::Everything` fold for an event a void-edge voided. Properties: `event` (`SwarmStreamEvent`), `voidType` (`CausalVoidEdgeType`), `reason` (string — taken from the most recent void-edge in causal order). (v0.15.0+) | [CHANGELOG](../CHANGELOG.md) |
+
 ## Configuration Keys
 
 Notable configuration keys that affect observable behavior or operational decisions. See [Configuration](configuration.md) for the full reference.
