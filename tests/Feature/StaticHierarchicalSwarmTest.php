@@ -400,17 +400,27 @@ test('static hierarchical swarm streams sequential workers in order', function (
     $events = iterator_to_array($stream);
     $types = array_map(fn ($event): string => $event->type(), $events);
 
-    // Both sequential workers stream live text
+    // Both sequential workers stream live text. Each worker node is also a
+    // structural node (#284): it opens before its content, declares its decided
+    // child as it routes forward, and closes — bracketing the deliberation.
     expect($types)->toBe([
         'swarm_stream_start',
+        // researcher node: opens, streams, decides writer_node, closes
+        'swarm_node_opened',
         'swarm_step_start',
         'swarm_text_delta',
         'swarm_text_end',
         'swarm_step_end',
+        'swarm_node_children_decided',
+        'swarm_node_closed',
+        // writer node: opens, streams, decides finish, closes
+        'swarm_node_opened',
         'swarm_step_start',
         'swarm_text_delta',
         'swarm_text_end',
         'swarm_step_end',
+        'swarm_node_children_decided',
+        'swarm_node_closed',
         'swarm_stream_end',
     ]);
 
@@ -447,16 +457,22 @@ test('static hierarchical stream defaults to concurrent mode for parallel groups
 
     // Concurrent mode: parallel branches produce step_end (no step_start, no text_delta)
     // Sequential synthesis step after join streams normally
+    // Concurrent parallel branches go through the fan-out path and are NOT
+    // wrapped in node grammar (#284); only the sequential synthesis worker opens
+    // a structural node, decides its child (finish), and closes.
     expect($types)->toBe([
         'swarm_stream_start',
         // concurrent branches — only step_end events (no step_start, no text deltas)
         'swarm_step_end',
         'swarm_step_end',
-        // synthesis worker streams live
+        // synthesis worker streams live, bracketed by its node grammar
+        'swarm_node_opened',
         'swarm_step_start',
         'swarm_text_delta',
         'swarm_text_end',
         'swarm_step_end',
+        'swarm_node_children_decided',
+        'swarm_node_closed',
         'swarm_stream_end',
     ]);
 
@@ -487,6 +503,9 @@ test('static hierarchical stream sequential mode streams all branches in declara
 
     // Sequential mode: each branch fully streams (step_start, text_delta, text_end, step_end)
     // Then synthesis also streams
+    // Sequential parallel branches stream through the fan-out path and are NOT
+    // wrapped in node grammar (#284); only the sequential synthesis worker opens
+    // a structural node, decides its child (finish), and closes.
     expect($types)->toBe([
         'swarm_stream_start',
         // researcher branch
@@ -499,11 +518,14 @@ test('static hierarchical stream sequential mode streams all branches in declara
         'swarm_text_delta',
         'swarm_text_end',
         'swarm_step_end',
-        // synthesis worker
+        // synthesis worker, bracketed by its node grammar
+        'swarm_node_opened',
         'swarm_step_start',
         'swarm_text_delta',
         'swarm_text_end',
         'swarm_step_end',
+        'swarm_node_children_decided',
+        'swarm_node_closed',
         'swarm_stream_end',
     ]);
 
@@ -525,13 +547,19 @@ test('static hierarchical stream handles mixed plan: sequential → concurrent p
     $types = array_map(fn ($event): string => $event->type(), $events);
 
     // Sequential researcher streams first, then concurrent parallel branches emit step_end only
+    // The sequential researcher is a structural node (#284): it opens, streams,
+    // decides its child (the parallel fan-out node), and closes. The concurrent
+    // branches themselves are not wrapped in node grammar.
     expect($types)->toBe([
         'swarm_stream_start',
-        // sequential researcher
+        // sequential researcher, bracketed by its node grammar
+        'swarm_node_opened',
         'swarm_step_start',
         'swarm_text_delta',
         'swarm_text_end',
         'swarm_step_end',
+        'swarm_node_children_decided',
+        'swarm_node_closed',
         // concurrent parallel branches — only step_end
         'swarm_step_end',
         'swarm_step_end',
@@ -660,13 +688,25 @@ test('static hierarchical stream honors a bounded loop to its iteration bound', 
 
     // Writer streams once, then the editor streams three times (max_iterations),
     // then the run ends — parity with the sync loop test, not body-once-and-exit.
+    // A looping node opens once on its first iteration and closes once when the
+    // loop exits (#284): the writer brackets its single pass and decides the
+    // editor; the editor opens on iteration 1, re-runs without re-opening on
+    // iterations 2 and 3, then decides finish and closes on the bound.
     $types = array_map(fn ($event): string => $event->type(), $events);
     expect($types)->toBe([
         'swarm_stream_start',
+        // writer node (single pass)
+        'swarm_node_opened',
+        'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
+        'swarm_node_children_decided', 'swarm_node_closed',
+        // editor node iteration 1 — opens, but the loop back-edge defers its close
+        'swarm_node_opened',
+        'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
+        // editor iterations 2 and 3 re-run under the open node (no re-open)
         'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
         'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
-        'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
-        'swarm_step_start', 'swarm_text_delta', 'swarm_text_end', 'swarm_step_end',
+        // the bound is reached: editor decides finish and closes
+        'swarm_node_children_decided', 'swarm_node_closed',
         'swarm_stream_end',
     ]);
 

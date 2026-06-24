@@ -33,6 +33,7 @@ final class SwarmCausalVoidEdge extends SwarmStreamEvent
         return [
             'id' => $this->id,
             'invocation_id' => $this->invocationId,
+            'node_id' => $this->nodeId,
             'type' => 'swarm_causal_void_edge',
             'run_id' => $this->runId,
             'void_type' => $this->voidType->value,

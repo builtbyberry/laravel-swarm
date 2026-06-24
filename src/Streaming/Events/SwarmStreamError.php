@@ -27,6 +27,7 @@ final class SwarmStreamError extends SwarmStreamEvent
         return [
             'id' => $this->id,
             'invocation_id' => $this->invocationId,
+            'node_id' => $this->nodeId,
             'type' => 'swarm_stream_error',
             'run_id' => $this->runId,
             'message' => $this->message,

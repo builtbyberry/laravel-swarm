@@ -27,6 +27,7 @@ final class SwarmReasoningEnd extends SwarmStreamEvent
         return [
             'id' => $this->id,
             'invocation_id' => $this->invocationId,
+            'node_id' => $this->nodeId,
             'type' => 'swarm_reasoning_end',
             'run_id' => $this->runId,
             'step_index' => $this->stepIndex,

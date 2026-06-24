@@ -48,6 +48,7 @@ final class SwarmToolResult extends SwarmStreamEvent
         return [
             'id' => $this->id,
             'invocation_id' => $this->invocationId,
+            'node_id' => $this->nodeId,
             'type' => 'swarm_tool_result',
             'run_id' => $this->runId,
             'step_index' => $this->stepIndex,
