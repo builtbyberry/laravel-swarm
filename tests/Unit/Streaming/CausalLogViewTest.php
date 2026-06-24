@@ -243,6 +243,34 @@ test('a void-edge with an unrecognized void_type is ignored', function () {
     expect($clean)->toBe(['a', 'v']);
 });
 
+test('the fold tolerates a re-executed log: duplicate node brackets fold deterministically', function () {
+    // OG2 — StaticHierarchicalStreamRunner RE-EXECUTES on crash-resume (it does
+    // not skip), and node.opened carries a stable id (== node_id), so a resumed
+    // run appends a second node.opened with the SAME id, plus fresh-id duplicate
+    // children-decided/closed. The fold is not the layer that reconciles crashed
+    // attempts (that is #285's void-edge reconciliation / #287's seal) — its job
+    // here is to stay total and deterministic over the duplicated log.
+    $events = [
+        SyntheticCausalEvent::nodeOpened('decider', 'decider', null),
+        SyntheticCausalEvent::childrenDecided('cd-1', 'decider', ['child']),
+        SyntheticCausalEvent::nodeClosed('cl-1', 'decider'),
+        // --- crash, then resume re-executes the same node ---
+        SyntheticCausalEvent::nodeOpened('decider', 'decider', null), // duplicate id
+        SyntheticCausalEvent::childrenDecided('cd-2', 'decider', ['child']),
+        SyntheticCausalEvent::nodeClosed('cl-2', 'decider'),
+    ];
+
+    $view = new CausalLogView($events);
+
+    // Deterministic across repeated folds despite the duplicate brackets.
+    $first = ids($view->fold(ViewOrder::Presentation, ViewSupersession::Clean));
+    expect($first)->toBe(ids($view->fold(ViewOrder::Presentation, ViewSupersession::Clean)));
+
+    // Total: nothing is dropped or invented, both attempts survive the fold.
+    expect(ids($view->fold(ViewOrder::Causal, ViewSupersession::Everything)))
+        ->toBe(['decider', 'cd-1', 'cl-1', 'decider', 'cd-2', 'cl-2']);
+});
+
 test('the two axes compose: presentation order with a clean supersession', function () {
     $events = [
         SyntheticCausalEvent::nodeOpened('o-root', 'root', null),
