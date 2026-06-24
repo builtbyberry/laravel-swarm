@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\BooleanCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Audit\ConfiguredSinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\SinkFailureDecision;
@@ -11,10 +12,34 @@ use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\AuditSinkHaltedException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\CountingThrowingSink;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Support\Facades\Log;
 use Psr\Log\NullLogger;
+
+/**
+ * Build a {@see ConfiguredSinkFailureHandler} with an explicit capture posture
+ * so the exception-message redaction path is deterministic regardless of the
+ * test harness's capture defaults.
+ *
+ * @param  array<string, mixed>  $audit  swarm.audit config overrides.
+ */
+function makeSinkFailureHandler(string $policy, bool $capture, array $audit = []): ConfiguredSinkFailureHandler
+{
+    $config = new ConfigRepository([
+        'swarm' => [
+            'audit' => ['failure_policy' => $policy] + $audit,
+            'capture' => ['inputs' => $capture, 'outputs' => $capture],
+        ],
+    ]);
+
+    return new ConfiguredSinkFailureHandler(
+        $config,
+        Log::getFacadeRoot(),
+        new SwarmCapture($config, new BooleanCapturePolicy($config)),
+    );
+}
 
 class StubFailureHandler implements SinkFailureHandler
 {
@@ -41,6 +66,7 @@ test('ConfiguredSinkFailureHandler returns Swallow for the swallow policy', func
     $handler = new ConfiguredSinkFailureHandler(
         new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'swallow']]]),
         new NullLogger,
+        app(SwarmCapture::class),
     );
 
     $decision = $handler->handle(new NoOpSwarmAuditSink, 'run.failed', [], new RuntimeException('x'));
@@ -57,6 +83,7 @@ test('ConfiguredSinkFailureHandler logs and returns Swallow for the log policy',
     $handler = new ConfiguredSinkFailureHandler(
         new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'log']]]),
         Log::getFacadeRoot(),
+        app(SwarmCapture::class),
     );
 
     $decision = $handler->handle(new NoOpSwarmAuditSink, 'run.failed', [], new RuntimeException('x'));
@@ -73,6 +100,7 @@ test('ConfiguredSinkFailureHandler logs and returns Halt for the halt policy', f
     $handler = new ConfiguredSinkFailureHandler(
         new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'halt']]]),
         Log::getFacadeRoot(),
+        app(SwarmCapture::class),
     );
 
     $decision = $handler->handle(new NoOpSwarmAuditSink, 'run.failed', [], new RuntimeException('x'));
@@ -89,11 +117,70 @@ test('ConfiguredSinkFailureHandler logs a warning and Swallows for unknown polic
     $handler = new ConfiguredSinkFailureHandler(
         new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'bogus']]]),
         Log::getFacadeRoot(),
+        app(SwarmCapture::class),
     );
 
     $decision = $handler->handle(new NoOpSwarmAuditSink, 'run.failed', [], new RuntimeException('x'));
 
     expect($decision)->toBe(SinkFailureDecision::Swallow);
+});
+
+test('ConfiguredSinkFailureHandler redacts the exception message by default but preserves the class', function (string $policy, string $level, string $expectedMessage): void {
+    Log::shouldReceive($level)->once()->withArgs(
+        fn ($message, $context): bool => $message === $expectedMessage
+            && $context['exception'] === '[redacted]'
+            && $context['class'] === RuntimeException::class
+            && ! str_contains($context['exception'], 'secret prompt fragment')
+    );
+
+    $handler = makeSinkFailureHandler($policy, capture: false);
+
+    $handler->handle(new NoOpSwarmAuditSink, 'run.failed', [], new RuntimeException('secret prompt fragment'));
+})->with([
+    ['log', 'error', 'Swarm audit sink failed.'],
+    ['halt', 'error', 'Swarm audit sink failed; halting run per swarm.audit.failure_policy=halt.'],
+    ['queue', 'warning', 'Swarm audit sink failed; queuing for retry via swarm:relay --type=audit.'],
+    ['dead_letter', 'error', 'Swarm audit sink failed; routing to dead-letter per swarm.audit.failure_policy=dead_letter.'],
+]);
+
+test('ConfiguredSinkFailureHandler passes the exception message through when capture permits failures', function (string $policy, string $level): void {
+    Log::shouldReceive($level)->once()->withArgs(
+        fn ($message, $context): bool => str_contains($context['exception'], 'secret prompt fragment')
+            && $context['class'] === RuntimeException::class
+    );
+
+    $handler = makeSinkFailureHandler($policy, capture: true);
+
+    $handler->handle(new NoOpSwarmAuditSink, 'run.failed', [], new RuntimeException('secret prompt fragment'));
+})->with([
+    ['log', 'error'],
+    ['halt', 'error'],
+    ['queue', 'warning'],
+    ['dead_letter', 'error'],
+]);
+
+test('ConfiguredSinkFailureHandler passes the message through when the operator opts out of redaction', function (): void {
+    Log::shouldReceive('error')->once()->withArgs(
+        fn ($message, $context): bool => str_contains($context['exception'], 'secret prompt fragment')
+            && $context['class'] === RuntimeException::class
+    );
+
+    $handler = makeSinkFailureHandler('log', capture: false, audit: ['redact_exception_messages' => false]);
+
+    $handler->handle(new NoOpSwarmAuditSink, 'run.failed', [], new RuntimeException('secret prompt fragment'));
+});
+
+test('ConfiguredSinkFailureHandler redacts the message but adds the class on unknown policies', function (): void {
+    Log::shouldReceive('warning')->once()->withArgs(
+        fn ($message, $context): bool => str_contains($message, 'Unknown')
+            && $context['configured_policy'] === 'bogus'
+            && $context['exception'] === '[redacted]'
+            && $context['class'] === RuntimeException::class
+    );
+
+    $handler = makeSinkFailureHandler('bogus', capture: false);
+
+    $handler->handle(new NoOpSwarmAuditSink, 'run.failed', [], new RuntimeException('secret prompt fragment'));
 });
 
 test('dispatcher swallows sink failure when handler returns Swallow', function (): void {

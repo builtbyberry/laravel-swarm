@@ -57,7 +57,7 @@ test('dispatcher swallows sink exceptions by default', function (): void {
         ->not->toThrow(RuntimeException::class);
 });
 
-test('dispatcher logs sink exceptions when failure_policy is log', function (): void {
+test('dispatcher redacts sink exception messages by default when capture is off', function (): void {
     $throwingSink = new class implements SwarmAuditSink
     {
         public function emit(string $category, array $payload): void
@@ -68,13 +68,70 @@ test('dispatcher logs sink exceptions when failure_policy is log', function (): 
 
     app()->instance(SwarmAuditSink::class, $throwingSink);
     config(['swarm.audit.failure_policy' => 'log']);
+    // Capture off is the package default; the test harness enables it, so opt
+    // back out to exercise the safe-production redaction path.
+    config(['swarm.capture.inputs' => false, 'swarm.capture.outputs' => false]);
 
     Log::shouldReceive('error')
         ->once()
         ->withArgs(function (string $message, array $context): bool {
             return $message === 'Swarm audit sink failed.'
                 && $context['category'] === 'run.failed'
-                && str_contains($context['exception'], 'sink error details');
+                && $context['exception'] === '[redacted]'
+                // The exception class/type is always preserved, never gated.
+                && $context['class'] === RuntimeException::class
+                && ! str_contains($context['exception'], 'sink error details');
+        });
+
+    app(SwarmAuditDispatcher::class)->emit('run.failed', ['run_id' => 'x']);
+});
+
+test('dispatcher passes through sink exception messages when capture permits failures', function (): void {
+    $throwingSink = new class implements SwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void
+        {
+            throw new RuntimeException('sink error details');
+        }
+    };
+
+    app()->instance(SwarmAuditSink::class, $throwingSink);
+    config(['swarm.audit.failure_policy' => 'log']);
+    // Both capture flags on => capturesFailures() is true => passthrough.
+    config(['swarm.capture.inputs' => true, 'swarm.capture.outputs' => true]);
+
+    Log::shouldReceive('error')
+        ->once()
+        ->withArgs(function (string $message, array $context): bool {
+            return $message === 'Swarm audit sink failed.'
+                && $context['category'] === 'run.failed'
+                && str_contains($context['exception'], 'sink error details')
+                && $context['class'] === RuntimeException::class;
+        });
+
+    app(SwarmAuditDispatcher::class)->emit('run.failed', ['run_id' => 'x']);
+});
+
+test('dispatcher passes through sink exception messages when operator opts out of redaction', function (): void {
+    $throwingSink = new class implements SwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void
+        {
+            throw new RuntimeException('sink error details');
+        }
+    };
+
+    app()->instance(SwarmAuditSink::class, $throwingSink);
+    config(['swarm.audit.failure_policy' => 'log']);
+    // Capture off, but operator disables redaction => raw message passes through.
+    config(['swarm.capture.inputs' => false, 'swarm.capture.outputs' => false]);
+    config(['swarm.audit.redact_exception_messages' => false]);
+
+    Log::shouldReceive('error')
+        ->once()
+        ->withArgs(function (string $message, array $context): bool {
+            return str_contains($context['exception'], 'sink error details')
+                && $context['class'] === RuntimeException::class;
         });
 
     app(SwarmAuditDispatcher::class)->emit('run.failed', ['run_id' => 'x']);
