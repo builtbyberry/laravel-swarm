@@ -109,6 +109,18 @@ Handler](#sink-failure-handler) below). The default handler reads
 from audit-write failures. `halt` is opt-in for regulated workloads that
 must not continue when evidence cannot be emitted.
 
+When a sink, signer, or outbox operation throws, the failure handler logs the
+exception. Provider, driver, and tool exception messages can carry prompt
+fragments or PII, so the **free-text message is gated through the capture
+authority** while the exception **class is always logged**. By default
+(`swarm.audit.redact_exception_messages` = `true`,
+`SWARM_AUDIT_REDACT_EXCEPTION_MESSAGES`), the message is logged as `[redacted]`
+unless capture already permits failure free-text (`swarm.capture.inputs` and
+`swarm.capture.outputs` both enabled). Set
+`SWARM_AUDIT_REDACT_EXCEPTION_MESSAGES=false` to always log the raw message
+regardless of capture. See [Redaction and Capture
+Alignment](#redaction-and-capture-alignment) below.
+
 ## Audit Outbox
 
 When `failure_policy` is `queue` or `dead_letter` (the v0.5 default is
@@ -301,6 +313,27 @@ For example:
     'metadata_allowlist' => ['tenant_id', 'workflow_type'],
 ],
 ```
+
+### Exception messages on failure paths
+
+Audit sink-failure, signing, and outbox log paths route the exception's
+free-text message through the same capture authority as the rest of the
+runtime, because provider/driver/tool exception messages can embed prompt
+fragments or PII. The exception **class/type is always preserved** for
+diagnosability; only the message is gated.
+
+```php
+'audit' => [
+    // Default true: redact audit-path exception messages unless capture
+    // permits failure free-text (swarm.capture.inputs && swarm.capture.outputs).
+    // Set false to always emit the raw message regardless of capture.
+    'redact_exception_messages' => env('SWARM_AUDIT_REDACT_EXCEPTION_MESSAGES', true),
+],
+```
+
+With the default (`true`), the logged message is `[redacted]` unless capture
+already permits failure free-text. This is a safe-production default: audit
+failure logs never leak un-redacted exception text into an ungoverned log sink.
 
 ## Versioning
 

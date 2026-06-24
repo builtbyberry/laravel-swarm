@@ -124,6 +124,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Telemetry\NoOpSwarmTelemetrySink;
@@ -201,6 +202,7 @@ class SwarmServiceProvider extends ServiceProvider
                 sink: $app->make(SwarmAuditSink::class),
                 config: $app->make(ConfigRepository::class),
                 failureHandler: $app->make(SinkFailureHandler::class),
+                capture: $app->make(SwarmCapture::class),
                 signer: $app->bound(SwarmAuditSigner::class) ? $app->make(SwarmAuditSigner::class) : null,
                 outbox: $app->make(AuditOutbox::class),
                 logger: $app->make(LoggerInterface::class),

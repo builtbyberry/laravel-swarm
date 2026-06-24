@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Responses\AuditDrainResult;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -48,6 +49,7 @@ test('ConfiguredSinkFailureHandler returns Queue for queue policy', function ():
     $handler = new ConfiguredSinkFailureHandler(
         new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'queue']]]),
         new NullLogger,
+        app(SwarmCapture::class),
     );
 
     $decision = $handler->handle(
@@ -64,6 +66,7 @@ test('ConfiguredSinkFailureHandler returns DeadLetter for dead_letter policy', f
     $handler = new ConfiguredSinkFailureHandler(
         new ConfigRepository(['swarm' => ['audit' => ['failure_policy' => 'dead_letter']]]),
         new NullLogger,
+        app(SwarmCapture::class),
     );
 
     $decision = $handler->handle(
