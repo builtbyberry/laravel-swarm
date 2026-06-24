@@ -113,6 +113,17 @@ return [
      */
     'audit' => [
         'failure_policy' => env('SWARM_AUDIT_FAILURE_POLICY', 'queue'),
+        /*
+         * Redact exception messages embedded in audit sink-failure / signing
+         * payloads and logs. Provider, driver, and tool exceptions can carry
+         * prompt fragments or PII in their free-text message, so the default is
+         * true (redact) for safe production behavior: the message collapses to
+         * "[redacted]" unless capture already permits failure free-text
+         * (swarm.capture.inputs && swarm.capture.outputs). The exception class
+         * is always preserved for diagnosability. Set false to always emit the
+         * raw message regardless of capture.
+         */
+        'redact_exception_messages' => filter_var(env('SWARM_AUDIT_REDACT_EXCEPTION_MESSAGES', true), FILTER_VALIDATE_BOOLEAN),
         'actor' => [
             'required' => filter_var(env('SWARM_AUDIT_ACTOR_REQUIRED', false), FILTER_VALIDATE_BOOLEAN),
         ],

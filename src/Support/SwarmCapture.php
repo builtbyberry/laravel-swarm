@@ -125,6 +125,33 @@ class SwarmCapture
     }
 
     /**
+     * Gate an exception's free-text message before it is embedded in an audit
+     * payload or log context on a sink-failure / signing path.
+     *
+     * Provider, driver, and tool exceptions can carry prompt fragments or PII
+     * in their messages, so the raw text must flow through the same capture
+     * authority as every other sensitive failure free-text. The message passes
+     * through only when the operator has explicitly opted out
+     * (`swarm.audit.redact_exception_messages` = false) or capture already
+     * permits failure free-text ({@see capturesFailures()}); otherwise it
+     * collapses to {@see self::REDACTED}. The exception *class* is never gated
+     * here — callers always preserve it alongside the message.
+     */
+    public function auditExceptionMessage(Throwable $exception): string
+    {
+        $redact = filter_var(
+            $this->config->get('swarm.audit.redact_exception_messages', true),
+            FILTER_VALIDATE_BOOLEAN,
+        );
+
+        if (! $redact || $this->capturesFailures()) {
+            return $exception->getMessage();
+        }
+
+        return self::REDACTED;
+    }
+
+    /**
      * Skip-aware failure message: Full → message, Redact → REDACTED, Skip →
      * null so the caller omits the `error.message` key while keeping `class`.
      */
