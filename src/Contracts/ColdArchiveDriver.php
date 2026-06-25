@@ -48,6 +48,14 @@ interface ColdArchiveDriver
     public function readEvents(string $runId, int $belowSequence): iterable;
 
     /**
+     * Deletes all cold archive data for this run (both events and snapshot rows).
+     * Called by {@see TieredStreamEventStore::forget()} to propagate hot-store
+     * deletion to cold. Until the #287 compactor graduates data, cold is always
+     * empty for a run (base_pointer=0), so this is typically a no-op until then.
+     */
+    public function forget(string $runId): void;
+
+    /**
      * Returns the sealed fold-snapshot string for operational resume,
      * or null if nothing has been graduated yet.
      * Callers MUST decrypt via openStrict and wrap DecryptException → SwarmException.

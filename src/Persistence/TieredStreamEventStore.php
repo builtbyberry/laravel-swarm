@@ -11,8 +11,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 /**
  * Transparent hot/cold tiered decorator over a StreamEventStore (#286).
  *
- * `record()` and `forget()` always delegate to the hot store — the compactor
- * (#287) is the only path that writes to cold. `events()` stitches cold and hot
+ * `record()` delegates to the hot store. `forget()` propagates to both hot
+ * and cold so deletion is complete across tiers. The compactor (#287) is the
+ * only path that writes to cold. `events()` stitches cold and hot
  * together at the base pointer: cold owns [0, base), hot owns [base, ∞).
  *
  * Stateless singleton-safe: no mutable per-run instance fields. Every call reads
@@ -35,6 +36,7 @@ class TieredStreamEventStore implements StreamEventStore
     public function forget(string $runId): void
     {
         $this->hot->forget($runId);
+        $this->cold->forget($runId);
     }
 
     public function assertReady(): void

@@ -82,6 +82,15 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
     }
 
     /**
+     * Deletes all cold archive rows for this run (both events and snapshot).
+     * Propagates hot-store forget() to cold so deletion is complete across tiers.
+     */
+    public function forget(string $runId): void
+    {
+        $this->table()->where('run_id', $runId)->delete();
+    }
+
+    /**
      * Returns the sealed fold-snapshot string for operational resume, or null if
      * nothing has been graduated yet. The caller MUST decrypt via openStrict() and
      * wrap DecryptException into a SwarmException — this method does not decrypt.

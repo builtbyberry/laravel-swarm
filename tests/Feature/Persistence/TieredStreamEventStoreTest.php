@@ -163,6 +163,17 @@ test('assertReady() throws SwarmException when the cold archive table is missing
         ->toThrow(SwarmException::class, 'swarm_cold_archives');
 });
 
+test('assertReady() throws SwarmException when required columns are missing from the cold archive table', function () {
+    Schema::connection('testing')->table('swarm_cold_archives', function ($table): void {
+        $table->dropColumn('base_pointer');
+    });
+
+    $store = app(TieredStreamEventStore::class);
+
+    expect(fn () => $store->assertReady())
+        ->toThrow(SwarmException::class, 'runtime columns');
+});
+
 test('DatabaseColdArchiveDriver::readSnapshotStrict() wraps DecryptException into SwarmException on a bad-key snapshot', function () {
     $runId = 'run-decrypt-fail';
     $now = now('UTC');
