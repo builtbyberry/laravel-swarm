@@ -44,6 +44,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
@@ -81,11 +82,13 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use BuiltByBerry\LaravelSwarm\Persistence\TieredStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\AuditOutbox as AuditOutboxCard;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmMemory as SwarmMemoryCard;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
@@ -317,11 +320,22 @@ class SwarmServiceProvider extends ServiceProvider
         // CausalLogStore contract resolve the same instance — never two.
         $this->app->singleton(DatabaseCausalLogStore::class);
 
+        // Hot/cold tiering (#286). The cold archive driver is stateless and safe as
+        // a singleton. TieredStreamEventStore decorates the hot DatabaseCausalLogStore
+        // with the cold driver; its events() method stitches the two halves at the
+        // base pointer using the half-open seam [0, base) / [base, ∞).
+        $this->app->singleton(DatabaseColdArchiveDriver::class);
+        $this->app->singleton(ColdArchiveDriver::class, DatabaseColdArchiveDriver::class);
+        $this->app->singleton(TieredStreamEventStore::class, fn (Application $app): TieredStreamEventStore => new TieredStreamEventStore(
+            hot: $app->make(DatabaseCausalLogStore::class),
+            cold: $app->make(DatabaseColdArchiveDriver::class),
+        ));
+
         $this->app->singleton(StreamEventStore::class, fn (Application $app): StreamEventStore => $this->resolvePersistenceStore(
             $app,
             'streaming.replay',
             CacheStreamEventStore::class,
-            DatabaseCausalLogStore::class,
+            TieredStreamEventStore::class,
         ));
 
         // CausalLogStore is database-only: void-edges need indexed UUID lookup and

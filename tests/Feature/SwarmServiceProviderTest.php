@@ -27,7 +27,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
-use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
+use BuiltByBerry\LaravelSwarm\Persistence\TieredStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
@@ -101,7 +101,7 @@ test('the container resolves database persistence stores from the global driver'
     expect(app(ContextStore::class))->toBeInstanceOf(DatabaseContextStore::class);
     expect(app(ArtifactRepository::class))->toBeInstanceOf(DatabaseArtifactRepository::class);
     expect(app(RunHistoryStore::class))->toBeInstanceOf(DatabaseRunHistoryStore::class);
-    expect(app(StreamEventStore::class))->toBeInstanceOf(DatabaseStreamEventStore::class);
+    expect(app(StreamEventStore::class))->toBeInstanceOf(TieredStreamEventStore::class);
 });
 
 test('blank per-store persistence drivers fall back to the global driver', function () {
@@ -118,7 +118,7 @@ test('blank per-store persistence drivers fall back to the global driver', funct
     expect(app(ContextStore::class))->toBeInstanceOf(DatabaseContextStore::class);
     expect(app(ArtifactRepository::class))->toBeInstanceOf(DatabaseArtifactRepository::class);
     expect(app(RunHistoryStore::class))->toBeInstanceOf(DatabaseRunHistoryStore::class);
-    expect(app(StreamEventStore::class))->toBeInstanceOf(DatabaseStreamEventStore::class);
+    expect(app(StreamEventStore::class))->toBeInstanceOf(TieredStreamEventStore::class);
 });
 
 test('the container resolves the durable run store', function () {
@@ -139,7 +139,7 @@ test('per-store persistence driver overrides the global driver', function () {
     expect(app(ContextStore::class))->toBeInstanceOf(DatabaseContextStore::class);
     expect(app(ArtifactRepository::class))->toBeInstanceOf(DatabaseArtifactRepository::class);
     expect(app(RunHistoryStore::class))->toBeInstanceOf(DatabaseRunHistoryStore::class);
-    expect(app(StreamEventStore::class))->toBeInstanceOf(DatabaseStreamEventStore::class);
+    expect(app(StreamEventStore::class))->toBeInstanceOf(TieredStreamEventStore::class);
 });
 
 test('invalid global persistence driver fails clearly', function () {

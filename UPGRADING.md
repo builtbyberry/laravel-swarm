@@ -269,6 +269,16 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.15.0
+
+### New migration: `swarm_cold_archives`
+
+v0.15.0 ships a new migration that creates the `swarm_cold_archives` table. Run `php artisan migrate` after updating the package. The table is inert until the background compactor (#287) is available — existing runs continue to read entirely from the hot store (`swarm_stream_events`). You can override the table name via `SWARM_COLD_ARCHIVES_TABLE` or `config('swarm.tables.cold_archives')`.
+
+### `StreamEventStore` container binding change (internal)
+
+Under the database persistence driver, resolving `StreamEventStore` from the container now returns a `TieredStreamEventStore` instead of a `DatabaseCausalLogStore`. Both classes are `@internal` — operators should not type-check the resolved instance. If your application does `instanceof DatabaseCausalLogStore` on the resolved store binding, update that check to use the `StreamEventStore` contract instead.
+
 ## Upgrading to v0.13.0
 
 v0.13.0 raises the **minimum `laravel/ai` to `^0.8`** (dropping `^0.6 || ^0.7`). There are **no migrations** and no `config/swarm.php` changes. The durable persistence shapes (the `tool_calls` snapshot column and the audit envelope) are unchanged, so existing runs replay across the upgrade.
