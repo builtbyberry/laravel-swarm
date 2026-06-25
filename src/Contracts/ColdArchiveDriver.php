@@ -44,6 +44,8 @@ interface ColdArchiveDriver
      * Yields raw (unsealed) SwarmStreamEvent objects for this run
      * with DB id < $belowSequence, in ascending causal order.
      * Returns an empty iterable when no cold events exist (not an error).
+     *
+     * @return iterable<int, SwarmStreamEvent>
      */
     public function readEvents(string $runId, int $belowSequence): iterable;
 

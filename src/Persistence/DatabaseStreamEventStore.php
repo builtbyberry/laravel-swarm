@@ -73,6 +73,8 @@ class DatabaseStreamEventStore implements StreamEventStore
      * has yielded events with id < base, the hot store yields id >= base so the
      * two halves together cover the full set without gap or overlap (half-open seam,
      * F1 invariant from #286).
+     *
+     * @return iterable<int, SwarmStreamEvent>
      */
     public function eventsFrom(string $runId, int $fromSequence): iterable
     {
