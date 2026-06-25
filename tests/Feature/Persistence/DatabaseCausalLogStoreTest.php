@@ -5,6 +5,7 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
+use BuiltByBerry\LaravelSwarm\Persistence\TieredStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
@@ -40,17 +41,22 @@ function seedCausalFeatureRun(string $runId): void
     ]);
 }
 
-test('under the database driver StreamEventStore and CausalLogStore share one instance', function () {
+test('under the database driver StreamEventStore resolves TieredStreamEventStore wrapping the shared DatabaseCausalLogStore', function () {
     config()->set('swarm.persistence.driver', 'database');
     app()->forgetInstance(StreamEventStore::class);
     app()->forgetInstance(CausalLogStore::class);
     app()->forgetInstance(DatabaseCausalLogStore::class);
+    app()->forgetInstance(TieredStreamEventStore::class);
 
     $streamStore = app(StreamEventStore::class);
     $causalStore = app(CausalLogStore::class);
 
-    expect($streamStore)->toBeInstanceOf(DatabaseCausalLogStore::class)
-        ->and($causalStore)->toBe($streamStore);
+    // StreamEventStore now resolves the tiered decorator (#286).
+    expect($streamStore)->toBeInstanceOf(TieredStreamEventStore::class);
+    // CausalLogStore still resolves the shared DatabaseCausalLogStore directly.
+    expect($causalStore)->toBeInstanceOf(DatabaseCausalLogStore::class);
+    // The tiered store's hot inner store is the same singleton as CausalLogStore.
+    expect($streamStore->hot)->toBe($causalStore);
 });
 
 test('a stream event survives a full DB round-trip through the causal log subclass', function () {

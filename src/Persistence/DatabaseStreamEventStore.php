@@ -66,6 +66,21 @@ class DatabaseStreamEventStore implements StreamEventStore
         }
     }
 
+    /**
+     * Yields events for `$runId` with DB id >= `$fromSequence`, in ascending order.
+     *
+     * Used by the hot half of {@see TieredStreamEventStore}: after the cold tier
+     * has yielded events with id < base, the hot store yields id >= base so the
+     * two halves together cover the full set without gap or overlap (half-open seam,
+     * F1 invariant from #286).
+     */
+    public function eventsFrom(string $runId, int $fromSequence): iterable
+    {
+        foreach ($this->table()->where('run_id', $runId)->where('id', '>=', $fromSequence)->orderBy('id')->cursor() as $record) {
+            yield SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+        }
+    }
+
     protected function table(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events'));

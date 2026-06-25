@@ -605,5 +605,6 @@ return [
         'memories' => env('SWARM_MEMORIES_TABLE', 'swarm_memories'),
         'memory_snapshots' => env('SWARM_MEMORY_SNAPSHOTS_TABLE', 'swarm_memory_snapshots'),
         'stream_step_checkpoints' => env('SWARM_STREAM_STEP_CHECKPOINTS_TABLE', 'swarm_stream_step_checkpoints'),
+        'cold_archives' => env('SWARM_COLD_ARCHIVES_TABLE', 'swarm_cold_archives'),
     ],
 ];
