@@ -36,6 +36,8 @@ return new class extends Migration
     {
         Schema::create('swarm_cold_archives', function (Blueprint $table): void {
             $table->id();
+            // No FK to swarm_run_histories: cold archives are long-term audit retention
+            // and may intentionally outlive the run history row.
             $table->string('run_id');
             // 'snapshot' | 'event'
             $table->string('archive_type');

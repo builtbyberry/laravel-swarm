@@ -174,6 +174,53 @@ test('assertReady() throws SwarmException when required columns are missing from
         ->toThrow(SwarmException::class, 'runtime columns');
 });
 
+test('forget() propagates deletion to both hot and cold tiers', function () {
+    $runId = 'run-forget-cascade';
+    $now = now('UTC');
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id'      => $runId,
+        'swarm_class' => 'TestSwarm',
+        'topology'    => 'sequential',
+        'status'      => 'running',
+        'context'     => json_encode([]),
+        'metadata'    => json_encode([]),
+        'steps'       => json_encode([]),
+        'output'      => null,
+        'usage'       => json_encode([]),
+        'error'       => null,
+        'artifacts'   => json_encode([]),
+        'created_at'  => $now,
+        'updated_at'  => $now,
+    ]);
+
+    /** @var TieredStreamEventStore $store */
+    $store = app(TieredStreamEventStore::class);
+
+    $store->hot->record($runId, new SwarmStreamStart(
+        id: 'evt-forget-1',
+        runId: $runId,
+        swarmClass: 'TestSwarm',
+        topology: 'sequential',
+        input: 'to be forgotten',
+        metadata: [],
+        timestamp: SwarmStreamEvent::timestamp(),
+    ), 0);
+
+    DB::table('swarm_cold_archives')->insert([
+        ['run_id' => $runId, 'archive_type' => 'event', 'sequence' => 1, 'payload' => '{}', 'base_pointer' => null, 'created_at' => $now, 'updated_at' => $now],
+        ['run_id' => $runId, 'archive_type' => 'snapshot', 'sequence' => null, 'payload' => '{}', 'base_pointer' => 2, 'created_at' => $now, 'updated_at' => $now],
+    ]);
+
+    expect(DB::table('swarm_stream_events')->where('run_id', $runId)->count())->toBe(1);
+    expect(DB::table('swarm_cold_archives')->where('run_id', $runId)->count())->toBe(2);
+
+    $store->forget($runId);
+
+    expect(DB::table('swarm_stream_events')->where('run_id', $runId)->count())->toBe(0);
+    expect(DB::table('swarm_cold_archives')->where('run_id', $runId)->count())->toBe(0);
+});
+
 test('DatabaseColdArchiveDriver::readSnapshotStrict() wraps DecryptException into SwarmException on a bad-key snapshot', function () {
     $runId = 'run-decrypt-fail';
     $now = now('UTC');

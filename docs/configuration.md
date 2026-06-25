@@ -325,6 +325,7 @@ Table name overrides for all database-backed stores. If you change these, publis
 | `swarm.tables.durable_child_runs` | `swarm_durable_child_runs` | `SWARM_DURABLE_CHILD_RUNS_TABLE` |
 | `swarm.tables.durable_webhook_idempotency` | `swarm_durable_webhook_idempotency` | `SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE` |
 | `swarm.tables.durable_outbox` | `swarm_durable_outbox` | `SWARM_DURABLE_OUTBOX_TABLE` |
+| `swarm.tables.cold_archives` | `swarm_cold_archives` | `SWARM_COLD_ARCHIVES_TABLE` |
 
 Table names are honored by all database repositories at runtime.
 
