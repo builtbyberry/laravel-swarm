@@ -24,19 +24,19 @@ test('events() short-circuits to hot-only when no cold data exists', function ()
     $now = now('UTC');
 
     DB::table('swarm_run_histories')->insert([
-        'run_id'      => $runId,
+        'run_id' => $runId,
         'swarm_class' => 'TestSwarm',
-        'topology'    => 'sequential',
-        'status'      => 'running',
-        'context'     => json_encode([]),
-        'metadata'    => json_encode([]),
-        'steps'       => json_encode([]),
-        'output'      => null,
-        'usage'       => json_encode([]),
-        'error'       => null,
-        'artifacts'   => json_encode([]),
-        'created_at'  => $now,
-        'updated_at'  => $now,
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'created_at' => $now,
+        'updated_at' => $now,
     ]);
 
     /** @var TieredStreamEventStore $store */
@@ -68,19 +68,19 @@ test('events() stitches cold below base and hot at-or-above base with no gap or 
     $now = now('UTC');
 
     DB::table('swarm_run_histories')->insert([
-        'run_id'      => $runId,
+        'run_id' => $runId,
         'swarm_class' => 'TestSwarm',
-        'topology'    => 'sequential',
-        'status'      => 'running',
-        'context'     => json_encode([]),
-        'metadata'    => json_encode([]),
-        'steps'       => json_encode([]),
-        'output'      => null,
-        'usage'       => json_encode([]),
-        'error'       => null,
-        'artifacts'   => json_encode([]),
-        'created_at'  => $now,
-        'updated_at'  => $now,
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'created_at' => $now,
+        'updated_at' => $now,
     ]);
 
     /** @var TieredStreamEventStore $store */
@@ -118,23 +118,23 @@ test('events() stitches cold below base and hot at-or-above base with no gap or 
     // Simulate compaction: graduate EventA (id=1) to cold as sequence=1.
     // Set base_pointer=2 — cold owns id < 2 (EventA), hot owns id >= 2 (EventB).
     DB::table('swarm_cold_archives')->insert([
-        'run_id'       => $runId,
+        'run_id' => $runId,
         'archive_type' => 'event',
-        'sequence'     => 1,
-        'payload'      => $coldPayload,
+        'sequence' => 1,
+        'payload' => $coldPayload,
         'base_pointer' => null,
-        'created_at'   => $now,
-        'updated_at'   => $now,
+        'created_at' => $now,
+        'updated_at' => $now,
     ]);
 
     DB::table('swarm_cold_archives')->insert([
-        'run_id'       => $runId,
+        'run_id' => $runId,
         'archive_type' => 'snapshot',
-        'sequence'     => null,
-        'payload'      => '{}',
+        'sequence' => null,
+        'payload' => '{}',
         'base_pointer' => 2,
-        'created_at'   => $now,
-        'updated_at'   => $now,
+        'created_at' => $now,
+        'updated_at' => $now,
     ]);
 
     // Collect via explicit iteration (events() is a generator; foreach is the safe consumer).
@@ -179,19 +179,19 @@ test('forget() propagates deletion to both hot and cold tiers', function () {
     $now = now('UTC');
 
     DB::table('swarm_run_histories')->insert([
-        'run_id'      => $runId,
+        'run_id' => $runId,
         'swarm_class' => 'TestSwarm',
-        'topology'    => 'sequential',
-        'status'      => 'running',
-        'context'     => json_encode([]),
-        'metadata'    => json_encode([]),
-        'steps'       => json_encode([]),
-        'output'      => null,
-        'usage'       => json_encode([]),
-        'error'       => null,
-        'artifacts'   => json_encode([]),
-        'created_at'  => $now,
-        'updated_at'  => $now,
+        'topology' => 'sequential',
+        'status' => 'running',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'created_at' => $now,
+        'updated_at' => $now,
     ]);
 
     /** @var TieredStreamEventStore $store */
@@ -228,13 +228,13 @@ test('DatabaseColdArchiveDriver::readSnapshotStrict() wraps DecryptException int
     // Insert a snapshot row with a sealed-looking payload that is not valid ciphertext.
     // The sw0: prefix triggers openStrict()'s decrypt path; the garbage body throws DecryptException.
     DB::table('swarm_cold_archives')->insert([
-        'run_id'       => $runId,
+        'run_id' => $runId,
         'archive_type' => 'snapshot',
-        'sequence'     => null,
-        'payload'      => 'sw0:thisisnotvalidciphertextabcdef',
+        'sequence' => null,
+        'payload' => 'sw0:thisisnotvalidciphertextabcdef',
         'base_pointer' => 1,
-        'created_at'   => $now,
-        'updated_at'   => $now,
+        'created_at' => $now,
+        'updated_at' => $now,
     ]);
 
     $driver = app(DatabaseColdArchiveDriver::class);
