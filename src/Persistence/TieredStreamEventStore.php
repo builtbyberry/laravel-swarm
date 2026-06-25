@@ -37,14 +37,10 @@ class TieredStreamEventStore implements StreamEventStore
         $this->hot->forget($runId);
     }
 
-    /**
-     * Delegate the readiness assertion to the hot store. The cold driver is
-     * stateless and always ready; the hot store (DatabaseCausalLogStore) owns
-     * the schema check that fails loud if the table is missing.
-     */
     public function assertReady(): void
     {
         $this->hot->assertReady();
+        $this->cold->assertReady();
     }
 
     public function events(string $runId): iterable

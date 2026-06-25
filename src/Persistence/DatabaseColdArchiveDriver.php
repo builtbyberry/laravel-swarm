@@ -67,6 +67,20 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
         }
     }
 
+    public function assertReady(): void
+    {
+        $table = (string) $this->config->get('swarm.tables.cold_archives', 'swarm_cold_archives');
+        $schema = $this->connection->getSchemaBuilder();
+
+        if (! $schema->hasTable($table)) {
+            throw new SwarmException("Database-backed cold archive requires the [{$table}] table.");
+        }
+
+        if (! $schema->hasColumns($table, ['id', 'run_id', 'archive_type', 'sequence', 'payload', 'base_pointer'])) {
+            throw new SwarmException("Database-backed cold archive requires runtime columns on [{$table}].");
+        }
+    }
+
     /**
      * Returns the sealed fold-snapshot string for operational resume, or null if
      * nothing has been graduated yet. The caller MUST decrypt via openStrict() and

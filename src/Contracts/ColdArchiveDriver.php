@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 
 /**
@@ -25,6 +26,13 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
  */
 interface ColdArchiveDriver
 {
+    /**
+     * Asserts that the cold archive storage is available.
+     * Throws {@see SwarmException} if the underlying table is missing or lacks
+     * required columns. Called by {@see TieredStreamEventStore::assertReady()}.
+     */
+    public function assertReady(): void;
+
     /**
      * Returns the hot/cold boundary sequence number.
      * Events with DB id < base live in cold; id >= base live in hot.
