@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 
 /**
@@ -67,7 +68,9 @@ class TieredStreamEventStore implements StreamEventStore
             yield $event;
         }
         foreach ($this->hot->eventsFrom($runId, $base) as $event) {
-            yield $event;
+            if (! ($event instanceof SwarmCausalSealBarrier)) {
+                yield $event;
+            }
         }
     }
 }

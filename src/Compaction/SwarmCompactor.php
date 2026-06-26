@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Compaction;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
@@ -20,7 +21,7 @@ use Throwable;
  * Graduates a sealed event prefix from the hot event log (swarm_stream_events) to cold
  * storage (swarm_cold_archives) under a per-run compaction lease. The ordering spine is:
  *
- *   cold-durable → CAS base-pointer advance → sealed_at UPDATE → DELETE from hot
+ *   cold-durable → sealed_at UPDATE → CAS base-pointer advance → DELETE from hot
  *
  * This spine is enforced inside DatabaseColdArchiveDriver::graduate(). reclaim() is called
  * only after graduate() returns true (CAS succeeded), so a crash at any point leaves the
@@ -40,6 +41,7 @@ class SwarmCompactor
         protected Connection $connection,
         protected ConfigRepository $config,
         protected LoggerInterface $logger,
+        protected SwarmAuditDispatcher $audit,
     ) {}
 
     /**
@@ -99,14 +101,15 @@ class SwarmCompactor
         // Read events [currentBase, barrierDbId) to build the fold snapshot.
         $events = $this->causalLog->eventsFrom($runId, $currentBase);
         $view = new CausalLogView($this->boundedEvents($events));
-        $sealedSnapshot = $this->cipher->seal(json_encode($view->snapshot()));
+        $sealedSnapshot = $this->cipher->seal(json_encode($view->snapshot(), JSON_THROW_ON_ERROR))
+            ?? throw new \LogicException('Sealed snapshot is unexpectedly null — cipher::seal() contract violated.');
 
-        // Graduate to cold (cold-durable + CAS + sealed_at in one transaction).
+        // Graduate to cold (cold-durable + sealed_at UPDATE + CAS in one transaction).
         $graduated = $this->cold->graduate(
             runId: $runId,
             fromId: $currentBase,
             boundaryId: $barrierDbId,
-            sealedSnapshot: $sealedSnapshot !== null ? $sealedSnapshot : '',
+            sealedSnapshot: $sealedSnapshot,
         );
 
         if (! $graduated) {
@@ -201,6 +204,16 @@ class SwarmCompactor
             $this->connection->table($durableTable)
                 ->where('run_id', $runId)
                 ->update(['compaction_quarantined_at' => Carbon::now('UTC')]);
+
+            try {
+                $this->audit->emit('compaction.quarantined', [
+                    'run_id' => $runId,
+                    'exception_class' => $exception::class,
+                    'message' => $exception->getMessage(),
+                ]);
+            } catch (Throwable) {
+                // Audit emit failure must not suppress the quarantine DB write.
+            }
         } catch (Throwable $quarantineException) {
             $this->logger->error('laravel-swarm: failed to quarantine run after compaction failure.', [
                 'run_id' => $runId,

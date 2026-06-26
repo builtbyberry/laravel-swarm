@@ -235,13 +235,13 @@ test('TieredStreamEventStore::events() stitches cold and hot correctly after com
     $inputs = array_map(fn (SwarmStreamStart $e) => $e->input, $contentEvents);
     expect($inputs)->toBe(['first', 'second', 'third - after barrier']);
 
-    // The barrier row sits at the seam in hot (id == base_pointer); it appears in events().
-    // Its type is 'swarm_causal_seal_barrier' — an infrastructure event, gracefully ignored by CausalLogView.
+    // The barrier is filtered from TieredStreamEventStore::events() — consumers never see it.
+    // DatabaseStreamEventStore::eventsFrom() (used by the compactor) remains unfiltered.
     $barrierEvents = array_filter(
         $allEvents,
         fn ($e) => $e instanceof SwarmCausalSealBarrier,
     );
-    expect($barrierEvents)->toHaveCount(1);
+    expect($barrierEvents)->toHaveCount(0);
 });
 
 // ─── Scenario 3: Idempotent re-run on already-graduated run ──────────────────
