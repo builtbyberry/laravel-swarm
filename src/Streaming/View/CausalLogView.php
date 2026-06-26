@@ -86,6 +86,45 @@ final class CausalLogView
     }
 
     /**
+     * Serialize the accumulated fold state for compactor resume (#287).
+     *
+     * Produces a plain array suitable for `json_encode()` and cold-storage
+     * sealing. The compactor stores the sealed snapshot alongside the raw event
+     * rows so a future re-read can reconstruct the view's index without
+     * replaying the full log from scratch.
+     *
+     * @return array{
+     *     events: list<array<string, mixed>>,
+     *     voids_by_target: array<string, list<array{type: string, reason: string}>>,
+     *     parent_of: array<string, string|null>,
+     *     declared_children: array<string, list<string>>,
+     *     node_id_by_event_id: array<string, string|null>,
+     * }
+     */
+    public function snapshot(): array
+    {
+        $voidsByTarget = [];
+
+        foreach ($this->voidsByTarget as $target => $edges) {
+            $voidsByTarget[$target] = array_map(
+                fn (array $edge): array => [
+                    'type' => $edge['type']->value,
+                    'reason' => $edge['reason'],
+                ],
+                $edges,
+            );
+        }
+
+        return [
+            'events' => array_map(fn (SwarmStreamEvent $e): array => $e->toArray(), $this->events),
+            'voids_by_target' => $voidsByTarget,
+            'parent_of' => $this->parentOf,
+            'declared_children' => $this->declaredChildren,
+            'node_id_by_event_id' => $this->nodeIdByEventId,
+        ];
+    }
+
+    /**
      * Fold the log into an ordered list of events under the two view axes.
      *
      * Under {@see ViewSupersession::Clean} voided events are absent; under

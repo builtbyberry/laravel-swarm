@@ -47,7 +47,7 @@ class DatabaseStreamEventStore implements StreamEventStore
 
     public function events(string $runId): iterable
     {
-        foreach ($this->table()->where('run_id', $runId)->orderBy('id')->cursor() as $record) {
+        foreach ($this->table()->where('run_id', $runId)->where('event_type', '!=', 'swarm_causal_seal_barrier')->orderBy('id')->cursor() as $record) {
             yield SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
         }
     }

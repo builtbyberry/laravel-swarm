@@ -60,7 +60,14 @@ class TieredStreamEventStore implements StreamEventStore
 
         // F1 half-open seam: cold owns id < base, hot owns id >= base.
         // Together they cover the full set with no gap and no duplicate.
-        yield from $this->cold->readEvents($runId, $base);
-        yield from $this->hot->eventsFrom($runId, $base);
+        // Explicit foreach avoids PHP yield-from key passthrough: both sub-generators
+        // yield integer keys 0,1,… — yield-from passes those through and a second
+        // generator overwrites the first in iterator_to_array($gen, preserve_keys=true).
+        foreach ($this->cold->readEvents($runId, $base) as $event) {
+            yield $event;
+        }
+        foreach ($this->hot->eventsFrom($runId, $base) as $event) {
+            yield $event;
+        }
     }
 }

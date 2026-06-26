@@ -47,6 +47,7 @@ abstract class SwarmStreamEvent extends StreamEvent
             'swarm_node_opened' => SwarmNodeOpened::fromArray($payload),
             'swarm_node_children_decided' => SwarmNodeChildrenDecided::fromArray($payload),
             'swarm_node_closed' => SwarmNodeClosed::fromArray($payload),
+            'swarm_causal_seal_barrier' => SwarmCausalSealBarrier::fromArray($payload),
             default => throw new SwarmException('Unknown persisted swarm stream event type ['.($payload['type'] ?? 'null').'].'),
         };
 

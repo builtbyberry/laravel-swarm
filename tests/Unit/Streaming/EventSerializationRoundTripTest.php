@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
@@ -48,6 +49,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
  * @var array<class-string<SwarmStreamEvent>>
  */
 const ROUND_TRIP_EVENT_CLASSES = [
+    SwarmCausalSealBarrier::class,
     SwarmCausalVoidEdge::class,
     SwarmNodeChildrenDecided::class,
     SwarmNodeClosed::class,
@@ -391,6 +393,24 @@ function event_payload_cases(): array
         ],
         'successful' => false,
         'error' => 'tool exploded',
+        'timestamp' => 1_700_000_021,
+    ]];
+
+    // SwarmCausalSealBarrier — infrastructure compaction marker; no nullable fields.
+    $cases['causal_seal_barrier with node_id'] = [SwarmCausalSealBarrier::class, [
+        'id' => 'evt-csb-1',
+        'invocation_id' => 'inv-csb-1',
+        'node_id' => 'node-csb-1',
+        'type' => 'swarm_causal_seal_barrier',
+        'run_id' => 'run-1',
+        'timestamp' => 1_700_000_020,
+    ]];
+    $cases['causal_seal_barrier null node_id'] = [SwarmCausalSealBarrier::class, [
+        'id' => 'evt-csb-2',
+        'invocation_id' => 'inv-csb-2',
+        'node_id' => null,
+        'type' => 'swarm_causal_seal_barrier',
+        'run_id' => 'run-1',
         'timestamp' => 1_700_000_021,
     ]];
 

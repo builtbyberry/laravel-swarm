@@ -12,6 +12,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Carbon;
 
 /**
  * Database-backed cold archive driver (#286).
@@ -143,6 +144,130 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
         }
 
         return $plain !== null ? $this->decodeJson($plain, []) : null;
+    }
+
+    /**
+     * Graduates hot events in [fromId, boundaryId) to cold storage and CAS-advances
+     * the base pointer to boundaryId, all inside a single DB transaction.
+     *
+     * Ordering spine (never inverted):
+     *   1. Write raw event rows to cold (idempotent — deletes any prior partial write).
+     *   2. Write / update snapshot row with base_pointer = 0 placeholder.
+     *   3. SET sealed_at on graduated hot events (serialises with appendVoidEdge locks).
+     *   4. CAS advance base_pointer: WHERE base_pointer IS NULL OR base_pointer < boundaryId.
+     *
+     * Returns true when the CAS succeeds (exactly one row updated), false on a
+     * concurrent race (CAS 0 rows — pointer already >= boundaryId). The caller
+     * (SwarmCompactor) must check the return value; false means another compactor
+     * won the race and the hot events were NOT reclaimed by this call.
+     *
+     * Does not DELETE from hot — that is the caller's responsibility via reclaim(),
+     * invoked only after graduate() returns true.
+     */
+    public function graduate(string $runId, int $fromId, int $boundaryId, string $sealedSnapshot): bool
+    {
+        $coldTable = (string) $this->config->get('swarm.tables.cold_archives', 'swarm_cold_archives');
+        $hotTable = (string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events');
+        $now = Carbon::now('UTC');
+
+        return (bool) $this->connection->transaction(function () use ($runId, $fromId, $boundaryId, $sealedSnapshot, $coldTable, $hotTable, $now): bool {
+            // Step 1: idempotent event row write — delete any prior partial run,
+            // then re-insert. The transaction fence makes this safe under the lease.
+            $this->connection->table($coldTable)
+                ->where('run_id', $runId)
+                ->where('archive_type', 'event')
+                ->delete();
+
+            $hotQuery = $this->connection->table($hotTable)
+                ->where('run_id', $runId)
+                ->where('id', '>=', $fromId)
+                ->where('id', '<', $boundaryId)
+                ->orderBy('id');
+
+            $insertRows = [];
+
+            foreach ($hotQuery->cursor() as $record) {
+                $insertRows[] = [
+                    'run_id' => $runId,
+                    'archive_type' => 'event',
+                    'sequence' => $record->id,
+                    'payload' => $record->payload,
+                    'base_pointer' => null,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+
+                if (count($insertRows) >= 200) {
+                    $this->connection->table($coldTable)->insert($insertRows);
+                    $insertRows = [];
+                }
+            }
+
+            if ($insertRows !== []) {
+                $this->connection->table($coldTable)->insert($insertRows);
+            }
+
+            // Step 2: snapshot row — insert or replace (one snapshot per run).
+            $hasSnapshot = $this->connection->table($coldTable)
+                ->where('run_id', $runId)
+                ->where('archive_type', 'snapshot')
+                ->exists();
+
+            if ($hasSnapshot) {
+                $this->connection->table($coldTable)
+                    ->where('run_id', $runId)
+                    ->where('archive_type', 'snapshot')
+                    ->update(['payload' => $sealedSnapshot, 'base_pointer' => 0, 'updated_at' => $now]);
+            } else {
+                $this->connection->table($coldTable)->insert([
+                    'run_id' => $runId,
+                    'archive_type' => 'snapshot',
+                    'sequence' => null,
+                    'payload' => $sealedSnapshot,
+                    'base_pointer' => 0,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            }
+
+            // Step 3: seal graduated hot events so appendVoidEdge() rejects retroactive
+            // void-edges. The lockForUpdate in appendVoidEdge serialises with this UPDATE.
+            $this->connection->table($hotTable)
+                ->where('run_id', $runId)
+                ->where('id', '>=', $fromId)
+                ->where('id', '<', $boundaryId)
+                ->whereNull('sealed_at')
+                ->update(['sealed_at' => $now, 'updated_at' => $now]);
+
+            // Step 4: CAS advance — atomic, monotonic. Fails fast on race or re-run.
+            $advanced = $this->connection->table($coldTable)
+                ->where('run_id', $runId)
+                ->where('archive_type', 'snapshot')
+                ->where(function ($q) use ($boundaryId): void {
+                    $q->whereNull('base_pointer')->orWhere('base_pointer', '<', $boundaryId);
+                })
+                ->update(['base_pointer' => $boundaryId, 'updated_at' => $now]);
+
+            return $advanced === 1;
+        });
+    }
+
+    /**
+     * Deletes graduated hot events from the live event store.
+     *
+     * Called by SwarmCompactor only after graduate() returns true (CAS succeeded).
+     * The ordering spine guarantees cold-durable + base-pointer-advanced before any
+     * reclaim: a reader that sees id >= base_pointer on the hot side, or id < base_pointer
+     * on the cold side, will always find its data.
+     */
+    public function reclaim(string $runId, int $boundaryId): void
+    {
+        $hotTable = (string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events');
+
+        $this->connection->table($hotTable)
+            ->where('run_id', $runId)
+            ->where('id', '<', $boundaryId)
+            ->delete();
     }
 
     protected function table(): Builder

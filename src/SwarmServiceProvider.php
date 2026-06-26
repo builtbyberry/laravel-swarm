@@ -33,6 +33,7 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmMemoryPurgeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPauseCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmProgressCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmPruneCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmCompactCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmRecoverCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmRelayCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
@@ -79,6 +80,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
+use BuiltByBerry\LaravelSwarm\Compaction\SwarmCompactor;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
@@ -325,6 +327,7 @@ class SwarmServiceProvider extends ServiceProvider
         // with the cold driver; its events() method stitches the two halves at the
         // base pointer using the half-open seam [0, base) / [base, ∞).
         $this->app->singleton(DatabaseColdArchiveDriver::class);
+        $this->app->singleton(SwarmCompactor::class);
         $this->app->singleton(ColdArchiveDriver::class, DatabaseColdArchiveDriver::class);
         $this->app->singleton(TieredStreamEventStore::class, fn (Application $app): TieredStreamEventStore => new TieredStreamEventStore(
             hot: $app->make(DatabaseCausalLogStore::class),
@@ -472,6 +475,7 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmResumeCommand::class,
                 SwarmCancelCommand::class,
                 SwarmRecoverCommand::class,
+                SwarmCompactCommand::class,
                 SwarmRelayCommand::class,
                 SwarmAuditStatusCommand::class,
                 SwarmAuditReconcileCommand::class,
