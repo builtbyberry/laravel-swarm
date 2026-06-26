@@ -151,10 +151,18 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
      * the base pointer to boundaryId, all inside a single DB transaction.
      *
      * Ordering spine (never inverted):
-     *   1. Write raw event rows to cold (idempotent — deletes any prior partial write).
-     *   2. Write / update snapshot row with base_pointer = 0 placeholder.
+     *   0. Pre-check: bail early if base_pointer already >= boundaryId.
+     *   1. Write raw event rows to cold (idempotent via insertOrIgnore — no DELETE).
+     *   2. Write / update snapshot payload (base_pointer left untouched until step 4).
      *   3. SET sealed_at on graduated hot events (serialises with appendVoidEdge locks).
      *   4. CAS advance base_pointer: WHERE base_pointer IS NULL OR base_pointer < boundaryId.
+     *
+     * The pre-check + insertOrIgnore pairing closes the lease-expiry race (#287 OG3):
+     * if a prior compactor already graduated and reclaimed hot events, the pre-check
+     * returns false before any writes, leaving cold data intact. Without the pre-check,
+     * a DELETE+INSERT approach would wipe cold rows then find an empty hot log — data loss.
+     * insertOrIgnore (backed by the unique index on (run_id, archive_type, sequence))
+     * provides the secondary safety net for truly concurrent graduation attempts.
      *
      * Returns true when the CAS succeeds (exactly one row updated), false on a
      * concurrent race (CAS 0 rows — pointer already >= boundaryId). The caller
@@ -171,13 +179,21 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
         $now = Carbon::now('UTC');
 
         return (bool) $this->connection->transaction(function () use ($runId, $fromId, $boundaryId, $sealedSnapshot, $coldTable, $hotTable, $now): bool {
-            // Step 1: idempotent event row write — delete any prior partial run,
-            // then re-insert. The transaction fence makes this safe under the lease.
-            $this->connection->table($coldTable)
+            // Step 0: pre-check — if base_pointer is already at or past boundaryId,
+            // another compactor won the race and graduated this window. Bail early
+            // before touching cold storage so we never wipe data then find an empty hot log.
+            $currentBase = $this->connection->table($coldTable)
                 ->where('run_id', $runId)
-                ->where('archive_type', 'event')
-                ->delete();
+                ->where('archive_type', 'snapshot')
+                ->value('base_pointer');
 
+            if ($currentBase !== null && (int) $currentBase >= $boundaryId) {
+                return false;
+            }
+
+            // Step 1: idempotent event row write via insertOrIgnore (no DELETE).
+            // The unique index on (run_id, archive_type, sequence) ensures a concurrent
+            // compactor's rows are silently skipped rather than duplicated.
             $hotQuery = $this->connection->table($hotTable)
                 ->where('run_id', $runId)
                 ->where('id', '>=', $fromId)
@@ -198,16 +214,19 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
                 ];
 
                 if (count($insertRows) >= 200) {
-                    $this->connection->table($coldTable)->insert($insertRows);
+                    $this->connection->table($coldTable)->insertOrIgnore($insertRows);
                     $insertRows = [];
                 }
             }
 
             if ($insertRows !== []) {
-                $this->connection->table($coldTable)->insert($insertRows);
+                $this->connection->table($coldTable)->insertOrIgnore($insertRows);
             }
 
-            // Step 2: snapshot row — insert or replace (one snapshot per run).
+            // Step 2: snapshot row — update payload only; do NOT touch base_pointer here.
+            // Resetting base_pointer to a placeholder (e.g. 0) creates a window where
+            // TieredStreamEventStore readers see a stale boundary and route to an empty hot log.
+            // The CAS in step 4 advances base_pointer atomically once cold data is durable.
             $hasSnapshot = $this->connection->table($coldTable)
                 ->where('run_id', $runId)
                 ->where('archive_type', 'snapshot')
@@ -217,14 +236,14 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
                 $this->connection->table($coldTable)
                     ->where('run_id', $runId)
                     ->where('archive_type', 'snapshot')
-                    ->update(['payload' => $sealedSnapshot, 'base_pointer' => 0, 'updated_at' => $now]);
+                    ->update(['payload' => $sealedSnapshot, 'updated_at' => $now]);
             } else {
                 $this->connection->table($coldTable)->insert([
                     'run_id' => $runId,
                     'archive_type' => 'snapshot',
                     'sequence' => null,
                     'payload' => $sealedSnapshot,
-                    'base_pointer' => 0,
+                    'base_pointer' => null,
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
