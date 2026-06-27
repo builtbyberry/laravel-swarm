@@ -139,6 +139,33 @@ class SwarmAttributeResolver
         return $configured;
     }
 
+    /**
+     * @return 'concurrent'|'sequential'
+     */
+    public function resolveStreamParallelBranchesForHierarchical(Swarm $swarm): string
+    {
+        $reflection = new ReflectionClass($swarm);
+        $attributes = $reflection->getAttributes(StreamParallelBranchesAttribute::class);
+
+        if ($attributes !== []) {
+            $value = $attributes[0]->newInstance()->mode;
+
+            if (! in_array($value, ['concurrent', 'sequential'], true)) {
+                throw new SwarmException("Invalid stream parallel branches mode [{$value}]. Supported values: concurrent, sequential.");
+            }
+
+            return $value;
+        }
+
+        $configured = (string) $this->config->get('swarm.hierarchical.stream_parallel_branches', 'concurrent');
+
+        if (! in_array($configured, ['concurrent', 'sequential'], true)) {
+            throw new SwarmException("Invalid swarm.hierarchical.stream_parallel_branches [{$configured}]. Supported values: concurrent, sequential.");
+        }
+
+        return $configured;
+    }
+
     public function resolveDurableParallelFailurePolicy(Swarm $swarm): DurableParallelFailurePolicy
     {
         $reflection = new ReflectionClass($swarm);

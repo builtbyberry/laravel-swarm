@@ -118,6 +118,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\QueuedHierarchicalDurableCoordinat
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
+use BuiltByBerry\LaravelSwarm\Runners\HierarchicalStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\LeaseManager;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
@@ -238,6 +239,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(HierarchicalRunner::class);
         $this->app->singleton(StaticHierarchicalRunner::class);
         $this->app->singleton(StaticHierarchicalStreamRunner::class);
+        $this->app->singleton(HierarchicalStreamRunner::class);
         $this->app->singleton(SwarmStepRecorder::class);
         $this->app->singleton(QueuedHierarchicalCoordinator::class);
 

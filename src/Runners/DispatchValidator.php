@@ -66,10 +66,10 @@ class DispatchValidator
     public function ensureStreamableTopology(Swarm $swarm): void
     {
         $topology = $this->resolver->resolveTopology($swarm);
-        $streamable = [Topology::Sequential, Topology::StaticHierarchical];
+        $streamable = [Topology::Sequential, Topology::StaticHierarchical, Topology::Hierarchical];
 
         if (! in_array($topology, $streamable, true)) {
-            throw new SwarmException("Streaming is only supported for sequential and static_hierarchical swarms. {$topology->value} topology does not support streaming.");
+            throw new SwarmException("Streaming is only supported for sequential, static_hierarchical, and hierarchical swarms. {$topology->value} topology does not support streaming.");
         }
     }
 

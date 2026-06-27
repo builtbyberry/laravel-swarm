@@ -342,506 +342,20 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         $historyRowStarted = true;
 
         try {
-            $nodeOutputs = [];
-            $mergedUsage = [];
-            $nextIndex = 0;
-            $executedNodeIds = [];
-            $executedAgentClasses = [];
-            $parallelGroups = [];
-            $loopIterations = [];
-            // The enclosing node id for the next node opened (#284): null at the
-            // root, then the most-recent decider once it declares its child.
-            $parentNodeId = null;
-            $currentNodeId = $plan->startAt;
-
-            while ($currentNodeId !== null) {
-                if (hrtime(true) >= $state->deadlineMonotonic) {
-                    throw new SwarmTimeoutException('The swarm exceeded its configured timeout while streaming.');
-                }
-
-                $node = $plan->node($currentNodeId);
-
-                if ($node instanceof HierarchicalWorkerNode) {
-                    $agent = $workerMap[$node->agentClass];
-                    $input = $this->composeStaticPrompt($node->prompt, $node->withOutputs, $nodeOutputs, $node->id);
-                    $agentName = class_basename($agent::class);
-
-                    $iteration = ($loopIterations[$node->id] ?? 0) + 1;
-                    $stepMetadata = array_merge($node->metadata, ['node_id' => $node->id]);
-
-                    if ($node->hasLoop()) {
-                        $stepMetadata['loop_iteration'] = $iteration;
-                    }
-
-                    // Open this node on the causal log (#284) before any event
-                    // tagged with its id — causal completeness. The node is
-                    // self-identifying (node_id == id); only the first iteration
-                    // of a looping node opens, so the open brackets the node once.
-                    if ($iteration === 1) {
-                        $nodeOpenedEvent = (new SwarmNodeOpened(
-                            id: $node->id,
-                            runId: $context->runId,
-                            parentNodeId: $parentNodeId,
-                            role: $this->nodeRole($node->metadata),
-                            rationale: null,
-                            timestamp: SwarmStreamEvent::timestamp(),
-                        ))->withNodeId($node->id);
-                        yield $nodeOpenedEvent;
-                        $this->recordStreamTelemetry($swarm, $state, $nodeOpenedEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-                    }
-
-                    $this->stepsRecorder->started($state, $nextIndex, $agent::class, $input);
-
-                    $stepStartEvent = (new SwarmStepStart(
-                        id: SwarmStreamEvent::newId(),
-                        runId: $context->runId,
-                        stepIndex: $nextIndex,
-                        agentClass: $agent::class,
-                        agent: $agentName,
-                        input: $this->capture->applyInput($input, $context),
-                        timestamp: SwarmStreamEvent::timestamp(),
-                    ))->withNodeId($node->id);
-                    yield $stepStartEvent;
-                    $this->recordStreamTelemetry($swarm, $state, $stepStartEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-
-                    $stepStartedAt = MonotonicTime::now();
-
-                    // The snapshot is frozen (or replayed) inside streamAgentEvents,
-                    // after the run frame is entered, so begin()'s frozen-view
-                    // override lands on the same frame the agent reads through.
-                    // The node id is threaded in so every deliberation event the
-                    // node streams (text/reasoning/tool deltas) carries its tag.
-                    ['output' => $output, 'usage' => $stepUsage] = yield from $this->streamAgentEvents(
-                        $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart, $node->id,
-                    );
-
-                    $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
-                    $this->guardrails->validateStep(
-                        $swarm,
-                        GuardrailStepContext::fromState($state, $nextIndex, $agent::class, $input, $output, $stepMetadata),
-                        $context,
-                    );
-
-                    $step = $this->stepsRecorder->completed(
-                        state: $state,
-                        index: $nextIndex,
-                        agentClass: $agent::class,
-                        input: $input,
-                        output: $output,
-                        usage: $stepUsage,
-                        durationMs: $durationMs,
-                        metadata: $stepMetadata,
-                    );
-
-                    $nodeOutputs[$node->id] = $output;
-                    $executedNodeIds[] = $node->id;
-                    $executedAgentClasses[] = $node->agentClass;
-                    $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
-                    $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $context);
-
-                    $stepEndEvent = (new SwarmStepEnd(
-                        id: SwarmStreamEvent::newId(),
-                        runId: $context->runId,
-                        stepIndex: $nextIndex,
-                        agentClass: $agent::class,
-                        agent: $agentName,
-                        output: $stepOutput,
-                        durationMs: $durationMs,
-                        metadata: ['usage' => $stepUsage],
-                        timestamp: SwarmStreamEvent::timestamp(),
-                    ))->withNodeId($node->id);
-                    yield $stepEndEvent;
-                    $this->recordStreamTelemetry($swarm, $state, $stepEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-
-                    $nextIndex++;
-                    $loopIterations[$node->id] = $iteration;
-                    $currentNodeId = $node->successor($iteration);
-
-                    // On a loop back-edge, reset every inner loop's counter so it
-                    // runs its full count again on the next outer pass. Mirrors the
-                    // sync path in HierarchicalRunner::executePlan().
-                    if ($node->hasLoop() && $currentNodeId === $node->loopTo) {
-                        $plan->clearInnerLoopCounters($loopIterations, (string) $node->loopTo, $node->id);
-                    }
-
-                    // The node has finished deliberating. When it routes forward to
-                    // a child node, that fall-through IS its decision: declare the
-                    // chosen child (#284) so a reader (#283) sees the structure as
-                    // payload. A loop back-edge is not a child decision; the
-                    // looping node re-deliberates rather than spawning a child.
-                    $forwardChild = $node->successor($iteration);
-                    if ($forwardChild !== null && $forwardChild !== $node->loopTo) {
-                        $childrenDecidedEvent = (new SwarmNodeChildrenDecided(
-                            id: SwarmStreamEvent::newId(),
-                            runId: $context->runId,
-                            childNodeIds: [$forwardChild],
-                            rationale: null,
-                            timestamp: SwarmStreamEvent::timestamp(),
-                        ))->withNodeId($node->id);
-                        yield $childrenDecidedEvent;
-                        $this->recordStreamTelemetry($swarm, $state, $childrenDecidedEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-
-                        // The decided child becomes the parent of the nodes opened
-                        // beneath it as the plan is walked forward.
-                        $parentNodeId = $node->id;
-                    }
-
-                    // Close the node once it will not loop again (the next hop is
-                    // not its own loop back-edge), bracketing every event tagged
-                    // with its id.
-                    if ($currentNodeId !== $node->loopTo) {
-                        $nodeClosedEvent = (new SwarmNodeClosed(
-                            id: SwarmStreamEvent::newId(),
-                            runId: $context->runId,
-                            result: $stepOutput,
-                            timestamp: SwarmStreamEvent::timestamp(),
-                        ))->withNodeId($node->id);
-                        yield $nodeClosedEvent;
-                        $this->recordStreamTelemetry($swarm, $state, $nodeClosedEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-                    }
-
-                    continue;
-                }
-
-                if ($node instanceof HierarchicalParallelNode) {
-                    $executedNodeIds[] = $node->id;
-                    $parallelGroups[] = ['node_id' => $node->id, 'branches' => $node->branches];
-
-                    // If this fan-out sits inside a bounded loop, stamp each branch
-                    // step with the enclosing loop's current iteration so a parallel
-                    // group re-run is attributable to its pass — parity with the sync
-                    // path (HierarchicalRunner::parallelBranchMetadata).
-                    $enclosingLoopId = $plan->enclosingLoopNodeId($node->id);
-                    $parallelLoopIteration = $enclosingLoopId !== null
-                        ? ($loopIterations[$enclosingLoopId] ?? 0) + 1
-                        : null;
-                    $branchLoopMeta = $parallelLoopIteration !== null
-                        ? ['loop_iteration' => $parallelLoopIteration]
-                        : [];
-
-                    if ($parallelMode === 'sequential') {
-                        // Stream each branch in declaration order
-                        foreach ($node->branches as $branchNodeId) {
-                            /** @var HierarchicalWorkerNode $branch */
-                            $branch = $plan->node($branchNodeId);
-                            $agent = $workerMap[$branch->agentClass];
-                            $input = $this->composeStaticPrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
-                            $agentName = class_basename($agent::class);
-
-                            $this->stepsRecorder->started($state, $nextIndex, $agent::class, $input);
-
-                            $branchStartEvent = new SwarmStepStart(
-                                id: SwarmStreamEvent::newId(),
-                                runId: $context->runId,
-                                stepIndex: $nextIndex,
-                                agentClass: $agent::class,
-                                agent: $agentName,
-                                input: $this->capture->applyInput($input, $context),
-                                timestamp: SwarmStreamEvent::timestamp(),
-                            );
-                            yield $branchStartEvent;
-                            $this->recordStreamTelemetry($swarm, $state, $branchStartEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-
-                            $stepStartedAt = MonotonicTime::now();
-
-                            // The snapshot is frozen (or replayed) inside
-                            // streamAgentEvents, after the run frame is entered.
-                            ['output' => $output, 'usage' => $stepUsage] = yield from $this->streamAgentEvents(
-                                $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart,
-                            );
-
-                            $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
-                            $this->guardrails->validateStep(
-                                $swarm,
-                                GuardrailStepContext::fromState(
-                                    $state,
-                                    $nextIndex,
-                                    $agent::class,
-                                    $input,
-                                    $output,
-                                    array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
-                                ),
-                                $context,
-                            );
-
-                            $step = $this->stepsRecorder->completed(
-                                state: $state,
-                                index: $nextIndex,
-                                agentClass: $agent::class,
-                                input: $input,
-                                output: $output,
-                                usage: $stepUsage,
-                                durationMs: $durationMs,
-                                metadata: array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
-                                updateContext: false,
-                                storeContext: false,
-                            );
-
-                            $nodeOutputs[$branch->id] = $output;
-                            $executedNodeIds[] = $branch->id;
-                            $executedAgentClasses[] = $branch->agentClass;
-                            $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
-                            $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $context);
-
-                            $branchEndEvent = new SwarmStepEnd(
-                                id: SwarmStreamEvent::newId(),
-                                runId: $context->runId,
-                                stepIndex: $nextIndex,
-                                agentClass: $agent::class,
-                                agent: $agentName,
-                                output: $stepOutput,
-                                durationMs: $durationMs,
-                                metadata: ['usage' => $stepUsage],
-                                timestamp: SwarmStreamEvent::timestamp(),
-                            );
-                            yield $branchEndEvent;
-                            $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-
-                            $nextIndex++;
-                        }
-                    } else {
-                        // Concurrent mode: branches run via ConcurrencyManager (no live text deltas)
-                        $branchDefinitions = [];
-                        $branchSnapshots = [];
-                        $callbacks = [];
-
-                        foreach ($node->branches as $ordinal => $branchNodeId) {
-                            /** @var HierarchicalWorkerNode $branch */
-                            $branch = $plan->node($branchNodeId);
-                            $input = $this->composeStaticPrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
-
-                            // Persist the branch snapshot BEFORE ConcurrencyManager
-                            // dispatches, so each (possibly forked) child's begin()
-                            // can find() it and reconstruct its own frozen view. On
-                            // a crash-resume the prior frozen snapshot is preserved
-                            // (its entries are the determinism record) with tool
-                            // calls reset so this attempt rebuilds them; on a fresh
-                            // attempt a new snapshot is frozen from the live view.
-                            $existingBranchSnapshot = $this->coordinator->existingSnapshot(
-                                $swarm::class,
-                                $context->runId,
-                                $nextIndex + $ordinal,
-                            );
-
-                            $branchSnapshots[$ordinal] = $existingBranchSnapshot !== null
-                                ? $this->snapshots->resetToolCalls($existingBranchSnapshot)
-                                : $this->snapshots->snapshot(
-                                    $context->runId,
-                                    $nextIndex + $ordinal,
-                                    $this->view->present($swarm, $context, $workerMap[$branch->agentClass]),
-                                );
-
-                            $this->stepsRecorder->started($state, $nextIndex + $ordinal, $branch->agentClass, $input);
-
-                            $branchDefinitions[$branchNodeId] = [
-                                'node' => $branch,
-                                'input' => $input,
-                                'index' => $nextIndex + $ordinal,
-                                'ordinal' => $ordinal,
-                            ];
-
-                            $agentClass = $branch->agentClass;
-                            $branchRunId = $state->context->runId;
-                            $branchSwarmClass = $state->swarm::class;
-                            $branchContextPayload = $state->context->toQueuePayload();
-                            $branchStepIndex = $nextIndex + $ordinal;
-                            // A `static` closure that resolves every collaborator
-                            // from the container — it MUST NOT bind `$this`. The
-                            // real ProcessDriver serializes this callback with
-                            // SerializableClosure to ship it to a child process;
-                            // binding `$this` would drag the entire runner object
-                            // graph (every injected collaborator) into the
-                            // serialization and blow up. The agent and the
-                            // MemoryReplayCoordinator are both re-resolved from the
-                            // child's container instead, mirroring how the worker
-                            // agent is resolved below.
-                            $callbacks[$ordinal] = static function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchStepIndex): array {
-                                $container = Container::getInstance();
-                                $worker = $container->make($agentClass);
-
-                                if (! $worker instanceof Agent) {
-                                    throw new SwarmException("Static hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
-                                }
-
-                                ActiveRunContext::enter($branchRunId, $branchSwarmClass, RunContext::fromPayload($branchContextPayload, $branchRunId));
-
-                                // Each concurrent branch resolves its OWN frozen-view
-                                // override from the DB. A process-local handle cannot
-                                // cross a fork/process boundary, so the branch calls
-                                // begin() itself: its find() is a DB read that works
-                                // in any process and reconstructs this branch's own
-                                // ReplaySwarmMemory as the frame override. The parent
-                                // persisted this branch's snapshot before dispatch
-                                // (above), so find() sees it. We use begin() only for
-                                // the read override — the parent owns the tool-call
-                                // append from the returned payload — so the returned
-                                // boundary's snapshot is intentionally unused here.
-                                // This is correct-by-construction across fork/process
-                                // branches because F1 removed the shared-container
-                                // mutation that made begin() unsafe inside a child.
-                                //
-                                // Resolve the coordinator defensively: a child
-                                // process whose container has not booted the package
-                                // bindings (so SnapshotsMemory is unresolvable) cannot
-                                // replay anyway — there is no snapshot store to read —
-                                // so it simply runs the branch fresh against live
-                                // memory rather than failing the whole run. Real
-                                // workers (Octane/queue) boot the provider, so they
-                                // take the begin()/end() override path.
-                                $coordinator = null;
-                                $boundary = null;
-
-                                try {
-                                    $coordinator = $container->make(MemoryReplayCoordinator::class);
-                                    $boundary = $coordinator->begin($branchSwarmClass, $branchRunId, $branchStepIndex);
-                                } catch (BindingResolutionException) {
-                                    $coordinator = null;
-                                    $boundary = null;
-                                }
-
-                                try {
-                                    $branchStartedAt = MonotonicTime::now();
-                                    $response = $worker->prompt($input);
-
-                                    return [
-                                        'output' => (string) $response,
-                                        'usage' => $response->usage->toArray(),
-                                        'duration_ms' => MonotonicTime::elapsedMilliseconds($branchStartedAt),
-                                        'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
-                                    ];
-                                } finally {
-                                    if ($coordinator !== null && $boundary !== null) {
-                                        $coordinator->end($boundary);
-                                    }
-                                    ActiveRunContext::exit();
-                                }
-                            };
-                        }
-
-                        /** @var array<int, array{output: string, usage: array<string, int>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
-                        $results = $this->concurrency->driver()->run($callbacks);
-
-                        $policy = GuardrailParallelFailurePolicy::tryFrom((string) $this->config->get(
-                            'swarm.guardrails.parallel_failure_policy',
-                            GuardrailParallelFailurePolicy::Existing->value,
-                        )) ?? GuardrailParallelFailurePolicy::Existing;
-
-                        if ($policy === GuardrailParallelFailurePolicy::BatchValidateBeforeRecord) {
-                            foreach ($node->branches as $branchNodeId) {
-                                /** @var HierarchicalWorkerNode $branch */
-                                $branch = $branchDefinitions[$branchNodeId]['node'];
-                                $input = $branchDefinitions[$branchNodeId]['input'];
-                                $index = $branchDefinitions[$branchNodeId]['index'];
-                                $ordinal = $branchDefinitions[$branchNodeId]['ordinal'];
-
-                                if (! array_key_exists($ordinal, $results)) {
-                                    throw new SwarmException($swarm::class.": static hierarchical parallel execution did not return a result for branch node [{$branchNodeId}].");
-                                }
-
-                                $row = $results[$ordinal];
-                                $this->guardrails->validateStep(
-                                    $swarm,
-                                    GuardrailStepContext::fromState(
-                                        $state,
-                                        $index,
-                                        $branch->agentClass,
-                                        $input,
-                                        $row['output'],
-                                        array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
-                                    ),
-                                    $context,
-                                );
-                            }
-                        }
-
-                        foreach ($node->branches as $ordinal => $branchNodeId) {
-                            /** @var HierarchicalWorkerNode $branch */
-                            $branch = $branchDefinitions[$branchNodeId]['node'];
-                            $input = $branchDefinitions[$branchNodeId]['input'];
-                            $index = $branchDefinitions[$branchNodeId]['index'];
-
-                            if (! array_key_exists($ordinal, $results)) {
-                                throw new SwarmException($swarm::class.": static hierarchical parallel execution did not return a result for branch node [{$branchNodeId}].");
-                            }
-
-                            $row = $results[$ordinal];
-                            $mergedMeta = array_merge($branch->metadata, [
-                                'node_id' => $branch->id,
-                                'parent_parallel_node_id' => $node->id,
-                            ], $branchLoopMeta);
-
-                            if ($policy === GuardrailParallelFailurePolicy::Existing) {
-                                $this->guardrails->validateStep(
-                                    $swarm,
-                                    GuardrailStepContext::fromState($state, $index, $branch->agentClass, $input, $row['output'], $mergedMeta),
-                                    $context,
-                                );
-                            }
-
-                            $step = $this->stepsRecorder->completed(
-                                state: $state,
-                                index: $index,
-                                agentClass: $branch->agentClass,
-                                input: $input,
-                                output: $row['output'],
-                                usage: $row['usage'],
-                                durationMs: $row['duration_ms'],
-                                metadata: $mergedMeta,
-                                updateContext: false,
-                                storeContext: false,
-                                includeUsageInMetadata: false,
-                            );
-
-                            $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
-                            $nodeOutputs[$branch->id] = $step->output;
-                            $executedNodeIds[] = $branch->id;
-                            $executedAgentClasses[] = $branch->agentClass;
-
-                            $branchEndEvent = new SwarmStepEnd(
-                                id: SwarmStreamEvent::newId(),
-                                runId: $context->runId,
-                                stepIndex: $index,
-                                agentClass: $branch->agentClass,
-                                agent: class_basename($branch->agentClass),
-                                output: $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $row['output']), $context),
-                                durationMs: $row['duration_ms'],
-                                metadata: ['usage' => $row['usage']],
-                                timestamp: SwarmStreamEvent::timestamp(),
-                            );
-                            yield $branchEndEvent;
-                            $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
-                        }
-
-                        $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
-
-                        foreach ($node->branches as $ordinal => $branchNodeId) {
-                            if (! array_key_exists($ordinal, $results)) {
-                                continue;
-                            }
-                            foreach ($results[$ordinal]['tool_calls'] as $toolCall) {
-                                $branchSnapshots[$ordinal] = $this->snapshots->appendToolCall($branchSnapshots[$ordinal], $toolCall);
-                            }
-                        }
-
-                        $nextIndex += count($node->branches);
-                    }
-
-                    $currentNodeId = $node->next;
-
-                    continue;
-                }
-
-                /** @var HierarchicalFinishNode $node */
-                $finalOutput = $node->outputFrom !== null
-                    ? ($nodeOutputs[$node->outputFrom] ?? '')
-                    : ($node->output ?? '');
-
-                $executedNodeIds[] = $node->id;
-
-                // Override last_output with finish node's result (may differ from last worker)
-                $context->mergeData(['last_output' => $finalOutput]);
-                $currentNodeId = null;
-            }
+            ['mergedUsage' => $mergedUsage, 'executedNodeIds' => $executedNodeIds, 'executedAgentClasses' => $executedAgentClasses, 'parallelGroups' => $parallelGroups, 'nextIndex' => $nextIndex]
+                = yield from $this->drivePlanNodes(
+                    state: $state,
+                    context: $context,
+                    contextTtl: $contextTtl,
+                    swarm: $swarm,
+                    plan: $plan,
+                    workerMap: $workerMap,
+                    parallelMode: $parallelMode,
+                    nextIndex: 0,
+                    initialParentNodeId: null,
+                    streamSequenceIndex: $streamSequenceIndex,
+                    streamTelemetryStart: $streamTelemetryStart,
+                );
 
             $context->mergeMetadata([
                 'usage' => $mergedUsage,
@@ -923,6 +437,538 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
     }
 
     /**
+     * Drive the plan-walk generator for a route plan.
+     *
+     * Extracted so both StaticHierarchicalStreamRunner (index=0, parentNodeId=null)
+     * and HierarchicalStreamRunner (index=1, parentNodeId='__coordinator__') can
+     * reuse the same loop.
+     *
+     * @param  array<class-string, Agent>  $workerMap
+     * @return \Generator<int, SwarmStreamEvent, null, array{mergedUsage: array<string, int>, executedNodeIds: list<string>, executedAgentClasses: list<class-string>, parallelGroups: list<array<string, mixed>>, nextIndex: int}>
+     */
+    protected function drivePlanNodes(
+        SwarmExecutionState $state,
+        RunContext $context,
+        int $contextTtl,
+        Swarm $swarm,
+        HierarchicalRoutePlan $plan,
+        array $workerMap,
+        string $parallelMode,
+        int $nextIndex,
+        ?string $initialParentNodeId,
+        int &$streamSequenceIndex,
+        float $streamTelemetryStart,
+    ): \Generator {
+        $nodeOutputs = [];
+        $mergedUsage = [];
+        $executedNodeIds = [];
+        $executedAgentClasses = [];
+        $parallelGroups = [];
+        $loopIterations = [];
+        // The enclosing node id for the next node opened (#284): null at the
+        // root, then the most-recent decider once it declares its child.
+        $parentNodeId = $initialParentNodeId;
+        $currentNodeId = $plan->startAt;
+
+        while ($currentNodeId !== null) {
+            if (hrtime(true) >= $state->deadlineMonotonic) {
+                throw new SwarmTimeoutException('The swarm exceeded its configured timeout while streaming.');
+            }
+
+            $node = $plan->node($currentNodeId);
+
+            if ($node instanceof HierarchicalWorkerNode) {
+                $agent = $workerMap[$node->agentClass];
+                $input = $this->composeStaticPrompt($node->prompt, $node->withOutputs, $nodeOutputs, $node->id);
+                $agentName = class_basename($agent::class);
+
+                $iteration = ($loopIterations[$node->id] ?? 0) + 1;
+                $stepMetadata = array_merge($node->metadata, ['node_id' => $node->id]);
+
+                if ($node->hasLoop()) {
+                    $stepMetadata['loop_iteration'] = $iteration;
+                }
+
+                // Open this node on the causal log (#284) before any event
+                // tagged with its id — causal completeness. The node is
+                // self-identifying (node_id == id); only the first iteration
+                // of a looping node opens, so the open brackets the node once.
+                if ($iteration === 1) {
+                    $nodeOpenedEvent = (new SwarmNodeOpened(
+                        id: $node->id,
+                        runId: $context->runId,
+                        parentNodeId: $parentNodeId,
+                        role: $this->nodeRole($node->metadata),
+                        rationale: null,
+                        timestamp: SwarmStreamEvent::timestamp(),
+                    ))->withNodeId($node->id);
+                    yield $nodeOpenedEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $nodeOpenedEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                }
+
+                $this->stepsRecorder->started($state, $nextIndex, $agent::class, $input);
+
+                $stepStartEvent = (new SwarmStepStart(
+                    id: SwarmStreamEvent::newId(),
+                    runId: $context->runId,
+                    stepIndex: $nextIndex,
+                    agentClass: $agent::class,
+                    agent: $agentName,
+                    input: $this->capture->applyInput($input, $context),
+                    timestamp: SwarmStreamEvent::timestamp(),
+                ))->withNodeId($node->id);
+                yield $stepStartEvent;
+                $this->recordStreamTelemetry($swarm, $state, $stepStartEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                $stepStartedAt = MonotonicTime::now();
+
+                // The snapshot is frozen (or replayed) inside streamAgentEvents,
+                // after the run frame is entered, so begin()'s frozen-view
+                // override lands on the same frame the agent reads through.
+                // The node id is threaded in so every deliberation event the
+                // node streams (text/reasoning/tool deltas) carries its tag.
+                ['output' => $output, 'usage' => $stepUsage] = yield from $this->streamAgentEvents(
+                    $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart, $node->id,
+                );
+
+                $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
+                $this->guardrails->validateStep(
+                    $swarm,
+                    GuardrailStepContext::fromState($state, $nextIndex, $agent::class, $input, $output, $stepMetadata),
+                    $context,
+                );
+
+                $step = $this->stepsRecorder->completed(
+                    state: $state,
+                    index: $nextIndex,
+                    agentClass: $agent::class,
+                    input: $input,
+                    output: $output,
+                    usage: $stepUsage,
+                    durationMs: $durationMs,
+                    metadata: $stepMetadata,
+                );
+
+                $nodeOutputs[$node->id] = $output;
+                $executedNodeIds[] = $node->id;
+                $executedAgentClasses[] = $node->agentClass;
+                $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
+                $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $context);
+
+                $stepEndEvent = (new SwarmStepEnd(
+                    id: SwarmStreamEvent::newId(),
+                    runId: $context->runId,
+                    stepIndex: $nextIndex,
+                    agentClass: $agent::class,
+                    agent: $agentName,
+                    output: $stepOutput,
+                    durationMs: $durationMs,
+                    metadata: ['usage' => $stepUsage],
+                    timestamp: SwarmStreamEvent::timestamp(),
+                ))->withNodeId($node->id);
+                yield $stepEndEvent;
+                $this->recordStreamTelemetry($swarm, $state, $stepEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                $nextIndex++;
+                $loopIterations[$node->id] = $iteration;
+                $currentNodeId = $node->successor($iteration);
+
+                // On a loop back-edge, reset every inner loop's counter so it
+                // runs its full count again on the next outer pass. Mirrors the
+                // sync path in HierarchicalRunner::executePlan().
+                if ($node->hasLoop() && $currentNodeId === $node->loopTo) {
+                    $plan->clearInnerLoopCounters($loopIterations, (string) $node->loopTo, $node->id);
+                }
+
+                // The node has finished deliberating. When it routes forward to
+                // a child node, that fall-through IS its decision: declare the
+                // chosen child (#284) so a reader (#283) sees the structure as
+                // payload. A loop back-edge is not a child decision; the
+                // looping node re-deliberates rather than spawning a child.
+                $forwardChild = $node->successor($iteration);
+                if ($forwardChild !== null && $forwardChild !== $node->loopTo) {
+                    $childrenDecidedEvent = (new SwarmNodeChildrenDecided(
+                        id: SwarmStreamEvent::newId(),
+                        runId: $context->runId,
+                        childNodeIds: [$forwardChild],
+                        rationale: null,
+                        timestamp: SwarmStreamEvent::timestamp(),
+                    ))->withNodeId($node->id);
+                    yield $childrenDecidedEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $childrenDecidedEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                    // The decided child becomes the parent of the nodes opened
+                    // beneath it as the plan is walked forward.
+                    $parentNodeId = $node->id;
+                }
+
+                // Close the node once it will not loop again (the next hop is
+                // not its own loop back-edge), bracketing every event tagged
+                // with its id.
+                if ($currentNodeId !== $node->loopTo) {
+                    $nodeClosedEvent = (new SwarmNodeClosed(
+                        id: SwarmStreamEvent::newId(),
+                        runId: $context->runId,
+                        result: $stepOutput,
+                        timestamp: SwarmStreamEvent::timestamp(),
+                    ))->withNodeId($node->id);
+                    yield $nodeClosedEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $nodeClosedEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                }
+
+                continue;
+            }
+
+            if ($node instanceof HierarchicalParallelNode) {
+                $executedNodeIds[] = $node->id;
+                $parallelGroups[] = ['node_id' => $node->id, 'branches' => $node->branches];
+
+                // If this fan-out sits inside a bounded loop, stamp each branch
+                // step with the enclosing loop's current iteration so a parallel
+                // group re-run is attributable to its pass — parity with the sync
+                // path (HierarchicalRunner::parallelBranchMetadata).
+                $enclosingLoopId = $plan->enclosingLoopNodeId($node->id);
+                $parallelLoopIteration = $enclosingLoopId !== null
+                    ? ($loopIterations[$enclosingLoopId] ?? 0) + 1
+                    : null;
+                $branchLoopMeta = $parallelLoopIteration !== null
+                    ? ['loop_iteration' => $parallelLoopIteration]
+                    : [];
+
+                if ($parallelMode === 'sequential') {
+                    // Stream each branch in declaration order
+                    foreach ($node->branches as $branchNodeId) {
+                        /** @var HierarchicalWorkerNode $branch */
+                        $branch = $plan->node($branchNodeId);
+                        $agent = $workerMap[$branch->agentClass];
+                        $input = $this->composeStaticPrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
+                        $agentName = class_basename($agent::class);
+
+                        $this->stepsRecorder->started($state, $nextIndex, $agent::class, $input);
+
+                        $branchStartEvent = new SwarmStepStart(
+                            id: SwarmStreamEvent::newId(),
+                            runId: $context->runId,
+                            stepIndex: $nextIndex,
+                            agentClass: $agent::class,
+                            agent: $agentName,
+                            input: $this->capture->applyInput($input, $context),
+                            timestamp: SwarmStreamEvent::timestamp(),
+                        );
+                        yield $branchStartEvent;
+                        $this->recordStreamTelemetry($swarm, $state, $branchStartEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                        $stepStartedAt = MonotonicTime::now();
+
+                        // The snapshot is frozen (or replayed) inside
+                        // streamAgentEvents, after the run frame is entered.
+                        ['output' => $output, 'usage' => $stepUsage] = yield from $this->streamAgentEvents(
+                            $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart,
+                        );
+
+                        $durationMs = MonotonicTime::elapsedMilliseconds($stepStartedAt);
+                        $this->guardrails->validateStep(
+                            $swarm,
+                            GuardrailStepContext::fromState(
+                                $state,
+                                $nextIndex,
+                                $agent::class,
+                                $input,
+                                $output,
+                                array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
+                            ),
+                            $context,
+                        );
+
+                        $step = $this->stepsRecorder->completed(
+                            state: $state,
+                            index: $nextIndex,
+                            agentClass: $agent::class,
+                            input: $input,
+                            output: $output,
+                            usage: $stepUsage,
+                            durationMs: $durationMs,
+                            metadata: array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
+                            updateContext: false,
+                            storeContext: false,
+                        );
+
+                        $nodeOutputs[$branch->id] = $output;
+                        $executedNodeIds[] = $branch->id;
+                        $executedAgentClasses[] = $branch->agentClass;
+                        $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
+                        $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $context);
+
+                        $branchEndEvent = new SwarmStepEnd(
+                            id: SwarmStreamEvent::newId(),
+                            runId: $context->runId,
+                            stepIndex: $nextIndex,
+                            agentClass: $agent::class,
+                            agent: $agentName,
+                            output: $stepOutput,
+                            durationMs: $durationMs,
+                            metadata: ['usage' => $stepUsage],
+                            timestamp: SwarmStreamEvent::timestamp(),
+                        );
+                        yield $branchEndEvent;
+                        $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                        $nextIndex++;
+                    }
+                } else {
+                    // Concurrent mode: branches run via ConcurrencyManager (no live text deltas)
+                    $branchDefinitions = [];
+                    $branchSnapshots = [];
+                    $callbacks = [];
+
+                    foreach ($node->branches as $ordinal => $branchNodeId) {
+                        /** @var HierarchicalWorkerNode $branch */
+                        $branch = $plan->node($branchNodeId);
+                        $input = $this->composeStaticPrompt($branch->prompt, $branch->withOutputs, $nodeOutputs, $branch->id);
+
+                        // Persist the branch snapshot BEFORE ConcurrencyManager
+                        // dispatches, so each (possibly forked) child's begin()
+                        // can find() it and reconstruct its own frozen view. On
+                        // a crash-resume the prior frozen snapshot is preserved
+                        // (its entries are the determinism record) with tool
+                        // calls reset so this attempt rebuilds them; on a fresh
+                        // attempt a new snapshot is frozen from the live view.
+                        $existingBranchSnapshot = $this->coordinator->existingSnapshot(
+                            $swarm::class,
+                            $context->runId,
+                            $nextIndex + $ordinal,
+                        );
+
+                        $branchSnapshots[$ordinal] = $existingBranchSnapshot !== null
+                            ? $this->snapshots->resetToolCalls($existingBranchSnapshot)
+                            : $this->snapshots->snapshot(
+                                $context->runId,
+                                $nextIndex + $ordinal,
+                                $this->view->present($swarm, $context, $workerMap[$branch->agentClass]),
+                            );
+
+                        $this->stepsRecorder->started($state, $nextIndex + $ordinal, $branch->agentClass, $input);
+
+                        $branchDefinitions[$branchNodeId] = [
+                            'node' => $branch,
+                            'input' => $input,
+                            'index' => $nextIndex + $ordinal,
+                            'ordinal' => $ordinal,
+                        ];
+
+                        $agentClass = $branch->agentClass;
+                        $branchRunId = $state->context->runId;
+                        $branchSwarmClass = $state->swarm::class;
+                        $branchContextPayload = $state->context->toQueuePayload();
+                        $branchStepIndex = $nextIndex + $ordinal;
+                        // A `static` closure that resolves every collaborator
+                        // from the container — it MUST NOT bind `$this`. The
+                        // real ProcessDriver serializes this callback with
+                        // SerializableClosure to ship it to a child process;
+                        // binding `$this` would drag the entire runner object
+                        // graph (every injected collaborator) into the
+                        // serialization and blow up. The agent and the
+                        // MemoryReplayCoordinator are both re-resolved from the
+                        // child's container instead, mirroring how the worker
+                        // agent is resolved below.
+                        $callbacks[$ordinal] = static function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchStepIndex): array {
+                            $container = Container::getInstance();
+                            $worker = $container->make($agentClass);
+
+                            if (! $worker instanceof Agent) {
+                                throw new SwarmException("Static hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
+                            }
+
+                            ActiveRunContext::enter($branchRunId, $branchSwarmClass, RunContext::fromPayload($branchContextPayload, $branchRunId));
+
+                            // Each concurrent branch resolves its OWN frozen-view
+                            // override from the DB. A process-local handle cannot
+                            // cross a fork/process boundary, so the branch calls
+                            // begin() itself: its find() is a DB read that works
+                            // in any process and reconstructs this branch's own
+                            // ReplaySwarmMemory as the frame override. The parent
+                            // persisted this branch's snapshot before dispatch
+                            // (above), so find() sees it. We use begin() only for
+                            // the read override — the parent owns the tool-call
+                            // append from the returned payload — so the returned
+                            // boundary's snapshot is intentionally unused here.
+                            // This is correct-by-construction across fork/process
+                            // branches because F1 removed the shared-container
+                            // mutation that made begin() unsafe inside a child.
+                            //
+                            // Resolve the coordinator defensively: a child
+                            // process whose container has not booted the package
+                            // bindings (so SnapshotsMemory is unresolvable) cannot
+                            // replay anyway — there is no snapshot store to read —
+                            // so it simply runs the branch fresh against live
+                            // memory rather than failing the whole run. Real
+                            // workers (Octane/queue) boot the provider, so they
+                            // take the begin()/end() override path.
+                            $coordinator = null;
+                            $boundary = null;
+
+                            try {
+                                $coordinator = $container->make(MemoryReplayCoordinator::class);
+                                $boundary = $coordinator->begin($branchSwarmClass, $branchRunId, $branchStepIndex);
+                            } catch (BindingResolutionException) {
+                                $coordinator = null;
+                                $boundary = null;
+                            }
+
+                            try {
+                                $branchStartedAt = MonotonicTime::now();
+                                $response = $worker->prompt($input);
+
+                                return [
+                                    'output' => (string) $response,
+                                    'usage' => $response->usage->toArray(),
+                                    'duration_ms' => MonotonicTime::elapsedMilliseconds($branchStartedAt),
+                                    'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
+                                ];
+                            } finally {
+                                if ($coordinator !== null && $boundary !== null) {
+                                    $coordinator->end($boundary);
+                                }
+                                ActiveRunContext::exit();
+                            }
+                        };
+                    }
+
+                    /** @var array<int, array{output: string, usage: array<string, int>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+                    $results = $this->concurrency->driver()->run($callbacks);
+
+                    $policy = GuardrailParallelFailurePolicy::tryFrom((string) $this->config->get(
+                        'swarm.guardrails.parallel_failure_policy',
+                        GuardrailParallelFailurePolicy::Existing->value,
+                    )) ?? GuardrailParallelFailurePolicy::Existing;
+
+                    if ($policy === GuardrailParallelFailurePolicy::BatchValidateBeforeRecord) {
+                        foreach ($node->branches as $branchNodeId) {
+                            /** @var HierarchicalWorkerNode $branch */
+                            $branch = $branchDefinitions[$branchNodeId]['node'];
+                            $input = $branchDefinitions[$branchNodeId]['input'];
+                            $index = $branchDefinitions[$branchNodeId]['index'];
+                            $ordinal = $branchDefinitions[$branchNodeId]['ordinal'];
+
+                            if (! array_key_exists($ordinal, $results)) {
+                                throw new SwarmException($swarm::class.": static hierarchical parallel execution did not return a result for branch node [{$branchNodeId}].");
+                            }
+
+                            $row = $results[$ordinal];
+                            $this->guardrails->validateStep(
+                                $swarm,
+                                GuardrailStepContext::fromState(
+                                    $state,
+                                    $index,
+                                    $branch->agentClass,
+                                    $input,
+                                    $row['output'],
+                                    array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
+                                ),
+                                $context,
+                            );
+                        }
+                    }
+
+                    foreach ($node->branches as $ordinal => $branchNodeId) {
+                        /** @var HierarchicalWorkerNode $branch */
+                        $branch = $branchDefinitions[$branchNodeId]['node'];
+                        $input = $branchDefinitions[$branchNodeId]['input'];
+                        $index = $branchDefinitions[$branchNodeId]['index'];
+
+                        if (! array_key_exists($ordinal, $results)) {
+                            throw new SwarmException($swarm::class.": static hierarchical parallel execution did not return a result for branch node [{$branchNodeId}].");
+                        }
+
+                        $row = $results[$ordinal];
+                        $mergedMeta = array_merge($branch->metadata, [
+                            'node_id' => $branch->id,
+                            'parent_parallel_node_id' => $node->id,
+                        ], $branchLoopMeta);
+
+                        if ($policy === GuardrailParallelFailurePolicy::Existing) {
+                            $this->guardrails->validateStep(
+                                $swarm,
+                                GuardrailStepContext::fromState($state, $index, $branch->agentClass, $input, $row['output'], $mergedMeta),
+                                $context,
+                            );
+                        }
+
+                        $step = $this->stepsRecorder->completed(
+                            state: $state,
+                            index: $index,
+                            agentClass: $branch->agentClass,
+                            input: $input,
+                            output: $row['output'],
+                            usage: $row['usage'],
+                            durationMs: $row['duration_ms'],
+                            metadata: $mergedMeta,
+                            updateContext: false,
+                            storeContext: false,
+                            includeUsageInMetadata: false,
+                        );
+
+                        $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
+                        $nodeOutputs[$branch->id] = $step->output;
+                        $executedNodeIds[] = $branch->id;
+                        $executedAgentClasses[] = $branch->agentClass;
+
+                        $branchEndEvent = new SwarmStepEnd(
+                            id: SwarmStreamEvent::newId(),
+                            runId: $context->runId,
+                            stepIndex: $index,
+                            agentClass: $branch->agentClass,
+                            agent: class_basename($branch->agentClass),
+                            output: $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $row['output']), $context),
+                            durationMs: $row['duration_ms'],
+                            metadata: ['usage' => $row['usage']],
+                            timestamp: SwarmStreamEvent::timestamp(),
+                        );
+                        yield $branchEndEvent;
+                        $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                    }
+
+                    $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
+
+                    foreach ($node->branches as $ordinal => $branchNodeId) {
+                        if (! array_key_exists($ordinal, $results)) {
+                            continue;
+                        }
+                        foreach ($results[$ordinal]['tool_calls'] as $toolCall) {
+                            $branchSnapshots[$ordinal] = $this->snapshots->appendToolCall($branchSnapshots[$ordinal], $toolCall);
+                        }
+                    }
+
+                    $nextIndex += count($node->branches);
+                }
+
+                $currentNodeId = $node->next;
+
+                continue;
+            }
+
+            /** @var HierarchicalFinishNode $node */
+            $finalOutput = $node->outputFrom !== null
+                ? ($nodeOutputs[$node->outputFrom] ?? '')
+                : ($node->output ?? '');
+
+            $executedNodeIds[] = $node->id;
+
+            // Override last_output with finish node's result (may differ from last worker)
+            $context->mergeData(['last_output' => $finalOutput]);
+            $currentNodeId = null;
+        }
+
+        return [
+            'mergedUsage' => $mergedUsage,
+            'executedNodeIds' => $executedNodeIds,
+            'executedAgentClasses' => $executedAgentClasses,
+            'parallelGroups' => $parallelGroups,
+            'nextIndex' => $nextIndex,
+        ];
+    }
+
+    /**
      * Stream events from one agent and yield them as SwarmStreamEvents.
      *
      * Returns the accumulated text output and step usage so the caller can record the step,
@@ -930,7 +976,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
      *
      * @return \Generator<int, SwarmStreamEvent, null, array{output: string, usage: array<string, int>}>
      */
-    private function streamAgentEvents(
+    protected function streamAgentEvents(
         Agent $agent,
         string $input,
         int $stepIndex,

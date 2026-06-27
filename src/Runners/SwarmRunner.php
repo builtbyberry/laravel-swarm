@@ -74,6 +74,7 @@ class SwarmRunner
         protected HierarchicalRunner $hierarchical,
         protected StaticHierarchicalRunner $staticHierarchical,
         protected StaticHierarchicalStreamRunner $staticHierarchicalStream,
+        protected HierarchicalStreamRunner $hierarchicalStream,
         protected DurableSwarmManager $durable,
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
@@ -306,6 +307,10 @@ class SwarmRunner
 
         if ($topology === Topology::StaticHierarchical) {
             return $this->staticHierarchicalStream->stream($swarm, $context);
+        }
+
+        if ($topology === Topology::Hierarchical) {
+            return $this->hierarchicalStream->stream($swarm, $context);
         }
 
         $this->validator->ensureStreamableTopology($swarm);

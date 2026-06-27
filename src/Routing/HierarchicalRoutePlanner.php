@@ -104,6 +104,10 @@ class HierarchicalRoutePlanner
                 throw new SwarmException('Hierarchical route plan node ids must be non-empty strings.');
             }
 
+            if (str_starts_with($nodeId, '__')) {
+                throw new SwarmException('Hierarchical route plan node ids must not start with "__" (reserved prefix).');
+            }
+
             if (! is_array($nodePayload)) {
                 throw new SwarmException("Hierarchical route node [{$nodeId}] must be an object.");
             }
