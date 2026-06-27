@@ -24,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditReconcileCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditStatusCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmCompactCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmInspectCommand;
@@ -39,6 +40,7 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmSignalCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmTraceCommand;
+use BuiltByBerry\LaravelSwarm\Compaction\SwarmCompactor;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
@@ -325,6 +327,7 @@ class SwarmServiceProvider extends ServiceProvider
         // with the cold driver; its events() method stitches the two halves at the
         // base pointer using the half-open seam [0, base) / [base, ∞).
         $this->app->singleton(DatabaseColdArchiveDriver::class);
+        $this->app->singleton(SwarmCompactor::class);
         $this->app->singleton(ColdArchiveDriver::class, DatabaseColdArchiveDriver::class);
         $this->app->singleton(TieredStreamEventStore::class, fn (Application $app): TieredStreamEventStore => new TieredStreamEventStore(
             hot: $app->make(DatabaseCausalLogStore::class),
@@ -472,6 +475,7 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmResumeCommand::class,
                 SwarmCancelCommand::class,
                 SwarmRecoverCommand::class,
+                SwarmCompactCommand::class,
                 SwarmRelayCommand::class,
                 SwarmAuditStatusCommand::class,
                 SwarmAuditReconcileCommand::class,

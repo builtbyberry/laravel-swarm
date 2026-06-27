@@ -20,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
@@ -265,6 +266,19 @@ class SequentialStreamRunner
             $this->recordStreamTelemetry($swarm, $state, $streamEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
             yield $streamEndEvent;
+
+            // Record the seal barrier to the event store — it is an internal
+            // compaction marker. Best-effort: a store failure here (e.g. a failing
+            // test fixture) must not surface to the caller.
+            try {
+                $this->streamEvents->record($context->runId, new SwarmCausalSealBarrier(
+                    id: SwarmStreamEvent::newId(),
+                    runId: $context->runId,
+                    timestamp: SwarmStreamEvent::timestamp(),
+                ), $contextTtl);
+            } catch (Throwable) {
+                // Intentionally swallowed.
+            }
 
             return $response;
         } catch (Throwable $exception) {

@@ -36,6 +36,7 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeOpened;
@@ -899,6 +900,19 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             $this->recordStreamTelemetry($swarm, $state, $streamEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
             yield $streamEndEvent;
+
+            // Record the seal barrier to the event store — it is an internal
+            // compaction marker. Best-effort: a store failure here must not surface
+            // to the caller.
+            try {
+                $this->streamEvents->record($context->runId, new SwarmCausalSealBarrier(
+                    id: SwarmStreamEvent::newId(),
+                    runId: $context->runId,
+                    timestamp: SwarmStreamEvent::timestamp(),
+                ), $contextTtl);
+            } catch (Throwable) {
+                // Intentionally swallowed.
+            }
 
             return $response;
         } catch (Throwable $exception) {

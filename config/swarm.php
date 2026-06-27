@@ -574,6 +574,22 @@ return [
         ],
     ],
 
+    'compaction' => [
+
+        /*
+        |--------------------------------------------------------------------------
+        | Compaction Lease Duration
+        |--------------------------------------------------------------------------
+        |
+        | How long (in seconds) a compaction lease is held for a single run.
+        | Tune upward for large event windows or slow databases; the lease
+        | expires naturally if the job process dies.
+        |
+        */
+        'lease_seconds' => (int) env('SWARM_COMPACTION_LEASE_SECONDS', 300),
+
+    ],
+
     // These table names are honored by the database repositories at runtime.
     // If you change them, publish and update the package migrations as well.
     //

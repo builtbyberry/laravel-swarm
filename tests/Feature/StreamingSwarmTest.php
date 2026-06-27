@@ -844,6 +844,7 @@ test('database replay store preserves insertion order', function () {
         'swarm_text_end',
         'swarm_step_end',
         'swarm_stream_end',
+        'swarm_causal_seal_barrier',
     ]);
 });
 

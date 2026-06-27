@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 
 /**
@@ -53,14 +54,27 @@ class TieredStreamEventStore implements StreamEventStore
 
         if ($base === 0) {
             // No cold data yet — hot is the complete event set.
-            yield from $this->hot->events($runId);
+            foreach ($this->hot->events($runId) as $event) {
+                if (! ($event instanceof SwarmCausalSealBarrier)) {
+                    yield $event;
+                }
+            }
 
             return;
         }
 
         // F1 half-open seam: cold owns id < base, hot owns id >= base.
         // Together they cover the full set with no gap and no duplicate.
-        yield from $this->cold->readEvents($runId, $base);
-        yield from $this->hot->eventsFrom($runId, $base);
+        // Explicit foreach avoids PHP yield-from key passthrough: both sub-generators
+        // yield integer keys 0,1,… — yield-from passes those through and a second
+        // generator overwrites the first in iterator_to_array($gen, preserve_keys=true).
+        foreach ($this->cold->readEvents($runId, $base) as $event) {
+            yield $event;
+        }
+        foreach ($this->hot->eventsFrom($runId, $base) as $event) {
+            if (! ($event instanceof SwarmCausalSealBarrier)) {
+                yield $event;
+            }
+        }
     }
 }

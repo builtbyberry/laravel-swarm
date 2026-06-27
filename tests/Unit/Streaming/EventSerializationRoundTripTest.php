@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
@@ -18,6 +19,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmUnknownEvent;
 
 /**
  * Direct, data-driven serialization coverage for every concrete
@@ -48,6 +50,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
  * @var array<class-string<SwarmStreamEvent>>
  */
 const ROUND_TRIP_EVENT_CLASSES = [
+    SwarmCausalSealBarrier::class,
     SwarmCausalVoidEdge::class,
     SwarmNodeChildrenDecided::class,
     SwarmNodeClosed::class,
@@ -63,6 +66,7 @@ const ROUND_TRIP_EVENT_CLASSES = [
     SwarmTextEnd::class,
     SwarmToolCall::class,
     SwarmToolResult::class,
+    SwarmUnknownEvent::class,
 ];
 
 /**
@@ -394,6 +398,24 @@ function event_payload_cases(): array
         'timestamp' => 1_700_000_021,
     ]];
 
+    // SwarmCausalSealBarrier — infrastructure compaction marker; no nullable fields.
+    $cases['causal_seal_barrier with node_id'] = [SwarmCausalSealBarrier::class, [
+        'id' => 'evt-csb-1',
+        'invocation_id' => 'inv-csb-1',
+        'node_id' => 'node-csb-1',
+        'type' => 'swarm_causal_seal_barrier',
+        'run_id' => 'run-1',
+        'timestamp' => 1_700_000_020,
+    ]];
+    $cases['causal_seal_barrier null node_id'] = [SwarmCausalSealBarrier::class, [
+        'id' => 'evt-csb-2',
+        'invocation_id' => 'inv-csb-2',
+        'node_id' => null,
+        'type' => 'swarm_causal_seal_barrier',
+        'run_id' => 'run-1',
+        'timestamp' => 1_700_000_021,
+    ]];
+
     // SwarmCausalVoidEdge — two void types; no nullable fields (run-scoped edge).
     $cases['causal_void_edge supersedes'] = [SwarmCausalVoidEdge::class, [
         'id' => 'evt-cve-1',
@@ -497,6 +519,26 @@ function event_payload_cases(): array
         'run_id' => 'run-1',
         'result' => null,
         'timestamp' => 1_700_000_029,
+    ]];
+
+    // SwarmUnknownEvent — sentinel for types not in this version's registry.
+    // The payload uses an imaginary future type; fromArray() hits the default arm
+    // and returns a SwarmUnknownEvent that carries the raw payload unchanged.
+    $cases['unknown_event with node_id'] = [SwarmUnknownEvent::class, [
+        'id' => 'evt-unk-1',
+        'invocation_id' => 'inv-unk-1',
+        'node_id' => 'node-unk-1',
+        'type' => 'swarm_future_event_type',
+        'run_id' => 'run-1',
+        'timestamp' => 1_700_000_050,
+    ]];
+    $cases['unknown_event null node_id'] = [SwarmUnknownEvent::class, [
+        'id' => 'evt-unk-2',
+        'invocation_id' => 'inv-unk-2',
+        'node_id' => null,
+        'type' => 'swarm_future_event_type',
+        'run_id' => 'run-1',
+        'timestamp' => 1_700_000_051,
     ]];
 
     return $cases;

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
-use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEvent;
 use Illuminate\Http\StreamedEvent;
 use Illuminate\Support\Str;
@@ -47,7 +46,8 @@ abstract class SwarmStreamEvent extends StreamEvent
             'swarm_node_opened' => SwarmNodeOpened::fromArray($payload),
             'swarm_node_children_decided' => SwarmNodeChildrenDecided::fromArray($payload),
             'swarm_node_closed' => SwarmNodeClosed::fromArray($payload),
-            default => throw new SwarmException('Unknown persisted swarm stream event type ['.($payload['type'] ?? 'null').'].'),
+            'swarm_causal_seal_barrier' => SwarmCausalSealBarrier::fromArray($payload),
+            default => new SwarmUnknownEvent($payload),
         };
 
         if (is_string($payload['invocation_id'] ?? null)) {

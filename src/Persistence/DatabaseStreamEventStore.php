@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmUnknownEvent;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
@@ -47,8 +48,11 @@ class DatabaseStreamEventStore implements StreamEventStore
 
     public function events(string $runId): iterable
     {
-        foreach ($this->table()->where('run_id', $runId)->orderBy('id')->cursor() as $record) {
-            yield SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+        foreach ($this->table()->where('run_id', $runId)->where('event_type', '!=', 'swarm_causal_seal_barrier')->orderBy('id')->cursor() as $record) {
+            $event = SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+            if (! ($event instanceof SwarmUnknownEvent)) {
+                yield $event;
+            }
         }
     }
 
@@ -79,7 +83,10 @@ class DatabaseStreamEventStore implements StreamEventStore
     public function eventsFrom(string $runId, int $fromSequence): iterable
     {
         foreach ($this->table()->where('run_id', $runId)->where('id', '>=', $fromSequence)->orderBy('id')->cursor() as $record) {
-            yield SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+            $event = SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+            if (! ($event instanceof SwarmUnknownEvent)) {
+                yield $event;
+            }
         }
     }
 
