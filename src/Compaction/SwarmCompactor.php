@@ -8,10 +8,12 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -133,8 +135,8 @@ class SwarmCompactor
      * at it (exclusive) gives us exactly the event set [currentBase, barrierDbId) —
      * the same range graduate() writes to cold storage.
      *
-     * @param  iterable<\BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent>  $events
-     * @return iterable<\BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent>
+     * @param  iterable<SwarmStreamEvent>  $events
+     * @return iterable<SwarmStreamEvent>
      */
     protected function boundedEvents(iterable $events): iterable
     {
@@ -155,7 +157,7 @@ class SwarmCompactor
     {
         $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
         $leaseSeconds = (int) $this->config->get('swarm.compaction.lease_seconds', 300);
-        $token = (string) \Illuminate\Support\Str::uuid();
+        $token = (string) Str::uuid();
         $now = Carbon::now('UTC');
 
         $acquired = $this->connection->table($durableTable)

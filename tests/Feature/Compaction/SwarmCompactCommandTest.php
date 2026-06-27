@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Jobs\CompactSwarmRun;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
@@ -199,7 +200,7 @@ test('swarm:compact with no eligible runs prints info and exits zero', function 
 test('swarm:compact emits a command.compact audit event with dispatched_count', function (): void {
     $sink = new RecordingSwarmAuditSink;
     app()->instance(SwarmAuditSink::class, $sink);
-    app()->forgetInstance(\BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher::class);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
 
     cmd_seedRunHistory('run-cmd-audit-1');
     cmd_seedRunHistory('run-cmd-audit-2');

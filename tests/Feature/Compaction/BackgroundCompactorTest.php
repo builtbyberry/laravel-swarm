@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * End-to-end compaction scenarios for SwarmCompactor (#287).
@@ -18,7 +19,6 @@ use Illuminate\Support\Facades\DB;
  * Tests the full graduation protocol:
  *   cold-durable → CAS base-pointer advance → sealed_at UPDATE → DELETE from hot
  */
-
 beforeEach(function () {
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
     config()->set('swarm.persistence.driver', 'database');
@@ -440,7 +440,7 @@ test('DatabaseStreamEventStore skips unknown event types in events() and eventsF
     $now = now('UTC');
     DB::table('swarm_stream_events')->insert([
         'run_id' => $runId,
-        'event_uuid' => \Illuminate\Support\Str::uuid(),
+        'event_uuid' => Str::uuid(),
         'event_type' => 'swarm_future_event_type',
         'payload' => json_encode(['type' => 'swarm_future_event_type', 'id' => 'unknown-uuid']),
         'expires_at' => null,
@@ -448,18 +448,18 @@ test('DatabaseStreamEventStore skips unknown event types in events() and eventsF
         'updated_at' => $now,
     ]);
 
-    /** @var \BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore $store */
-    $store = app(\BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore::class);
+    /** @var DatabaseCausalLogStore $store */
+    $store = app(DatabaseCausalLogStore::class);
 
     // events() must return only the known event; unknown must be silently skipped.
     $allFromEvents = iterator_to_array($store->events($runId));
     expect($allFromEvents)->toHaveCount(1);
-    expect($allFromEvents[0])->toBeInstanceOf(\BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart::class);
+    expect($allFromEvents[0])->toBeInstanceOf(SwarmStreamStart::class);
 
     // eventsFrom() from sequence 0 must also skip the unknown event.
     $allFromEventsFrom = iterator_to_array($store->eventsFrom($runId, 0));
     expect($allFromEventsFrom)->toHaveCount(1);
-    expect($allFromEventsFrom[0])->toBeInstanceOf(\BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart::class);
+    expect($allFromEventsFrom[0])->toBeInstanceOf(SwarmStreamStart::class);
 });
 
 // ─── Scenario 6: Crash mid-graduation → quarantine ───────────────────────────
@@ -483,7 +483,7 @@ test('graduation transaction failure quarantines the run and leaves hot unchange
 
         public function graduate(string $runId, int $fromId, int $boundaryId, string $sealedSnapshot): bool
         {
-            throw new \RuntimeException('simulated graduation failure');
+            throw new RuntimeException('simulated graduation failure');
         }
 
         public function basePointer(string $runId): int
