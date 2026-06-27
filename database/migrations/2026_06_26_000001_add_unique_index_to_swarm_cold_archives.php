@@ -26,7 +26,9 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('swarm_cold_archives', function (Blueprint $table): void {
+        $table = (string) config('swarm.tables.cold_archives', 'swarm_cold_archives');
+
+        Schema::table($table, function (Blueprint $table): void {
             $table->unique(
                 ['run_id', 'archive_type', 'sequence'],
                 'swarm_cold_archives_run_id_type_sequence_unique',
@@ -36,7 +38,9 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::table('swarm_cold_archives', function (Blueprint $table): void {
+        $table = (string) config('swarm.tables.cold_archives', 'swarm_cold_archives');
+
+        Schema::table($table, function (Blueprint $table): void {
             $table->dropUnique('swarm_cold_archives_run_id_type_sequence_unique');
         });
     }

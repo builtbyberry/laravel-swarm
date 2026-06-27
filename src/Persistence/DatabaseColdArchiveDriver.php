@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Contracts\ColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmUnknownEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Encryption\DecryptException;
@@ -66,7 +67,10 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
             ->orderBy('sequence');
 
         foreach ($query->cursor() as $record) {
-            yield SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+            $event = SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+            if (! ($event instanceof SwarmUnknownEvent)) {
+                yield $event;
+            }
         }
     }
 
@@ -203,6 +207,10 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
             $insertRows = [];
 
             foreach ($hotQuery->cursor() as $record) {
+                if ($record->event_type === 'swarm_causal_seal_barrier') {
+                    continue;
+                }
+
                 $insertRows[] = [
                     'run_id' => $runId,
                     'archive_type' => 'event',

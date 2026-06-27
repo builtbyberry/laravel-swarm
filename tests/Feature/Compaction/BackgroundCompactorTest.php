@@ -259,7 +259,8 @@ test('compact() on an already-graduated run is a no-op — no errors, no duplica
 
     $coldCountAfterFirst = DB::table('swarm_cold_archives')->where('run_id', $runId)->count();
 
-    // Second compact() call: barrier is gone from hot (reclaimed), no new barrier → no-op.
+    // Second compact() call: barrier is still in hot (reclaim deletes id < barrierDbId, not <=),
+    // but the pre-check sees base_pointer >= barrierDbId and returns false before any writes.
     $result = $compactor->compact($runId);
 
     expect($result)->toBeFalse();
@@ -334,6 +335,131 @@ test('run A compaction failure does not affect run B — both compact independen
     expect(DB::table('swarm_cold_archives')->where('run_id', $runIdB)->where('archive_type', 'event')->count())->toBe(1);
     expect(DB::table('swarm_cold_archives')->where('run_id', $runIdB)->where('archive_type', 'snapshot')->count())->toBe(1);
     expect(DB::table('swarm_durable_runs')->where('run_id', $runIdB)->whereNotNull('compaction_quarantined_at')->count())->toBe(0);
+});
+
+// ─── Scenario 7: Two-window graduation — barriers never appear in cold ────────
+
+test('two sequential graduation windows: prior-window barrier is never written to cold or surfaced via events()', function () {
+    $runId = 'run-compact-two-window';
+    seedCompactionRun($runId);
+
+    // Window 1: two content events + first barrier.
+    recordHotEvent($runId, 'evt-w1-1', 'window-1-first');
+    recordHotEvent($runId, 'evt-w1-2', 'window-1-second');
+    $barrier1DbId = recordSealBarrier($runId);
+
+    /** @var SwarmCompactor $compactor */
+    $compactor = app(SwarmCompactor::class);
+    $result1 = $compactor->compact($runId);
+    expect($result1)->toBeTrue();
+
+    // Window 2: two more content events + second barrier.
+    recordHotEvent($runId, 'evt-w2-1', 'window-2-first');
+    recordHotEvent($runId, 'evt-w2-2', 'window-2-second');
+    $barrier2DbId = recordSealBarrier($runId);
+
+    // Re-acquire fresh singleton so acquireLease() sees the released lease from window 1.
+    app()->forgetInstance(SwarmCompactor::class);
+    $compactor = app(SwarmCompactor::class);
+    $result2 = $compactor->compact($runId);
+    expect($result2)->toBeTrue();
+
+    // Cold must have exactly 4 content event rows (2 per window).
+    // Without the barrier-skip fix, this would be 5 (barrier1 included as an event row).
+    $coldEventCount = DB::table('swarm_cold_archives')
+        ->where('run_id', $runId)
+        ->where('archive_type', 'event')
+        ->count();
+
+    expect($coldEventCount)->toBe(4);
+
+    // Base pointer must be at the second barrier.
+    $basePointer = DB::table('swarm_cold_archives')
+        ->where('run_id', $runId)
+        ->where('archive_type', 'snapshot')
+        ->value('base_pointer');
+
+    expect((int) $basePointer)->toBe($barrier2DbId);
+
+    // TieredStreamEventStore::events() must return all 4 content events — no barriers.
+    app()->forgetInstance(TieredStreamEventStore::class);
+    app()->forgetInstance(DatabaseColdArchiveDriver::class);
+    app()->forgetInstance(DatabaseCausalLogStore::class);
+
+    /** @var TieredStreamEventStore $tiered */
+    $tiered = app(TieredStreamEventStore::class);
+    $allEvents = iterator_to_array($tiered->events($runId));
+
+    $contentEvents = array_values(array_filter($allEvents, fn ($e) => $e instanceof SwarmStreamStart));
+    $barrierEvents = array_filter($allEvents, fn ($e) => $e instanceof SwarmCausalSealBarrier);
+
+    expect($contentEvents)->toHaveCount(4);
+    expect($barrierEvents)->toHaveCount(0);
+
+    $inputs = array_map(fn (SwarmStreamStart $e) => $e->input, $contentEvents);
+    expect($inputs)->toBe(['window-1-first', 'window-1-second', 'window-2-first', 'window-2-second']);
+});
+
+// ─── Scenario 8: Hot-only barrier filter (pre-compaction TieredStreamEventStore) ────
+
+test('TieredStreamEventStore::events() filters barriers in the hot-only path before any compaction', function () {
+    $runId = 'run-compact-hot-filter';
+    seedCompactionRun($runId);
+
+    recordHotEvent($runId, 'evt-hf-1', 'content event');
+    recordSealBarrier($runId);
+
+    // base_pointer = 0 here (no compaction yet) — TieredStreamEventStore::events()
+    // takes the hot-only code path. Barriers must be filtered there too.
+    app()->forgetInstance(TieredStreamEventStore::class);
+    app()->forgetInstance(DatabaseColdArchiveDriver::class);
+    app()->forgetInstance(DatabaseCausalLogStore::class);
+
+    /** @var TieredStreamEventStore $tiered */
+    $tiered = app(TieredStreamEventStore::class);
+    $allEvents = iterator_to_array($tiered->events($runId));
+
+    $contentEvents = array_values(array_filter($allEvents, fn ($e) => $e instanceof SwarmStreamStart));
+    $barrierEvents = array_filter($allEvents, fn ($e) => $e instanceof SwarmCausalSealBarrier);
+
+    expect($contentEvents)->toHaveCount(1);
+    expect($barrierEvents)->toHaveCount(0);
+});
+
+// ─── Scenario 9: Unknown event types are skipped, not thrown (rolling-upgrade safety) ───
+
+test('DatabaseStreamEventStore skips unknown event types in events() and eventsFrom() without throwing', function () {
+    $runId = 'run-compact-unknown-evt';
+    seedCompactionRun($runId);
+
+    // Known event at DB id N.
+    $knownDbId = recordHotEvent($runId, 'evt-known-1', 'known content');
+
+    // Inject a row with a future/unknown event_type directly — simulates a new-worker
+    // writing an event type that old workers do not have in their fromArray() registry.
+    $now = now('UTC');
+    DB::table('swarm_stream_events')->insert([
+        'run_id' => $runId,
+        'event_uuid' => \Illuminate\Support\Str::uuid(),
+        'event_type' => 'swarm_future_event_type',
+        'payload' => json_encode(['type' => 'swarm_future_event_type', 'id' => 'unknown-uuid']),
+        'expires_at' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    /** @var \BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore $store */
+    $store = app(\BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore::class);
+
+    // events() must return only the known event; unknown must be silently skipped.
+    $allFromEvents = iterator_to_array($store->events($runId));
+    expect($allFromEvents)->toHaveCount(1);
+    expect($allFromEvents[0])->toBeInstanceOf(\BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart::class);
+
+    // eventsFrom() from sequence 0 must also skip the unknown event.
+    $allFromEventsFrom = iterator_to_array($store->eventsFrom($runId, 0));
+    expect($allFromEventsFrom)->toHaveCount(1);
+    expect($allFromEventsFrom[0])->toBeInstanceOf(\BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart::class);
 });
 
 // ─── Scenario 6: Crash mid-graduation → quarantine ───────────────────────────

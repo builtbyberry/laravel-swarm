@@ -54,7 +54,11 @@ class TieredStreamEventStore implements StreamEventStore
 
         if ($base === 0) {
             // No cold data yet — hot is the complete event set.
-            yield from $this->hot->events($runId);
+            foreach ($this->hot->events($runId) as $event) {
+                if (! ($event instanceof SwarmCausalSealBarrier)) {
+                    yield $event;
+                }
+            }
 
             return;
         }
