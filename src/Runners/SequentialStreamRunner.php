@@ -20,7 +20,9 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
@@ -59,6 +61,7 @@ class SequentialStreamRunner
         protected SwarmTelemetryDispatcher $telemetry,
         protected SwarmGuardrailRunner $guardrails,
         protected LoggerInterface $logger,
+        protected ContextGrowthGovernor $growthGovernor,
     ) {}
 
     /**
@@ -214,11 +217,21 @@ class SequentialStreamRunner
 
         $historyRowStarted = true;
 
+        // Per-run context-growth throttle memory (#288). Local to this stream so
+        // two runs in one Octane worker never share warn/nudge bookkeeping.
+        $growthState = [];
+
         try {
             foreach ($this->sequential->stream($state) as $streamEvent) {
                 $this->recordStreamTelemetry($swarm, $state, $streamEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
                 yield $streamEvent;
+
+                // Step boundary: govern hot context growth (#288). $streamSequenceIndex
+                // is the in-process hot working-set event count.
+                if ($streamEvent instanceof SwarmStepEnd) {
+                    $this->growthGovernor->evaluate($swarm, $context->runId, $streamSequenceIndex, $growthState);
+                }
             }
 
             $response = $this->normalizeCompletionResponse(new SwarmResponse(

@@ -606,6 +606,76 @@ return [
 
     ],
 
+    'context_growth' => [
+
+        /*
+        |--------------------------------------------------------------------------
+        | Context-Growth Policy
+        |--------------------------------------------------------------------------
+        |
+        | How the framework reacts when a streaming run's hot working set exceeds
+        | the budget below. This is the framework default; a swarm author may
+        | override it per swarm with #[ContextGrowthPolicy(...)]. The ladder is a
+        | set of cumulative bands — each rung includes the behaviour of every
+        | lower one:
+        |
+        |   ignore          — take no growth action (the hard cap still applies)
+        |   warn            — emit telemetry + a throttled warning
+        |   degrade_to_cold — warn, and nudge background compaction (default)
+        |   backpressure    — warn, degrade, and insert a bounded delay
+        |   refuse          — warn, then abort the run loud (re-dispatchable)
+        |
+        | Applies to the streaming substrate only; non-streaming prompt() runs do
+        | not accumulate a hot causal log and are out of scope.
+        |
+        */
+        'policy' => env('SWARM_CONTEXT_GROWTH_POLICY', 'degrade_to_cold'),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Working-Set Budget (Operator-Supplied)
+        |--------------------------------------------------------------------------
+        |
+        | The soft budget, measured in hot stream events for a run — the same rows
+        | background compaction reclaims. When the working set exceeds this, the
+        | declared policy above acts. Null (the default) leaves the policy inert:
+        | the package ships the machinery and the author's intent, never an
+        | imposed number. A non-positive value disables the budget.
+        |
+        | Intentionally left un-cast: a bare env() preserves null (inert). The
+        | governor's configuredCount() handles the ''/null/non-positive cases.
+        |
+        */
+        'budget_events' => env('SWARM_CONTEXT_GROWTH_BUDGET_EVENTS'),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Working-Set Hard Cap (Operator Veto)
+        |--------------------------------------------------------------------------
+        |
+        | An absolute ceiling that clamps author intent: a breach refuses the run
+        | regardless of the declared policy (even `ignore`). Best-effort
+        | governance, not a correctness invariant — if the policy machinery itself
+        | fails, the run proceeds rather than wedging. Null disables the cap.
+        |
+        */
+        'hard_cap_events' => env('SWARM_CONTEXT_GROWTH_HARD_CAP_EVENTS'),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Backpressure Delay
+        |--------------------------------------------------------------------------
+        |
+        | The bounded delay (milliseconds) inserted at a step boundary under the
+        | `backpressure` rung. Clamped to a safe maximum so it can never wedge a
+        | run; most meaningful for queued/durable execution rather than a
+        | synchronous HTTP stream.
+        |
+        */
+        'backpressure_delay_ms' => (int) env('SWARM_CONTEXT_GROWTH_BACKPRESSURE_DELAY_MS', 250),
+
+    ],
+
     // These table names are honored by the database repositories at runtime.
     // If you change them, publish and update the package migrations as well.
     //

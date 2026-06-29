@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
+use BuiltByBerry\LaravelSwarm\Attributes\ContextGrowthPolicy as ContextGrowthPolicyAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\DurableParallelFailurePolicy as DurableParallelFailurePolicyAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\MaxAgentSteps as MaxAgentStepsAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\PropagationPolicy as PropagationPolicyAttribute;
@@ -14,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\GrowthPolicy;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
@@ -182,6 +184,30 @@ class SwarmAttributeResolver
         } catch (ValueError $exception) {
             throw new SwarmException("Invalid durable parallel failure policy [{$configured}]. Supported policies: collect_failures, fail_run, partial_success.", previous: $exception);
         }
+    }
+
+    /**
+     * Resolve the context-growth policy for a swarm: the
+     * `#[ContextGrowthPolicy(...)]` attribute when present, otherwise the
+     * configured `swarm.context_growth.policy` default (warn + degrade-to-cold).
+     *
+     * Parsing is lenient and fail-safe: an unrecognised configured value falls
+     * back to the framework default rather than throwing, so a typo in operator
+     * config can never wedge a run — consistent with the policy's own fail-safe
+     * contract (#288).
+     */
+    public function resolveGrowthPolicy(Swarm $swarm): GrowthPolicy
+    {
+        $reflection = new ReflectionClass($swarm);
+        $attributes = $reflection->getAttributes(ContextGrowthPolicyAttribute::class);
+
+        if ($attributes !== []) {
+            return $attributes[0]->newInstance()->policy;
+        }
+
+        $configured = $this->config->get('swarm.context_growth.policy');
+
+        return GrowthPolicy::tryFromConfig(is_string($configured) ? $configured : null);
     }
 
     /**
