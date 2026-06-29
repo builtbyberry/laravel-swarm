@@ -32,7 +32,7 @@ test('persistence documentation names durable runtime inspection access', functi
 test('streaming documentation covers topology replay capture and limits', function () {
     $contents = file_get_contents(__DIR__.'/../../docs/streaming.md');
 
-    expect($contents)->toContain('Sequential and Static-Hierarchical')
+    expect($contents)->toContain('Sequential, Static-Hierarchical, and Hierarchical')
         ->and($contents)->toContain('bounded loops')
         ->and($contents)->toContain('storeForReplay')
         ->and($contents)->toContain('SwarmHistory::replay')
