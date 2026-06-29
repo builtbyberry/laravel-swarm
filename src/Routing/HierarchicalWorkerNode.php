@@ -10,6 +10,7 @@ namespace BuiltByBerry\LaravelSwarm\Routing;
 class HierarchicalWorkerNode extends HierarchicalRouteNode
 {
     /**
+     * @param  class-string  $agentClass
      * @param  array<string, string>  $withOutputs
      * @param  array<string, mixed>  $metadata
      */

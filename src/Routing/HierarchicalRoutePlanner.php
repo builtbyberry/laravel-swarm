@@ -81,7 +81,7 @@ class HierarchicalRoutePlanner
     }
 
     /**
-     * @param  array<int, string>  $workerClasses
+     * @param  array<int, class-string>  $workerClasses
      * @param  array<string, mixed>  $payload
      */
     private function normalizeAndValidateWithCoordinatorClass(?string $coordinatorClass, array $workerClasses, array $payload, string $swarmClass): HierarchicalRoutePlan
@@ -133,7 +133,7 @@ class HierarchicalRoutePlanner
 
     /**
      * @param  array<string, mixed>  $payload
-     * @param  array<int, string>  $workerClasses
+     * @param  array<int, class-string>  $workerClasses
      */
     protected function normalizeNode(string $nodeId, array $payload, ?string $coordinatorClass, array $workerClasses, string $swarmClass): HierarchicalRouteNode
     {
@@ -160,7 +160,7 @@ class HierarchicalRoutePlanner
     /**
      * @param  array<string, mixed>  $payload
      * @param  array<string, mixed>  $metadata
-     * @param  array<int, string>  $workerClasses
+     * @param  array<int, class-string>  $workerClasses
      */
     protected function normalizeWorkerNode(string $nodeId, array $payload, array $metadata, ?string $next, ?string $coordinatorClass, array $workerClasses): HierarchicalWorkerNode
     {
