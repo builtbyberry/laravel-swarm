@@ -23,6 +23,11 @@ final class SwarmCausalVoidEdge extends SwarmStreamEvent
         public string $targetEventId,
         public string $reason,
         public int $timestamp,
+        // The rollup node whose digest reads in the target's place, for a
+        // RolledUp edge (#289). Null for every other void type. It rides in the
+        // payload JSON only — no dedicated column — since the fold reads it from
+        // there and the lock/seal path keys on the existing void columns.
+        public ?string $digestNodeId = null,
     ) {}
 
     /**
@@ -39,6 +44,7 @@ final class SwarmCausalVoidEdge extends SwarmStreamEvent
             'void_type' => $this->voidType->value,
             'target_event_id' => $this->targetEventId,
             'reason' => $this->reason,
+            'digest_node_id' => $this->digestNodeId,
             'timestamp' => $this->timestamp,
         ];
     }
@@ -55,6 +61,7 @@ final class SwarmCausalVoidEdge extends SwarmStreamEvent
             targetEventId: self::stringValue($payload, 'target_event_id'),
             reason: self::stringValue($payload, 'reason'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
+            digestNodeId: self::nullableStringValue($payload, 'digest_node_id'),
         );
     }
 }

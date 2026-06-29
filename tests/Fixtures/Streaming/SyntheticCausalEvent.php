@@ -88,6 +88,24 @@ final class SyntheticCausalEvent extends SwarmStreamEvent
     }
 
     /**
+     * A `swarm_causal_void_edge` of type `rolled_up` (#289), carrying the digest
+     * node the target reads in its place.
+     */
+    public static function rolledUpEdge(string $id, string $targetEventId, string $digestNodeId, string $reason = 'rolled up'): self
+    {
+        return new self([
+            'id' => $id,
+            'type' => 'swarm_causal_void_edge',
+            'run_id' => 'run-synthetic',
+            'void_type' => 'rolled_up',
+            'target_event_id' => $targetEventId,
+            'reason' => $reason,
+            'digest_node_id' => $digestNodeId,
+            'timestamp' => 0,
+        ]);
+    }
+
+    /**
      * A plain leaf event carrying an optional `node_id` (absent => null/top-level).
      */
     public static function leaf(string $id, ?string $nodeId = null): self

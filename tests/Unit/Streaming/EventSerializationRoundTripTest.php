@@ -416,7 +416,8 @@ function event_payload_cases(): array
         'timestamp' => 1_700_000_021,
     ]];
 
-    // SwarmCausalVoidEdge — two void types; no nullable fields (run-scoped edge).
+    // SwarmCausalVoidEdge — supersedes/replaces carry a null digest pointer;
+    // a rolled_up edge (#289) carries the digest node it points downstream to.
     $cases['causal_void_edge supersedes'] = [SwarmCausalVoidEdge::class, [
         'id' => 'evt-cve-1',
         'invocation_id' => 'inv-cve-1',
@@ -426,6 +427,7 @@ function event_payload_cases(): array
         'void_type' => 'supersedes',
         'target_event_id' => 'evt-target-1',
         'reason' => 'coordinator re-routed',
+        'digest_node_id' => null,
         'timestamp' => 1_700_000_022,
     ]];
     $cases['causal_void_edge replaces'] = [SwarmCausalVoidEdge::class, [
@@ -437,7 +439,20 @@ function event_payload_cases(): array
         'void_type' => 'replaces',
         'target_event_id' => 'evt-target-2',
         'reason' => 'crash-retry of the same step',
+        'digest_node_id' => null,
         'timestamp' => 1_700_000_023,
+    ]];
+    $cases['causal_void_edge rolled_up'] = [SwarmCausalVoidEdge::class, [
+        'id' => 'evt-cve-3',
+        'invocation_id' => 'inv-cve-3',
+        'node_id' => null,
+        'type' => 'swarm_causal_void_edge',
+        'run_id' => 'run-1',
+        'void_type' => 'rolled_up',
+        'target_event_id' => 'evt-target-3',
+        'reason' => 'rolled up by [rollup_node]',
+        'digest_node_id' => 'rollup_node',
+        'timestamp' => 1_700_000_024,
     ]];
 
     // SwarmNodeOpened (#284) — root node (parent null) self-identifying +

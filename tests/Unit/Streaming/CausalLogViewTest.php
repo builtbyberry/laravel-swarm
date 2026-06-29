@@ -184,6 +184,76 @@ test('everything view surfaces the whole abandoned subtree, each wrapped under t
 });
 
 // ---------------------------------------------------------------------------
+// Rollup (#289) — node_id-membership suppression, NOT subtree
+// ---------------------------------------------------------------------------
+
+test('rolled_up suppresses ONLY the digested nodes, never their forward chain', function () {
+    // A chain A -> B -> rollup -> D, where each node is the PARENT of the next
+    // (exactly how the sequential walk records structure). Rolling up {A, B}
+    // must drop only A's and B's events and KEEP the rollup and D — even though
+    // they are causal descendants of A/B. This is the R6 anti-subtree property:
+    // Abandons would erase the whole tail; RolledUp must not.
+    $events = [
+        SyntheticCausalEvent::nodeOpened('o-a', 'A', null),
+        SyntheticCausalEvent::leaf('a-leaf', 'A'),
+        SyntheticCausalEvent::nodeOpened('o-b', 'B', 'A'),
+        SyntheticCausalEvent::leaf('b-leaf', 'B'),
+        SyntheticCausalEvent::nodeOpened('o-r', 'rollup', 'B'),
+        SyntheticCausalEvent::leaf('r-leaf', 'rollup'),
+        SyntheticCausalEvent::nodeOpened('o-d', 'D', 'rollup'),
+        SyntheticCausalEvent::leaf('d-leaf', 'D'),
+        SyntheticCausalEvent::rolledUpEdge('v-a', 'o-a', 'rollup'),
+        SyntheticCausalEvent::rolledUpEdge('v-b', 'o-b', 'rollup'),
+    ];
+
+    $clean = ids((new CausalLogView($events))->fold(ViewOrder::Causal, ViewSupersession::Clean));
+
+    // A and B (open + leaf) are gone; the rollup, D, and the edges survive.
+    expect($clean)->toBe(['o-r', 'r-leaf', 'o-d', 'd-leaf', 'v-a', 'v-b']);
+});
+
+test('the same chain under abandons DOES erase the tail — pinning the difference', function () {
+    // Identical structure, but an `abandons` on A. Subtree suppression now takes
+    // everything downstream of A: B, the rollup, and D all vanish. This is the
+    // exact behaviour RolledUp must avoid (contrast for the test above).
+    $events = [
+        SyntheticCausalEvent::nodeOpened('o-a', 'A', null),
+        SyntheticCausalEvent::nodeOpened('o-b', 'B', 'A'),
+        SyntheticCausalEvent::nodeOpened('o-r', 'rollup', 'B'),
+        SyntheticCausalEvent::nodeOpened('o-d', 'D', 'rollup'),
+        SyntheticCausalEvent::voidEdge('v', 'abandons', 'o-a', 'cancelled'),
+    ];
+
+    $clean = ids((new CausalLogView($events))->fold(ViewOrder::Causal, ViewSupersession::Clean));
+
+    // Only the void-edge remains — the entire chain is abandoned.
+    expect($clean)->toBe(['v']);
+});
+
+test('everything view wraps each rolled-up event with its digest pointer', function () {
+    $events = [
+        SyntheticCausalEvent::nodeOpened('o-a', 'A', null),
+        SyntheticCausalEvent::leaf('a-leaf', 'A'),
+        SyntheticCausalEvent::nodeOpened('o-r', 'rollup', 'A'),
+        SyntheticCausalEvent::rolledUpEdge('v-a', 'o-a', 'rollup', 'digested by [rollup]'),
+    ];
+
+    $everything = (new CausalLogView($events))->fold(ViewOrder::Causal, ViewSupersession::Everything);
+
+    // Nothing dropped; the rollup node and the edge stay plain.
+    expect(ids($everything))->toBe(['o-a', 'a-leaf', 'o-r', 'v-a']);
+
+    // Both of A's events surface as rolled-up, each carrying the digest pointer
+    // so an auditor can follow the digested node forward to its summary.
+    $wrapped = collect($everything)->filter(fn ($row) => $row instanceof VoidedEvent)->values();
+    expect($wrapped)->toHaveCount(2)
+        ->and($wrapped->pluck('event')->map(fn ($e) => $e->toArray()['id'])->all())->toBe(['o-a', 'a-leaf'])
+        ->and($wrapped->every(fn ($w) => $w->voidType === CausalVoidEdgeType::RolledUp))->toBeTrue()
+        ->and($wrapped->every(fn ($w) => $w->digestNodeId === 'rollup'))->toBeTrue()
+        ->and($wrapped->every(fn ($w) => $w->reason === 'digested by [rollup]'))->toBeTrue();
+});
+
+// ---------------------------------------------------------------------------
 // Edge cases that must not crash
 // ---------------------------------------------------------------------------
 

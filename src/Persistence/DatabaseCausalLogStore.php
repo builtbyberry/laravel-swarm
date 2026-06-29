@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SealedCausalWindowException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\UnknownCausalTargetException;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
@@ -57,12 +58,13 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
         string $targetEventId,
         string $reason,
         int $ttlSeconds = 0,
+        ?string $digestNodeId = null,
     ): void {
         // Fail loud with a clear message on the cache driver / un-migrated schema,
         // rather than letting a raw QueryException surface from the insert.
         $this->assertReady();
 
-        $this->connection->transaction(function () use ($runId, $type, $targetEventId, $reason, $ttlSeconds): void {
+        $this->connection->transaction(function () use ($runId, $type, $targetEventId, $reason, $ttlSeconds, $digestNodeId): void {
             // Fence the target row: a concurrent #287 seal must take the same lock,
             // so it either commits before this SELECT (we observe sealed_at and
             // throw) or blocks until this void-edge commits. No TOCTOU window.
@@ -91,6 +93,7 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
                 targetEventId: $targetEventId,
                 reason: $reason,
                 timestamp: SwarmStreamEvent::timestamp(),
+                digestNodeId: $digestNodeId,
             );
 
             $timestamp = Carbon::now('UTC');
@@ -107,6 +110,56 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
                 'created_at' => $timestamp,
                 'updated_at' => $timestamp,
             ]);
+        });
+    }
+
+    public function sealRollup(
+        string $runId,
+        array $targetEventIds,
+        string $digestNodeId,
+        string $reason,
+        int $ttlSeconds = 0,
+    ): void {
+        $this->assertReady();
+
+        $this->connection->transaction(function () use ($runId, $targetEventIds, $digestNodeId, $reason, $ttlSeconds): void {
+            $emittedAny = false;
+
+            foreach ($targetEventIds as $targetEventId) {
+                // Idempotent: a target already carrying a rolled_up edge (a
+                // re-dispatched/re-executed pass) is skipped rather than voided
+                // twice. The dedicated void columns make this an indexed lookup.
+                $alreadyRolledUp = $this->table()
+                    ->where('run_id', $runId)
+                    ->where('void_type', CausalVoidEdgeType::RolledUp->value)
+                    ->where('void_target_event_uuid', $targetEventId)
+                    ->exists();
+
+                if ($alreadyRolledUp) {
+                    continue;
+                }
+
+                // appendVoidEdge fences the target row and throws on a sealed
+                // target; nesting it here runs under a savepoint, so any throw
+                // rolls back the whole rollup-seal — never a partial.
+                $this->appendVoidEdge($runId, CausalVoidEdgeType::RolledUp, $targetEventId, $reason, $ttlSeconds, $digestNodeId);
+                $emittedAny = true;
+            }
+
+            // Barrier last, and only when this call actually voided something.
+            // Edges + barrier are written in one transaction, so an all-skipped
+            // call (every target already rolled up) means the barrier from the
+            // original call already exists — re-recording it would graduate an
+            // empty window. The compactor keys on the barrier, so emitting it
+            // only after at least one fresh edge keeps a partial rollup
+            // ungraduatable while never duplicating a window.
+            if ($emittedAny) {
+                $this->record($runId, new SwarmCausalSealBarrier(
+                    id: SwarmStreamEvent::newId(),
+                    runId: $runId,
+                    timestamp: SwarmStreamEvent::timestamp(),
+                ), $ttlSeconds);
+            }
         });
     }
 

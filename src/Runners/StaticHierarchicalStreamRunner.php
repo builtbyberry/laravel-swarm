@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\HasRoutePlan;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
@@ -32,6 +33,7 @@ use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalFinishNode;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalParallelNode;
+use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRollupNode;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
@@ -463,6 +465,12 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         float $streamTelemetryStart,
     ): \Generator {
         $nodeOutputs = [];
+        // node_id => the event uuid of that node's CURRENT step-end (#289).
+        // Overwritten each loop iteration so a rollup targets the live, unsealed
+        // step-end of the generation it digests — never the once-only node-open
+        // event, which a prior iteration's barrier may have sealed. Generator-
+        // local, so two runs in one Octane worker never share it.
+        $nodeStepEndEventIds = [];
         $mergedUsage = [];
         $executedNodeIds = [];
         $executedAgentClasses = [];
@@ -574,6 +582,21 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 ))->withNodeId($node->id);
                 yield $stepEndEvent;
                 $this->recordStreamTelemetry($swarm, $state, $stepEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                $nodeStepEndEventIds[$node->id] = $stepEndEvent->id;
+
+                // #289 — a rollup digests its named generation: prune those nodes
+                // from the operational context map (so downstream can only read
+                // this digest), then best-effort void + seal the digested window
+                // for mid-run compaction. The prune is the operational bound; the
+                // edges/barrier are the display fold + sealability and degrade to
+                // a no-op off the database causal log.
+                if ($node instanceof HierarchicalRollupNode) {
+                    foreach ($node->digestedNodeIds() as $digestedId) {
+                        unset($nodeOutputs[$digestedId]);
+                    }
+
+                    $this->sealRolledUpGeneration($context->runId, $node, $nodeStepEndEventIds, $contextTtl);
+                }
 
                 // Step boundary: govern hot context growth (#288). $streamSequenceIndex
                 // is the in-process hot working-set event count.
@@ -722,6 +745,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         );
                         yield $branchEndEvent;
                         $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                        $nodeStepEndEventIds[$branch->id] = $branchEndEvent->id;
 
                         // Step boundary: a parallel branch end is a step end too, so a
                         // fan-out-dominated run is governed for context growth (#288).
@@ -940,6 +964,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         );
                         yield $branchEndEvent;
                         $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                        $nodeStepEndEventIds[$branch->id] = $branchEndEvent->id;
 
                         // Step boundary: govern context growth on each joined branch
                         // result too (#288). The concurrent work is already complete
@@ -1213,6 +1238,68 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         }
 
         return rtrim($prompt)."\n\nNamed outputs:\n".implode("\n\n", $sections);
+    }
+
+    /**
+     * Best-effort: void the digested generation's events and seal the window so
+     * #287 can graduate it to cold mid-run. Requires the database causal log;
+     * skipped (the display fold degrades to showing the raw nodes) on any other
+     * driver or store failure, exactly like the run-end seal barrier. The
+     * operational prune has already happened by the time this runs, so a skip
+     * never affects correctness — only how the audit/display fold reads.
+     *
+     * @param  array<string, string>  $nodeStepEndEventIds  node_id => current step-end event uuid
+     */
+    protected function sealRolledUpGeneration(string $runId, HierarchicalRollupNode $node, array $nodeStepEndEventIds, int $contextTtl): void
+    {
+        $targets = [];
+
+        foreach ($node->digestedNodeIds() as $digestedId) {
+            // The digested node executed earlier in this pass, so its current
+            // step-end uuid is in the generator-local map. A missing entry means
+            // the node was never reached — skip it rather than guess a target.
+            if (isset($nodeStepEndEventIds[$digestedId])) {
+                $targets[] = $nodeStepEndEventIds[$digestedId];
+            }
+        }
+
+        if ($targets === []) {
+            return;
+        }
+
+        try {
+            $this->causalLog()?->sealRollup(
+                runId: $runId,
+                targetEventIds: $targets,
+                digestNodeId: $node->id,
+                reason: "rolled up by [{$node->id}]",
+                ttlSeconds: $contextTtl,
+            );
+        } catch (Throwable) {
+            // Intentionally swallowed — matches the best-effort run-end seal
+            // barrier. The operational prune already bounded the working set.
+        }
+    }
+
+    /**
+     * The database causal log when the bound store can append void-edges, else
+     * null (cache driver / un-migrated schema). Tiered runs decorate the hot
+     * DatabaseCausalLogStore, so the shared singleton is resolved directly to
+     * land the void-edges on the hot tier the compactor reads.
+     */
+    protected function causalLog(): ?CausalLogStore
+    {
+        if ($this->streamEvents instanceof CausalLogStore) {
+            return $this->streamEvents;
+        }
+
+        try {
+            $resolved = Container::getInstance()->make(CausalLogStore::class);
+
+            return $resolved instanceof CausalLogStore ? $resolved : null;
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     // -------------------------------------------------------------------------
