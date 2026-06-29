@@ -36,6 +36,7 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
+use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
@@ -123,6 +124,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         SwarmTelemetryDispatcher $telemetry,
         SwarmGuardrailRunner $guardrails,
         LoggerInterface $logger,
+        ContextGrowthGovernor $growthGovernor,
         protected HierarchicalRoutePlanner $planner,
         protected ConcurrencyManager $concurrency,
         protected SwarmStepRecorder $stepsRecorder,
@@ -145,6 +147,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             $telemetry,
             $guardrails,
             $logger,
+            $growthGovernor,
         );
     }
 
@@ -465,6 +468,9 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         $executedAgentClasses = [];
         $parallelGroups = [];
         $loopIterations = [];
+        // Per-run context-growth throttle memory (#288). Generator-local so two
+        // runs in one Octane worker never share warn/nudge bookkeeping.
+        $growthState = [];
         // The enclosing node id for the next node opened (#284): null at the
         // root, then the most-recent decider once it declares its child.
         $parentNodeId = $initialParentNodeId;
@@ -568,6 +574,10 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 ))->withNodeId($node->id);
                 yield $stepEndEvent;
                 $this->recordStreamTelemetry($swarm, $state, $stepEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                // Step boundary: govern hot context growth (#288). $streamSequenceIndex
+                // is the in-process hot working-set event count.
+                $this->growthGovernor->evaluate($swarm, $context->runId, $streamSequenceIndex, $growthState);
 
                 $nextIndex++;
                 $loopIterations[$node->id] = $iteration;
@@ -712,6 +722,10 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         );
                         yield $branchEndEvent;
                         $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                        // Step boundary: a parallel branch end is a step end too, so a
+                        // fan-out-dominated run is governed for context growth (#288).
+                        $this->growthGovernor->evaluate($swarm, $context->runId, $streamSequenceIndex, $growthState);
 
                         $nextIndex++;
                     }
@@ -926,6 +940,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         );
                         yield $branchEndEvent;
                         $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+
+                        // Step boundary: govern context growth on each joined branch
+                        // result too (#288). The concurrent work is already complete
+                        // here, so a refusal aborts cleanly without racing a branch.
+                        $this->growthGovernor->evaluate($swarm, $context->runId, $streamSequenceIndex, $growthState);
                     }
 
                     $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
