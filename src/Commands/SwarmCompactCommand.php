@@ -29,6 +29,20 @@ class SwarmCompactCommand extends Command
         $limit = $this->optionInt('limit', 50);
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
+        if ($config->get('swarm.persistence.driver') !== 'database') {
+            $audit->emit('command.compact', [
+                'target_run_id' => $targetRunId,
+                'dispatched_count' => 0,
+                'dispatched_run_ids' => [],
+                'status' => 'skipped_non_database_driver',
+                ...$audit->metadata($actorMetadata),
+            ]);
+
+            $this->components->info('Compaction requires the database persistence driver; nothing to do.');
+
+            return self::SUCCESS;
+        }
+
         $runIds = $targetRunId !== null
             ? [$targetRunId]
             : $this->discoverEligibleRuns($config, $connection, $limit);

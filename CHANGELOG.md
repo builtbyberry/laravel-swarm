@@ -26,6 +26,10 @@ Legible self-structuring streaming: an append-only causal-log substrate that mak
 
 _To be filled in during release wrap-up._
 
+### Fixed
+
+- **swarm:compact no-ops on a non-database persistence driver (#290 review).** The command now returns early with an informational message instead of throwing a QueryException when swarm.persistence.driver is not database — matching the documented operator-runbook behavior.
+
 ## v0.14.0 - 2026-06-23
 
 Durable runtime hardening & idiom polish — batches the durable recovery sweeps off per-row hydration, investigates and guards the durable run-state write path, finishes the `readonly class` / Collection idiom adoption, and redacts exception messages on the audit event/log paths.
