@@ -129,6 +129,16 @@ Controls behavior specific to the `StaticHierarchical` topology.
 
 ---
 
+## Hierarchical
+
+Controls behavior specific to the dynamic `Hierarchical` topology when streamed (v0.15.0+). See the [Streaming Substrate Author Guide](streaming-substrate-author-guide.md).
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.hierarchical.stream_parallel_branches` | string | `concurrent` | `SWARM_HIERARCHICAL_STREAM_PARALLEL_BRANCHES` | How parallel groups behave when a dynamic hierarchical swarm is streamed, independent of the static-hierarchical key of the same name. `concurrent` — branches run via `ConcurrencyManager` (no live text deltas from branches). `sequential` — branches stream one at a time in declaration order. `#[StreamParallelBranches]` overrides this per swarm. |
+
+---
+
 ## Queue
 
 Queue connection and name used for `queue()` execution and hierarchical parallel coordination.
@@ -160,6 +170,29 @@ Controls the optional persisted stream replay feature. Replay is disabled by def
 | `swarm.streaming.replay.failure_policy` | string | `fail` | `SWARM_STREAM_REPLAY_FAILURE_POLICY` | What happens when writing a replay event fails. `fail` — the stream fails (default). `continue` — the failure is swallowed and partial replay is unavailable. |
 | `swarm.streaming.replay.store` | string\|null | `null` | `SWARM_STREAM_REPLAY_STORE` | Named cache store for stream replay events. `null` uses the default cache store. |
 | `swarm.streaming.replay.prefix` | string | `swarm:stream:` | `SWARM_STREAM_REPLAY_PREFIX` | Cache key prefix for stream replay entries. |
+
+---
+
+## Compaction
+
+Controls the background compactor that bounds the hot causal log by graduating sealed history to cold storage (v0.15.0+, database driver only). The `swarm:compact` command is **not** auto-scheduled — see the [Streaming Substrate Operator Runbook](operator-runbook-streaming-substrate.md).
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.compaction.lease_seconds` | int | `300` | `SWARM_COMPACTION_LEASE_SECONDS` | How long a per-run compaction lease is held. The lease expires naturally if the job process dies, so a crashed compaction self-heals on the next sweep. |
+
+---
+
+## Context Growth
+
+Governs a streaming run's hot working set by declared intent (v0.15.0+). An author declares a `#[ContextGrowthPolicy]`; the operator supplies the budget. The budget and hard-cap default to `null` (inert) — the package imposes no number unless you set one. See the [Streaming Substrate Author Guide](streaming-substrate-author-guide.md#context-growth-policy).
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.context_growth.policy` | string | `degrade_to_cold` | `SWARM_CONTEXT_GROWTH_POLICY` | Framework default growth-policy rung when a swarm declares no `#[ContextGrowthPolicy]`. Cumulative ladder: `ignore` → `warn` → `degrade_to_cold` → `backpressure` → `refuse`. |
+| `swarm.context_growth.budget_events` | int\|null | `null` (inert) | `SWARM_CONTEXT_GROWTH_BUDGET_EVENTS` | Soft budget in hot stream events. `null` leaves the policy inert; supplying a number activates the default `degrade_to_cold` behaviour unless an author declares another rung. Measured per stream segment (resets when a run resumes in a fresh process). |
+| `swarm.context_growth.hard_cap_events` | int\|null | `null` (disabled) | `SWARM_CONTEXT_GROWTH_HARD_CAP_EVENTS` | Absolute ceiling that clamps author intent — a breach refuses the run regardless of declared policy (even `ignore`). Best-effort governance, not a correctness invariant. |
+| `swarm.context_growth.backpressure_delay_ms` | int | `250` | `SWARM_CONTEXT_GROWTH_BACKPRESSURE_DELAY_MS` | Bounded delay inserted at a step boundary under the `backpressure` rung. Clamped to a safe maximum. |
 
 ---
 
