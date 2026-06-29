@@ -149,10 +149,10 @@ test('the governor holds no mutable per-run instance state (Octane singleton-saf
 
     foreach ($properties as $property) {
         $type = $property->getType();
-        $typeName = $type instanceof ReflectionNamedType ? $type->getName() : (string) $type;
-
-        expect(in_array($typeName, ['string', 'int', 'float', 'bool', 'array'], true))
-            ->toBeFalse("ContextGrowthGovernor::\${$property->getName()} is a scalar/array — a per-run leak surface under Octane.");
+        $isStatelessCollaborator = $type instanceof ReflectionNamedType && ! $type->isBuiltin();
+        expect($isStatelessCollaborator)->toBeTrue(
+            ContextGrowthGovernor::class."::\${$property->getName()} must be a typed object collaborator; scalar/array/untyped/mixed/union is a per-run leak surface under Octane."
+        );
     }
 });
 

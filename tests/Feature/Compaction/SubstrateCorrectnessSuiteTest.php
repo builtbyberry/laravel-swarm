@@ -415,14 +415,15 @@ test('the compactor and cold driver carry no mutable per-run instance state (sin
         $properties = (new ReflectionClass($class))->getProperties();
 
         foreach ($properties as $property) {
-            $type = $property->getType();
-            $typeName = $type instanceof ReflectionNamedType ? $type->getName() : (string) $type;
-
             // Only collaborators (config, connection, cipher, logger, audit) are
             // allowed — all themselves stateless/singleton. A run-id string, an
-            // int cursor, or an array buffer would be a per-run leak surface.
-            expect(in_array($typeName, ['string', 'int', 'float', 'bool', 'array'], true))
-                ->toBeFalse("{$class}::\${$property->getName()} is a scalar/array — a per-run state leak surface under Octane.");
+            // int cursor, an array buffer, or an untyped/mixed/union field would be
+            // a per-run leak surface — require a typed OBJECT collaborator.
+            $type = $property->getType();
+            $isStatelessCollaborator = $type instanceof ReflectionNamedType && ! $type->isBuiltin();
+            expect($isStatelessCollaborator)->toBeTrue(
+                "{$class}::\${$property->getName()} must be a typed object collaborator; scalar/array/untyped/mixed/union is a per-run leak surface under Octane."
+            );
         }
     }
 });
@@ -535,8 +536,8 @@ test('a cold snapshot resume read under a rotated APP_KEY fails loud and never f
 
     // And critically: it does NOT return null and does NOT return ciphertext.
     try {
-        $folded = app(DatabaseColdArchiveDriver::class)->readSnapshotStrict($runId, $rotated);
-        expect($folded)->toBeNull('readSnapshotStrict silently folded a rotated-key snapshot — must fail loud.');
+        app(DatabaseColdArchiveDriver::class)->readSnapshotStrict($runId, $rotated);
+        $this->fail('readSnapshotStrict silently returned on a rotated-key snapshot — must fail loud.');
     } catch (SwarmException $e) {
         expect($e->getMessage())->toContain($runId)
             ->and($e->getMessage())->toContain('Re-dispatch');
@@ -572,33 +573,35 @@ test('supersede is bounded to the unsealed window: a sealed target is not retrac
     seedSubstrateRun($runId);
 
     recordStart($runId, 'si-s', 'prompt');
-    $sealedTargetDbId = recordDelta($runId, 'si-d1', 'will be sealed');
-    recordBarrier($runId);
+    recordDelta($runId, 'si-d1', 'will be sealed');
+    $barrierId = recordBarrier($runId);
 
-    expect(app(SwarmCompactor::class)->compact($runId))->toBeTrue();
+    // Graduate WITHOUT reclaim — graduate() step 3 sets sealed_at on the hot rows
+    // before the (separate) reclaim DELETE, so after a graduate-without-reclaim the
+    // real sealed row is still present in hot. This exercises compaction actually
+    // sealing the row, not a hand-inserted synthetic one.
+    $causalLog = app(DatabaseCausalLogStore::class);
+    $cipher = app(SwarmPersistenceCipher::class);
+    $cold = app(DatabaseColdArchiveDriver::class);
 
-    // The graduated rows were reclaimed from hot — re-seed a sealed row to model a
-    // sealed-but-still-hot target (graduate sets sealed_at before reclaim deletes).
-    // Here we assert directly against the guard: a sealed target cannot be voided.
-    DB::table('swarm_stream_events')->insert([
-        'run_id' => $runId,
-        'event_uuid' => 'si-sealed-survivor',
-        'event_type' => 'swarm_text_delta',
-        'payload' => json_encode(['type' => 'swarm_text_delta', 'id' => 'si-sealed-survivor', 'run_id' => $runId]),
-        'sealed_at' => now('UTC'),
-        'expires_at' => null,
-        'created_at' => now('UTC'),
-        'updated_at' => now('UTC'),
-    ]);
+    $window = [];
+    foreach ($causalLog->eventsFrom($runId, 0) as $event) {
+        if ($event instanceof SwarmCausalSealBarrier) {
+            break;
+        }
+        $window[] = $event;
+    }
+    $sealed = $cipher->seal(json_encode((new CausalLogView($window))->snapshot(), JSON_THROW_ON_ERROR));
+
+    expect($cold->graduate($runId, 0, $barrierId, $sealed))->toBeTrue();
+    // Deliberately DO NOT reclaim — si-d1 now carries sealed_at but is still in the hot log.
 
     expect(fn () => app(CausalLogStore::class)->appendVoidEdge(
         $runId,
         CausalVoidEdgeType::Supersedes,
-        'si-sealed-survivor',
+        'si-d1',
         'too late — sealed',
     ))->toThrow(SealedCausalWindowException::class);
-
-    unset($sealedTargetDbId);
 });
 
 test('an unsealed target IS still retractable (the bound is sealed-vs-unsealed, not blanket immutability)', function () {
