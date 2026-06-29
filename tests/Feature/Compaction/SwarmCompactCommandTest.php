@@ -195,6 +195,35 @@ test('swarm:compact with no eligible runs prints info and exits zero', function 
     Queue::assertNothingPushed();
 });
 
+// ─── Scenario 5b: non-database driver no-ops cleanly (no QueryException) ──────
+
+test('swarm:compact no-ops on a non-database persistence driver', function (): void {
+    Queue::fake();
+
+    // Drop the swarm tables so any DB access would throw a QueryException —
+    // the cache driver never touches them, so the guard must short-circuit first.
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+    config()->set('swarm.persistence.driver', 'cache');
+
+    $exitCode = Artisan::call('swarm:compact');
+
+    expect($exitCode)->toBe(0);
+    expect(Artisan::output())->toContain('Compaction requires the database persistence driver');
+    Queue::assertNothingPushed();
+});
+
+test('swarm:compact --run-id no-ops on a non-database persistence driver', function (): void {
+    Queue::fake();
+
+    config()->set('swarm.persistence.driver', 'cache');
+
+    $exitCode = Artisan::call('swarm:compact', ['--run-id' => 'whatever']);
+
+    expect($exitCode)->toBe(0);
+    expect(Artisan::output())->toContain('Compaction requires the database persistence driver');
+    Queue::assertNothingPushed();
+});
+
 // ─── Scenario 6: command.compact audit event emitted ─────────────────────────
 
 test('swarm:compact emits a command.compact audit event with dispatched_count', function (): void {
