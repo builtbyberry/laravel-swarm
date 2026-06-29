@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalBudgetLimitedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMissingStructuredCoordinatorSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalStreamSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
@@ -136,4 +137,25 @@ test('streamed hierarchical swarm emits node.closed for __coordinator__ after ch
 test('streamed hierarchical swarm fails loud when coordinator lacks HasStructuredOutput', function () {
     expect(fn () => FakeHierarchicalMissingStructuredCoordinatorSwarm::make()->stream('task'))
         ->toThrow(SwarmException::class, 'Laravel AI structured output');
+});
+
+test('streamed hierarchical swarm throws when coordinator plan exceeds MaxAgentSteps budget', function () {
+    // beforeEach fakes a single-worker plan → coordinator (1) + writer_node (1) = 2 > MaxAgentSteps(1).
+    expect(fn () => iterator_to_array(FakeHierarchicalBudgetLimitedSwarm::make()->stream('task')))
+        ->toThrow(SwarmException::class, 'agent executions');
+});
+
+test('streamed hierarchical swarm throws when coordinator plan contains a reserved __ prefix node id', function () {
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('__reserved__', [
+            '__reserved__' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'x',
+            ],
+        ]),
+    ]);
+
+    expect(fn () => iterator_to_array(FakeHierarchicalStreamSwarm::make()->stream('task')))
+        ->toThrow(SwarmException::class, 'reserved prefix');
 });

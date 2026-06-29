@@ -235,6 +235,22 @@ return [
         'stream_parallel_branches' => env('SWARM_STATIC_HIERARCHICAL_STREAM_PARALLEL_BRANCHES', 'concurrent'),
     ],
 
+    'hierarchical' => [
+        /*
+         * How parallel groups behave when a dynamic (Topology::Hierarchical) swarm
+         * is streamed. The coordinator always runs synchronously; this controls the
+         * streaming behaviour of the worker nodes once the plan is resolved.
+         *
+         * concurrent  — branches run via ConcurrencyManager (no live text deltas from branches);
+         *               sequential nodes after the join stream normally.
+         * sequential  — branches stream one at a time in declaration order;
+         *               sequential nodes after the join stream normally.
+         *
+         * Override per swarm with the #[StreamParallelBranches] attribute.
+         */
+        'stream_parallel_branches' => env('SWARM_HIERARCHICAL_STREAM_PARALLEL_BRANCHES', 'concurrent'),
+    ],
+
     'memory' => [
         /*
          * Controls how a durable swarm re-executes after a crash-resume.
