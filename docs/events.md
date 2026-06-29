@@ -538,6 +538,83 @@ For full listener examples and the compliance hard-fail pattern, see [Swarm Memo
 
 ---
 
+## Structural Stream Events (v0.15.0+)
+
+The lifecycle events above are Laravel `Event` objects. The **stream events**
+below are a different surface: typed `SwarmStreamEvent` payloads carried on the
+append-only causal log and yielded from `stream()` / replayed from
+`StreamEventStore`. They are not dispatched through Laravel's event system —
+you observe them by iterating a stream or folding the log with
+[`CausalLogView`](public-surface.md#causal-log-view-v0150). They are documented
+here for the per-release event catalog; for the full list of *content* stream
+events (`swarm_text_delta`, `swarm_tool_call`, …) see
+[Streaming § Stream Event Types](streaming.md#stream-event-types).
+
+All structural event classes live under the
+`BuiltByBerry\LaravelSwarm\Streaming\Events` namespace. Every `SwarmStreamEvent`
+carries a nullable `node_id` (payload key `node_id`) tagging the run-structure
+node it belongs to — absent/null means a top-level event with no enclosing node.
+A pre-v0.15 persisted log (which lacks the key) rehydrates `node_id` to `null`,
+so the carry is additive and non-breaking.
+
+### Node grammar — "structure as payload" (#284)
+
+Three events bracket each run-structure node so a reader can reconstruct a run's
+shape from the log alone.
+
+| Class | `type()` | Payload keys (beyond `id`, `invocation_id`, `node_id`, `run_id`, `timestamp`) | Role |
+| --- | --- | --- | --- |
+| `SwarmNodeOpened` | `swarm_node_opened` | `parent_node_id` (null at the root), `role`, `rationale` | A node opening. Self-identifying — `node_id == id`. Recorded **before** any event tagged with that node id (causal completeness). |
+| `SwarmNodeChildrenDecided` | `swarm_node_children_decided` | `child_node_ids` (in chosen order), `rationale` | A deciding node declaring its children in declared/presentation order. |
+| `SwarmNodeClosed` | `swarm_node_closed` | `result` | The terminal bracket for every event tagged with that node id. |
+
+The `role` on `SwarmNodeOpened` is `coordinator` for a hierarchical
+coordinator node (id `__coordinator__`) and `worker` for a worker or rollup node
+(unless a node's `node_role` metadata overrides it). Rollup nodes open with the
+`worker` role; they are distinguished on the log by the `rolled_up` void-edge
+they append (below), not by a distinct role.
+
+### Causal void-edges (#282, #289)
+
+A void-edge never deletes the event it points at — it records, in causal order,
+that a later event voids an earlier one. The [fold layer](public-surface.md#causal-log-view-v0150)
+interprets edges at read time; the voided event stays in the log.
+
+`SwarmCausalVoidEdge` — `type()` `swarm_causal_void_edge`. Payload keys (beyond
+the common set): `void_type`, `target_event_id` (the `event_uuid` of the voided
+event), `reason`, `digest_node_id` (the rollup summary node for a `rolled_up`
+edge; `null` otherwise).
+
+`void_type` is a `CausalVoidEdgeType` enum
+(`BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType`):
+
+| Case | Value | Meaning |
+| --- | --- | --- |
+| `Supersedes` | `supersedes` | A semantic revision — the workflow chose a different path, so the earlier event no longer reflects intent. |
+| `Replaces` | `replaces` | A crash-retry of the same logical step — same intent, fresh attempt. |
+| `Abandons` | `abandons` | Terminal cancellation of an event **and, by fold convention, its node subtree**. |
+| `RolledUp` | `rolled_up` | A rollup node digested this event's node into a downstream summary (#289). Suppresses **only** the digested node's own events by `node_id`, never its causal descendants. |
+
+The `Clean` supersession fold suppresses a `supersedes`/`replaces` target, an
+`abandons` target plus its subtree, and a `rolled_up` target by node membership;
+the `Everything` fold exposes voided events as `VoidedEvent` wrappers carrying
+their `voidType`, `reason`, and (for `rolled_up`) `digestNodeId`. See
+[Streaming Substrate Author Guide](streaming-substrate-author-guide.md) and the
+[CausalLogView surface](public-surface.md#causal-log-view-v0150).
+
+### Infrastructure markers (#287)
+
+| Class | `type()` | Visibility |
+| --- | --- | --- |
+| `SwarmCausalSealBarrier` (`@internal`) | `swarm_causal_seal_barrier` | Emitted immediately after `SwarmStreamEnd` (and mid-run by a rollup). Its DB auto-increment `id` **is** the compaction graduation boundary. Filtered from `events()` replay — never visible to stream consumers. |
+| `SwarmUnknownEvent` (`@internal`) | — | Forward-compatibility sentinel returned by `SwarmStreamEvent::fromArray()` for an unrecognized persisted `type`. Filtered out by every storage-layer iterator before yielding, so an unknown future event type is silently skipped rather than thrown. |
+
+Operators do not listen to either marker — they exist so the
+[compaction worker](operator-runbook-streaming-substrate.md) can bound the hot
+log and so a co-deployed older worker survives a newer worker's event types.
+
+---
+
 ## Common Patterns
 
 ### Dashboard Run Tracking
