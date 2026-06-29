@@ -420,7 +420,7 @@ class HierarchicalRoutePlan
 
         return new HierarchicalWorkerNode(
             id: $nodeId,
-            agentClass: self::requiredClassString($payload, 'agent', $nodeId),
+            agentClass: self::requiredString($payload, 'agent', $nodeId),
             prompt: self::requiredString($payload, 'prompt', $nodeId),
             withOutputs: self::optionalStringMap($payload, 'with_outputs', $nodeId),
             metadata: $metadata,
@@ -471,21 +471,6 @@ class HierarchicalRoutePlan
         }
 
         return $payload[$key];
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     * @return class-string
-     */
-    protected static function requiredClassString(array $payload, string $key, string $nodeId): string
-    {
-        $value = self::requiredString($payload, $key, $nodeId);
-
-        if (! class_exists($value)) {
-            throw new SwarmException("Persisted hierarchical route node [{$nodeId}] references unknown class [{$value}] for [{$key}].");
-        }
-
-        return $value;
     }
 
     /**

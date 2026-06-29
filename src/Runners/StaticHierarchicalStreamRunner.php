@@ -444,7 +444,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
      * reuse the same loop.
      *
      * @param  array<class-string, Agent>  $workerMap
-     * @return \Generator<int, SwarmStreamEvent, null, array{mergedUsage: array<string, int>, executedNodeIds: list<string>, executedAgentClasses: list<class-string>, parallelGroups: list<array<string, mixed>>, nextIndex: int}>
+     * @return \Generator<int, SwarmStreamEvent, null, array{mergedUsage: array<string, int>, executedNodeIds: list<string>, executedAgentClasses: list<string>, parallelGroups: list<array<string, mixed>>, nextIndex: int}>
      */
     protected function drivePlanNodes(
         SwarmExecutionState $state,
