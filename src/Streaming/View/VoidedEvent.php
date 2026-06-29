@@ -16,6 +16,10 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
  * and reason taken from the void-edge that voided it. Where several void-edges
  * target one event, the wrapper reflects the last (most recent) one in causal
  * order, matching how the clean view would have resolved its fate.
+ *
+ * For a {@see CausalVoidEdgeType::RolledUp} edge, `digestNodeId` points at the
+ * rollup node whose digest reads in this event's place (#289), so an auditor can
+ * follow a digested node forward to its summary; it is null for every other type.
  */
 final class VoidedEvent
 {
@@ -23,5 +27,6 @@ final class VoidedEvent
         public readonly SwarmStreamEvent $event,
         public readonly CausalVoidEdgeType $voidType,
         public readonly string $reason,
+        public readonly ?string $digestNodeId = null,
     ) {}
 }

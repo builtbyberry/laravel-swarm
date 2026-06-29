@@ -18,10 +18,15 @@ namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
  *   after a failed/abandoned execution.
  * - Abandons — terminal cancellation of an event (and, by fold convention, its
  *   subtree); no replacement follows.
+ * - RolledUp — a rollup node digested this event's node into a downstream summary
+ *   (#289). Unlike Abandons it suppresses ONLY the digested node's own events (by
+ *   node_id), never its causal descendants — the forward chain keeps running — and
+ *   it carries a digest pointer to the node that reads in its place.
  */
 enum CausalVoidEdgeType: string
 {
     case Supersedes = 'supersedes';
     case Replaces = 'replaces';
     case Abandons = 'abandons';
+    case RolledUp = 'rolled_up';
 }

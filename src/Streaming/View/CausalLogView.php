@@ -37,7 +37,7 @@ final class CausalLogView
      * Void-edges grouped by the `event_uuid` they target, each list in causal
      * order. A target may collect more than one edge (apply last-wins).
      *
-     * @var array<string, list<array{type: CausalVoidEdgeType, reason: string}>>
+     * @var array<string, list<array{type: CausalVoidEdgeType, reason: string, digest_node_id: string|null}>>
      */
     private array $voidsByTarget = [];
 
@@ -95,7 +95,7 @@ final class CausalLogView
      *
      * @return array{
      *     events: list<array<string, mixed>>,
-     *     voids_by_target: array<string, list<array{type: string, reason: string}>>,
+     *     voids_by_target: array<string, list<array{type: string, reason: string, digest_node_id: string|null}>>,
      *     parent_of: array<string, string|null>,
      *     declared_children: array<string, list<string>>,
      *     node_id_by_event_id: array<string, string|null>,
@@ -110,6 +110,7 @@ final class CausalLogView
                 fn (array $edge): array => [
                     'type' => $edge['type']->value,
                     'reason' => $edge['reason'],
+                    'digest_node_id' => $edge['digest_node_id'],
                 ],
                 $edges,
             );
@@ -161,7 +162,7 @@ final class CausalLogView
                 continue;
             }
 
-            $folded[] = new VoidedEvent($event, $annotation['type'], $annotation['reason']);
+            $folded[] = new VoidedEvent($event, $annotation['type'], $annotation['reason'], $annotation['digest_node_id']);
         }
 
         return $folded;
@@ -206,6 +207,7 @@ final class CausalLogView
         $this->voidsByTarget[$target][] = [
             'type' => $voidType,
             'reason' => is_string($payload['reason'] ?? null) ? $payload['reason'] : '',
+            'digest_node_id' => is_string($payload['digest_node_id'] ?? null) ? $payload['digest_node_id'] : null,
         ];
     }
 
@@ -249,7 +251,7 @@ final class CausalLogView
      * inherited subtree one. Degrades to the single target when no `node_id`
      * structure is present.
      *
-     * @return array<string, array{type: CausalVoidEdgeType, reason: string}>
+     * @return array<string, array{type: CausalVoidEdgeType, reason: string, digest_node_id: string|null}>
      */
     private function voidAnnotations(): array
     {
@@ -258,9 +260,16 @@ final class CausalLogView
         // node_id => reason it was directly abandoned under.
         $abandoned = [];
 
+        // node_id => ['reason' => …, 'digest_node_id' => …] for rolled-up nodes.
+        $rolledUp = [];
+
         foreach ($this->voidsByTarget as $targetId => $edges) {
             $last = $edges[count($edges) - 1];
-            $annotations[$targetId] = ['type' => $last['type'], 'reason' => $last['reason']];
+            $annotations[$targetId] = [
+                'type' => $last['type'],
+                'reason' => $last['reason'],
+                'digest_node_id' => $last['digest_node_id'],
+            ];
 
             if ($last['type'] === CausalVoidEdgeType::Abandons) {
                 $node = $this->nodeOfEvent($targetId);
@@ -268,6 +277,44 @@ final class CausalLogView
                 if ($node !== null) {
                     $abandoned[$node] = $last['reason'];
                 }
+            }
+
+            if ($last['type'] === CausalVoidEdgeType::RolledUp) {
+                $node = $this->nodeOfEvent($targetId);
+
+                if ($node !== null) {
+                    $rolledUp[$node] = ['reason' => $last['reason'], 'digest_node_id' => $last['digest_node_id']];
+                }
+            }
+        }
+
+        // A rolled-up node's OWN events are suppressed by node_id membership —
+        // never its causal descendants (#289 R6). The sequential walk records
+        // each node as the parent of its `next`, so a subtree expansion (as
+        // Abandons does) would erase the entire forward chain including the
+        // rollup and everything after it. Membership suppresses exactly the
+        // digested nodes and leaves the chain intact.
+        if ($rolledUp !== []) {
+            foreach ($this->events as $event) {
+                $node = $this->nodeIdOf($event);
+
+                if ($node === null || ! isset($rolledUp[$node])) {
+                    continue;
+                }
+
+                $id = $this->eventId($event);
+
+                // A direct edge on this specific event (e.g. its own supersede)
+                // is more specific than the rollup membership, so it wins.
+                if ($id === null || isset($annotations[$id])) {
+                    continue;
+                }
+
+                $annotations[$id] = [
+                    'type' => CausalVoidEdgeType::RolledUp,
+                    'reason' => $rolledUp[$node]['reason'],
+                    'digest_node_id' => $rolledUp[$node]['digest_node_id'],
+                ];
             }
         }
 
@@ -295,6 +342,7 @@ final class CausalLogView
             $annotations[$id] = [
                 'type' => CausalVoidEdgeType::Abandons,
                 'reason' => $this->abandonReasonFor($node, $abandoned),
+                'digest_node_id' => null,
             ];
         }
 

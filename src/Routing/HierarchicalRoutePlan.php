@@ -394,6 +394,7 @@ class HierarchicalRoutePlan
 
         return match ($type) {
             'worker' => self::workerFromArray($nodeId, $payload, $metadata, $next),
+            'rollup' => self::rollupFromArray($nodeId, $payload, $metadata, $next),
             'parallel' => new HierarchicalParallelNode(
                 id: $nodeId,
                 branches: self::requiredStringList($payload, 'branches', $nodeId),
@@ -427,6 +428,32 @@ class HierarchicalRoutePlan
             next: $next,
             loopTo: $loopTo,
             loopMaxIterations: $loopMaxIterations,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $metadata
+     */
+    protected static function rollupFromArray(string $nodeId, array $payload, array $metadata, ?string $next): HierarchicalRollupNode
+    {
+        if (array_key_exists('loop', $payload)) {
+            throw new SwarmException("Persisted hierarchical rollup node [{$nodeId}] cannot define a [loop].");
+        }
+
+        $withOutputs = self::optionalStringMap($payload, 'with_outputs', $nodeId);
+
+        if ($withOutputs === []) {
+            throw new SwarmException("Persisted hierarchical rollup node [{$nodeId}] must define [with_outputs] naming the generation it digests.");
+        }
+
+        return new HierarchicalRollupNode(
+            id: $nodeId,
+            agentClass: self::requiredString($payload, 'agent', $nodeId),
+            prompt: self::requiredString($payload, 'prompt', $nodeId),
+            withOutputs: $withOutputs,
+            metadata: $metadata,
+            next: $next,
         );
     }
 
@@ -660,23 +687,31 @@ class HierarchicalRoutePlan
     protected function validatePersistedDataDependencies(): void
     {
         $completed = [];
+        $rolledUp = [];
 
-        $this->validatePersistedNodeDataDependencies($this->startAt, $completed);
+        $this->validatePersistedNodeDataDependencies($this->startAt, $completed, $rolledUp);
     }
 
     /**
      * @param  array<string, true>  $completed
+     * @param  array<string, string>  $rolledUp  digested node id => the rollup node that digested it
      */
-    protected function validatePersistedNodeDataDependencies(string $nodeId, array &$completed): void
+    protected function validatePersistedNodeDataDependencies(string $nodeId, array &$completed, array &$rolledUp): void
     {
         $node = $this->node($nodeId);
 
         if ($node instanceof HierarchicalWorkerNode) {
-            $this->assertPersistedWorkerOutputsCompleted($node, $completed);
+            $this->assertPersistedWorkerOutputsCompleted($node, $completed, $rolledUp);
             $completed[$node->id] = true;
 
+            if ($node instanceof HierarchicalRollupNode) {
+                foreach ($node->digestedNodeIds() as $digestedId) {
+                    $rolledUp[$digestedId] = $node->id;
+                }
+            }
+
             if ($node->next !== null) {
-                $this->validatePersistedNodeDataDependencies($node->next, $completed);
+                $this->validatePersistedNodeDataDependencies($node->next, $completed, $rolledUp);
             }
 
             return;
@@ -688,14 +723,14 @@ class HierarchicalRoutePlan
             foreach ($node->branches as $branchNodeId) {
                 /** @var HierarchicalWorkerNode $branch */
                 $branch = $this->node($branchNodeId);
-                $this->assertPersistedWorkerOutputsCompleted($branch, $completed);
+                $this->assertPersistedWorkerOutputsCompleted($branch, $completed, $rolledUp);
                 $groupCompleted[$branch->id] = true;
             }
 
             $completed = $groupCompleted;
 
             if ($node->next !== null) {
-                $this->validatePersistedNodeDataDependencies($node->next, $completed);
+                $this->validatePersistedNodeDataDependencies($node->next, $completed, $rolledUp);
             }
 
             return;
@@ -705,16 +740,25 @@ class HierarchicalRoutePlan
         if ($node->outputFrom !== null && ! isset($completed[$node->outputFrom])) {
             throw new SwarmException("Persisted hierarchical finish node [{$node->id}] cannot reference output from [{$node->outputFrom}] before that node has completed.");
         }
+
+        if ($node->outputFrom !== null && isset($rolledUp[$node->outputFrom])) {
+            throw new SwarmException("Persisted hierarchical finish node [{$node->id}] references [{$node->outputFrom}], which was rolled up by [{$rolledUp[$node->outputFrom]}]; reference the rollup node [{$rolledUp[$node->outputFrom]}] instead.");
+        }
     }
 
     /**
      * @param  array<string, true>  $completed
+     * @param  array<string, string>  $rolledUp
      */
-    protected function assertPersistedWorkerOutputsCompleted(HierarchicalWorkerNode $node, array $completed): void
+    protected function assertPersistedWorkerOutputsCompleted(HierarchicalWorkerNode $node, array $completed, array $rolledUp): void
     {
         foreach ($node->withOutputs as $alias => $sourceNodeId) {
             if (! isset($completed[$sourceNodeId])) {
                 throw new SwarmException("Persisted hierarchical worker node [{$node->id}] cannot map output alias [{$alias}] from [{$sourceNodeId}] before that node has completed.");
+            }
+
+            if (isset($rolledUp[$sourceNodeId])) {
+                throw new SwarmException("Persisted hierarchical worker node [{$node->id}] maps output alias [{$alias}] from [{$sourceNodeId}], which was rolled up by [{$rolledUp[$sourceNodeId]}]; reference the rollup node [{$rolledUp[$sourceNodeId]}] instead.");
             }
         }
     }
