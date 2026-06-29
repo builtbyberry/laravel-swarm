@@ -11,7 +11,7 @@ adding a new public API.
 | `prompt()` | Run a swarm synchronously and return `SwarmResponse`. | [README: Running A Swarm](../README.md#running-a-swarm), [Sequential Content Pipeline](../examples/sequential-content-pipeline/README.md) |
 | `run()` | Compatibility alias for `prompt()`. | [README: Running A Swarm](../README.md#running-a-swarm) |
 | `queue()` | Dispatch a lightweight background swarm job. | [README: Queueing A Swarm](../README.md#queueing-a-swarm), [Queued Workflow Events](../examples/queued-workflow-events/README.md) |
-| `stream()` | Run a sequential or static-hierarchical swarm and yield typed stream events. | [Streaming](streaming.md), [Static Hierarchical Topology](static-hierarchical-topology.md#streaming), [Streaming Progress](../examples/streaming-progress/README.md) |
+| `stream()` | Run a sequential, static-hierarchical, or hierarchical swarm and yield typed stream events. For hierarchical swarms the coordinator runs synchronously; worker nodes stream normally. | [Streaming](streaming.md), [Static Hierarchical Topology](static-hierarchical-topology.md#streaming), [Streaming Progress](../examples/streaming-progress/README.md) |
 | `broadcast()` | Stream and broadcast typed events immediately. | [Streaming](streaming.md#broadcasting-stream-events) |
 | `broadcastNow()` | Stream and broadcast typed events with immediate delivery. | [Streaming](streaming.md#broadcasting-stream-events) |
 | `broadcastOnQueue()` | Queue a worker to stream and broadcast typed events. | [Streaming](streaming.md#broadcasting-stream-events) |
@@ -35,7 +35,7 @@ adding a new public API.
 | Attribute | Purpose | Primary documentation |
 | --- | --- | --- |
 | `#[Topology]` | Set sequential, parallel, hierarchical, or static_hierarchical topology. | [README: Topologies](../README.md#topologies), [Hierarchical Routing](hierarchical-routing.md), [Static Hierarchical Topology](static-hierarchical-topology.md) |
-| `#[StreamParallelBranches]` | Control how parallel groups stream in a static-hierarchical swarm (`'concurrent'` or `'sequential'`). | [Static Hierarchical Topology](static-hierarchical-topology.md#streaming) |
+| `#[StreamParallelBranches]` | Control how parallel groups stream in a static-hierarchical or hierarchical swarm (`'concurrent'` or `'sequential'`). For hierarchical swarms, falls back to `swarm.hierarchical.stream_parallel_branches` config key (default: `'concurrent'`). | [Static Hierarchical Topology](static-hierarchical-topology.md#streaming), [Streaming](streaming.md) |
 | `#[Timeout]` | Set the best-effort orchestration deadline. | [Durable Execution](durable-execution.md#timeouts-and-database-requirements), [Maintenance](maintenance.md) |
 | `#[MaxAgentSteps]` | Limit reachable coordinator and worker executions. | [Hierarchical Routing](hierarchical-routing.md#step-limits), [Static Hierarchical Topology](static-hierarchical-topology.md#step-limits-and-maxagentsteps) |
 | `#[QueuedHierarchicalParallelCoordination]` | Opt a hierarchical queued swarm into multi-worker parallel coordination. | [Hierarchical Routing](hierarchical-routing.md#queue) |

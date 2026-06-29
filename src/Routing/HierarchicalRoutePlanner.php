@@ -81,7 +81,7 @@ class HierarchicalRoutePlanner
     }
 
     /**
-     * @param  array<int, string>  $workerClasses
+     * @param  array<int, class-string>  $workerClasses
      * @param  array<string, mixed>  $payload
      */
     private function normalizeAndValidateWithCoordinatorClass(?string $coordinatorClass, array $workerClasses, array $payload, string $swarmClass): HierarchicalRoutePlan
@@ -102,6 +102,10 @@ class HierarchicalRoutePlanner
         foreach ($nodesPayload as $nodeId => $nodePayload) {
             if (! is_string($nodeId) || $nodeId === '') {
                 throw new SwarmException('Hierarchical route plan node ids must be non-empty strings.');
+            }
+
+            if (str_starts_with($nodeId, '__')) {
+                throw new SwarmException('Hierarchical route plan node ids must not start with "__" (reserved prefix).');
             }
 
             if (! is_array($nodePayload)) {
@@ -129,7 +133,7 @@ class HierarchicalRoutePlanner
 
     /**
      * @param  array<string, mixed>  $payload
-     * @param  array<int, string>  $workerClasses
+     * @param  array<int, class-string>  $workerClasses
      */
     protected function normalizeNode(string $nodeId, array $payload, ?string $coordinatorClass, array $workerClasses, string $swarmClass): HierarchicalRouteNode
     {
@@ -156,7 +160,7 @@ class HierarchicalRoutePlanner
     /**
      * @param  array<string, mixed>  $payload
      * @param  array<string, mixed>  $metadata
-     * @param  array<int, string>  $workerClasses
+     * @param  array<int, class-string>  $workerClasses
      */
     protected function normalizeWorkerNode(string $nodeId, array $payload, array $metadata, ?string $next, ?string $coordinatorClass, array $workerClasses): HierarchicalWorkerNode
     {
