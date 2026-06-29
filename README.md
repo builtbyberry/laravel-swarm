@@ -315,6 +315,13 @@ On resume, already-completed non-final steps are **skipped** (their providers ar
 
 Swarm carries `laravel/ai` `ToolCall` / `ToolResult` objects through the stream and the durable snapshot as **opaque passthrough**, so the **MCP client/server tools** added in `laravel/ai` 0.8 flow through with no MCP-specific configuration — including structured (non-scalar) MCP results, preserved intact. A tool value JSON cannot represent degrades to a typed placeholder at the tool boundary rather than crashing the run. See [Streaming — Tool calls (including MCP tools)](docs/streaming.md#tool-calls-including-mcp-tools).
 
+### Streaming dynamic swarms & the causal-log substrate (v0.15.0)
+
+`stream()` now streams **dynamic `Hierarchical` swarms** — the coordinator runs synchronously, then its workers stream as the plan is walked. Underneath, the streamed event log is an **append-only causal log**: nothing is mutated or deleted in place, course-corrections are typed *void-edges*, and any shape a reader wants (clean vs. forensic, causal vs. presentation order) is a read-time **fold** via `CausalLogView`. A background compactor graduates sealed history to a cold tier so the hot log stays bounded, and authors can bound their own context with `'type' => 'rollup'` plan nodes and a declarative `#[ContextGrowthPolicy]`.
+
+- **Authors:** [Streaming Substrate Author Guide](docs/streaming-substrate-author-guide.md) — dynamic streaming, the causal-log fold, rollup nodes, the context-growth policy.
+- **Operators:** [Streaming Substrate Operator Runbook](docs/operator-runbook-streaming-substrate.md) — hot/cold tiering, scheduling `swarm:compact`, retention, recovery and quarantine.
+
 ## Durable Execution
 
 Use `dispatchDurable()` when the workflow is too important or too long-lived for one queue job:
