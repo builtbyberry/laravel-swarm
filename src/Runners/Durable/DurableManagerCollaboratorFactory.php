@@ -276,6 +276,7 @@ class DurableManagerCollaboratorFactory
             'outbox' => $outbox,
             'terminal' => $terminal,
             'coordinator' => $memoryReplayCoordinator,
+            'nodeStream' => $this->application->make(DurableNodeStreamRecorder::class),
         ]);
 
         return new DurableManagerCollaborators(

@@ -57,7 +57,7 @@ class DispatchValidator
      *
      * @var list<Topology>
      */
-    private const STREAMING_SUPPORTED_TOPOLOGIES = [Topology::Sequential, Topology::Hierarchical, Topology::StaticHierarchical];
+    private const STREAMING_SUPPORTED_TOPOLOGIES = [Topology::Sequential, Topology::Hierarchical, Topology::StaticHierarchical, Topology::Parallel];
 
     public function __construct(
         protected SwarmAttributeResolver $resolver,
@@ -149,7 +149,9 @@ class DispatchValidator
         }
 
         if (! in_array($topology, self::STREAMING_SUPPORTED_TOPOLOGIES, true)) {
-            throw new SwarmException("Durable per-node streaming (#[DurableStreaming]) is not yet supported for {$topology->value} durable swarms; that topology's streaming arrives in a later release. Remove #[DurableStreaming] from the swarm or use a sequential, hierarchical, or static_hierarchical topology.");
+            $supported = implode(', ', array_map(static fn (Topology $supported): string => $supported->value, self::STREAMING_SUPPORTED_TOPOLOGIES));
+
+            throw new SwarmException("Durable per-node streaming (#[DurableStreaming]) is currently supported only for {$supported} durable swarms; {$topology->value} streaming arrives in a later release. Remove #[DurableStreaming] from the swarm or use a supported topology.");
         }
 
         if (! $this->causalLog instanceof DatabaseCausalLogStore) {

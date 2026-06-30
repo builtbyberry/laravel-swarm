@@ -147,6 +147,16 @@ class DurableRunRecorder
             // is the value pinned on the run row (#310), threaded in by the caller so
             // the seal and the advancer's void share one source of truth and never
             // disagree. No-op unless the run pinned the opt-in on.
+            //
+            // Seal-on-join (#312 gate H2): this same checkpoint also seals durable
+            // PARALLEL branches — the branch generation is sealed by the parent's NEXT
+            // hierarchical checkpoint after the join, never at branch commit. The
+            // run-scoped barrier graduates everything below it, so this single seal
+            // fences every committed branch attempt. Safe because the join gate
+            // (DurableHierarchicalCoordinator::dispatchWaitingBoundary) only releases the
+            // parent once branchesAreTerminal() — a retrying branch stays pending and
+            // blocks the join, so nothing is in-flight at seal time. A per-branch seal
+            // would prematurely seal a concurrent sibling's in-flight window.
             $this->nodeStream->sealNodeBoundary($runId, $durableStreaming);
             if ($withTransaction !== null) {
                 ($withTransaction)();

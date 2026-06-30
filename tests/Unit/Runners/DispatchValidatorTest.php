@@ -82,17 +82,20 @@ test('validateForDispatch composes agent + timeout + topology checks', function 
     expect(true)->toBeTrue();
 });
 
-test('ensureDurableStreamingInfrastructure rejects #[DurableStreaming] on an unsupported topology (#310 forcing function)', function (Topology $topology): void {
-    // The topology guard runs BEFORE the database-causal-log check, so this fails
-    // loud regardless of persistence setup — a swarm can never silently pin the
-    // opt-in and then no-op on a topology that does not stream yet. Parallel is the
-    // only remaining unsupported topology now that #311 wired hierarchical and
-    // static_hierarchical; #312 wires parallel and deletes this case.
-    expect(fn () => $this->validator->ensureDurableStreamingInfrastructure(true, $topology))
-        ->toThrow(SwarmException::class, 'is not yet supported for');
-})->with([
-    'parallel' => Topology::Parallel,
-]);
+test('STREAMING_SUPPORTED_TOPOLOGIES wires every topology — a future unwired topology must fail loud (#310 forcing function)', function (): void {
+    // #311 wired hierarchical + static_hierarchical and #312 wired parallel, so every
+    // Topology now streams under #[DurableStreaming] and no production topology reaches
+    // the fail-loud throw anymore. This completeness assertion preserves the guarantee
+    // the per-topology negative cases used to give: if a NEW topology is ever added
+    // without being wired into the allow-list, this fails in CI — forcing it to be wired
+    // (with a positive streaming test) or consciously excluded, never silently pinning
+    // the opt-in and no-op'ing at runtime. The throw branch in
+    // ensureDurableStreamingInfrastructure remains as the runtime backstop for exactly
+    // that future-topology case.
+    $supported = (new ReflectionClassConstant(DispatchValidator::class, 'STREAMING_SUPPORTED_TOPOLOGIES'))->getValue();
+
+    expect($supported)->toEqualCanonicalizing(Topology::cases());
+});
 
 test('ensureDurableStreamingInfrastructure is a no-op for a non-streaming run on any topology', function (): void {
     // durableStreaming = false (the swarm did not opt in) short-circuits before the
@@ -108,6 +111,16 @@ test('ensureDurableStreamingInfrastructure allows sequential when the database c
     app()->forgetInstance(DispatchValidator::class);
 
     app(DispatchValidator::class)->ensureDurableStreamingInfrastructure(true, Topology::Sequential);
+
+    expect(true)->toBeTrue();
+});
+
+test('ensureDurableStreamingInfrastructure allows parallel when the database causal log is ready (#312)', function (): void {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+    app()->forgetInstance(DispatchValidator::class);
+
+    app(DispatchValidator::class)->ensureDurableStreamingInfrastructure(true, Topology::Parallel);
 
     expect(true)->toBeTrue();
 });
