@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms;
 
 use BuiltByBerry\LaravelSwarm\Attributes\DurableRetry;
-use BuiltByBerry\LaravelSwarm\Attributes\DurableStreaming;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology;
 use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
@@ -14,14 +13,13 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyStreamEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\PlainStreamEditor;
 
 /**
- * A three-node sequential durable swarm whose middle node crashes mid-stream on
- * its first attempt — the #298 per-node streaming resume scenario. The retry
- * attribute lets the crashed node re-execute after backoff.
+ * The same three-node sequential durable swarm as {@see DurableStreamingSwarm} but
+ * WITHOUT `#[DurableStreaming]`, so it never opts into durable per-node streaming.
+ * Used to prove an un-attributed swarm writes nothing to the causal log (#310).
  */
 #[Topology(TopologyEnum::Sequential)]
 #[DurableRetry(maxAttempts: 2, backoffSeconds: [60])]
-#[DurableStreaming]
-class DurableStreamingSwarm implements Swarm
+class DurableNonStreamingSwarm implements Swarm
 {
     use Runnable;
 

@@ -45,6 +45,20 @@ use ReflectionUnionType;
  */
 class DispatchValidator
 {
+    /**
+     * Durable topologies whose per-node streaming is actually wired (#310 → #311/#312).
+     * This list is the single source of truth for "what `#[DurableStreaming]` streams":
+     * a swarm that opts in on any topology NOT in this set fails loud at dispatch
+     * rather than silently pinning the opt-in and never streaming. A topology is added
+     * here only in the same change that wires its streaming and proves it with a
+     * positive test — so a missed topology is a loud dispatch error, never a silent
+     * no-op. Grows to the full topology set as #311 (hierarchical) and #312 (parallel)
+     * land.
+     *
+     * @var list<Topology>
+     */
+    private const STREAMING_SUPPORTED_TOPOLOGIES = [Topology::Sequential];
+
     public function __construct(
         protected SwarmAttributeResolver $resolver,
         protected ParallelRunner $parallel,
@@ -89,7 +103,7 @@ class DispatchValidator
         }
     }
 
-    public function ensureDatabaseDurableInfrastructure(): void
+    public function ensureDatabaseDurableInfrastructure(Swarm $swarm): void
     {
         if (! $this->contextStore instanceof DatabaseContextStore
             || ! $this->artifactRepository instanceof DatabaseArtifactRepository
@@ -103,30 +117,43 @@ class DispatchValidator
         $this->historyStore->assertReady();
         $this->durableRuns->assertReady();
 
-        $this->ensureDurableStreamingInfrastructure();
+        $this->ensureDurableStreamingInfrastructure(
+            $this->resolver->resolveDurableStreaming($swarm),
+            $this->resolver->resolveTopology($swarm),
+        );
     }
 
     /**
-     * Gate the durable per-node streaming opt-in (#298): when
-     * [swarm.durable.stream_to_causal_log] is on, the database causal log the
-     * advancer appends node events to — and retracts a crashed attempt against on
-     * resume — must be available and migrated. Fail loud at dispatch rather than
-     * silently dropping events or falling back to prompt(). Off by default, so
-     * existing durable runs never reach this check.
+     * Gate the per-swarm durable per-node streaming opt-in (#298/#310): when the
+     * swarm carries `#[DurableStreaming]`, the database causal log the advancer
+     * appends node events to — and retracts a crashed attempt against on resume —
+     * must be available and migrated. Fail loud at dispatch rather than silently
+     * dropping events or falling back to prompt(). Swarms without the attribute pass
+     * `false` and never reach this check.
      *
      * This runs only after {@see ensureDatabaseDurableInfrastructure()} has already
      * verified the database durable stores, so the persistence driver is database
      * by here; the remaining check is that the causal log (always the database
      * store) carries the void-edge and durable-streaming columns.
+     *
+     * Topology guard (#310): `#[DurableStreaming]` is a topology-agnostic surface — an
+     * author can declare it on any swarm — but only the topologies in
+     * {@see self::STREAMING_SUPPORTED_TOPOLOGIES} actually stream. Opting in on an
+     * unsupported topology fails loud here rather than silently pinning the opt-in and
+     * never streaming. #311/#312 add the remaining topologies to the allow-list.
      */
-    public function ensureDurableStreamingInfrastructure(): void
+    public function ensureDurableStreamingInfrastructure(bool $durableStreaming, Topology $topology): void
     {
-        if (! (bool) $this->config->get('swarm.durable.stream_to_causal_log', false)) {
+        if (! $durableStreaming) {
             return;
         }
 
+        if (! in_array($topology, self::STREAMING_SUPPORTED_TOPOLOGIES, true)) {
+            throw new SwarmException("Durable per-node streaming (#[DurableStreaming]) is currently supported only for sequential durable swarms; {$topology->value} streaming arrives in a later release. Remove #[DurableStreaming] from the swarm or use a sequential topology.");
+        }
+
         if (! $this->causalLog instanceof DatabaseCausalLogStore) {
-            throw new SwarmException('Durable per-node streaming ([swarm.durable.stream_to_causal_log]) requires the database persistence driver so the causal log is available to append node events to. Disable the flag or switch [swarm.persistence.driver] to database.');
+            throw new SwarmException('Durable per-node streaming (#[DurableStreaming]) requires the database persistence driver so the causal log is available to append node events to. Remove #[DurableStreaming] from the swarm or switch [swarm.persistence.driver] to database.');
         }
 
         $this->causalLog->assertReady();
@@ -147,7 +174,7 @@ class DispatchValidator
             $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
 
             if ($this->resolver->resolveQueueHierarchicalParallelCoordination($swarm) === 'multi_worker') {
-                $this->ensureDatabaseDurableInfrastructure();
+                $this->ensureDatabaseDurableInfrastructure($swarm);
             }
         }
     }

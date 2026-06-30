@@ -114,7 +114,7 @@ class DurableStepCheckpointCoordinator
                 $this->recorder->checkpointHierarchical($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $hierarchicalResult, $step, $withTransaction);
             }
         } else {
-            $this->recorder->checkpointSequential($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $withTransaction);
+            $this->recorder->checkpointSequential($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, (bool) ($run['durable_streaming'] ?? false), $withTransaction);
         }
 
         if (is_callable($this->afterStepCheckpointHook)) {

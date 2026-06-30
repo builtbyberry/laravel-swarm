@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\QueueHierarchicalParallelBoundary;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -36,6 +37,7 @@ class QueuedHierarchicalDurableCoordinator
         protected DurableJobDispatcher $jobs,
         protected DurableOutbox $outbox,
         protected Connection $connection,
+        protected SwarmAttributeResolver $resolver,
     ) {}
 
     public function enter(SwarmExecutionState $state, QueueHierarchicalParallelBoundary $boundary): void
@@ -64,6 +66,10 @@ class QueuedHierarchicalDurableCoordinator
                 'topology' => Topology::Hierarchical->value,
                 'execution_mode' => ExecutionMode::Queue->value,
                 'coordination_profile' => CoordinationProfile::QueueHierarchicalParallel->value,
+                // Pin the per-swarm durable-streaming opt-in at run-start (#310),
+                // mirroring DurableSwarmStarter, so a hierarchical run carries the
+                // same pinned decision every resume reads.
+                'durable_streaming' => $this->resolver->resolveDurableStreaming($swarm),
                 'status' => 'pending',
                 'next_step_index' => 0,
                 'current_step_index' => null,

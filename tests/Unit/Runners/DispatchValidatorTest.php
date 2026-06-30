@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
+use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
@@ -11,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SwarmWithoutTopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SwarmWithParallelTopologyAttribute;
+use Illuminate\Support\Facades\Artisan;
 
 beforeEach(function (): void {
     $this->validator = app(DispatchValidator::class);
@@ -76,6 +78,36 @@ test('ensureQueueable accepts swarms with no constructor parameters', function (
 
 test('validateForDispatch composes agent + timeout + topology checks', function (): void {
     $this->validator->validateForDispatch(new FakeParallelSwarm);
+
+    expect(true)->toBeTrue();
+});
+
+test('ensureDurableStreamingInfrastructure rejects #[DurableStreaming] on every non-sequential topology (#310 forcing function)', function (Topology $topology): void {
+    // The topology guard runs BEFORE the database-causal-log check, so this fails
+    // loud regardless of persistence setup — a swarm can never silently pin the
+    // opt-in and then no-op on a topology that does not stream yet.
+    expect(fn () => $this->validator->ensureDurableStreamingInfrastructure(true, $topology))
+        ->toThrow(SwarmException::class, 'currently supported only for sequential');
+})->with([
+    'hierarchical' => Topology::Hierarchical,
+    'static hierarchical' => Topology::StaticHierarchical,
+    'parallel' => Topology::Parallel,
+]);
+
+test('ensureDurableStreamingInfrastructure is a no-op for a non-streaming run on any topology', function (): void {
+    // durableStreaming = false (the swarm did not opt in) short-circuits before the
+    // topology guard, so a hierarchical durable run that never opted in is untouched.
+    $this->validator->ensureDurableStreamingInfrastructure(false, Topology::Hierarchical);
+
+    expect(true)->toBeTrue();
+});
+
+test('ensureDurableStreamingInfrastructure allows sequential when the database causal log is ready', function (): void {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+    app()->forgetInstance(DispatchValidator::class);
+
+    app(DispatchValidator::class)->ensureDurableStreamingInfrastructure(true, Topology::Sequential);
 
     expect(true)->toBeTrue();
 });

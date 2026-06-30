@@ -153,16 +153,19 @@ class DurableRunRecorder
         ]);
     }
 
-    public function checkpointSequential(string $runId, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds, ?callable $withTransaction = null): void
+    public function checkpointSequential(string $runId, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds, bool $durableStreaming, ?callable $withTransaction = null): void
     {
-        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $withTransaction): void {
+        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $durableStreaming, $withTransaction): void {
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->durableRuns->releaseForNextStep($runId, $token, $nextStepIndex);
             // Seal the just-committed node's streamed events in the SAME lease-fenced
             // transaction as the cursor advance (#298 F1/F5), so an uncommitted node
-            // can never be sealed beside its fresh attempt. No-op unless per-node
-            // streaming is on.
-            $this->nodeStream->sealNodeBoundary($runId);
+            // can never be sealed beside its fresh attempt. `$durableStreaming` is the
+            // value pinned on the run row (#310), threaded in from the already-loaded
+            // run by the caller — the single source of truth this seal shares with the
+            // advancer's void, so seal and void never disagree and the commit txn does
+            // not re-hydrate the run just to read one bool. No-op unless it pinned on.
+            $this->nodeStream->sealNodeBoundary($runId, $durableStreaming);
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }

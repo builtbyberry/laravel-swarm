@@ -248,6 +248,46 @@ Each durable step job:
 That gives retries and recovery a clear boundary. A retry re-runs the current
 step. It does not replay the whole workflow.
 
+## Durable Per-Node Streaming
+
+By default a durable step calls the agent's `prompt()` and records one response per
+node. A swarm can instead **stream each node's events into the append-only causal
+log** by declaring `#[DurableStreaming]` on the swarm class:
+
+```php
+use BuiltByBerry\LaravelSwarm\Attributes\DurableStreaming;
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+
+#[Topology(TopologyEnum::Sequential)]
+#[DurableStreaming]
+class ClaimsReviewSwarm implements Swarm { /* … */ }
+```
+
+This gives operators a live, replay-safe signal from a durable run. A node that
+crashes mid-stream and re-executes on resume retracts its prior attempt with a
+`node_reexecuted` void-edge before re-emitting, so a clean fold of the log shows
+exactly one attempt per node. Requires the **database** persistence driver (the
+causal log lives in `swarm_stream_events`); dispatch fails loud otherwise.
+
+The opt-in is **resolved once and pinned onto the durable run row at run-start**, so
+a run streams (or does not) for its whole life — adding or removing the attribute in
+a deploy never changes an in-flight run. A bare `#[DurableStreaming]` opts in;
+`#[DurableStreaming(false)]` explicitly opts out (e.g. to override a base class).
+A swarm without the attribute never writes a stream event.
+
+**Operator kill-switch.** Set `SWARM_DURABLE_STREAMING_ENABLED=false`
+(`swarm.durable.streaming_enabled`, default `true`) to stop the per-event causal-log
+write load fleet-wide at runtime without a redeploy — e.g. when `swarm_stream_events`
+is hot. It gates only emission: opted-in runs fall back to the blocking `prompt()`
+path, but every crashed attempt is still retracted and every committed node still
+sealed, so the log stays consistent. Flipping it mid-run is safe.
+
+Scope: sequential durable runs in v0.15.0 (hierarchical and parallel-branch durable
+streaming follow). Applying `#[DurableStreaming]` to a **non-sequential** durable swarm
+**fails loud at dispatch** until those land — it never silently pins the opt-in and
+no-ops. Non-durable (`run()`/`queue()`) execution is unaffected.
+
 ## Durable Hierarchical Parallel Flow
 
 A hierarchical durable run can contain route-plan `parallel` nodes. Those

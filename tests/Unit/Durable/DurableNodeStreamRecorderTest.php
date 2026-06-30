@@ -32,29 +32,71 @@ function seedNodeStreamRun(string $runId): void
     ]);
 }
 
-test('enabled reflects the per-node streaming opt-in flag', function () {
+test('enabled reflects the pinned opt-in and ignores the operator kill-switch', function () {
     $recorder = app(DurableNodeStreamRecorder::class);
 
-    config()->set('swarm.durable.stream_to_causal_log', false);
-    expect($recorder->enabled())->toBeFalse();
+    // enabled() is driven only by the pinned opt-in (+ database causal log), never
+    // the kill-switch — integrity ops must run even while emission is paused.
+    expect($recorder->enabled(false))->toBeFalse();
+    expect($recorder->enabled(true))->toBeTrue();
 
-    config()->set('swarm.durable.stream_to_causal_log', true);
-    expect($recorder->enabled())->toBeTrue();
+    config()->set('swarm.durable.streaming_enabled', false);
+    expect($recorder->enabled(true))->toBeTrue();
 });
 
-test('sealNodeBoundary and voidPriorAttempt are inert when streaming is off (the prompt path is untouched)', function () {
-    config()->set('swarm.durable.stream_to_causal_log', false);
+test('streamingActive honours the operator kill-switch on top of the pinned opt-in', function () {
+    $recorder = app(DurableNodeStreamRecorder::class);
+
+    // A run that did not opt in never emits, regardless of the kill-switch.
+    expect($recorder->streamingActive(false))->toBeFalse();
+
+    // A pinned run emits only while the kill-switch is on (default).
+    expect($recorder->streamingActive(true))->toBeTrue();
+
+    config()->set('swarm.durable.streaming_enabled', false);
+    expect($recorder->streamingActive(true))->toBeFalse();
+});
+
+test('sealNodeBoundary and voidPriorAttempt are inert when the run is not pinned (the prompt path is untouched)', function () {
     seedNodeStreamRun('run-off');
 
     $recorder = app(DurableNodeStreamRecorder::class);
-    $recorder->sealNodeBoundary('run-off');
-    $recorder->voidPriorAttempt('run-off', 'step:0', 1);
+    $recorder->sealNodeBoundary('run-off', false);
+    $recorder->voidPriorAttempt('run-off', 'step:0', 1, false);
 
     expect(DB::table('swarm_stream_events')->where('run_id', 'run-off')->count())->toBe(0);
 });
 
+test('integrity ops still run when the kill-switch pauses emission (KS1)', function () {
+    // Kill-switch off, but the run is pinned: a prior streamed attempt must still be
+    // voided and the boundary still sealed, so the causal-log fold never orphans.
+    config()->set('swarm.durable.streaming_enabled', false);
+    seedNodeStreamRun('run-ks');
+
+    // The crashed attempt streamed one event under epoch 0 (sinkFor never gates).
+    $sink0 = app(DurableNodeStreamRecorder::class)->sinkFor('run-ks', 'step:0', 0);
+    $sink0(new SwarmTextDelta(
+        id: 'ks-crashed-event',
+        runId: 'run-ks',
+        stepIndex: 0,
+        agentClass: 'ExampleAgent',
+        delta: 'partial',
+        timestamp: SwarmStreamEvent::timestamp(),
+    ));
+
+    $recorder = app(DurableNodeStreamRecorder::class);
+    $recorder->voidPriorAttempt('run-ks', 'step:0', 1, true);
+    $recorder->sealNodeBoundary('run-ks', true);
+
+    expect(
+        DB::table('swarm_stream_events')->where('run_id', 'run-ks')->where('void_type', 'node_reexecuted')->count()
+    )->toBe(1)
+        ->and(
+            DB::table('swarm_stream_events')->where('run_id', 'run-ks')->where('event_type', 'swarm_causal_seal_barrier')->count()
+        )->toBe(1);
+});
+
 test('sinkFor stamps the node id and attempt epoch onto each event and appends it', function () {
-    config()->set('swarm.durable.stream_to_causal_log', true);
     seedNodeStreamRun('run-sink');
 
     $sink = app(DurableNodeStreamRecorder::class)->sinkFor('run-sink', 'step:2', 4);
@@ -73,11 +115,10 @@ test('sinkFor stamps the node id and attempt epoch onto each event and appends i
         ->and($row->event_uuid)->toBe('sink-event-1');
 });
 
-test('sealNodeBoundary appends one seal barrier when streaming is on', function () {
-    config()->set('swarm.durable.stream_to_causal_log', true);
+test('sealNodeBoundary appends one seal barrier when the run is pinned', function () {
     seedNodeStreamRun('run-seal');
 
-    app(DurableNodeStreamRecorder::class)->sealNodeBoundary('run-seal');
+    app(DurableNodeStreamRecorder::class)->sealNodeBoundary('run-seal', true);
 
     expect(
         DB::table('swarm_stream_events')
@@ -88,7 +129,6 @@ test('sealNodeBoundary appends one seal barrier when streaming is on', function 
 });
 
 test('voidPriorAttempt retracts the prior epoch before a fresh attempt re-emits', function () {
-    config()->set('swarm.durable.stream_to_causal_log', true);
     seedNodeStreamRun('run-resume');
 
     // The crashed attempt streamed one event under epoch 0.
@@ -103,7 +143,7 @@ test('voidPriorAttempt retracts the prior epoch before a fresh attempt re-emits'
     ));
 
     // Resume runs under epoch 1 and retracts epoch 0.
-    app(DurableNodeStreamRecorder::class)->voidPriorAttempt('run-resume', 'step:0', 1);
+    app(DurableNodeStreamRecorder::class)->voidPriorAttempt('run-resume', 'step:0', 1, true);
 
     $edge = DB::table('swarm_stream_events')
         ->where('run_id', 'run-resume')
