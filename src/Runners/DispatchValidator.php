@@ -8,12 +8,14 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
@@ -21,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use ReflectionClass;
 use ReflectionIntersectionType;
@@ -52,6 +55,8 @@ class DispatchValidator
         protected ArtifactRepository $artifactRepository,
         protected RunHistoryStore $historyStore,
         protected DurableRunStore $durableRuns,
+        protected StreamEventStore $streamEvents,
+        protected ConfigRepository $config,
     ) {}
 
     public function ensureSwarmHasAgents(Swarm $swarm): void
@@ -97,6 +102,29 @@ class DispatchValidator
         $this->artifactRepository->assertReady();
         $this->historyStore->assertReady();
         $this->durableRuns->assertReady();
+
+        $this->ensureDurableStreamingInfrastructure();
+    }
+
+    /**
+     * Gate the durable per-node streaming opt-in (#298): when
+     * [swarm.durable.stream_to_causal_log] is on, the bound StreamEventStore must
+     * be the database-backed causal log so node events have a log to append to and
+     * a crashed attempt can be retracted on resume. Fail loud at dispatch rather
+     * than silently dropping events or falling back to prompt(). Off by default, so
+     * existing durable runs never reach this check.
+     */
+    public function ensureDurableStreamingInfrastructure(): void
+    {
+        if (! (bool) $this->config->get('swarm.durable.stream_to_causal_log', false)) {
+            return;
+        }
+
+        if (! $this->streamEvents instanceof DatabaseCausalLogStore) {
+            throw new SwarmException('Durable per-node streaming ([swarm.durable.stream_to_causal_log]) requires the database persistence driver so the causal log is available to append node events to. Disable the flag or switch [swarm.persistence.driver] to database.');
+        }
+
+        $this->streamEvents->assertReady();
     }
 
     public function validateForDispatch(Swarm $swarm): void
