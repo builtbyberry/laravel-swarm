@@ -564,7 +564,7 @@ shape from the log alone.
 
 | Class | `type()` | Payload keys (beyond `id`, `invocation_id`, `node_id`, `run_id`, `timestamp`) | Role |
 | --- | --- | --- | --- |
-| `SwarmNodeOpened` | `swarm_node_opened` | `parent_node_id` (null at the root), `role`, `rationale` | A node opening. Self-identifying — `node_id == id`. Recorded **before** any event tagged with that node id (causal completeness). |
+| `SwarmNodeOpened` | `swarm_node_opened` | `parent_node_id` (null at the root), `role`, `rationale` | A node opening, recorded **before** any event tagged with that node id (causal completeness). Self-identifying (`node_id == id`) in the **live** structural stream; in **durable** per-node streaming each attempt's open carries a fresh per-attempt `event_uuid` (`id != node_id`) so a crash-retry voids exactly its prior attempt — `node_id` is the separately-stamped tag the fold groups by. |
 | `SwarmNodeChildrenDecided` | `swarm_node_children_decided` | `child_node_ids` (in chosen order), `rationale` | A deciding node declaring its children in declared/presentation order. |
 | `SwarmNodeClosed` | `swarm_node_closed` | `result` | The terminal bracket for every event tagged with that node id. |
 
