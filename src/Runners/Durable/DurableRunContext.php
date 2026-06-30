@@ -142,4 +142,14 @@ class DurableRunContext
     {
         return (string) $this->requireRun($runId)['topology'];
     }
+
+    /**
+     * The run's pinned `#[DurableStreaming]` opt-in (#310). Reads the value persisted
+     * on the run row at run-start so the seal site shares one source of truth with
+     * the advancer's void/sink. Mirrors {@see swarmClassFor()} / {@see topologyFor()}.
+     */
+    public function durableStreamingFor(string $runId): bool
+    {
+        return (bool) $this->requireRun($runId)['durable_streaming'];
+    }
 }

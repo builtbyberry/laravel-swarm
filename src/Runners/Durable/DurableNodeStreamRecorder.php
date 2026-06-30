@@ -15,13 +15,21 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 /**
  * Per-node durable streaming sink over the append-only causal log (#298).
  *
- * Bridges a durable step advancer to the causal log: when the
- * `[swarm.durable.stream_to_causal_log]` opt-in is on AND a database causal log is
- * bound, it builds a per-attempt sink that stamps every streamed event with its
- * node id and attempt epoch and appends it, and it retracts a crashed prior
- * attempt before the fresh one re-emits. When the opt-in is off (the default)
- * every method is inert, so the advancer falls through to the unchanged blocking
- * `prompt()` path and existing durable runs are untouched.
+ * Bridges a durable step advancer to the causal log: when the run's pinned
+ * `#[DurableStreaming]` opt-in is on AND a database causal log is bound, it builds a
+ * per-attempt sink that stamps every streamed event with its node id and attempt
+ * epoch and appends it, and it retracts a crashed prior attempt before the fresh one
+ * re-emits. When the opt-in is off (the default) every method is inert, so the
+ * advancer falls through to the unchanged blocking `prompt()` path and existing
+ * durable runs are untouched.
+ *
+ * Two gates, deliberately split (#310 KS1): {@see enabled()} (pin-only) governs the
+ * causal-log INTEGRITY operations — the void-on-resume and the seal-on-commit — so
+ * they always run for a pinned run and the fold stays consistent. {@see streamingActive()}
+ * additionally honours the live `swarm.durable.streaming_enabled` operator kill-switch
+ * and governs only EMISSION (whether a node streams via the sink or falls back to
+ * `prompt()`). So an operator can stop the per-event write load mid-incident without
+ * ever dropping a retraction or seal — the kill-switch can force streaming off, never on.
  *
  * State discipline (#298 F4): nothing per-attempt is held on this object. The sink
  * is a fresh closure per `advance()` call, capturing the node id and epoch in its
@@ -44,15 +52,34 @@ class DurableNodeStreamRecorder
     ) {}
 
     /**
-     * Whether durable per-node streaming is active: the opt-in is on AND the bound
-     * causal log is the database store. {@see DispatchValidator}
-     * already enforces this at dispatch; it is re-checked here so an advancer is
-     * correct in isolation (a relayed job re-resolves its own collaborators).
+     * Whether the causal-log INTEGRITY operations (void-on-resume, seal-on-commit)
+     * run for this step: the run's pinned `#[DurableStreaming]` opt-in is on AND the
+     * bound causal log is the database store. Deliberately does NOT consult the
+     * operator kill-switch — integrity must hold even while emission is paused, so a
+     * crashed attempt is always retracted and every committed node always sealed.
+     *
+     * The pinned value is threaded in by the caller from the durable run row (never
+     * read from live config), so a relayed/recovered job sees the run's original
+     * decision. {@see DispatchValidator} enforces
+     * the database-causal-log requirement at dispatch; it is re-checked here so an
+     * advancer is correct in isolation.
      */
-    public function enabled(): bool
+    public function enabled(bool $pinned): bool
     {
-        return (bool) $this->config->get('swarm.durable.stream_to_causal_log', false)
-            && $this->causalLog instanceof DatabaseCausalLogStore;
+        return $pinned && $this->causalLog instanceof DatabaseCausalLogStore;
+    }
+
+    /**
+     * Whether this node should EMIT a stream (use the sink) rather than fall back to
+     * `prompt()`: integrity is enabled AND the live operator kill-switch
+     * `swarm.durable.streaming_enabled` (default true) is on. The kill-switch lets an
+     * operator shed the per-event causal-log write load fleet-wide without a redeploy;
+     * because it gates only emission, flipping it mid-run never orphans events.
+     */
+    public function streamingActive(bool $pinned): bool
+    {
+        return $this->enabled($pinned)
+            && (bool) $this->config->get('swarm.durable.streaming_enabled', true);
     }
 
     /**
@@ -65,9 +92,9 @@ class DurableNodeStreamRecorder
      * or when streaming is off. Must run under the step lease the caller already
      * holds, before any fresh event is written (#298 F5).
      */
-    public function voidPriorAttempt(string $runId, string $nodeId, int $epoch): void
+    public function voidPriorAttempt(string $runId, string $nodeId, int $epoch, bool $pinned): void
     {
-        if (! $this->enabled()) {
+        if (! $this->enabled($pinned)) {
             return;
         }
 
@@ -101,9 +128,9 @@ class DurableNodeStreamRecorder
      * barrier that fences the next attempt's retraction. The dispatch gate (F7)
      * makes a mid-run causal-log failure a genuine infrastructure fault.
      */
-    public function sealNodeBoundary(string $runId): void
+    public function sealNodeBoundary(string $runId, bool $pinned): void
     {
-        if (! $this->enabled()) {
+        if (! $this->enabled($pinned)) {
             return;
         }
 

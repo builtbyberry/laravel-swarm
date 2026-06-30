@@ -89,7 +89,7 @@ class DispatchValidator
         }
     }
 
-    public function ensureDatabaseDurableInfrastructure(): void
+    public function ensureDatabaseDurableInfrastructure(Swarm $swarm): void
     {
         if (! $this->contextStore instanceof DatabaseContextStore
             || ! $this->artifactRepository instanceof DatabaseArtifactRepository
@@ -103,30 +103,30 @@ class DispatchValidator
         $this->historyStore->assertReady();
         $this->durableRuns->assertReady();
 
-        $this->ensureDurableStreamingInfrastructure();
+        $this->ensureDurableStreamingInfrastructure($this->resolver->resolveDurableStreaming($swarm));
     }
 
     /**
-     * Gate the durable per-node streaming opt-in (#298): when
-     * [swarm.durable.stream_to_causal_log] is on, the database causal log the
-     * advancer appends node events to — and retracts a crashed attempt against on
-     * resume — must be available and migrated. Fail loud at dispatch rather than
-     * silently dropping events or falling back to prompt(). Off by default, so
-     * existing durable runs never reach this check.
+     * Gate the per-swarm durable per-node streaming opt-in (#298/#310): when the
+     * swarm carries `#[DurableStreaming]`, the database causal log the advancer
+     * appends node events to — and retracts a crashed attempt against on resume —
+     * must be available and migrated. Fail loud at dispatch rather than silently
+     * dropping events or falling back to prompt(). Swarms without the attribute pass
+     * `false` and never reach this check.
      *
      * This runs only after {@see ensureDatabaseDurableInfrastructure()} has already
      * verified the database durable stores, so the persistence driver is database
      * by here; the remaining check is that the causal log (always the database
      * store) carries the void-edge and durable-streaming columns.
      */
-    public function ensureDurableStreamingInfrastructure(): void
+    public function ensureDurableStreamingInfrastructure(bool $durableStreaming): void
     {
-        if (! (bool) $this->config->get('swarm.durable.stream_to_causal_log', false)) {
+        if (! $durableStreaming) {
             return;
         }
 
         if (! $this->causalLog instanceof DatabaseCausalLogStore) {
-            throw new SwarmException('Durable per-node streaming ([swarm.durable.stream_to_causal_log]) requires the database persistence driver so the causal log is available to append node events to. Disable the flag or switch [swarm.persistence.driver] to database.');
+            throw new SwarmException('Durable per-node streaming (#[DurableStreaming]) requires the database persistence driver so the causal log is available to append node events to. Remove #[DurableStreaming] from the swarm or switch [swarm.persistence.driver] to database.');
         }
 
         $this->causalLog->assertReady();
@@ -147,7 +147,7 @@ class DispatchValidator
             $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
 
             if ($this->resolver->resolveQueueHierarchicalParallelCoordination($swarm) === 'multi_worker') {
-                $this->ensureDatabaseDurableInfrastructure();
+                $this->ensureDatabaseDurableInfrastructure($swarm);
             }
         }
     }

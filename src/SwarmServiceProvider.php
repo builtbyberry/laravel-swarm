@@ -132,6 +132,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
@@ -234,6 +235,7 @@ class SwarmServiceProvider extends ServiceProvider
         ));
         $this->app->singleton(SwarmAttributeResolver::class);
         $this->app->singleton(ContextGrowthGovernor::class);
+        $this->app->singleton(StreamEventMapper::class);
         $this->app->singleton(SequentialRunner::class);
         $this->app->singleton(SequentialStreamRunner::class);
 

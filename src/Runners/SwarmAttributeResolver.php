@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Attributes\ContextGrowthPolicy as ContextGrowthPolicyAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\DurableParallelFailurePolicy as DurableParallelFailurePolicyAttribute;
+use BuiltByBerry\LaravelSwarm\Attributes\DurableStreaming as DurableStreamingAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\MaxAgentSteps as MaxAgentStepsAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\PropagationPolicy as PropagationPolicyAttribute;
 use BuiltByBerry\LaravelSwarm\Attributes\QueuedHierarchicalParallelCoordination as QueuedHierarchicalParallelCoordinationAttribute;
@@ -139,6 +140,25 @@ class SwarmAttributeResolver
         }
 
         return $configured;
+    }
+
+    /**
+     * Whether this swarm opts into durable per-node streaming (#310). Resolved by
+     * reflection from the `#[DurableStreaming]` attribute only — there is no config
+     * fallback: an absent attribute means off, so a swarm never streams durably
+     * unless it explicitly asks to. The boolean is pinned onto the durable run row
+     * at run-start, so every resume reads the run's original decision.
+     */
+    public function resolveDurableStreaming(Swarm $swarm): bool
+    {
+        $reflection = new ReflectionClass($swarm);
+        $attributes = $reflection->getAttributes(DurableStreamingAttribute::class);
+
+        if ($attributes === []) {
+            return false;
+        }
+
+        return $attributes[0]->newInstance()->enabled;
     }
 
     /**

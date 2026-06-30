@@ -144,7 +144,7 @@ class SwarmRunner
             $queueHierarchicalCoord = $this->resolver->resolveQueueHierarchicalParallelCoordination($swarm);
 
             if ($queueHierarchicalCoord === 'multi_worker') {
-                $this->validator->ensureDatabaseDurableInfrastructure();
+                $this->validator->ensureDatabaseDurableInfrastructure($swarm);
                 $context->mergeMetadata([
                     'durable_parallel_failure_policy' => $this->resolver->resolveDurableParallelFailurePolicy($swarm)->value,
                 ]);
@@ -409,7 +409,7 @@ class SwarmRunner
 
         $topology = $this->resolver->resolveTopology($swarm);
 
-        $this->validator->ensureDatabaseDurableInfrastructure();
+        $this->validator->ensureDatabaseDurableInfrastructure($swarm);
 
         if ($topology === Topology::Parallel) {
             $this->parallel->ensureAgentsAreContainerResolvable($swarm->agents(), $swarm::class);

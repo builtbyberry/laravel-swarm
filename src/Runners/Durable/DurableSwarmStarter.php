@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmStart;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
@@ -37,6 +38,7 @@ class DurableSwarmStarter
         protected SwarmPayloadLimits $limits,
         protected DurableRunContext $runs,
         protected DurableJobDispatcher $jobs,
+        protected SwarmAttributeResolver $resolver,
     ) {}
 
     public function start(Swarm $swarm, RunContext $context, Topology $topology, int $timeoutSeconds, int $totalSteps, DurableParallelFailurePolicy $parallelFailurePolicy = DurableParallelFailurePolicy::CollectFailures): DurableSwarmStart
@@ -69,6 +71,9 @@ class DurableSwarmStarter
                 'swarm_class' => $swarm::class,
                 'topology' => $topology->value,
                 'execution_mode' => ExecutionMode::Durable->value,
+                // Pin the per-swarm durable-streaming opt-in at run-start (#310) so
+                // every resume reads the run's original decision, never live config.
+                'durable_streaming' => $this->resolver->resolveDurableStreaming($swarm),
                 'status' => 'pending',
                 'next_step_index' => 0,
                 'current_step_index' => null,

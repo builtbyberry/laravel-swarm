@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
 use BuiltByBerry\LaravelSwarm\Streaming\View\ViewSupersession;
 use BuiltByBerry\LaravelSwarm\Streaming\View\VoidedEvent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyStreamEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableNonStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableStreamingSwarm;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Artisan;
@@ -64,9 +65,18 @@ function durableStreamEventCount(string $runId, ?string $nodeId = null): int
 
 beforeEach(function () {
     configureDurablePerNodeStreamingRuntime();
-    config()->set('swarm.durable.stream_to_causal_log', true);
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
     FlakyStreamEditor::reset(failuresBeforeSuccess: 1);
+});
+
+test('the durable-streaming opt-in is resolved from the attribute and pinned on the run row at run-start', function () {
+    FlakyStreamEditor::reset(failuresBeforeSuccess: 0);
+
+    $optedIn = DurableStreamingSwarm::make()->dispatchDurable('stream-task')->runId;
+    $optedOut = DurableNonStreamingSwarm::make()->dispatchDurable('stream-task')->runId;
+
+    expect((bool) DB::table('swarm_durable_runs')->where('run_id', $optedIn)->value('durable_streaming'))->toBeTrue()
+        ->and((bool) DB::table('swarm_durable_runs')->where('run_id', $optedOut)->value('durable_streaming'))->toBeFalse();
 });
 
 test('a 3-node durable run streams per node, voids the crashed node, and keeps the resumed node clean', function () {
@@ -140,11 +150,10 @@ test('a 3-node durable run streams per node, voids the crashed node, and keeps t
         ->and($voided[0]->event->toArray()['delta'] ?? null)->toBe('partial-1');
 });
 
-test('a durable run with streaming opted out writes no causal-log events', function () {
-    config()->set('swarm.durable.stream_to_causal_log', false);
+test('a durable swarm without the #[DurableStreaming] attribute writes no causal-log events', function () {
     FlakyStreamEditor::reset(failuresBeforeSuccess: 0);
 
-    $response = DurableStreamingSwarm::make()->dispatchDurable('stream-task');
+    $response = DurableNonStreamingSwarm::make()->dispatchDurable('stream-task');
     $runId = $response->runId;
     $manager = app(DurableSwarmManager::class);
 
@@ -156,9 +165,48 @@ test('a durable run with streaming opted out writes no causal-log events', funct
         ->and(durableStreamEventCount($runId))->toBe(0);
 });
 
-test('durable per-node streaming dispatch fails loud when the causal log is not migrated for streaming (#298 F7)', function () {
-    config()->set('swarm.durable.stream_to_causal_log', true);
+test('the operator kill-switch sheds emission mid-run but the crashed attempt is still voided (KS1)', function () {
+    $response = DurableStreamingSwarm::make()->dispatchDurable('stream-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
 
+    // Step 0 + step 1 stream normally; step 1 crashes mid-node, leaving one partial
+    // event under epoch 0.
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+    expect(durableStreamEventCount($runId, 'step:1'))->toBe(1);
+
+    // Operator pauses durable streaming fleet-wide before the resume.
+    config()->set('swarm.durable.streaming_enabled', false);
+
+    $this->travel(61)->seconds();
+    Artisan::call('swarm:recover');
+
+    // Step 1 re-executes under epoch 1: the kill-switch routes it through prompt()
+    // (no new stream deltas), but integrity is untouched — the crashed attempt is
+    // still retracted with a node_reexecuted void-edge.
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and(
+            DB::table('swarm_stream_events')
+                ->where('run_id', $runId)
+                ->where('void_type', CausalVoidEdgeType::NodeReexecuted->value)
+                ->count()
+        )->toBe(1)
+        // No epoch-1 stream deltas for step:1 — emission was shed.
+        ->and(
+            DB::table('swarm_stream_events')
+                ->where('run_id', $runId)
+                ->where('node_id', 'step:1')
+                ->where('attempt_epoch', 1)
+                ->where('event_type', 'swarm_text_delta')
+                ->count()
+        )->toBe(0);
+});
+
+test('durable per-node streaming dispatch fails loud when the causal log is not migrated for streaming (#298 F7)', function () {
     Schema::table('swarm_stream_events', function (Blueprint $table): void {
         $table->dropIndex('swarm_stream_events_run_node_epoch_index');
         $table->dropColumn(['node_id', 'attempt_epoch']);

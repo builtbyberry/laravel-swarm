@@ -160,9 +160,11 @@ class DurableRunRecorder
             $this->durableRuns->releaseForNextStep($runId, $token, $nextStepIndex);
             // Seal the just-committed node's streamed events in the SAME lease-fenced
             // transaction as the cursor advance (#298 F1/F5), so an uncommitted node
-            // can never be sealed beside its fresh attempt. No-op unless per-node
-            // streaming is on.
-            $this->nodeStream->sealNodeBoundary($runId);
+            // can never be sealed beside its fresh attempt. The opt-in is read from
+            // the value pinned on the run row (#310) — the single source of truth this
+            // seal shares with the advancer's void — so seal and void never disagree.
+            // No-op unless the run pinned per-node streaming on.
+            $this->nodeStream->sealNodeBoundary($runId, $this->runs->durableStreamingFor($runId));
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }
