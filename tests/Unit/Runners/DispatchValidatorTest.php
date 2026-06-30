@@ -82,15 +82,15 @@ test('validateForDispatch composes agent + timeout + topology checks', function 
     expect(true)->toBeTrue();
 });
 
-test('ensureDurableStreamingInfrastructure rejects #[DurableStreaming] on every non-sequential topology (#310 forcing function)', function (Topology $topology): void {
+test('ensureDurableStreamingInfrastructure rejects #[DurableStreaming] on an unsupported topology (#310 forcing function)', function (Topology $topology): void {
     // The topology guard runs BEFORE the database-causal-log check, so this fails
     // loud regardless of persistence setup — a swarm can never silently pin the
-    // opt-in and then no-op on a topology that does not stream yet.
+    // opt-in and then no-op on a topology that does not stream yet. Parallel is the
+    // only remaining unsupported topology now that #311 wired hierarchical and
+    // static_hierarchical; #312 wires parallel and deletes this case.
     expect(fn () => $this->validator->ensureDurableStreamingInfrastructure(true, $topology))
-        ->toThrow(SwarmException::class, 'currently supported only for sequential');
+        ->toThrow(SwarmException::class, 'is not yet supported for');
 })->with([
-    'hierarchical' => Topology::Hierarchical,
-    'static hierarchical' => Topology::StaticHierarchical,
     'parallel' => Topology::Parallel,
 ]);
 
