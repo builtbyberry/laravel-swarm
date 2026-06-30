@@ -73,7 +73,11 @@ class SequentialStreamRunner
         $this->ensureSwarmHasAgents($swarm);
 
         if ($topology !== Topology::Sequential) {
-            throw new SwarmException('Streaming is only supported for sequential swarms. '.$topology->value.' topology does not support streaming.');
+            // This is the live sequential stream() runner specifically; hierarchical and
+            // static_hierarchical live-stream via their own runners, and any topology
+            // (incl. parallel) can stream durably via #[DurableStreaming]. So this is a
+            // routing guard, not a claim that {$topology} cannot stream at all.
+            throw new SwarmException('The live sequential stream() runner only accepts sequential swarms; a '.$topology->value.' swarm streams via its own live runner or durably via #[DurableStreaming].');
         }
 
         $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);

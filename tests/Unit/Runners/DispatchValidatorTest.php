@@ -29,9 +29,15 @@ test('ensureSwarmHasAgents passes when agents are present', function (): void {
     expect(true)->toBeTrue();
 });
 
-test('ensureStreamableTopology blocks parallel topology', function (): void {
+test('ensureStreamableTopology blocks parallel topology with a live-vs-durable error', function (): void {
+    // The live stream() gate excludes parallel (no single ordered token stream); the
+    // error must name the live API and point at the durable path that DOES support it,
+    // so it never reads as contradicting durable parallel streaming (#312).
     expect(fn () => $this->validator->ensureStreamableTopology(new SwarmWithParallelTopologyAttribute))
-        ->toThrow(SwarmException::class, 'Streaming is only supported');
+        ->toThrow(SwarmException::class, 'The live stream() API only supports');
+
+    expect(fn () => $this->validator->ensureStreamableTopology(new SwarmWithParallelTopologyAttribute))
+        ->toThrow(SwarmException::class, '#[DurableStreaming] does support');
 });
 
 test('ensureStreamableTopology allows sequential topology', function (): void {
