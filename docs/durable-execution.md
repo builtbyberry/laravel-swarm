@@ -283,10 +283,17 @@ is hot. It gates only emission: opted-in runs fall back to the blocking `prompt(
 path, but every crashed attempt is still retracted and every committed node still
 sealed, so the log stays consistent. Flipping it mid-run is safe.
 
-Scope: sequential durable runs in v0.15.0 (hierarchical and parallel-branch durable
-streaming follow). Applying `#[DurableStreaming]` to a **non-sequential** durable swarm
-**fails loud at dispatch** until those land — it never silently pins the opt-in and
-no-ops. Non-durable (`run()`/`queue()`) execution is unaffected.
+Scope: sequential and parallel durable runs in v0.15.0. Parallel covers both
+top-level `Topology::Parallel` branches and hierarchical fan-out branches (and so
+queue-hierarchical-parallel, whose branches run through the same advancer); each
+branch streams under its own node id — a fan-out branch's real node id, or, for a
+top-level parallel branch, its stable `branch_id` (e.g. `parallel:2`) — and under
+its own branch attempt epoch, so a branch that crashes and resumes retracts only its
+own prior attempt and never a committed sibling. The branch generation is sealed at
+the parent's post-join checkpoint, never at branch commit. Hierarchical main-walk
+node streaming follows. Applying `#[DurableStreaming]` to a topology that does not
+yet stream **fails loud at dispatch** — it never silently pins the opt-in and no-ops.
+Non-durable (`run()`/`queue()`) execution is unaffected.
 
 ## Durable Hierarchical Parallel Flow
 

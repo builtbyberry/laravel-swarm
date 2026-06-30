@@ -115,6 +115,40 @@ test('sinkFor stamps the node id and attempt epoch onto each event and appends i
         ->and($row->event_uuid)->toBe('sink-event-1');
 });
 
+test('two branch sinks in one worker carry distinct (node_id, epoch) stamps (#312 Octane L3)', function () {
+    // Per-branch sink closures are call-scoped: two concurrent durable parallel
+    // branches sharing one Octane worker each build their own sink, capturing their
+    // own (branch node id, branch epoch) in closure scope. Proven by interleaving the
+    // two sinks' emissions — neither stamps the other's identity onto its events.
+    seedNodeStreamRun('run-branches');
+
+    $recorder = app(DurableNodeStreamRecorder::class);
+    $branchA = $recorder->sinkFor('run-branches', 'parallel:0', 1); // crashed branch, epoch 1
+    $branchB = $recorder->sinkFor('run-branches', 'parallel:1', 1); // sibling branch, epoch 1
+
+    $event = static fn (string $id): SwarmTextDelta => new SwarmTextDelta(
+        id: $id,
+        runId: 'run-branches',
+        stepIndex: 0,
+        agentClass: 'ExampleAgent',
+        delta: 'd',
+        timestamp: SwarmStreamEvent::timestamp(),
+    );
+
+    // Interleave the two sinks to prove neither closure leaks the other's identity.
+    $branchA($event('a-1'));
+    $branchB($event('b-1'));
+    $branchA($event('a-2'));
+
+    $stamp = fn (string $uuid): array => (array) DB::table('swarm_stream_events')
+        ->where('run_id', 'run-branches')->where('event_uuid', $uuid)
+        ->first(['node_id', 'attempt_epoch']);
+
+    expect($stamp('a-1'))->toMatchArray(['node_id' => 'parallel:0', 'attempt_epoch' => 1])
+        ->and($stamp('a-2'))->toMatchArray(['node_id' => 'parallel:0', 'attempt_epoch' => 1])
+        ->and($stamp('b-1'))->toMatchArray(['node_id' => 'parallel:1', 'attempt_epoch' => 1]);
+});
+
 test('sealNodeBoundary appends one seal barrier when the run is pinned', function () {
     seedNodeStreamRun('run-seal');
 
