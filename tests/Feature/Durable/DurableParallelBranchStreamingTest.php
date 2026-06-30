@@ -17,11 +17,15 @@ use BuiltByBerry\LaravelSwarm\Streaming\View\ViewSupersession;
 use BuiltByBerry\LaravelSwarm\Streaming\View\VoidedEvent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyStreamEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Streaming\UnknownStreamEvent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\HierarchicalFanOutStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelDurableStreamingSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelDurableUnknownStreamEventSwarm;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Psr\Log\AbstractLogger;
+use Psr\Log\LoggerInterface;
 
 /** Mirror the durable runtime setup used by the sequential per-node streaming test. */
 function configureDurableParallelBranchStreamingRuntime(): void
@@ -64,6 +68,32 @@ function parallelBranchEventCount(string $runId, ?string $nodeId = null, ?int $e
     }
 
     return $query->count();
+}
+
+/**
+ * Collects log records so a branch breadcrumb can be asserted without touching the
+ * real log stack. AbstractLogger routes ->warning() through log(). Mirrors the
+ * collector in StreamEventBreadcrumbTest, named distinctly to avoid a redeclaration
+ * across the two test files.
+ */
+class CollectingBranchLogger extends AbstractLogger
+{
+    /** @var list<array{level: mixed, message: string|Stringable, context: array<string, mixed>}> */
+    public array $records = [];
+
+    public function log($level, $message, array $context = []): void
+    {
+        $this->records[] = ['level' => $level, 'message' => $message, 'context' => $context];
+    }
+
+    /** @return list<array{level: mixed, message: string|Stringable, context: array<string, mixed>}> */
+    public function unknownEventBreadcrumbs(): array
+    {
+        return array_values(array_filter(
+            $this->records,
+            fn (array $record): bool => str_contains((string) $record['message'], 'unrecognized stream event type'),
+        ));
+    }
 }
 
 beforeEach(function () {
@@ -167,6 +197,19 @@ test('one branch crashes + resumes while the sibling commits: only the crashed b
         fn ($event) => $event instanceof VoidedEvent && parallelBranchNodeId($event) === 'parallel:1',
     ));
     expect($voidedParallel1)->toBeEmpty();
+
+    // ...and the "no voided parallel:1" assertion cannot pass vacuously: parallel:1
+    // really did stream foldable events, and they survive un-wrapped (never a
+    // VoidedEvent) in the clean fold. A sibling whose commit produced nothing would
+    // satisfy the toBeEmpty() above too — this positive check rules that out.
+    $cleanParallel1 = array_values(array_filter(
+        CausalLogView::forRun($log, $runId)->fold(supersession: ViewSupersession::Clean),
+        fn ($event) => parallelBranchNodeId($event) === 'parallel:1',
+    ));
+    expect($cleanParallel1)->not->toBeEmpty();
+    foreach ($cleanParallel1 as $event) {
+        expect($event)->not->toBeInstanceOf(VoidedEvent::class);
+    }
 });
 
 test('a hierarchical fan-out streams each branch under its non-null node_id and seals on join, never at branch commit (#312 hierarchical)', function () {
@@ -257,4 +300,90 @@ test('a streaming child swarm pins durable_streaming from its OWN class, indepen
 
     expect(parallelBranchEventCount($child->childRunId, 'parallel:0'))->toBeGreaterThan(0)
         ->and(parallelBranchEventCount($child->childRunId, 'parallel:1'))->toBeGreaterThan(0);
+});
+
+test('a branch that streams an unrecognized provider event leaves a fail-visible breadcrumb (#312 review F2)', function () {
+    // Bind a collecting logger under LoggerInterface, then forget the durable manager
+    // graph so the branch advancer is rebuilt against it. Mirrors the sequential
+    // breadcrumb test's wiring (StreamEventBreadcrumbTest).
+    $logger = new CollectingBranchLogger;
+    app()->instance(LoggerInterface::class, $logger);
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    $runId = ParallelDurableUnknownStreamEventSwarm::make()->dispatchDurable('branch-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);            // fan out branches
+    (new AdvanceDurableBranch($runId, 'parallel:0'))->handle($manager); // streams the unknown event
+    (new AdvanceDurableBranch($runId, 'parallel:1'))->handle($manager); // clean sibling
+
+    // The branch advancer breadcrumbed the dropped class exactly once, naming the
+    // unknown event class only (never its payload), with the branch's run + step index.
+    $breadcrumbs = $logger->unknownEventBreadcrumbs();
+    expect($breadcrumbs)->toHaveCount(1)
+        ->and($breadcrumbs[0]['context']['event_types'])->toBe([UnknownStreamEvent::class])
+        ->and($breadcrumbs[0]['context'])->toHaveKey('run_id')
+        ->and($breadcrumbs[0]['context']['run_id'])->toBe($runId);
+
+    // The unknown event did not abort the branch: both branches still streamed and
+    // the join completes the run.
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+    expect($manager->find($runId)['status'])->toBe('completed');
+});
+
+test('the operator kill-switch sheds branch emission mid-run but the crashed branch is still voided and falls back to prompt() (#312 review F4)', function () {
+    // Opted-in parallel run. Mirrors the sequential kill-switch test (KS1): the crash
+    // happens on a STREAMED attempt (so there is a real prior attempt to retract),
+    // then the operator sheds emission before the resume — integrity (void-on-resume)
+    // still runs, but the resumed branch falls back to prompt() and writes no new rows.
+    $runId = ParallelDurableStreamingSwarm::make()->dispatchDurable('branch-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    // Pinned at run-start from the swarm's own #[DurableStreaming] — the kill-switch
+    // gates emission, never the pin.
+    expect((bool) DB::table('swarm_durable_runs')->where('run_id', $runId)->value('durable_streaming'))->toBeTrue();
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager); // fan out branches
+
+    // Branch parallel:0 is the flaky agent: it streams a partial delta then crashes
+    // mid-node on attempt 1; a retry is scheduled. Its one partial event is in the log
+    // under epoch 1, not yet voided.
+    (new AdvanceDurableBranch($runId, 'parallel:0'))->handle($manager);
+    expect(FlakyStreamEditor::$attempts)->toBe(1)
+        ->and(parallelBranchEventCount($runId, 'parallel:0', 1))->toBe(1);
+
+    // Sibling parallel:1 commits cleanly, streaming its events under epoch 1.
+    (new AdvanceDurableBranch($runId, 'parallel:1'))->handle($manager);
+    $siblingRowsBeforeShed = parallelBranchEventCount($runId, 'parallel:1');
+    expect($siblingRowsBeforeShed)->toBeGreaterThan(0);
+
+    // Operator pauses durable streaming fleet-wide before the crashed branch resumes.
+    config()->set('swarm.durable.streaming_enabled', false);
+
+    // Recover past the backoff and re-execute the crashed branch. The kill-switch
+    // routes the resumed attempt through prompt() (no new stream deltas), but integrity
+    // is untouched — the crashed epoch-1 attempt is still retracted with a
+    // node_reexecuted void-edge, keyed on (parallel:0, epoch) so parallel:1 is untouched.
+    $this->travel(61)->seconds();
+    Artisan::call('swarm:recover');
+    (new AdvanceDurableBranch($runId, 'parallel:0'))->handle($manager);
+    // stream() was NOT called again on the resume — the kill-switch routed the branch
+    // through promptBranchAgent(), which never touches the flaky stream counter. It
+    // stays at 1, proving the fallback to prompt() (not a second streamed attempt).
+    expect(FlakyStreamEditor::$attempts)->toBe(1)
+        // No epoch-2 stream rows for the resumed branch — emission was shed, it ran prompt().
+        ->and(parallelBranchEventCount($runId, 'parallel:0', 2))->toBe(0)
+        // ...and the committed sibling's rows were not touched by the shed.
+        ->and(parallelBranchEventCount($runId, 'parallel:1'))->toBe($siblingRowsBeforeShed);
+
+    // The join completes the run.
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        // Exactly one node_reexecuted void-edge was written, for the crashed parallel:0
+        // attempt — integrity held through the kill-switch.
+        ->and(
+            DB::table('swarm_stream_events')->where('run_id', $runId)
+                ->where('void_type', CausalVoidEdgeType::NodeReexecuted->value)->count()
+        )->toBe(1);
 });

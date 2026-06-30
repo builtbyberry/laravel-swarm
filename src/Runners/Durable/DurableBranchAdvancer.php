@@ -23,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
@@ -46,6 +47,8 @@ use Throwable;
  */
 class DurableBranchAdvancer
 {
+    use RecordsUnknownStreamEvents;
+
     public function __construct(
         protected DurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
@@ -341,6 +344,19 @@ class DurableBranchAdvancer
                     SnapshotToolCallNormalizer::entry($unpairedCall),
                 );
             }
+
+            // Breadcrumb any provider event the mapper's instanceof chain did not
+            // recognize, mirroring the sequential path (SequentialRunner::streamStep).
+            // Without this a branch silently drops unknown event classes — its frozen
+            // snapshot is the durable replay source, so the drop must stay observable.
+            // Degrade-safe (logs, never throws); fires on the happy path and on a
+            // mid-stream crash alike, so a branch that abandons mid-stream still
+            // records that its snapshot is incomplete.
+            $this->breadcrumbUnknownStreamEvents(
+                $accumulator->unknownEventClasses,
+                $state->context->runId,
+                (int) $branch['step_index'],
+            );
         }
 
         return [$accumulator->output, $accumulator->stepUsage, $accumulator->snapshot];

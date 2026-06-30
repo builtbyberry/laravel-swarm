@@ -289,11 +289,19 @@ queue-hierarchical-parallel, whose branches run through the same advancer); each
 branch streams under its own node id — a fan-out branch's real node id, or, for a
 top-level parallel branch, its stable `branch_id` (e.g. `parallel:2`) — and under
 its own branch attempt epoch, so a branch that crashes and resumes retracts only its
-own prior attempt and never a committed sibling. The branch generation is sealed at
-the parent's post-join checkpoint, never at branch commit. Hierarchical main-walk
-node streaming follows. Applying `#[DurableStreaming]` to a topology that does not
-yet stream **fails loud at dispatch** — it never silently pins the opt-in and no-ops.
-Non-durable (`run()`/`queue()`) execution is unaffected.
+own prior attempt and never a committed sibling. Seal-on-join is by topology: a
+**hierarchical** fan-out's branch generation is sealed at the parent's post-join
+checkpoint (never at branch commit), so its events graduate and compact. A
+**top-level `Topology::Parallel`** run instead converges by completing the run with no
+post-join checkpoint, so its streamed branch events are **never sealed** — they are
+retained-but-uncompacted in `swarm_stream_events` and expire with the rest of the run
+at its data TTL (`swarm.context.ttl`) rather than graduating to cold storage. This is
+deliberate: a top-level parallel run has no subsequent node to fence, so there is no
+on-join seal point; size `swarm_stream_events` retention with that in mind for
+high-fan-out top-level parallel streaming. Hierarchical main-walk node streaming
+follows. Applying `#[DurableStreaming]` to a topology that does not yet stream **fails
+loud at dispatch** — it never silently pins the opt-in and no-ops. Non-durable
+(`run()`/`queue()`) execution is unaffected.
 
 ## Durable Hierarchical Parallel Flow
 
