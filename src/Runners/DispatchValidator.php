@@ -45,6 +45,20 @@ use ReflectionUnionType;
  */
 class DispatchValidator
 {
+    /**
+     * Durable topologies whose per-node streaming is actually wired (#310 → #311/#312).
+     * This list is the single source of truth for "what `#[DurableStreaming]` streams":
+     * a swarm that opts in on any topology NOT in this set fails loud at dispatch
+     * rather than silently pinning the opt-in and never streaming. A topology is added
+     * here only in the same change that wires its streaming and proves it with a
+     * positive test — so a missed topology is a loud dispatch error, never a silent
+     * no-op. Grows to the full topology set as #311 (hierarchical) and #312 (parallel)
+     * land.
+     *
+     * @var list<Topology>
+     */
+    private const STREAMING_SUPPORTED_TOPOLOGIES = [Topology::Sequential];
+
     public function __construct(
         protected SwarmAttributeResolver $resolver,
         protected ParallelRunner $parallel,
@@ -103,7 +117,10 @@ class DispatchValidator
         $this->historyStore->assertReady();
         $this->durableRuns->assertReady();
 
-        $this->ensureDurableStreamingInfrastructure($this->resolver->resolveDurableStreaming($swarm));
+        $this->ensureDurableStreamingInfrastructure(
+            $this->resolver->resolveDurableStreaming($swarm),
+            $this->resolver->resolveTopology($swarm),
+        );
     }
 
     /**
@@ -118,11 +135,21 @@ class DispatchValidator
      * verified the database durable stores, so the persistence driver is database
      * by here; the remaining check is that the causal log (always the database
      * store) carries the void-edge and durable-streaming columns.
+     *
+     * Topology guard (#310): `#[DurableStreaming]` is a topology-agnostic surface — an
+     * author can declare it on any swarm — but only the topologies in
+     * {@see self::STREAMING_SUPPORTED_TOPOLOGIES} actually stream. Opting in on an
+     * unsupported topology fails loud here rather than silently pinning the opt-in and
+     * never streaming. #311/#312 add the remaining topologies to the allow-list.
      */
-    public function ensureDurableStreamingInfrastructure(bool $durableStreaming): void
+    public function ensureDurableStreamingInfrastructure(bool $durableStreaming, Topology $topology): void
     {
         if (! $durableStreaming) {
             return;
+        }
+
+        if (! in_array($topology, self::STREAMING_SUPPORTED_TOPOLOGIES, true)) {
+            throw new SwarmException("Durable per-node streaming (#[DurableStreaming]) is currently supported only for sequential durable swarms; {$topology->value} streaming arrives in a later release. Remove #[DurableStreaming] from the swarm or use a sequential topology.");
         }
 
         if (! $this->causalLog instanceof DatabaseCausalLogStore) {

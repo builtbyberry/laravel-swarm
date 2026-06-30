@@ -19,6 +19,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\View\VoidedEvent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyStreamEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableNonStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableStreamingSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\HierarchicalDurableStreamingSwarm;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -214,4 +215,12 @@ test('durable per-node streaming dispatch fails loud when the causal log is not 
 
     expect(fn () => DurableStreamingSwarm::make()->dispatchDurable('stream-task'))
         ->toThrow(SwarmException::class);
+});
+
+test('#[DurableStreaming] on a non-sequential topology fails loud at dispatch until #311/#312 (#310 forcing function)', function () {
+    // End-to-end proof the topology guard is wired into the real dispatch path: a
+    // hierarchical swarm that opts in must NOT silently pin durable_streaming and
+    // no-op — it fails loud at dispatchDurable. Delete when #311 wires hierarchical.
+    expect(fn () => HierarchicalDurableStreamingSwarm::make()->dispatchDurable('stream-task'))
+        ->toThrow(SwarmException::class, 'currently supported only for sequential');
 });

@@ -284,7 +284,9 @@ path, but every crashed attempt is still retracted and every committed node stil
 sealed, so the log stays consistent. Flipping it mid-run is safe.
 
 Scope: sequential durable runs in v0.15.0 (hierarchical and parallel-branch durable
-streaming follow). Non-durable (`run()`/`queue()`) execution is unaffected.
+streaming follow). Applying `#[DurableStreaming]` to a **non-sequential** durable swarm
+**fails loud at dispatch** until those land — it never silently pins the opt-in and
+no-ops. Non-durable (`run()`/`queue()`) execution is unaffected.
 
 ## Durable Hierarchical Parallel Flow
 
