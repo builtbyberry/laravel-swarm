@@ -401,6 +401,7 @@ test('outbox row rollback rolls back the checkpoint', function (): void {
             $nextStepBefore + 1,
             RunContext::fromTask('test'),
             60,
+            false, // durableStreaming pinned off for this run
             function (): void {
                 throw new RuntimeException('simulated outbox failure');
             },
