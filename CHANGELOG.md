@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.15.0 - 2026-06-29
+## v0.15.0 - 2026-06-30
 
 Legible self-structuring streaming: an append-only causal-log substrate that makes dynamic swarms streamable, with background-compacted hot/cold durability and author-owned context bounding.
 
