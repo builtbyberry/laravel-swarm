@@ -1711,10 +1711,15 @@ class HierarchicalRunner
         );
 
         // Close the node bracket once the step has fully completed — every event
-        // tagged with this node id precedes it (#284).
+        // tagged with this node id precedes it (#284). Durable bracket events use
+        // newId() for per-emission event_uuid uniqueness across re-execution
+        // attempts; structural identity is the separately-stamped node_id +
+        // attempt_epoch. Reusing $nodeId as the id would collide across attempts —
+        // the void-edge addresses one event_uuid and the fold indexes annotations
+        // by it, so a duplicate would corrupt both retraction and supersession.
         $stepOutput = (string) ($step->artifacts[0]->content ?? $accumulator->output);
         $sink(new SwarmNodeClosed(
-            id: $nodeId,
+            id: SwarmStreamEvent::newId(),
             runId: $state->context->runId,
             result: $this->capture->applyOutput($stepOutput, $state->context),
             timestamp: SwarmStreamEvent::timestamp(),

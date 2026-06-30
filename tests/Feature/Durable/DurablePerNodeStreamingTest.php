@@ -17,10 +17,12 @@ use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
 use BuiltByBerry\LaravelSwarm\Streaming\View\ViewSupersession;
 use BuiltByBerry\LaravelSwarm\Streaming\View\VoidedEvent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyStreamEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\PlainStreamEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableNonStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableStreamingSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FlakyCoordinatorDurableStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\HierarchicalDurableStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StaticHierarchicalDurableStreamingSwarm;
 use Illuminate\Database\Schema\Blueprint;
@@ -71,6 +73,7 @@ beforeEach(function () {
     configureDurablePerNodeStreamingRuntime();
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
     FlakyStreamEditor::reset(failuresBeforeSuccess: 1);
+    FlakyHierarchicalCoordinator::reset(failuresBeforeSuccess: 1);
 });
 
 test('the durable-streaming opt-in is resolved from the attribute and pinned on the run row at run-start', function () {
@@ -371,6 +374,20 @@ test('a static-hierarchical durable run streams worker nodes token-by-token, voi
         ->where('event_type', 'swarm_text_delta')
         ->count())->toBeGreaterThan(0);
 
+    // A static plan has no coordinator, so its streamed worker opens at the root:
+    // parent_node_id is null, the one behavioral difference from the dynamic
+    // hierarchical runner's __coordinator__ parent (StaticHierarchicalRunner::
+    // durableWorkerParentNodeId()).
+    $writerOpened = DB::table('swarm_stream_events')
+        ->where('run_id', $runId)
+        ->where('node_id', 'writer_node')
+        ->where('event_type', 'swarm_node_opened')
+        ->value('payload');
+
+    $writerOpenedPayload = json_decode((string) $writerOpened, true);
+    expect($writerOpenedPayload)->toHaveKey('parent_node_id')
+        ->and($writerOpenedPayload['parent_node_id'])->toBeNull();
+
     // Step 2 — editor_node (flaky): partial delta then crash mid-node.
     (new AdvanceDurableSwarm($runId, 2))->handle($manager);
     expect($manager->find($runId)['status'])->toBe('pending')
@@ -402,4 +419,138 @@ test('a static-hierarchical durable run streams worker nodes token-by-token, voi
     $cleanDeltas = array_map(fn ($event) => $event->toArray()['delta'] ?? null, $cleanEditor);
     expect($cleanDeltas)->not->toContain('partial-1')
         ->and($cleanDeltas)->toContain('-done');
+});
+
+test('the operator kill-switch sheds hierarchical worker emission mid-run but the crashed node is still voided and sealed (KS1)', function () {
+    fakeHierarchicalStreamingPlan();
+
+    $response = HierarchicalDurableStreamingSwarm::make()->dispatchDurable('stream-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    // Coordinator (step 0) + writer_node (step 1) stream normally; editor_node
+    // (step 2) crashes mid-node, leaving one partial event under epoch 0.
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+    expect(durableStreamEventCount($runId, 'editor_node'))->toBe(2); // node_opened + 1 partial delta
+
+    // Operator pauses durable streaming fleet-wide before the resume.
+    config()->set('swarm.durable.streaming_enabled', false);
+
+    $this->travel(61)->seconds();
+    Artisan::call('swarm:recover');
+
+    // editor_node re-executes under epoch 1: the kill-switch routes it through the
+    // blocking prompt() fallback (no new node bracket, no stream deltas), but
+    // integrity is independent of the kill-switch — the crashed attempt is still
+    // retracted with a node_reexecuted void-edge and the run still completes.
+    (new AdvanceDurableSwarm($runId, 2))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('completed')
+        ->and(
+            DB::table('swarm_stream_events')
+                ->where('run_id', $runId)
+                ->where('void_type', CausalVoidEdgeType::NodeReexecuted->value)
+                ->count()
+        )->toBe(1)
+        // No epoch-1 stream rows for editor_node — emission was shed; the node was
+        // sealed via prompt() rather than re-streamed.
+        ->and(
+            DB::table('swarm_stream_events')
+                ->where('run_id', $runId)
+                ->where('node_id', 'editor_node')
+                ->where('attempt_epoch', 1)
+                ->count()
+        )->toBe(0);
+
+    // The crashed attempt is gone from the clean fold; the seal-on-commit fence
+    // means the resumed node committed cleanly even with emission shed.
+    $log = app(CausalLogStore::class);
+    $cleanEditor = array_values(array_filter(
+        CausalLogView::forRun($log, $runId)->fold(supersession: ViewSupersession::Clean),
+        fn ($event) => streamNodeId($event) === 'editor_node',
+    ));
+
+    $cleanDeltas = array_map(fn ($event) => $event->toArray()['delta'] ?? null, $cleanEditor);
+    expect($cleanDeltas)->not->toContain('partial-1');
+});
+
+test('a hierarchical coordinator that crashes before checkpoint is voided on resume, leaving one clean coordinator attempt (#311)', function () {
+    $response = FlakyCoordinatorDurableStreamingSwarm::make()->dispatchDurable('stream-task');
+    $runId = $response->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    // Step 0 — coordinator: opens the __coordinator__ structural bracket via the
+    // sink, then crashes inside prompt() before the children-decided/close +
+    // checkpoint. The orphaned node_opened is left above the checkpoint under epoch 0.
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+
+    $crashed = $manager->find($runId);
+    expect($crashed['status'])->toBe('pending')
+        ->and($crashed['recovery_count'])->toBe(0)
+        ->and(FlakyHierarchicalCoordinator::$attempts)->toBe(1)
+        // The crashed attempt's lone node_opened is in the log, not yet voided.
+        ->and(durableStreamEventCount($runId, '__coordinator__'))->toBe(1)
+        ->and(DB::table('swarm_stream_events')
+            ->where('run_id', $runId)
+            ->where('node_id', '__coordinator__')
+            ->where('event_type', 'swarm_node_opened')
+            ->where('attempt_epoch', 0)
+            ->count())->toBe(1);
+
+    // Recover past the backoff: recovery_count bumps to 1, so the resumed coordinator
+    // re-plans under a strictly higher epoch than the crashed one.
+    $this->travel(61)->seconds();
+    Artisan::call('swarm:recover');
+
+    // Step 0 re-executes: voidPriorAttempt('__coordinator__', …) retracts the crashed
+    // attempt, then the coordinator plans cleanly and brackets the run under epoch 1.
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    expect(FlakyHierarchicalCoordinator::$attempts)->toBe(2);
+
+    // Drive the single worker to completion.
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+    expect($manager->find($runId)['status'])->toBe('completed');
+
+    // Exactly ONE node_reexecuted void-edge was written — for the crashed coordinator
+    // attempt, not the worker.
+    expect(DB::table('swarm_stream_events')
+        ->where('run_id', $runId)
+        ->where('void_type', CausalVoidEdgeType::NodeReexecuted->value)
+        ->count())->toBe(1);
+
+    $log = app(CausalLogStore::class);
+
+    // Clean fold: the __coordinator__ events that survive all belong to the resumed
+    // attempt (epoch 1); the crashed open is suppressed. A clean coordinator bracket
+    // — open → children-decided → close — folds through.
+    $cleanCoordinator = array_values(array_filter(
+        CausalLogView::forRun($log, $runId)->fold(supersession: ViewSupersession::Clean),
+        fn ($event) => streamNodeId($event) === '__coordinator__',
+    ));
+
+    expect($cleanCoordinator)->not->toBeEmpty();
+
+    foreach ($cleanCoordinator as $event) {
+        expect($event->attemptEpoch)->toBe(1);
+    }
+
+    $cleanTypes = array_map(fn ($event) => $event->toArray()['type'] ?? null, $cleanCoordinator);
+    expect($cleanTypes)->toContain('swarm_node_opened')
+        ->and($cleanTypes)->toContain('swarm_node_children_decided')
+        ->and($cleanTypes)->toContain('swarm_node_closed')
+        // Exactly one open survives — the crashed attempt's open is voided away.
+        ->and(count(array_filter($cleanTypes, fn ($type) => $type === 'swarm_node_opened')))->toBe(1);
+
+    // Everything fold: the crashed coordinator open survives, wrapped as voided.
+    $voidedCoordinator = array_values(array_filter(
+        CausalLogView::forRun($log, $runId)->fold(supersession: ViewSupersession::Everything),
+        fn ($event) => $event instanceof VoidedEvent
+            && streamNodeId($event) === '__coordinator__'
+            && $event->voidType === CausalVoidEdgeType::NodeReexecuted,
+    ));
+
+    expect($voidedCoordinator)->toHaveCount(1)
+        ->and($voidedCoordinator[0]->event->attemptEpoch)->toBe(0);
 });
