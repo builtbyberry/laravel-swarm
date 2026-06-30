@@ -525,6 +525,11 @@ return [
          * before re-emitting. Requires the database persistence driver (the causal
          * log lives in swarm_stream_events); dispatch fails loud otherwise. Off by
          * default — existing durable runs keep the blocking prompt() path unchanged.
+         *
+         * Rolling upgrades: enable only once the whole fleet is on v0.15.0. The
+         * void-edges and seal barriers this writes can crash a lingering v0.14.x
+         * worker that resumes the same run — see "Rolling deploy from v0.14.x" in
+         * UPGRADING.md.
          */
         'stream_to_causal_log' => (bool) env('SWARM_DURABLE_STREAM_TO_CAUSAL_LOG', false),
 

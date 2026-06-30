@@ -307,6 +307,8 @@ A v0.15.0 worker writes a `swarm_causal_seal_barrier` row immediately after the 
 
 From v0.15.0 onward the sentinel protects you: a future package version's new event types will not crash a co-deployed v0.15.0 worker.
 
+**Durable per-node streaming opt-in.** The `SWARM_DURABLE_STREAM_TO_CAUSAL_LOG` opt-in (off by default) makes durable runs stream into the causal log, which writes `node_reexecuted` void-edges on top of the seal barriers above — both event shapes a lingering v0.14.x worker cannot read. Leave it **off until the fleet is fully on v0.15.0**; enabling it mid-deploy widens the same exposure window described above. It is safe to enable once every worker is on v0.15.0.
+
 ## Upgrading to v0.13.0
 
 v0.13.0 raises the **minimum `laravel/ai` to `^0.8`** (dropping `^0.6 || ^0.7`). There are **no migrations** and no `config/swarm.php` changes. The durable persistence shapes (the `tool_calls` snapshot column and the audit envelope) are unchanged, so existing runs replay across the upgrade.
