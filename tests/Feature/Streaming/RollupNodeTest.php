@@ -225,3 +225,42 @@ test('sealRollup is idempotent and atomic on re-dispatch (R8)', function () {
     expect($edges)->toBe(1)
         ->and($barriers)->toBe(1);
 });
+
+test('sealRollup voids a target repeated within one call exactly once (R8 batch skip-set)', function () {
+    // The idempotency check is a single batched lookup seeded into a skip-set the
+    // loop extends per appended edge — so a target id repeated inside one
+    // targetEventIds array is still voided exactly once, matching the prior
+    // per-iteration exists() that saw the just-inserted edge.
+    $store = app(CausalLogStore::class);
+    $runId = 'run-rollup-dup-target';
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => $runId,
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'static_hierarchical',
+        'status' => 'running',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $store->record($runId, new SwarmStepEnd(
+        id: 'evt-1', runId: $runId, stepIndex: 0, agentClass: FakeResearcher::class,
+        agent: 'r', output: 'a', durationMs: 1, metadata: [], timestamp: 1,
+    ), 0);
+
+    // Same target id twice in one call.
+    $store->sealRollup($runId, ['evt-1', 'evt-1'], 'rollup_node', 'rolled up by [rollup_node]');
+
+    $edges = DB::table('swarm_stream_events')->where('run_id', $runId)->where('void_type', 'rolled_up')->count();
+    $barriers = DB::table('swarm_stream_events')->where('run_id', $runId)->where('event_type', 'swarm_causal_seal_barrier')->count();
+
+    expect($edges)->toBe(1)
+        ->and($barriers)->toBe(1);
+});

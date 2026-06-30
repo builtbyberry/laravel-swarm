@@ -21,5 +21,5 @@ use BuiltByBerry\LaravelSwarm\Enums\GrowthPolicy;
 #[Attribute(Attribute::TARGET_CLASS)]
 final class ContextGrowthPolicy
 {
-    public function __construct(public GrowthPolicy $policy) {}
+    public function __construct(public readonly GrowthPolicy $policy) {}
 }

@@ -130,19 +130,27 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
         $this->assertReady();
 
         $this->connection->transaction(function () use ($runId, $targetEventIds, $digestNodeId, $reason, $ttlSeconds): void {
+            // Idempotent: a target already carrying a rolled_up edge (a
+            // re-dispatched/re-executed pass) is skipped rather than voided twice.
+            // One indexed batch lookup over every target seeds the skip-set, instead
+            // of an exists() per target — the dedicated void columns keep it a single
+            // seek on the (run_id, void_type) index. We extend the set as we append
+            // below, so a target repeated within one call is still voided exactly once
+            // (matching the prior per-iteration exists(), which saw the just-inserted edge).
+            $rolledUp = array_fill_keys(
+                $this->table()
+                    ->where('run_id', $runId)
+                    ->where('void_type', CausalVoidEdgeType::RolledUp->value)
+                    ->whereIn('void_target_event_uuid', $targetEventIds)
+                    ->pluck('void_target_event_uuid')
+                    ->all(),
+                true,
+            );
+
             $emittedAny = false;
 
             foreach ($targetEventIds as $targetEventId) {
-                // Idempotent: a target already carrying a rolled_up edge (a
-                // re-dispatched/re-executed pass) is skipped rather than voided
-                // twice. The dedicated void columns make this an indexed lookup.
-                $alreadyRolledUp = $this->table()
-                    ->where('run_id', $runId)
-                    ->where('void_type', CausalVoidEdgeType::RolledUp->value)
-                    ->where('void_target_event_uuid', $targetEventId)
-                    ->exists();
-
-                if ($alreadyRolledUp) {
+                if (isset($rolledUp[$targetEventId])) {
                     continue;
                 }
 
@@ -150,6 +158,7 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
                 // target; nesting it here runs under a savepoint, so any throw
                 // rolls back the whole rollup-seal — never a partial.
                 $this->appendVoidEdge($runId, CausalVoidEdgeType::RolledUp, $targetEventId, $reason, $ttlSeconds, $digestNodeId);
+                $rolledUp[$targetEventId] = true;
                 $emittedAny = true;
             }
 
