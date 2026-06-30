@@ -52,12 +52,12 @@ class DispatchValidator
      * rather than silently pinning the opt-in and never streaming. A topology is added
      * here only in the same change that wires its streaming and proves it with a
      * positive test — so a missed topology is a loud dispatch error, never a silent
-     * no-op. Grows to the full topology set as #311 (hierarchical) and #312 (parallel)
-     * land.
+     * no-op. #311 added Hierarchical + StaticHierarchical; #312 adds Parallel to
+     * complete the set.
      *
      * @var list<Topology>
      */
-    private const STREAMING_SUPPORTED_TOPOLOGIES = [Topology::Sequential];
+    private const STREAMING_SUPPORTED_TOPOLOGIES = [Topology::Sequential, Topology::Hierarchical, Topology::StaticHierarchical];
 
     public function __construct(
         protected SwarmAttributeResolver $resolver,
@@ -140,7 +140,7 @@ class DispatchValidator
      * author can declare it on any swarm — but only the topologies in
      * {@see self::STREAMING_SUPPORTED_TOPOLOGIES} actually stream. Opting in on an
      * unsupported topology fails loud here rather than silently pinning the opt-in and
-     * never streaming. #311/#312 add the remaining topologies to the allow-list.
+     * never streaming. #311 added hierarchical + static_hierarchical; #312 adds parallel.
      */
     public function ensureDurableStreamingInfrastructure(bool $durableStreaming, Topology $topology): void
     {
@@ -149,7 +149,7 @@ class DispatchValidator
         }
 
         if (! in_array($topology, self::STREAMING_SUPPORTED_TOPOLOGIES, true)) {
-            throw new SwarmException("Durable per-node streaming (#[DurableStreaming]) is currently supported only for sequential durable swarms; {$topology->value} streaming arrives in a later release. Remove #[DurableStreaming] from the swarm or use a sequential topology.");
+            throw new SwarmException("Durable per-node streaming (#[DurableStreaming]) is not yet supported for {$topology->value} durable swarms; that topology's streaming arrives in a later release. Remove #[DurableStreaming] from the swarm or use a sequential, hierarchical, or static_hierarchical topology.");
         }
 
         if (! $this->causalLog instanceof DatabaseCausalLogStore) {

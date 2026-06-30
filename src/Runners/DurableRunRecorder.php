@@ -122,8 +122,9 @@ class DurableRunRecorder
         DurableHierarchicalStepResult $result,
         ?SwarmStep $step = null,
         ?callable $withTransaction = null,
+        bool $durableStreaming = false,
     ): void {
-        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $step, $withTransaction): void {
+        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $step, $withTransaction, $durableStreaming): void {
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->persistStepArtifacts($runId, $step);
             $this->durableRuns->checkpointHierarchicalStep(
@@ -138,6 +139,15 @@ class DurableRunRecorder
                 totalSteps: $result->totalSteps,
                 clearBranchParentNodeIds: $result->clearBranchParentNodeIds,
             );
+            // Seal the just-committed node's streamed events in the SAME lease-fenced
+            // transaction as the cursor advance (#298 F1/F5) — the hierarchical twin
+            // of checkpointSequential's seal. An uncommitted (crashed) node can never
+            // be sealed beside its fresh attempt: its events stay above the last
+            // committed barrier, unsealed and retractable on resume. `$durableStreaming`
+            // is the value pinned on the run row (#310), threaded in by the caller so
+            // the seal and the advancer's void share one source of truth and never
+            // disagree. No-op unless the run pinned the opt-in on.
+            $this->nodeStream->sealNodeBoundary($runId, $durableStreaming);
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }

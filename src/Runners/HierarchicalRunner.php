@@ -23,6 +23,13 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\AlignsQueuedHierarchicalParallelCursor;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeOpened;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -42,6 +49,16 @@ class HierarchicalRunner
     use AlignsQueuedHierarchicalParallelCursor;
     use MergesAgentUsage;
 
+    /**
+     * The synthetic node id the durable coordinator step (index 0) streams under
+     * (gate M3). Worker steps stream under their plan node id; the coordinator has
+     * no plan node yet — it is the agent that produces the plan — so it brackets
+     * its structural events under this stable, reserved id. The void-on-resume and
+     * the seal share it by construction, so a re-executed coordinator retracts its
+     * own crashed attempt and never a worker's.
+     */
+    public const COORDINATOR_NODE_ID = '__coordinator__';
+
     public function __construct(
         protected HierarchicalRoutePlanner $planner,
         protected ConcurrencyManager $concurrency,
@@ -52,6 +69,8 @@ class HierarchicalRunner
         protected ConfigRepository $config,
         protected SnapshotsMemory $snapshots,
         protected AgentVisibleMemoryView $view,
+        protected StreamEventMapper $mapper,
+        protected DurableNodeStreamRecorder $nodeStream,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -474,16 +493,54 @@ class HierarchicalRunner
     {
         [$coordinator, $workers, $workerMap] = $this->resolveCoordinatorAndWorkers($state);
 
+        // The streaming opt-in and attempt epoch are read from the run row the
+        // caller already loaded (#310 pinned value, never live config; #298 epoch
+        // = recovery count). The advancer's replay coordinator wraps this call, so
+        // the per-node void/seal/emit all run inside that deterministic boundary.
+        $durableStreaming = (bool) ($run['durable_streaming'] ?? false);
+        $attemptEpoch = (int) ($run['recovery_count'] ?? 0);
+
         return $stepIndex === 0
-            ? $this->runDurableCoordinatorStep($state, $coordinator, $workers)
-            : $this->runDurableWorkerStep($state, $stepIndex, $run, $workerMap);
+            ? $this->runDurableCoordinatorStep($state, $coordinator, $workers, $durableStreaming, $attemptEpoch)
+            : $this->runDurableWorkerStep($state, $stepIndex, $run, $workerMap, $durableStreaming, $attemptEpoch);
     }
 
     /**
      * @param  array<int, Agent>  $workers
      */
-    protected function runDurableCoordinatorStep(SwarmExecutionState $state, Agent $coordinator, array $workers): DurableHierarchicalStepResult
+    protected function runDurableCoordinatorStep(SwarmExecutionState $state, Agent $coordinator, array $workers, bool $durableStreaming = false, int $attemptEpoch = 0): DurableHierarchicalStepResult
     {
+        // Coordinator step ships STRUCTURAL-ONLY (#311 decoupling): it runs via the
+        // blocking prompt() path and, when streaming is on, brackets the run with
+        // node-structure events on the causal log (open → children-decided → close)
+        // under the reserved __coordinator__ node id. Token streaming is deferred to
+        // #314 — the coordinator returns structured output the streamed-tokens path
+        // is being redesigned around. The void-on-resume + seal still fence its
+        // window so a crashed coordinator's events stay retractable.
+
+        // Integrity first (#310 KS1): retract a crashed prior coordinator attempt
+        // even when the kill-switch has paused emission, so a re-planned coordinator
+        // never leaves its earlier structural open orphaned in the clean fold. A
+        // no-op off the opt-in or on a first attempt.
+        $this->nodeStream->voidPriorAttempt($state->context->runId, self::COORDINATOR_NODE_ID, $attemptEpoch, $durableStreaming);
+
+        $sink = $this->durableNodeSink($state, self::COORDINATOR_NODE_ID, $durableStreaming, $attemptEpoch);
+
+        if ($sink !== null) {
+            // The event uuid (`id`) is a fresh per-attempt id, never the node id —
+            // the sink stamps `node_id` separately. A unique uuid is what lets a
+            // void-edge address exactly one attempt's open event on resume; the
+            // causal-log fold groups by the `node_id` tag, not the uuid.
+            $sink(new SwarmNodeOpened(
+                id: SwarmStreamEvent::newId(),
+                runId: $state->context->runId,
+                parentNodeId: null,
+                role: 'coordinator',
+                rationale: null,
+                timestamp: SwarmStreamEvent::timestamp(),
+            ));
+        }
+
         $coordinatorStep = $this->executeAgent(
             state: $state,
             agent: $coordinator,
@@ -503,6 +560,26 @@ class HierarchicalRunner
         $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
         $this->applyDurableCursorToContext($state, $cursor);
 
+        if ($sink !== null) {
+            // The coordinator's decision IS its children: declare the plan's start
+            // node as the structural child the run walks into, then close the
+            // coordinator's bracket. The plan's own worker nodes open under their
+            // own ids on their durable steps (#284 structure-as-payload).
+            $sink(new SwarmNodeChildrenDecided(
+                id: SwarmStreamEvent::newId(),
+                runId: $state->context->runId,
+                childNodeIds: [$plan->startAt],
+                rationale: null,
+                timestamp: SwarmStreamEvent::timestamp(),
+            ));
+            $sink(new SwarmNodeClosed(
+                id: SwarmStreamEvent::newId(),
+                runId: $state->context->runId,
+                result: null,
+                timestamp: SwarmStreamEvent::timestamp(),
+            ));
+        }
+
         return new DurableHierarchicalStepResult(
             step: $coordinatorStep,
             routeCursor: $cursor,
@@ -516,7 +593,7 @@ class HierarchicalRunner
      * @param  array<string, mixed>  $run
      * @param  array<class-string, Agent>  $workerMap
      */
-    protected function runDurableWorkerStep(SwarmExecutionState $state, int $stepIndex, array $run, array $workerMap): DurableHierarchicalStepResult
+    protected function runDurableWorkerStep(SwarmExecutionState $state, int $stepIndex, array $run, array $workerMap, bool $durableStreaming = false, int $attemptEpoch = 0): DurableHierarchicalStepResult
     {
         $cursor = $this->durableCursor($state, $run);
         $plan = HierarchicalRoutePlan::fromArray($this->routePlan($state, $run));
@@ -651,14 +728,21 @@ class HierarchicalRunner
             $metadata['parent_parallel_node_id'] = $parentParallelNodeId;
         }
 
-        $step = $this->executeAgent(
-            state: $state,
-            agent: $workerMap[$node->agentClass],
-            input: $this->composePrompt($node->prompt, $node->withOutputs, $nodeOutputs, $node->id),
-            index: $stepIndex,
-            metadata: $metadata,
-            storeContext: false,
-            storeArtifacts: false,
+        $input = $this->composePrompt($node->prompt, $node->withOutputs, $nodeOutputs, $node->id);
+
+        // The worker streams under its plan node id (gate M3). The void-on-resume
+        // and the seal share that id by construction, so a re-executed node retracts
+        // exactly its own crashed attempt. Off the opt-in this is a plain prompt().
+        $step = $this->executeDurableWorkerAgent(
+            $state,
+            $workerMap[$node->agentClass],
+            $input,
+            $stepIndex,
+            $node->id,
+            $this->durableWorkerParentNodeId(),
+            $metadata,
+            $durableStreaming,
+            $attemptEpoch,
         );
 
         $nodeOutputs[$node->id] = $step->output;
@@ -1514,5 +1598,167 @@ class HierarchicalRunner
             storeContext: $storeContext,
             storeArtifacts: $storeArtifacts,
         );
+    }
+
+    /**
+     * Run a durable hierarchical worker node, streaming per-node when the run opted
+     * in (#311). This is the hierarchical twin of
+     * {@see DurableSequentialStepAdvancer::advance()}: integrity (void-on-resume)
+     * and emission are split exactly as in the sequential precedent (#310 KS1).
+     *
+     * Whenever the opt-in is on, the crashed prior attempt is retracted first —
+     * under the step lease the caller already holds — regardless of the operator
+     * kill-switch. Only then does the kill-switch decide whether this attempt emits
+     * via the sink (a bracketed token stream) or falls back to the blocking
+     * {@see executeAgent()} prompt(). Either way the seal still fires at checkpoint,
+     * so a node's window is always fenced. The returned {@see SwarmStep} is shaped
+     * identically to the blocking path's, so the rest of durable execution is
+     * unchanged.
+     *
+     * @param  array<string, mixed>  $metadata
+     */
+    protected function executeDurableWorkerAgent(SwarmExecutionState $state, Agent $agent, string $input, int $index, string $nodeId, ?string $parentNodeId, array $metadata, bool $durableStreaming, int $attemptEpoch): SwarmStep
+    {
+        // Integrity first: retract a crashed prior attempt for this node even when
+        // the kill-switch has paused emission, so the clean fold never shows an
+        // orphaned partial. A no-op off the opt-in or on a first attempt.
+        $this->nodeStream->voidPriorAttempt($state->context->runId, $nodeId, $attemptEpoch, $durableStreaming);
+
+        $sink = $this->durableNodeSink($state, $nodeId, $durableStreaming, $attemptEpoch);
+
+        // Kill-switch paused emission (or never opted in): run blocking. The node is
+        // still sealed at checkpoint (integrity-gated), fencing its empty window.
+        if ($sink === null) {
+            return $this->executeAgent(
+                state: $state,
+                agent: $agent,
+                input: $input,
+                index: $index,
+                metadata: $metadata,
+                storeContext: false,
+                storeArtifacts: false,
+            );
+        }
+
+        if (hrtime(true) >= $state->deadlineMonotonic) {
+            throw new SwarmTimeoutException('The swarm exceeded its configured timeout while running hierarchically.');
+        }
+
+        $this->stepsRecorder->started($state, $index, $agent::class, $input);
+
+        // Open the node bracket before any event tagged with its id (#284 causal
+        // completeness), then fold every provider event through the shared mapper
+        // and stamp it via the sink — never a forked vendor→swarm fold (#310). The
+        // event uuid is a fresh per-attempt id (never the node id) so a void-edge
+        // can address exactly this attempt's open event on resume; the sink stamps
+        // the `node_id` tag the fold groups by.
+        $sink(new SwarmNodeOpened(
+            id: SwarmStreamEvent::newId(),
+            runId: $state->context->runId,
+            parentNodeId: $parentNodeId,
+            role: $this->nodeRoleFor($metadata),
+            rationale: null,
+            timestamp: SwarmStreamEvent::timestamp(),
+        ));
+
+        $accumulator = new StreamStepAccumulator($this->snapshots->snapshot(
+            $state->context->runId,
+            $index,
+            $this->view->present($state->swarm, $state->context, $agent),
+        ));
+
+        $startedAt = MonotonicTime::now();
+        ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
+
+        try {
+            foreach ($agent->stream($input) as $event) {
+                $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
+
+                if ($swarmEvent !== null) {
+                    $sink($swarmEvent);
+                }
+            }
+        } finally {
+            // Persist any tool call left without a result (happy path or a crash
+            // mid-node) so the frozen snapshot records every tool the agent invoked,
+            // exactly as the live stream does. Then clear the run frame.
+            foreach ($accumulator->pendingToolCalls as $unpairedCall) {
+                $accumulator->snapshot = $this->snapshots->appendToolCall(
+                    $accumulator->snapshot,
+                    SnapshotToolCallNormalizer::entry($unpairedCall),
+                );
+            }
+            ActiveRunContext::exit();
+        }
+
+        $this->guardrails->validateStep(
+            $state->swarm,
+            GuardrailStepContext::fromState($state, $index, $agent::class, $input, $accumulator->output, $metadata),
+            $state->context,
+        );
+
+        $step = $this->stepsRecorder->completed(
+            state: $state,
+            index: $index,
+            agentClass: $agent::class,
+            input: $input,
+            output: $accumulator->output,
+            usage: $accumulator->stepUsage,
+            durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
+            metadata: $metadata,
+            storeContext: false,
+            storeArtifacts: false,
+        );
+
+        // Close the node bracket once the step has fully completed — every event
+        // tagged with this node id precedes it (#284).
+        $stepOutput = (string) ($step->artifacts[0]->content ?? $accumulator->output);
+        $sink(new SwarmNodeClosed(
+            id: $nodeId,
+            runId: $state->context->runId,
+            result: $this->capture->applyOutput($stepOutput, $state->context),
+            timestamp: SwarmStreamEvent::timestamp(),
+        ));
+
+        return $step;
+    }
+
+    /**
+     * Build the per-attempt durable causal-log sink for a node, or null when the
+     * run did not opt in OR the operator kill-switch has paused emission. The
+     * returned closure stamps each event with the node id + attempt epoch and
+     * appends it (#298 F4 — per-attempt identity lives only in the closure's scope,
+     * never on a runner field, so two concurrent runs in one Octane worker never
+     * share a stamp).
+     *
+     * @return (callable(SwarmStreamEvent): void)|null
+     */
+    protected function durableNodeSink(SwarmExecutionState $state, string $nodeId, bool $durableStreaming, int $attemptEpoch): ?callable
+    {
+        if (! $this->nodeStream->streamingActive($durableStreaming)) {
+            return null;
+        }
+
+        return $this->nodeStream->sinkFor($state->context->runId, $nodeId, $attemptEpoch);
+    }
+
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
+    protected function nodeRoleFor(array $metadata): string
+    {
+        return is_string($metadata['node_role'] ?? null) ? $metadata['node_role'] : 'worker';
+    }
+
+    /**
+     * The structural parent a streamed durable worker node opens under (#284).
+     * Dynamic hierarchical runs route every worker beneath the coordinator that
+     * planned them, so the parent is the reserved __coordinator__ id;
+     * {@see StaticHierarchicalRunner} overrides this to null because a static plan
+     * has no coordinator step.
+     */
+    protected function durableWorkerParentNodeId(): ?string
+    {
+        return self::COORDINATOR_NODE_ID;
     }
 }
