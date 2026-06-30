@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.15.1 - unreleased
+
+Two follow-up fixes to the v0.15.0 streaming substrate: compaction is scoped to durable streaming (a live `stream()` run no longer generates compaction work it cannot perform, and `swarm:prune` is the documented hot-log bound for live streaming), and streaming a structured-output agent now fails loud in-package instead of leaking an internal `laravel/ai` error.
+
+### Fixed
+
+_To be filled in during release wrap-up._
+
 ## v0.15.0 - 2026-06-30
 
 Legible self-structuring streaming: an append-only causal-log substrate that makes dynamic swarms streamable, with background-compacted hot/cold durability and author-owned context bounding.
