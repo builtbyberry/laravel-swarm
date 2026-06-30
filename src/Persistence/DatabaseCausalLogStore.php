@@ -223,6 +223,21 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
         $this->appendVoidEdge($runId, CausalVoidEdgeType::NodeReexecuted, $firstEventUuid, $reason, $ttlSeconds);
     }
 
+    public function latestAttemptEpochBelow(string $runId, string $nodeId, int $epoch): ?int
+    {
+        // Metadata-only (#298 F6): the highest prior attempt epoch for this node,
+        // via the queryable columns — never decrypting payload. Called on resume
+        // before the fresh attempt emits, so the max below the fresh epoch is the
+        // crashed prior attempt to retract.
+        $max = $this->table()
+            ->where('run_id', $runId)
+            ->where('node_id', $nodeId)
+            ->where('attempt_epoch', '<', $epoch)
+            ->max('attempt_epoch');
+
+        return $max === null ? null : (int) $max;
+    }
+
     public function assertReady(): void
     {
         parent::assertReady();

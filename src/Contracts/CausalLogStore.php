@@ -106,4 +106,17 @@ interface CausalLogStore extends StreamEventStore
         string $reason,
         int $ttlSeconds = 0,
     ): void;
+
+    /**
+     * The highest `attempt_epoch` recorded for `(runId, nodeId)` strictly below
+     * `$epoch`, or null when the node has no earlier attempt in the log (#298).
+     *
+     * Metadata-only — reads the indexed `node_id` / `attempt_epoch` columns, never
+     * decrypting payload. The durable advancer calls this on resume to locate the
+     * crashed prior attempt it must retract via {@see voidNodeAttempt()} before the
+     * fresh attempt re-emits under a higher epoch. Because the void runs before the
+     * fresh attempt writes anything, the maximum below the fresh epoch is exactly
+     * the prior attempt; older already-voided attempts keep their own edges.
+     */
+    public function latestAttemptEpochBelow(string $runId, string $nodeId, int $epoch): ?int;
 }

@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
-use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
@@ -55,7 +55,7 @@ class DispatchValidator
         protected ArtifactRepository $artifactRepository,
         protected RunHistoryStore $historyStore,
         protected DurableRunStore $durableRuns,
-        protected StreamEventStore $streamEvents,
+        protected CausalLogStore $causalLog,
         protected ConfigRepository $config,
     ) {}
 
@@ -108,11 +108,16 @@ class DispatchValidator
 
     /**
      * Gate the durable per-node streaming opt-in (#298): when
-     * [swarm.durable.stream_to_causal_log] is on, the bound StreamEventStore must
-     * be the database-backed causal log so node events have a log to append to and
-     * a crashed attempt can be retracted on resume. Fail loud at dispatch rather
-     * than silently dropping events or falling back to prompt(). Off by default, so
+     * [swarm.durable.stream_to_causal_log] is on, the database causal log the
+     * advancer appends node events to — and retracts a crashed attempt against on
+     * resume — must be available and migrated. Fail loud at dispatch rather than
+     * silently dropping events or falling back to prompt(). Off by default, so
      * existing durable runs never reach this check.
+     *
+     * This runs only after {@see ensureDatabaseDurableInfrastructure()} has already
+     * verified the database durable stores, so the persistence driver is database
+     * by here; the remaining check is that the causal log (always the database
+     * store) carries the void-edge and durable-streaming columns.
      */
     public function ensureDurableStreamingInfrastructure(): void
     {
@@ -120,11 +125,11 @@ class DispatchValidator
             return;
         }
 
-        if (! $this->streamEvents instanceof DatabaseCausalLogStore) {
+        if (! $this->causalLog instanceof DatabaseCausalLogStore) {
             throw new SwarmException('Durable per-node streaming ([swarm.durable.stream_to_causal_log]) requires the database persistence driver so the causal log is available to append node events to. Disable the flag or switch [swarm.persistence.driver] to database.');
         }
 
-        $this->streamEvents->assertReady();
+        $this->causalLog->assertReady();
     }
 
     public function validateForDispatch(Swarm $swarm): void

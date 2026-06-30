@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -31,6 +32,7 @@ class DurableRunRecorder
         protected SwarmCapture $capture,
         protected DurableRunContext $runs,
         protected SwarmAuditDispatcher $audit,
+        protected DurableNodeStreamRecorder $nodeStream,
     ) {}
 
     public function fail(string $runId, string $token, Throwable $exception, RunContext $context, int $stepLeaseSeconds): void
@@ -156,6 +158,11 @@ class DurableRunRecorder
         $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $withTransaction): void {
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->durableRuns->releaseForNextStep($runId, $token, $nextStepIndex);
+            // Seal the just-committed node's streamed events in the SAME lease-fenced
+            // transaction as the cursor advance (#298 F1/F5), so an uncommitted node
+            // can never be sealed beside its fresh attempt. No-op unless per-node
+            // streaming is on.
+            $this->nodeStream->sealNodeBoundary($runId);
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }

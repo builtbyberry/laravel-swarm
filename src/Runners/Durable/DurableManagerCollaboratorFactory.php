@@ -239,6 +239,7 @@ class DurableManagerCollaboratorFactory
         $sequentialAdvancer = $this->application->makeWith(DurableSequentialStepAdvancer::class, [
             'sequential' => $sequential,
             'coordinator' => $memoryReplayCoordinator,
+            'nodeStream' => $this->application->make(DurableNodeStreamRecorder::class),
         ]);
         $checkpointCoordinator = $this->application->makeWith(DurableStepCheckpointCoordinator::class, [
             'durableRuns' => $durableRuns,
