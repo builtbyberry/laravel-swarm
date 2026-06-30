@@ -361,6 +361,19 @@ Schedule::command('swarm:prune')->daily();         // retention: removes expired
 
 Start with [Durable Execution](docs/durable-execution.md), then use the topic guides for [waits and signals](docs/durable-waits-and-signals.md), [retries and progress](docs/durable-retries-and-progress.md), [child swarms](docs/durable-child-swarms.md), and [webhooks](docs/durable-webhooks.md).
 
+### Durable per-node streaming (v0.15.0)
+
+A durable run can stream **each node's events into the causal log** as it executes, instead of producing one blocking `prompt()` response per node — so operators get a live, replay-safe signal from a durable run. Opt a swarm in with the `#[DurableStreaming]` attribute (off by default); the decision is pinned onto the run row at start, so a redeploy never changes an in-flight run.
+
+```php
+use BuiltByBerry\LaravelSwarm\Attributes\DurableStreaming;
+
+#[DurableStreaming]
+final class ClaimsReview implements Runnable { /* … */ }
+```
+
+It streams on **every durable topology** — sequential, hierarchical, static_hierarchical, and parallel (including fan-out branches) — with each node's attempt voided-and-retried cleanly on crash-resume (the same append-only causal-log fold the live substrate uses). The hierarchical coordinator streams structural events; token-streaming the coordinator is a follow-up. Declaring the attribute on a topology not yet wired for streaming fails loud at dispatch. An operator kill-switch (`SWARM_DURABLE_STREAMING_ENABLED=false`) pauses emission fleet-wide without a redeploy, safely mid-run. See [Durable Execution — per-node streaming](docs/durable-execution.md#durable-per-node-streaming).
+
 ## Memory (v0.9.0+)
 
 Swarm Memory is a first-class, scoped, snapshot-replayable memory subsystem. It gives agents and application code a place to read and write structured values that persist across steps, survive queue boundaries, and can be replayed deterministically from a frozen snapshot on a crash-resume.
