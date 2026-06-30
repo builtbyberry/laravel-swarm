@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 
@@ -170,4 +171,94 @@ test('SwarmStreamEvent::fromArray deserializes a void-edge payload without throw
         ->and($restored->voidType)->toBe(CausalVoidEdgeType::Replaces)
         ->and($restored->targetEventId)->toBe('event-y')
         ->and($restored->reason)->toBe('retry');
+});
+
+/**
+ * Record a durable node-attempt event (node_id + attempt_epoch stamped, exactly as
+ * the durable sink does) and return its event UUID. The caller seeds the run.
+ */
+function recordNodeAttemptEvent(CausalLogStore $store, string $runId, string $id, string $nodeId, int $epoch): string
+{
+    $event = new SwarmTextDelta(
+        id: $id,
+        runId: $runId,
+        stepIndex: 0,
+        agentClass: 'ExampleAgent',
+        delta: 'x',
+        timestamp: SwarmStreamEvent::timestamp(),
+    );
+    $event->withNodeId($nodeId)->withAttemptEpoch($epoch);
+    $store->record($runId, $event, 0);
+
+    return $id;
+}
+
+test('latestAttemptEpochBelow returns null when the node has no earlier attempt (#298)', function () {
+    $store = app(CausalLogStore::class);
+    seedCausalLogRun('run-epoch-1');
+    recordNodeAttemptEvent($store, 'run-epoch-1', 'evt-a', 'step:0', 2);
+
+    // No epoch strictly below 2 for this node, and a different node is ignored.
+    recordNodeAttemptEvent($store, 'run-epoch-1', 'evt-b', 'step:1', 0);
+
+    expect($store->latestAttemptEpochBelow('run-epoch-1', 'step:0', 2))->toBeNull();
+});
+
+test('latestAttemptEpochBelow returns the highest epoch strictly below the given epoch (#298)', function () {
+    $store = app(CausalLogStore::class);
+    seedCausalLogRun('run-epoch-2');
+    recordNodeAttemptEvent($store, 'run-epoch-2', 'evt-e0', 'step:0', 0);
+    recordNodeAttemptEvent($store, 'run-epoch-2', 'evt-e1', 'step:0', 3);
+    recordNodeAttemptEvent($store, 'run-epoch-2', 'evt-e2', 'step:0', 5);
+
+    expect($store->latestAttemptEpochBelow('run-epoch-2', 'step:0', 5))->toBe(3)
+        ->and($store->latestAttemptEpochBelow('run-epoch-2', 'step:0', 3))->toBe(0)
+        ->and($store->latestAttemptEpochBelow('run-epoch-2', 'step:0', 1))->toBe(0);
+});
+
+test('voidNodeAttempt retracts the prior attempt with one node_reexecuted edge against its first event (#298)', function () {
+    $store = app(CausalLogStore::class);
+    seedCausalLogRun('run-void-attempt-1');
+    $first = recordNodeAttemptEvent($store, 'run-void-attempt-1', 'evt-first', 'step:0', 0);
+    recordNodeAttemptEvent($store, 'run-void-attempt-1', 'evt-second', 'step:0', 0);
+
+    $store->voidNodeAttempt('run-void-attempt-1', 'step:0', 0, 'durable node re-executed on resume');
+
+    $edge = DB::table('swarm_stream_events')
+        ->where('run_id', 'run-void-attempt-1')
+        ->where('void_type', CausalVoidEdgeType::NodeReexecuted->value)
+        ->first();
+
+    expect($edge)->not->toBeNull()
+        ->and($edge->void_target_event_uuid)->toBe($first);
+});
+
+test('voidNodeAttempt is idempotent — a repeated resume never double-voids (#298 F3)', function () {
+    $store = app(CausalLogStore::class);
+    seedCausalLogRun('run-void-attempt-2');
+    recordNodeAttemptEvent($store, 'run-void-attempt-2', 'evt-only', 'step:0', 0);
+
+    $store->voidNodeAttempt('run-void-attempt-2', 'step:0', 0, 'resume');
+    $store->voidNodeAttempt('run-void-attempt-2', 'step:0', 0, 'redelivered resume');
+
+    expect(
+        DB::table('swarm_stream_events')
+            ->where('run_id', 'run-void-attempt-2')
+            ->where('void_type', CausalVoidEdgeType::NodeReexecuted->value)
+            ->count()
+    )->toBe(1);
+});
+
+test('voidNodeAttempt is a no-op when the prior attempt streamed nothing (#298)', function () {
+    $store = app(CausalLogStore::class);
+    seedCausalLogRun('run-void-attempt-3');
+
+    $store->voidNodeAttempt('run-void-attempt-3', 'step:0', 0, 'crash before first event');
+
+    expect(
+        DB::table('swarm_stream_events')
+            ->where('run_id', 'run-void-attempt-3')
+            ->where('void_type', CausalVoidEdgeType::NodeReexecuted->value)
+            ->count()
+    )->toBe(0);
 });

@@ -102,7 +102,10 @@ class DurableStepAdvancer
 
                 $step = $hierarchicalResult->step;
             } else {
-                $step = $this->sequential->advance($state, $expectedStepIndex);
+                // The attempt epoch is the run's recovery count, bumped before any
+                // recovery/retry re-dispatch — so a re-executed node streams under a
+                // strictly higher epoch than its crashed attempt (#298 F2).
+                $step = $this->sequential->advance($state, $expectedStepIndex, (int) $run['recovery_count']);
             }
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
             return;

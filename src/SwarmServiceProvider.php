@@ -104,6 +104,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableLifecycleController;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableManagerCollaboratorFactory;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurablePayloadCapture;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRecoveryCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
@@ -295,6 +296,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->bind(DurableTopLevelParallelAdvancer::class);
         $this->app->bind(DurableStepExecutionBuilder::class);
         $this->app->bind(DurableSequentialStepAdvancer::class);
+        $this->app->bind(DurableNodeStreamRecorder::class);
         $this->app->bind(DurableStepCheckpointCoordinator::class);
         $this->app->bind(DurableStepAdvancer::class);
         $this->app->bind(DurableBranchAdvancer::class);

@@ -78,4 +78,45 @@ interface CausalLogStore extends StreamEventStore
      * the #287 compactor populates `sealed_at`.
      */
     public function isSealed(string $runId, string $eventUuid): bool;
+
+    /**
+     * Retract a durable node's prior attempt before it re-executes on resume (#298).
+     *
+     * Appends a single `node_reexecuted` void-edge against the prior attempt's
+     * first event for `(runId, nodeId, epoch)`, located by a metadata-only query
+     * (the queryable `node_id` / `attempt_epoch` columns — never decrypting
+     * payload). The fold suppresses the whole `(node_id, epoch)` membership from
+     * that one edge, so the retracted attempt's events are hidden while the fresh
+     * attempt (a higher epoch, same node_id) survives.
+     *
+     * Idempotent — a redelivered or repeated resume that finds an existing
+     * `node_reexecuted` edge for that attempt is a no-op, never a double-void. A
+     * no-op too when the prior attempt streamed nothing (crash before first event).
+     *
+     * Relies on the seal-follows-commit invariant: an uncommitted node's events are
+     * never sealed, so the target is always in the retractable window. If that
+     * invariant is ever violated the underlying {@see appendVoidEdge()} throws
+     * {@see SealedCausalWindowException} loud rather than silently leaving two
+     * attempts in the fold.
+     */
+    public function voidNodeAttempt(
+        string $runId,
+        string $nodeId,
+        int $epoch,
+        string $reason,
+        int $ttlSeconds = 0,
+    ): void;
+
+    /**
+     * The highest `attempt_epoch` recorded for `(runId, nodeId)` strictly below
+     * `$epoch`, or null when the node has no earlier attempt in the log (#298).
+     *
+     * Metadata-only — reads the indexed `node_id` / `attempt_epoch` columns, never
+     * decrypting payload. The durable advancer calls this on resume to locate the
+     * crashed prior attempt it must retract via {@see voidNodeAttempt()} before the
+     * fresh attempt re-emits under a higher epoch. Because the void runs before the
+     * fresh attempt writes anything, the maximum below the fresh epoch is exactly
+     * the prior attempt; older already-voided attempts keep their own edges.
+     */
+    public function latestAttemptEpochBelow(string $runId, string $nodeId, int $epoch): ?int;
 }

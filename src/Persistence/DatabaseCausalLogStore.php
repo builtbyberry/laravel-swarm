@@ -44,6 +44,13 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
         $this->table()->insert([
             'run_id' => $runId,
             'event_uuid' => is_string($payload['id'] ?? null) ? $payload['id'] : null,
+            // Promoted from the JSON payload (#284) / event object (#298) into
+            // queryable columns so the durable resume-time void lookup can select a
+            // node's prior-attempt events without unpacking JSON. node_id is null
+            // for a top-level event; attempt_epoch is null for any non-durable-
+            // streamed event (only a durable advancer stamps it).
+            'node_id' => $event->nodeId,
+            'attempt_epoch' => $event->attemptEpoch,
             'event_type' => $event->type(),
             'payload' => $this->encodeJson($payload),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
@@ -172,6 +179,65 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
             ->exists();
     }
 
+    public function voidNodeAttempt(
+        string $runId,
+        string $nodeId,
+        int $epoch,
+        string $reason,
+        int $ttlSeconds = 0,
+    ): void {
+        $this->assertReady();
+
+        // Metadata-only (#298 F6): the prior attempt's first event for this
+        // node+epoch, via the queryable columns — never decrypting payload.
+        $firstEventUuid = $this->table()
+            ->where('run_id', $runId)
+            ->where('node_id', $nodeId)
+            ->where('attempt_epoch', $epoch)
+            ->orderBy('id')
+            ->value('event_uuid');
+
+        // The prior attempt streamed nothing (crashed before its first event) —
+        // there is nothing to retract.
+        if (! is_string($firstEventUuid)) {
+            return;
+        }
+
+        // Idempotent (#298 F3): a redelivered/repeated resume that already wrote
+        // the retraction is a no-op, never a second edge. Durable resumes are
+        // lease-fenced, so this guards at-least-once redelivery, not concurrency.
+        $alreadyVoided = $this->table()
+            ->where('run_id', $runId)
+            ->where('void_type', CausalVoidEdgeType::NodeReexecuted->value)
+            ->where('void_target_event_uuid', $firstEventUuid)
+            ->exists();
+
+        if ($alreadyVoided) {
+            return;
+        }
+
+        // One edge retracts the whole (node_id, epoch) membership; the fold reads
+        // the retracted pair off this target event. Throws loud on a sealed target
+        // (the seal-follows-commit invariant means that should never happen for an
+        // uncommitted node).
+        $this->appendVoidEdge($runId, CausalVoidEdgeType::NodeReexecuted, $firstEventUuid, $reason, $ttlSeconds);
+    }
+
+    public function latestAttemptEpochBelow(string $runId, string $nodeId, int $epoch): ?int
+    {
+        // Metadata-only (#298 F6): the highest prior attempt epoch for this node,
+        // via the queryable columns — never decrypting payload. Called on resume
+        // before the fresh attempt emits, so the max below the fresh epoch is the
+        // crashed prior attempt to retract.
+        $max = $this->table()
+            ->where('run_id', $runId)
+            ->where('node_id', $nodeId)
+            ->where('attempt_epoch', '<', $epoch)
+            ->max('attempt_epoch');
+
+        return $max === null ? null : (int) $max;
+    }
+
     public function assertReady(): void
     {
         parent::assertReady();
@@ -179,9 +245,9 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
         $table = (string) $this->config->get('swarm.tables.stream_events', 'swarm_stream_events');
         $schema = $this->connection->getSchemaBuilder();
 
-        if (! $schema->hasColumns($table, ['event_uuid', 'void_type', 'void_target_event_uuid', 'void_reason', 'sealed_at'])) {
+        if (! $schema->hasColumns($table, ['event_uuid', 'void_type', 'void_target_event_uuid', 'void_reason', 'sealed_at', 'node_id', 'attempt_epoch'])) {
             throw new SwarmException(
-                "Causal-log void-edges require the void-edge columns on [{$table}]; run the package migrations under the [database] persistence driver.",
+                "Causal-log void-edges require the void-edge and durable-streaming columns on [{$table}]; run the package migrations under the [database] persistence driver.",
             );
         }
     }

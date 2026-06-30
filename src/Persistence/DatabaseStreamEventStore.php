@@ -51,9 +51,28 @@ class DatabaseStreamEventStore implements StreamEventStore
         foreach ($this->table()->where('run_id', $runId)->where('event_type', '!=', 'swarm_causal_seal_barrier')->orderBy('id')->cursor() as $record) {
             $event = SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
             if (! ($event instanceof SwarmUnknownEvent)) {
-                yield $event;
+                yield $this->withAttemptEpoch($event, $record->attempt_epoch ?? null);
             }
         }
+    }
+
+    /**
+     * Restore the durable attempt epoch (#298) from its queryable column onto the
+     * event object — it lives outside the JSON payload so the resume-time void
+     * lookup stays metadata-only, so the fold reads it from the object, not the
+     * payload. A null column is a non-durable-streamed event (left untagged).
+     */
+    private function withAttemptEpoch(SwarmStreamEvent $event, mixed $epoch): SwarmStreamEvent
+    {
+        if (is_int($epoch)) {
+            return $event->withAttemptEpoch($epoch);
+        }
+
+        if (is_string($epoch) && ctype_digit($epoch)) {
+            return $event->withAttemptEpoch((int) $epoch);
+        }
+
+        return $event;
     }
 
     public function assertReady(): void
@@ -85,7 +104,7 @@ class DatabaseStreamEventStore implements StreamEventStore
         foreach ($this->table()->where('run_id', $runId)->where('id', '>=', $fromSequence)->orderBy('id')->cursor() as $record) {
             $event = SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
             if (! ($event instanceof SwarmUnknownEvent)) {
-                yield $event;
+                yield $this->withAttemptEpoch($event, $record->attempt_epoch ?? null);
             }
         }
     }

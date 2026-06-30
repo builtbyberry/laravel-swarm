@@ -22,6 +22,12 @@ namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
  *   (#289). Unlike Abandons it suppresses ONLY the digested node's own events (by
  *   node_id), never its causal descendants — the forward chain keeps running — and
  *   it carries a digest pointer to the node that reads in its place.
+ * - NodeReexecuted — a durable node crashed mid-execution and re-ran on resume
+ *   (#298). Suppresses the prior attempt's events for that node by (node_id,
+ *   attempt_epoch) membership — NOT by node_id alone, because the fresh attempt
+ *   reuses the same node_id; only the retracted epoch's events are hidden, the
+ *   re-executed epoch's events stay. Distinct from Replaces (which targets a
+ *   single event) because a streamed node emits many events per attempt.
  */
 enum CausalVoidEdgeType: string
 {
@@ -29,4 +35,5 @@ enum CausalVoidEdgeType: string
     case Replaces = 'replaces';
     case Abandons = 'abandons';
     case RolledUp = 'rolled_up';
+    case NodeReexecuted = 'node_reexecuted';
 }

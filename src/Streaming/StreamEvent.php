@@ -29,9 +29,28 @@ abstract class StreamEvent extends LaravelAiStreamEvent
 {
     public ?string $nodeId = null;
 
+    /**
+     * The durable per-node attempt this event belongs to (#298). Stamped only on
+     * events a durable advancer streams into the causal log; null for every
+     * non-durable-streamed event. It is the authoritative rollback discriminator —
+     * the vendor `invocationId` is nullable and cannot key attempt-distinction —
+     * so on resume the prior epoch's events for a node are voided before the new
+     * epoch is written. Carried as a queryable column (not the JSON payload) so the
+     * resume-time void lookup is metadata-only; the store hydrates it back onto the
+     * event via {@see withAttemptEpoch()} after {@see Events\SwarmStreamEvent::fromArray()}.
+     */
+    public ?int $attemptEpoch = null;
+
     public function withNodeId(string $id): static
     {
         $this->nodeId = $id;
+
+        return $this;
+    }
+
+    public function withAttemptEpoch(int $epoch): static
+    {
+        $this->attemptEpoch = $epoch;
 
         return $this;
     }

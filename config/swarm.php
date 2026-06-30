@@ -515,6 +515,24 @@ return [
 
     'durable' => [
         'step_timeout' => (int) env('SWARM_DURABLE_STEP_TIMEOUT', 300),
+
+        /*
+         * Per-node streaming from durable execution (#298). When true, durable
+         * step advancers call the agent's stream() instead of prompt() and append
+         * each event to the append-only causal log under the run id, so operators
+         * get a live signal from a durable run. A node that crashes and re-executes
+         * on resume retracts its prior attempt with a `node_reexecuted` void-edge
+         * before re-emitting. Requires the database persistence driver (the causal
+         * log lives in swarm_stream_events); dispatch fails loud otherwise. Off by
+         * default — existing durable runs keep the blocking prompt() path unchanged.
+         *
+         * Rolling upgrades: enable only once the whole fleet is on v0.15.0. The
+         * void-edges and seal barriers this writes can crash a lingering v0.14.x
+         * worker that resumes the same run — see "Rolling deploy from v0.14.x" in
+         * UPGRADING.md.
+         */
+        'stream_to_causal_log' => (bool) env('SWARM_DURABLE_STREAM_TO_CAUSAL_LOG', false),
+
         /*
          * AdvanceDurableSwarm / AdvanceDurableBranch queue settings.
          * Job timeout is step_timeout + timeout_margin_seconds (not a separate absolute cap).

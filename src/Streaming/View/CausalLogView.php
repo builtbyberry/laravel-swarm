@@ -68,6 +68,18 @@ final class CausalLogView
     private array $nodeIdByEventId = [];
 
     /**
+     * The durable attempt epoch (#298) each event belongs to, keyed by event id,
+     * built once in {@see index()} from the event object's `attemptEpoch` (a
+     * column-hydrated property, not a payload key). Null for any non-durable-
+     * streamed event. Lets the `node_reexecuted` membership pass suppress exactly
+     * the retracted attempt's events without touching the fresh attempt (which
+     * reuses the same `node_id` but carries a higher epoch).
+     *
+     * @var array<string, ?int>
+     */
+    private array $epochByEventId = [];
+
+    /**
      * @param  iterable<SwarmStreamEvent>  $events  Typically `StreamEventStore::events($runId)`.
      */
     public function __construct(iterable $events)
@@ -181,6 +193,9 @@ final class CausalLogView
 
             if ($id !== null) {
                 $this->nodeIdByEventId[$id] = is_string($payload['node_id'] ?? null) ? $payload['node_id'] : null;
+                // Epoch is a column-hydrated object property (#298), never a
+                // payload key — read it off the event itself.
+                $this->epochByEventId[$id] = $event->attemptEpoch;
             }
 
             match ($type) {
@@ -263,6 +278,11 @@ final class CausalLogView
         // node_id => ['reason' => …, 'digest_node_id' => …] for rolled-up nodes.
         $rolledUp = [];
 
+        // "node_id\x00epoch" => reason, for durable re-executed attempts (#298).
+        // Keyed on BOTH node and epoch so only the retracted attempt is suppressed,
+        // never the fresh attempt that reuses the same node_id.
+        $reexecuted = [];
+
         foreach ($this->voidsByTarget as $targetId => $edges) {
             $last = $edges[count($edges) - 1];
             $annotations[$targetId] = [
@@ -284,6 +304,18 @@ final class CausalLogView
 
                 if ($node !== null) {
                     $rolledUp[$node] = ['reason' => $last['reason'], 'digest_node_id' => $last['digest_node_id']];
+                }
+            }
+
+            if ($last['type'] === CausalVoidEdgeType::NodeReexecuted) {
+                // The retracted (node_id, epoch) is read off the TARGET event — the
+                // prior attempt's first event — not the edge, so the edge carries no
+                // epoch and never suppresses itself.
+                $node = $this->nodeOfEvent($targetId);
+                $epoch = $this->epochByEventId[$targetId] ?? null;
+
+                if ($node !== null && $epoch !== null) {
+                    $reexecuted[$node."\x00".$epoch] = $last['reason'];
                 }
             }
         }
@@ -314,6 +346,31 @@ final class CausalLogView
                     'type' => CausalVoidEdgeType::RolledUp,
                     'reason' => $rolledUp[$node]['reason'],
                     'digest_node_id' => $rolledUp[$node]['digest_node_id'],
+                ];
+            }
+        }
+
+        // A durable re-executed attempt's events are suppressed by (node_id, epoch)
+        // membership (#298). The fresh attempt shares node_id but carries a higher
+        // epoch, so it is never matched — only the retracted attempt is hidden.
+        if ($reexecuted !== []) {
+            foreach ($this->events as $event) {
+                $node = $this->nodeIdOf($event);
+                $id = $this->eventId($event);
+                $epoch = $id !== null ? ($this->epochByEventId[$id] ?? null) : null;
+
+                if ($node === null || $id === null || $epoch === null) {
+                    continue;
+                }
+
+                if (! isset($reexecuted[$node."\x00".$epoch]) || isset($annotations[$id])) {
+                    continue;
+                }
+
+                $annotations[$id] = [
+                    'type' => CausalVoidEdgeType::NodeReexecuted,
+                    'reason' => $reexecuted[$node."\x00".$epoch],
+                    'digest_node_id' => null,
                 ];
             }
         }
