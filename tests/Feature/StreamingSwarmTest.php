@@ -943,7 +943,7 @@ test('non sequential swarms cannot be streamed', function () {
 
     expect($stream)->toThrow(
         SwarmException::class,
-        'Streaming is only supported for sequential, static_hierarchical, and hierarchical swarms. parallel topology does not support streaming.',
+        'The live stream() API only supports sequential, static_hierarchical, and hierarchical swarms; a parallel swarm cannot yield a single ordered live token stream.',
     );
 });
 

@@ -203,7 +203,7 @@ test('broadcast job streams once and broadcasts immediately', function () {
 });
 
 test('broadcast helpers fail clearly for non sequential swarms', function () {
-    $message = 'Streaming is only supported for sequential, static_hierarchical, and hierarchical swarms. parallel topology does not support streaming.';
+    $message = 'The live stream() API only supports sequential, static_hierarchical, and hierarchical swarms; a parallel swarm cannot yield a single ordered live token stream.';
 
     expect(fn () => FakeParallelSwarm::make()->broadcast('broadcast-task', new Channel('swarm.run')))
         ->toThrow(SwarmException::class, $message);
