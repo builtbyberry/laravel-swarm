@@ -86,6 +86,15 @@ class SwarmCompactCommand extends Command
         $query = $connection->table($hotTable)
             ->select('run_id')
             ->where('event_type', 'swarm_causal_seal_barrier')
+            // Compaction leases against swarm_durable_runs (SwarmCompactor::acquireLease),
+            // so only a durable-anchored run can ever be compacted. Restrict discovery to
+            // runs that have a durable row: a barrier with no anchor — a pre-v0.15.1 live
+            // stream() row still within its TTL, or any future un-anchored marker — would
+            // otherwise be dispatched as a CompactSwarmRun job that no-ops forever. Live
+            // stream() hot logs are bounded by TTL via `swarm:prune`, not compaction.
+            ->whereIn('run_id', function ($durable) use ($durableTable): void {
+                $durable->select('run_id')->from($durableTable);
+            })
             ->distinct()
             ->limit($limit);
 

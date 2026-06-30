@@ -6,7 +6,6 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Enums\GrowthPolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\ContextBudgetExceededException;
-use BuiltByBerry\LaravelSwarm\Jobs\CompactSwarmRun;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
@@ -83,16 +82,18 @@ test('the operator hard cap clamps an author ignore policy into a refusal', func
         ->toThrow(ContextBudgetExceededException::class, 'hard cap');
 });
 
-test('a degrade-to-cold policy nudges background compaction and the run completes', function () {
+test('a degrade-to-cold policy does not dispatch compaction for a live stream and the run completes', function () {
     Queue::fake();
     config()->set('swarm.context_growth.policy', 'degrade_to_cold');
     config()->set('swarm.context_growth.budget_events', 4);
 
     $events = iterator_to_array(FakeSequentialSwarm::make()->stream('task'));
 
-    // The run completes (reaches its stream end) and compaction was nudged once.
+    // A live (non-durable) stream() run has no compaction lease anchor, so the
+    // degrade-to-cold rung warns instead of dispatching a job that would no-op
+    // forever; the hot log is bounded by swarm:prune (TTL). The run still completes.
     expect(end($events)->type())->toBe('swarm_stream_end');
-    Queue::assertPushed(CompactSwarmRun::class, 1);
+    Queue::assertNothingPushed();
 });
 
 test('a warn policy attributes the action in telemetry and the run completes', function () {
