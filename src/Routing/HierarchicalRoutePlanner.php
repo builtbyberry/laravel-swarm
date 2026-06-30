@@ -81,7 +81,7 @@ class HierarchicalRoutePlanner
     }
 
     /**
-     * @param  array<int, string>  $workerClasses
+     * @param  array<int, class-string>  $workerClasses
      * @param  array<string, mixed>  $payload
      */
     private function normalizeAndValidateWithCoordinatorClass(?string $coordinatorClass, array $workerClasses, array $payload, string $swarmClass): HierarchicalRoutePlan
@@ -102,6 +102,10 @@ class HierarchicalRoutePlanner
         foreach ($nodesPayload as $nodeId => $nodePayload) {
             if (! is_string($nodeId) || $nodeId === '') {
                 throw new SwarmException('Hierarchical route plan node ids must be non-empty strings.');
+            }
+
+            if (str_starts_with($nodeId, '__')) {
+                throw new SwarmException('Hierarchical route plan node ids must not start with "__" (reserved prefix).');
             }
 
             if (! is_array($nodePayload)) {
@@ -129,7 +133,7 @@ class HierarchicalRoutePlanner
 
     /**
      * @param  array<string, mixed>  $payload
-     * @param  array<int, string>  $workerClasses
+     * @param  array<int, class-string>  $workerClasses
      */
     protected function normalizeNode(string $nodeId, array $payload, ?string $coordinatorClass, array $workerClasses, string $swarmClass): HierarchicalRouteNode
     {
@@ -147,6 +151,7 @@ class HierarchicalRoutePlanner
 
         return match ($type) {
             'worker' => $this->normalizeWorkerNode($nodeId, $payload, $metadata, $next, $coordinatorClass, $workerClasses),
+            'rollup' => $this->normalizeRollupNode($nodeId, $payload, $metadata, $next, $coordinatorClass, $workerClasses),
             'parallel' => $this->normalizeParallelNode($nodeId, $payload, $metadata, $next, $swarmClass),
             'finish' => $this->normalizeFinishNode($nodeId, $payload, $metadata),
             default => throw new SwarmException("Hierarchical route node [{$nodeId}] uses unsupported type [{$type}]."),
@@ -154,9 +159,58 @@ class HierarchicalRoutePlanner
     }
 
     /**
+     * Normalize a rollup node — a worker that digests the generation named by its
+     * [with_outputs]. Shares the worker's agent/prompt resolution but forbids a
+     * loop of its own and requires a non-empty digested set.
+     *
      * @param  array<string, mixed>  $payload
      * @param  array<string, mixed>  $metadata
-     * @param  array<int, string>  $workerClasses
+     * @param  array<int, class-string>  $workerClasses
+     */
+    protected function normalizeRollupNode(string $nodeId, array $payload, array $metadata, ?string $next, ?string $coordinatorClass, array $workerClasses): HierarchicalRollupNode
+    {
+        if (array_key_exists('loop', $payload)) {
+            throw new SwarmException("Hierarchical rollup node [{$nodeId}] cannot define a [loop]; place it on a worker in the loop body instead.");
+        }
+
+        $agentClass = $payload['agent'] ?? null;
+        $prompt = $payload['prompt'] ?? null;
+        $withOutputs = $this->normalizeWithOutputs($nodeId, $payload['with_outputs'] ?? []);
+
+        if (! is_string($agentClass) || $agentClass === '') {
+            throw new SwarmException("Hierarchical rollup node [{$nodeId}] must define a non-empty [agent] class.");
+        }
+
+        if ($coordinatorClass !== null && $agentClass === $coordinatorClass) {
+            throw new SwarmException("Hierarchical route node [{$nodeId}] cannot route the coordinator [{$coordinatorClass}] as a worker.");
+        }
+
+        if (! in_array($agentClass, $workerClasses, true)) {
+            throw new SwarmException("Hierarchical route node [{$nodeId}] references unknown worker agent class [{$agentClass}]. Verify it is returned from agents().");
+        }
+
+        if (! is_string($prompt)) {
+            throw new SwarmException("Hierarchical rollup node [{$nodeId}] must define [prompt] as a string.");
+        }
+
+        if ($withOutputs === []) {
+            throw new SwarmException("Hierarchical rollup node [{$nodeId}] must define [with_outputs] naming the generation it digests.");
+        }
+
+        return new HierarchicalRollupNode(
+            id: $nodeId,
+            agentClass: $agentClass,
+            prompt: $prompt,
+            withOutputs: $withOutputs,
+            metadata: $metadata,
+            next: $next,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $metadata
+     * @param  array<int, class-string>  $workerClasses
      */
     protected function normalizeWorkerNode(string $nodeId, array $payload, array $metadata, ?string $next, ?string $coordinatorClass, array $workerClasses): HierarchicalWorkerNode
     {
@@ -376,23 +430,34 @@ class HierarchicalRoutePlanner
     protected function validateDataDependencies(HierarchicalRoutePlan $plan): void
     {
         $completed = [];
+        $rolledUp = [];
 
-        $this->validateNodeDataDependencies($plan->startAt, $plan, $completed);
+        $this->validateNodeDataDependencies($plan->startAt, $plan, $completed, $rolledUp);
     }
 
     /**
      * @param  array<string, true>  $completed
+     * @param  array<string, string>  $rolledUp  digested node id => the rollup node that digested it
      */
-    protected function validateNodeDataDependencies(string $nodeId, HierarchicalRoutePlan $plan, array &$completed): void
+    protected function validateNodeDataDependencies(string $nodeId, HierarchicalRoutePlan $plan, array &$completed, array &$rolledUp): void
     {
         $node = $plan->node($nodeId);
 
         if ($node instanceof HierarchicalWorkerNode) {
-            $this->assertWorkerOutputsCompleted($node, $completed);
+            // The rollup's OWN read of its digested set is checked before the
+            // set is marked rolled-up below, so a rollup reading what it digests
+            // is allowed while any later reference fails loud.
+            $this->assertWorkerOutputsCompleted($node, $completed, $rolledUp);
             $completed[$node->id] = true;
 
+            if ($node instanceof HierarchicalRollupNode) {
+                foreach ($node->digestedNodeIds() as $digestedId) {
+                    $rolledUp[$digestedId] = $node->id;
+                }
+            }
+
             if ($node->next !== null) {
-                $this->validateNodeDataDependencies($node->next, $plan, $completed);
+                $this->validateNodeDataDependencies($node->next, $plan, $completed, $rolledUp);
             }
 
             return;
@@ -404,14 +469,14 @@ class HierarchicalRoutePlanner
             foreach ($node->branches as $branchNodeId) {
                 /** @var HierarchicalWorkerNode $branch */
                 $branch = $plan->node($branchNodeId);
-                $this->assertWorkerOutputsCompleted($branch, $completed);
+                $this->assertWorkerOutputsCompleted($branch, $completed, $rolledUp);
                 $groupCompleted[$branch->id] = true;
             }
 
             $completed = $groupCompleted;
 
             if ($node->next !== null) {
-                $this->validateNodeDataDependencies($node->next, $plan, $completed);
+                $this->validateNodeDataDependencies($node->next, $plan, $completed, $rolledUp);
             }
 
             return;
@@ -421,16 +486,28 @@ class HierarchicalRoutePlanner
         if ($node->outputFrom !== null && ! isset($completed[$node->outputFrom])) {
             throw new SwarmException("Hierarchical finish node [{$node->id}] cannot reference output from [{$node->outputFrom}] before that node has completed.");
         }
+
+        if ($node->outputFrom !== null && isset($rolledUp[$node->outputFrom])) {
+            throw new SwarmException("Hierarchical finish node [{$node->id}] references [{$node->outputFrom}], which was rolled up by [{$rolledUp[$node->outputFrom]}]; reference the rollup node [{$rolledUp[$node->outputFrom]}] instead.");
+        }
     }
 
     /**
      * @param  array<string, true>  $completed
+     * @param  array<string, string>  $rolledUp
      */
-    protected function assertWorkerOutputsCompleted(HierarchicalWorkerNode $node, array $completed): void
+    protected function assertWorkerOutputsCompleted(HierarchicalWorkerNode $node, array $completed, array $rolledUp): void
     {
         foreach ($node->withOutputs as $alias => $sourceNodeId) {
             if (! isset($completed[$sourceNodeId])) {
                 throw new SwarmException("Hierarchical worker node [{$node->id}] cannot map output alias [{$alias}] from [{$sourceNodeId}] before that node has completed.");
+            }
+
+            // Once a generation has been rolled up it is context-unreferenceable:
+            // only the digest may be read downstream (#289 — fail loud at
+            // plan-materialization, never a silent empty read on resume).
+            if (isset($rolledUp[$sourceNodeId])) {
+                throw new SwarmException("Hierarchical worker node [{$node->id}] maps output alias [{$alias}] from [{$sourceNodeId}], which was rolled up by [{$rolledUp[$sourceNodeId]}]; reference the rollup node [{$rolledUp[$sourceNodeId]}] instead.");
             }
         }
     }

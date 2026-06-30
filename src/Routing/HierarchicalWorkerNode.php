@@ -22,8 +22,9 @@ class HierarchicalWorkerNode extends HierarchicalRouteNode
         public readonly ?string $next = null,
         public readonly ?string $loopTo = null,
         public readonly ?int $loopMaxIterations = null,
+        string $type = 'worker',
     ) {
-        parent::__construct($id, 'worker', $metadata);
+        parent::__construct($id, $type, $metadata);
     }
 
     public function hasLoop(): bool

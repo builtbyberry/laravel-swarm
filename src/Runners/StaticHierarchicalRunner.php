@@ -101,6 +101,15 @@ class StaticHierarchicalRunner extends HierarchicalRunner
         );
     }
 
+    /**
+     * A static plan has no coordinator step, so a streamed durable worker node
+     * opens at the root (null parent) rather than beneath __coordinator__.
+     */
+    protected function durableWorkerParentNodeId(): ?string
+    {
+        return null;
+    }
+
     public function buildPlanForSwarm(Swarm $swarm): HierarchicalRoutePlan
     {
         assert($swarm instanceof HasRoutePlan);
@@ -119,7 +128,18 @@ class StaticHierarchicalRunner extends HierarchicalRunner
 
         $agents = $state->swarm->agents();
 
-        return $this->runDurableWorkerStep($state, $stepIndex, $run, $this->workerMap($agents));
+        // Thread the run's pinned streaming opt-in (#310) and attempt epoch (#298
+        // recovery count) from the loaded run row so static-hierarchical worker
+        // nodes stream per-node exactly like the dynamic walk — the static init
+        // step (index 0) has no agent to stream.
+        return $this->runDurableWorkerStep(
+            $state,
+            $stepIndex,
+            $run,
+            $this->workerMap($agents),
+            (bool) ($run['durable_streaming'] ?? false),
+            (int) ($run['recovery_count'] ?? 0),
+        );
     }
 
     private function runStaticDurableInitStep(SwarmExecutionState $state): DurableHierarchicalStepResult

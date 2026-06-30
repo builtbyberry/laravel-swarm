@@ -50,7 +50,7 @@ class CacheStreamEventStore implements StreamEventStore
         }
 
         foreach ($events as $event) {
-            if (is_array($event)) {
+            if (is_array($event) && ($event['type'] ?? '') !== 'swarm_causal_seal_barrier') {
                 yield SwarmStreamEvent::fromArray($event);
             }
         }

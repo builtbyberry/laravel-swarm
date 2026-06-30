@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -31,6 +32,7 @@ class DurableRunRecorder
         protected SwarmCapture $capture,
         protected DurableRunContext $runs,
         protected SwarmAuditDispatcher $audit,
+        protected DurableNodeStreamRecorder $nodeStream,
     ) {}
 
     public function fail(string $runId, string $token, Throwable $exception, RunContext $context, int $stepLeaseSeconds): void
@@ -120,8 +122,9 @@ class DurableRunRecorder
         DurableHierarchicalStepResult $result,
         ?SwarmStep $step = null,
         ?callable $withTransaction = null,
+        bool $durableStreaming = false,
     ): void {
-        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $step, $withTransaction): void {
+        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $step, $withTransaction, $durableStreaming): void {
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->persistStepArtifacts($runId, $step);
             $this->durableRuns->checkpointHierarchicalStep(
@@ -136,6 +139,25 @@ class DurableRunRecorder
                 totalSteps: $result->totalSteps,
                 clearBranchParentNodeIds: $result->clearBranchParentNodeIds,
             );
+            // Seal the just-committed node's streamed events in the SAME lease-fenced
+            // transaction as the cursor advance (#298 F1/F5) — the hierarchical twin
+            // of checkpointSequential's seal. An uncommitted (crashed) node can never
+            // be sealed beside its fresh attempt: its events stay above the last
+            // committed barrier, unsealed and retractable on resume. `$durableStreaming`
+            // is the value pinned on the run row (#310), threaded in by the caller so
+            // the seal and the advancer's void share one source of truth and never
+            // disagree. No-op unless the run pinned the opt-in on.
+            //
+            // Seal-on-join (#312 gate H2): this same checkpoint also seals durable
+            // PARALLEL branches — the branch generation is sealed by the parent's NEXT
+            // hierarchical checkpoint after the join, never at branch commit. The
+            // run-scoped barrier graduates everything below it, so this single seal
+            // fences every committed branch attempt. Safe because the join gate
+            // (DurableHierarchicalCoordinator::dispatchWaitingBoundary) only releases the
+            // parent once branchesAreTerminal() — a retrying branch stays pending and
+            // blocks the join, so nothing is in-flight at seal time. A per-branch seal
+            // would prematurely seal a concurrent sibling's in-flight window.
+            $this->nodeStream->sealNodeBoundary($runId, $durableStreaming);
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }
@@ -151,11 +173,19 @@ class DurableRunRecorder
         ]);
     }
 
-    public function checkpointSequential(string $runId, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds, ?callable $withTransaction = null): void
+    public function checkpointSequential(string $runId, string $token, int $nextStepIndex, RunContext $context, int $stepLeaseSeconds, bool $durableStreaming, ?callable $withTransaction = null): void
     {
-        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $withTransaction): void {
+        $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $durableStreaming, $withTransaction): void {
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->durableRuns->releaseForNextStep($runId, $token, $nextStepIndex);
+            // Seal the just-committed node's streamed events in the SAME lease-fenced
+            // transaction as the cursor advance (#298 F1/F5), so an uncommitted node
+            // can never be sealed beside its fresh attempt. `$durableStreaming` is the
+            // value pinned on the run row (#310), threaded in from the already-loaded
+            // run by the caller — the single source of truth this seal shares with the
+            // advancer's void, so seal and void never disagree and the commit txn does
+            // not re-hydrate the run just to read one bool. No-op unless it pinned on.
+            $this->nodeStream->sealNodeBoundary($runId, $durableStreaming);
             if ($withTransaction !== null) {
                 ($withTransaction)();
             }

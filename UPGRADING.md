@@ -269,6 +269,46 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.15.0
+
+### New migration: `swarm_cold_archives`
+
+v0.15.0 ships a new migration that creates the `swarm_cold_archives` table. Run `php artisan migrate` after updating the package. The table is inert until the background compactor (#287) is available — existing runs continue to read entirely from the hot store (`swarm_stream_events`). You can override the table name via `SWARM_COLD_ARCHIVES_TABLE` or `config('swarm.tables.cold_archives')`.
+
+### `StreamEventStore` container binding change (internal)
+
+Under the database persistence driver, resolving `StreamEventStore` from the container now returns a `TieredStreamEventStore` instead of a `DatabaseCausalLogStore`. Both classes are `@internal` — operators should not type-check the resolved instance. If your application does `instanceof DatabaseCausalLogStore` on the resolved store binding, update that check to use the `StreamEventStore` contract instead.
+
+### Other migrations in this release
+
+The same `php artisan migrate` run also adds five nullable columns to `swarm_stream_events` (`event_uuid`, `void_type`, `void_target_event_uuid`, `void_reason`, `sealed_at`) plus two run-scoped indexes (#282), the compaction lease/quarantine columns (`compaction_token`, `compaction_leased_until`, `compaction_quarantined_at`) on `swarm_durable_runs` (#287), the durable-streaming identity columns `node_id` + `attempt_epoch` (with a run-scoped index) on `swarm_stream_events` (#298), and the `durable_streaming` pin column on `swarm_durable_runs` (#310). All are additive and nullable (the pin defaults to `false`) — existing rows read back unchanged and no backfill is required.
+
+### New (opt-in): schedule `swarm:compact` to bound the hot log
+
+The background compactor is **not auto-scheduled** — if you stream long or high-volume runs on the database driver, schedule it or the hot `swarm_stream_events` table grows unbounded:
+
+```php
+// bootstrap/app.php (or routes/console.php)
+$schedule->command('swarm:compact')->hourly();
+```
+
+`swarm:compact` discovers runs with a sealed window and dispatches a `CompactSwarmRun` queue job per run, so ensure a worker drains that queue. It is a no-op on the cache driver. Tune the lease with `SWARM_COMPACTION_LEASE_SECONDS` (default `300`). See the [Streaming Substrate Operator Runbook](docs/operator-runbook-streaming-substrate.md) for the retention horizon and the quarantine recovery flow. Applications that do not stream, or that are content to let the hot log retain a run's full event history until `swarm:prune`, need take no action.
+
+### New config block: `swarm.context_growth.*` (inert by default)
+
+A new config block governs a streaming run's hot working set: `swarm.context_growth.{policy,budget_events,hard_cap_events,backpressure_delay_ms}` (env `SWARM_CONTEXT_GROWTH_*`). `budget_events` and `hard_cap_events` default to **null** (inert) — the package imposes no budget unless you set one. Setting `budget_events` activates the framework default `degrade_to_cold` behaviour unless a swarm declares a different rung via `#[ContextGrowthPolicy]`. No action is required to preserve v0.14 behaviour.
+
+### Rolling deploy from v0.14.x (worker compatibility)
+
+A v0.15.0 worker writes a `swarm_causal_seal_barrier` row immediately after the first `SwarmStreamEnd`. The forward-compatibility sentinel that skips unknown event types (`SwarmUnknownEvent`) was **not** backported to v0.14.x, so a **v0.14.x worker that resumes a run after a v0.15.0 worker has written a barrier will throw**. Two safe paths:
+
+- **Coordinated full-fleet restart** — bring all workers to v0.15.0 before any long-running durable run completes. This is the guaranteed-safe path.
+- **Standard rolling deploy** — safe in practice when the deploy finishes within one compaction window (default lease `300 s`), since the exposure window is short.
+
+From v0.15.0 onward the sentinel protects you: a future package version's new event types will not crash a co-deployed v0.15.0 worker.
+
+**Durable per-node streaming opt-in.** A swarm opts into durable per-node streaming with the `#[DurableStreaming]` attribute (off unless the attribute is present). It streams every durable topology — sequential, hierarchical, static_hierarchical, and parallel (including fan-out branches); the hierarchical coordinator emits structural events (token streaming is a follow-up). Declaring the attribute on a future, not-yet-wired topology fails loud at dispatch rather than silently no-op'ing. A streamed durable run writes `node_reexecuted` void-edges on top of the seal barriers above — both event shapes a lingering v0.14.x worker cannot read. The opt-in is resolved once and **pinned onto the durable run row at run-start**, so a run streams (or does not) for its whole life regardless of a later redeploy — a run started before you add the attribute will never stream, and one started after will, with no mid-flight flip. The only rolling-deploy concern is therefore the same v0.14.x-cannot-read-barriers window described above: don't add `#[DurableStreaming]` to a swarm with in-flight runs until the fleet is fully on v0.15.0. To pause durable streaming fleet-wide at runtime without a redeploy, set `SWARM_DURABLE_STREAMING_ENABLED=false` (env for `swarm.durable.streaming_enabled`, default `true`); it gates only emission, so opted-in runs fall back to `prompt()` while crashed attempts are still voided and committed nodes still sealed — flipping it mid-run is safe.
+
 ## Upgrading to v0.13.0
 
 v0.13.0 raises the **minimum `laravel/ai` to `^0.8`** (dropping `^0.6 || ^0.7`). There are **no migrations** and no `config/swarm.php` changes. The durable persistence shapes (the `tool_calls` snapshot column and the audit envelope) are unchanged, so existing runs replay across the upgrade.

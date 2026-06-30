@@ -74,6 +74,7 @@ class SwarmRunner
         protected HierarchicalRunner $hierarchical,
         protected StaticHierarchicalRunner $staticHierarchical,
         protected StaticHierarchicalStreamRunner $staticHierarchicalStream,
+        protected HierarchicalStreamRunner $hierarchicalStream,
         protected DurableSwarmManager $durable,
         protected SwarmCapture $capture,
         protected SwarmPayloadLimits $limits,
@@ -143,7 +144,7 @@ class SwarmRunner
             $queueHierarchicalCoord = $this->resolver->resolveQueueHierarchicalParallelCoordination($swarm);
 
             if ($queueHierarchicalCoord === 'multi_worker') {
-                $this->validator->ensureDatabaseDurableInfrastructure();
+                $this->validator->ensureDatabaseDurableInfrastructure($swarm);
                 $context->mergeMetadata([
                     'durable_parallel_failure_policy' => $this->resolver->resolveDurableParallelFailurePolicy($swarm)->value,
                 ]);
@@ -308,6 +309,10 @@ class SwarmRunner
             return $this->staticHierarchicalStream->stream($swarm, $context);
         }
 
+        if ($topology === Topology::Hierarchical) {
+            return $this->hierarchicalStream->stream($swarm, $context);
+        }
+
         $this->validator->ensureStreamableTopology($swarm);
 
         return $this->sequentialStream->stream($swarm, $context);
@@ -404,7 +409,7 @@ class SwarmRunner
 
         $topology = $this->resolver->resolveTopology($swarm);
 
-        $this->validator->ensureDatabaseDurableInfrastructure();
+        $this->validator->ensureDatabaseDurableInfrastructure($swarm);
 
         if ($topology === Topology::Parallel) {
             $this->parallel->ensureAgentsAreContainerResolvable($swarm->agents(), $swarm::class);

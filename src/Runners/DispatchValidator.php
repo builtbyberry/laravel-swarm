@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
@@ -14,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
@@ -21,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use ReflectionClass;
 use ReflectionIntersectionType;
@@ -42,6 +45,20 @@ use ReflectionUnionType;
  */
 class DispatchValidator
 {
+    /**
+     * Durable topologies whose per-node streaming is actually wired (#310 → #311/#312).
+     * This list is the single source of truth for "what `#[DurableStreaming]` streams":
+     * a swarm that opts in on any topology NOT in this set fails loud at dispatch
+     * rather than silently pinning the opt-in and never streaming. A topology is added
+     * here only in the same change that wires its streaming and proves it with a
+     * positive test — so a missed topology is a loud dispatch error, never a silent
+     * no-op. #311 added Hierarchical + StaticHierarchical; #312 adds Parallel to
+     * complete the set.
+     *
+     * @var list<Topology>
+     */
+    private const STREAMING_SUPPORTED_TOPOLOGIES = [Topology::Sequential, Topology::Hierarchical, Topology::StaticHierarchical, Topology::Parallel];
+
     public function __construct(
         protected SwarmAttributeResolver $resolver,
         protected ParallelRunner $parallel,
@@ -52,6 +69,8 @@ class DispatchValidator
         protected ArtifactRepository $artifactRepository,
         protected RunHistoryStore $historyStore,
         protected DurableRunStore $durableRuns,
+        protected CausalLogStore $causalLog,
+        protected ConfigRepository $config,
     ) {}
 
     public function ensureSwarmHasAgents(Swarm $swarm): void
@@ -63,13 +82,22 @@ class DispatchValidator
         throw new SwarmException(class_basename($swarm).': swarm has no agents. Add at least one agent to agents().');
     }
 
+    /**
+     * Gate the LIVE `stream()` API — a single ordered generator of token events for
+     * one in-process run. This is a different surface from durable causal-log
+     * streaming ({@see ensureDurableStreamingInfrastructure()}): a parallel swarm
+     * cannot yield one ordered live token stream (its branches run concurrently), but
+     * it DOES stream durably under `#[DurableStreaming]`, where each branch writes its
+     * own per-node rows to the causal log. Keep that live-vs-durable distinction in the
+     * error string below so the two gates are never read as contradicting each other.
+     */
     public function ensureStreamableTopology(Swarm $swarm): void
     {
         $topology = $this->resolver->resolveTopology($swarm);
-        $streamable = [Topology::Sequential, Topology::StaticHierarchical];
+        $streamable = [Topology::Sequential, Topology::StaticHierarchical, Topology::Hierarchical];
 
         if (! in_array($topology, $streamable, true)) {
-            throw new SwarmException("Streaming is only supported for sequential and static_hierarchical swarms. {$topology->value} topology does not support streaming.");
+            throw new SwarmException("The live stream() API only supports sequential, static_hierarchical, and hierarchical swarms; a {$topology->value} swarm cannot yield a single ordered live token stream. (Durable per-node streaming via #[DurableStreaming] does support {$topology->value} — its branches stream as separate causal-log rows; see ensureDurableStreamingInfrastructure().)");
         }
     }
 
@@ -84,7 +112,7 @@ class DispatchValidator
         }
     }
 
-    public function ensureDatabaseDurableInfrastructure(): void
+    public function ensureDatabaseDurableInfrastructure(Swarm $swarm): void
     {
         if (! $this->contextStore instanceof DatabaseContextStore
             || ! $this->artifactRepository instanceof DatabaseArtifactRepository
@@ -97,6 +125,49 @@ class DispatchValidator
         $this->artifactRepository->assertReady();
         $this->historyStore->assertReady();
         $this->durableRuns->assertReady();
+
+        $this->ensureDurableStreamingInfrastructure(
+            $this->resolver->resolveDurableStreaming($swarm),
+            $this->resolver->resolveTopology($swarm),
+        );
+    }
+
+    /**
+     * Gate the per-swarm durable per-node streaming opt-in (#298/#310): when the
+     * swarm carries `#[DurableStreaming]`, the database causal log the advancer
+     * appends node events to — and retracts a crashed attempt against on resume —
+     * must be available and migrated. Fail loud at dispatch rather than silently
+     * dropping events or falling back to prompt(). Swarms without the attribute pass
+     * `false` and never reach this check.
+     *
+     * This runs only after {@see ensureDatabaseDurableInfrastructure()} has already
+     * verified the database durable stores, so the persistence driver is database
+     * by here; the remaining check is that the causal log (always the database
+     * store) carries the void-edge and durable-streaming columns.
+     *
+     * Topology guard (#310): `#[DurableStreaming]` is a topology-agnostic surface — an
+     * author can declare it on any swarm — but only the topologies in
+     * {@see self::STREAMING_SUPPORTED_TOPOLOGIES} actually stream. Opting in on an
+     * unsupported topology fails loud here rather than silently pinning the opt-in and
+     * never streaming. #311 added hierarchical + static_hierarchical; #312 adds parallel.
+     */
+    public function ensureDurableStreamingInfrastructure(bool $durableStreaming, Topology $topology): void
+    {
+        if (! $durableStreaming) {
+            return;
+        }
+
+        if (! in_array($topology, self::STREAMING_SUPPORTED_TOPOLOGIES, true)) {
+            $supported = implode(', ', array_map(static fn (Topology $supported): string => $supported->value, self::STREAMING_SUPPORTED_TOPOLOGIES));
+
+            throw new SwarmException("Durable per-node streaming (#[DurableStreaming]) is currently supported only for {$supported} durable swarms; {$topology->value} streaming arrives in a later release. Remove #[DurableStreaming] from the swarm or use a supported topology.");
+        }
+
+        if (! $this->causalLog instanceof DatabaseCausalLogStore) {
+            throw new SwarmException('Durable per-node streaming (#[DurableStreaming]) requires the database persistence driver so the causal log is available to append node events to. Remove #[DurableStreaming] from the swarm or switch [swarm.persistence.driver] to database.');
+        }
+
+        $this->causalLog->assertReady();
     }
 
     public function validateForDispatch(Swarm $swarm): void
@@ -114,7 +185,7 @@ class DispatchValidator
             $this->hierarchical->ensureUniqueWorkerClassesForSwarm($swarm);
 
             if ($this->resolver->resolveQueueHierarchicalParallelCoordination($swarm) === 'multi_worker') {
-                $this->ensureDatabaseDurableInfrastructure();
+                $this->ensureDatabaseDurableInfrastructure($swarm);
             }
         }
     }

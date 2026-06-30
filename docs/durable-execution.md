@@ -248,6 +248,61 @@ Each durable step job:
 That gives retries and recovery a clear boundary. A retry re-runs the current
 step. It does not replay the whole workflow.
 
+## Durable Per-Node Streaming
+
+By default a durable step calls the agent's `prompt()` and records one response per
+node. A swarm can instead **stream each node's events into the append-only causal
+log** by declaring `#[DurableStreaming]` on the swarm class:
+
+```php
+use BuiltByBerry\LaravelSwarm\Attributes\DurableStreaming;
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+
+#[Topology(TopologyEnum::Sequential)]
+#[DurableStreaming]
+class ClaimsReviewSwarm implements Swarm { /* … */ }
+```
+
+This gives operators a live, replay-safe signal from a durable run. A node that
+crashes mid-stream and re-executes on resume retracts its prior attempt with a
+`node_reexecuted` void-edge before re-emitting, so a clean fold of the log shows
+exactly one attempt per node. Requires the **database** persistence driver (the
+causal log lives in `swarm_stream_events`); dispatch fails loud otherwise.
+
+The opt-in is **resolved once and pinned onto the durable run row at run-start**, so
+a run streams (or does not) for its whole life — adding or removing the attribute in
+a deploy never changes an in-flight run. A bare `#[DurableStreaming]` opts in;
+`#[DurableStreaming(false)]` explicitly opts out (e.g. to override a base class).
+A swarm without the attribute never writes a stream event.
+
+**Operator kill-switch.** Set `SWARM_DURABLE_STREAMING_ENABLED=false`
+(`swarm.durable.streaming_enabled`, default `true`) to stop the per-event causal-log
+write load fleet-wide at runtime without a redeploy — e.g. when `swarm_stream_events`
+is hot. It gates only emission: opted-in runs fall back to the blocking `prompt()`
+path, but every crashed attempt is still retracted and every committed node still
+sealed, so the log stays consistent. Flipping it mid-run is safe.
+
+Scope: sequential and parallel durable runs in v0.15.0. Parallel covers both
+top-level `Topology::Parallel` branches and hierarchical fan-out branches (and so
+queue-hierarchical-parallel, whose branches run through the same advancer); each
+branch streams under its own node id — a fan-out branch's real node id, or, for a
+top-level parallel branch, its stable `branch_id` (e.g. `parallel:2`) — and under
+its own branch attempt epoch, so a branch that crashes and resumes retracts only its
+own prior attempt and never a committed sibling. Seal-on-join is by topology: a
+**hierarchical** fan-out's branch generation is sealed at the parent's post-join
+checkpoint (never at branch commit), so its events graduate and compact. A
+**top-level `Topology::Parallel`** run instead converges by completing the run with no
+post-join checkpoint, so its streamed branch events are **never sealed** — they are
+retained-but-uncompacted in `swarm_stream_events` and expire with the rest of the run
+at its data TTL (`swarm.context.ttl`) rather than graduating to cold storage. This is
+deliberate: a top-level parallel run has no subsequent node to fence, so there is no
+on-join seal point; size `swarm_stream_events` retention with that in mind for
+high-fan-out top-level parallel streaming. Hierarchical main-walk node streaming
+follows. Applying `#[DurableStreaming]` to a topology that does not yet stream **fails
+loud at dispatch** — it never silently pins the opt-in and no-ops. Non-durable
+(`run()`/`queue()`) execution is unaffected.
+
 ## Durable Hierarchical Parallel Flow
 
 A hierarchical durable run can contain route-plan `parallel` nodes. Those

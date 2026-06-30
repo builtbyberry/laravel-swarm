@@ -24,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditReconcileCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditStatusCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmCancelCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmCompactCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHistoryCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmInspectCommand;
@@ -39,10 +40,13 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmSignalCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmTraceCommand;
+use BuiltByBerry\LaravelSwarm\Compaction\SwarmCompactor;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
@@ -79,12 +83,14 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
-use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use BuiltByBerry\LaravelSwarm\Persistence\TieredStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\AuditOutbox as AuditOutboxCard;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmMemory as SwarmMemoryCard;
 use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
@@ -98,6 +104,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableLifecycleController;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableManagerCollaboratorFactory;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurablePayloadCapture;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRecoveryCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
@@ -112,6 +119,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\QueuedHierarchicalDurableCoordinat
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
+use BuiltByBerry\LaravelSwarm\Runners\HierarchicalStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\LeaseManager;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
@@ -123,6 +131,8 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
+use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
@@ -224,6 +234,8 @@ class SwarmServiceProvider extends ServiceProvider
             logger: $app->make(LoggerInterface::class),
         ));
         $this->app->singleton(SwarmAttributeResolver::class);
+        $this->app->singleton(ContextGrowthGovernor::class);
+        $this->app->singleton(StreamEventMapper::class);
         $this->app->singleton(SequentialRunner::class);
         $this->app->singleton(SequentialStreamRunner::class);
 
@@ -232,6 +244,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(HierarchicalRunner::class);
         $this->app->singleton(StaticHierarchicalRunner::class);
         $this->app->singleton(StaticHierarchicalStreamRunner::class);
+        $this->app->singleton(HierarchicalStreamRunner::class);
         $this->app->singleton(SwarmStepRecorder::class);
         $this->app->singleton(QueuedHierarchicalCoordinator::class);
 
@@ -285,6 +298,7 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->bind(DurableTopLevelParallelAdvancer::class);
         $this->app->bind(DurableStepExecutionBuilder::class);
         $this->app->bind(DurableSequentialStepAdvancer::class);
+        $this->app->bind(DurableNodeStreamRecorder::class);
         $this->app->bind(DurableStepCheckpointCoordinator::class);
         $this->app->bind(DurableStepAdvancer::class);
         $this->app->bind(DurableBranchAdvancer::class);
@@ -311,12 +325,35 @@ class SwarmServiceProvider extends ServiceProvider
             CacheRunHistoryStore::class,
             DatabaseRunHistoryStore::class,
         ));
+        // The database stream-event store IS the causal log (#282). Register it as
+        // one shared singleton so the StreamEventStore DB branch and the
+        // CausalLogStore contract resolve the same instance — never two.
+        $this->app->singleton(DatabaseCausalLogStore::class);
+
+        // Hot/cold tiering (#286). The cold archive driver is stateless and safe as
+        // a singleton. TieredStreamEventStore decorates the hot DatabaseCausalLogStore
+        // with the cold driver; its events() method stitches the two halves at the
+        // base pointer using the half-open seam [0, base) / [base, ∞).
+        $this->app->singleton(DatabaseColdArchiveDriver::class);
+        $this->app->singleton(SwarmCompactor::class);
+        $this->app->singleton(ColdArchiveDriver::class, DatabaseColdArchiveDriver::class);
+        $this->app->singleton(TieredStreamEventStore::class, fn (Application $app): TieredStreamEventStore => new TieredStreamEventStore(
+            hot: $app->make(DatabaseCausalLogStore::class),
+            cold: $app->make(DatabaseColdArchiveDriver::class),
+        ));
+
         $this->app->singleton(StreamEventStore::class, fn (Application $app): StreamEventStore => $this->resolvePersistenceStore(
             $app,
             'streaming.replay',
             CacheStreamEventStore::class,
-            DatabaseStreamEventStore::class,
+            TieredStreamEventStore::class,
         ));
+
+        // CausalLogStore is database-only: void-edges need indexed UUID lookup and
+        // row locking the cache driver cannot provide. It always resolves the
+        // database store; under the cache driver, appendVoidEdge() fails loud via
+        // assertReady() rather than emitting a raw query error.
+        $this->app->singleton(CausalLogStore::class, DatabaseCausalLogStore::class);
 
         $this->app->singleton(MemoryStore::class, fn (Application $app): MemoryStore => $this->resolvePersistenceStore(
             $app,
@@ -446,6 +483,7 @@ class SwarmServiceProvider extends ServiceProvider
                 SwarmResumeCommand::class,
                 SwarmCancelCommand::class,
                 SwarmRecoverCommand::class,
+                SwarmCompactCommand::class,
                 SwarmRelayCommand::class,
                 SwarmAuditStatusCommand::class,
                 SwarmAuditReconcileCommand::class,

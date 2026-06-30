@@ -34,6 +34,7 @@ The recommended reading path for new users.
 
 - [Choosing an Execution Mode](execution-modes.md) — comparison table and decision tree
 - [Streaming](streaming.md) — real-time token streaming
+- [Streaming Substrate Author Guide](streaming-substrate-author-guide.md) — streaming dynamic swarms, the causal-log fold (`CausalLogView`), rollup nodes, and the context-growth policy (v0.15.0+)
 - [Durable Execution](durable-execution.md) — checkpointed, recoverable, long-running workflows
 
 ---
@@ -80,6 +81,7 @@ The recommended reading path for new users.
 - [Correlation Contract](observability-correlation-contract.md)
 - [Audit Evidence](audit-evidence-contract.md)
 - [Operator Runbook: Audit Outbox Triage](operator-runbook-audit-outbox.md) — 3 a.m. decision trees for dead-letter and stale-pending pages
+- [Operator Runbook: Streaming Substrate](operator-runbook-streaming-substrate.md) — hot/cold tiering, the compaction worker (`swarm:compact`), retention horizon, recovery and quarantine (v0.15.0+)
 - [Metadata Allowlist Governance](metadata-allowlist-governance.md) — what belongs in metadata, named anti-patterns, and the allowlist review pattern
 - [Pulse](pulse.md) — Laravel Pulse cards for run counts and step latencies
 

@@ -102,7 +102,17 @@ class DurableStepAdvancer
 
                 $step = $hierarchicalResult->step;
             } else {
-                $step = $this->sequential->advance($state, $expectedStepIndex);
+                // The attempt epoch is the run's recovery count, bumped before any
+                // recovery/retry re-dispatch — so a re-executed node streams under a
+                // strictly higher epoch than its crashed attempt (#298 F2). The
+                // durable-streaming opt-in is read from the value pinned on the run
+                // row at run-start (#310), not live config, so resume is consistent.
+                $step = $this->sequential->advance(
+                    $state,
+                    $expectedStepIndex,
+                    (int) $run['recovery_count'],
+                    (bool) ($run['durable_streaming'] ?? false),
+                );
             }
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
             return;

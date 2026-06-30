@@ -20,6 +20,9 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
@@ -58,6 +61,7 @@ class SequentialStreamRunner
         protected SwarmTelemetryDispatcher $telemetry,
         protected SwarmGuardrailRunner $guardrails,
         protected LoggerInterface $logger,
+        protected ContextGrowthGovernor $growthGovernor,
     ) {}
 
     /**
@@ -69,7 +73,11 @@ class SequentialStreamRunner
         $this->ensureSwarmHasAgents($swarm);
 
         if ($topology !== Topology::Sequential) {
-            throw new SwarmException('Streaming is only supported for sequential swarms. '.$topology->value.' topology does not support streaming.');
+            // This is the live sequential stream() runner specifically; hierarchical and
+            // static_hierarchical live-stream via their own runners, and any topology
+            // (incl. parallel) can stream durably via #[DurableStreaming]. So this is a
+            // routing guard, not a claim that {$topology} cannot stream at all.
+            throw new SwarmException('The live sequential stream() runner only accepts sequential swarms; a '.$topology->value.' swarm streams via its own live runner or durably via #[DurableStreaming].');
         }
 
         $timeoutSeconds = $this->resolver->resolveTimeoutSeconds($swarm);
@@ -213,11 +221,21 @@ class SequentialStreamRunner
 
         $historyRowStarted = true;
 
+        // Per-run context-growth throttle memory (#288). Local to this stream so
+        // two runs in one Octane worker never share warn/nudge bookkeeping.
+        $growthState = [];
+
         try {
             foreach ($this->sequential->stream($state) as $streamEvent) {
                 $this->recordStreamTelemetry($swarm, $state, $streamEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
                 yield $streamEvent;
+
+                // Step boundary: govern hot context growth (#288). $streamSequenceIndex
+                // is the in-process hot working-set event count.
+                if ($streamEvent instanceof SwarmStepEnd) {
+                    $this->growthGovernor->evaluate($swarm, $context->runId, $streamSequenceIndex, $growthState);
+                }
             }
 
             $response = $this->normalizeCompletionResponse(new SwarmResponse(
@@ -265,6 +283,19 @@ class SequentialStreamRunner
             $this->recordStreamTelemetry($swarm, $state, $streamEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
             yield $streamEndEvent;
+
+            // Record the seal barrier to the event store — it is an internal
+            // compaction marker. Best-effort: a store failure here (e.g. a failing
+            // test fixture) must not surface to the caller.
+            try {
+                $this->streamEvents->record($context->runId, new SwarmCausalSealBarrier(
+                    id: SwarmStreamEvent::newId(),
+                    runId: $context->runId,
+                    timestamp: SwarmStreamEvent::timestamp(),
+                ), $contextTtl);
+            } catch (Throwable) {
+                // Intentionally swallowed.
+            }
 
             return $response;
         } catch (Throwable $exception) {

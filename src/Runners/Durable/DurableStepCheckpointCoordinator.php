@@ -111,10 +111,13 @@ class DurableStepCheckpointCoordinator
             if ($isBranchWait) {
                 $this->hierarchical->checkpointBranchWait($run, $token, $nextStepIndex, $context, $stepLeaseSeconds, $hierarchicalResult, $withTransaction);
             } else {
-                $this->recorder->checkpointHierarchical($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $hierarchicalResult, $step, $withTransaction);
+                // Thread the run's pinned opt-in (#310) so checkpointHierarchical
+                // seals the just-committed node's streamed events in its own txn —
+                // the hierarchical twin of the sequential seal below.
+                $this->recorder->checkpointHierarchical($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $hierarchicalResult, $step, $withTransaction, (bool) ($run['durable_streaming'] ?? false));
             }
         } else {
-            $this->recorder->checkpointSequential($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $withTransaction);
+            $this->recorder->checkpointSequential($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, (bool) ($run['durable_streaming'] ?? false), $withTransaction);
         }
 
         if (is_callable($this->afterStepCheckpointHook)) {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
+use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
@@ -11,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SwarmWithoutTopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SwarmWithParallelTopologyAttribute;
+use Illuminate\Support\Facades\Artisan;
 
 beforeEach(function (): void {
     $this->validator = app(DispatchValidator::class);
@@ -27,9 +29,15 @@ test('ensureSwarmHasAgents passes when agents are present', function (): void {
     expect(true)->toBeTrue();
 });
 
-test('ensureStreamableTopology blocks parallel topology', function (): void {
+test('ensureStreamableTopology blocks parallel topology with a live-vs-durable error', function (): void {
+    // The live stream() gate excludes parallel (no single ordered token stream); the
+    // error must name the live API and point at the durable path that DOES support it,
+    // so it never reads as contradicting durable parallel streaming (#312).
     expect(fn () => $this->validator->ensureStreamableTopology(new SwarmWithParallelTopologyAttribute))
-        ->toThrow(SwarmException::class, 'Streaming is only supported');
+        ->toThrow(SwarmException::class, 'The live stream() API only supports');
+
+    expect(fn () => $this->validator->ensureStreamableTopology(new SwarmWithParallelTopologyAttribute))
+        ->toThrow(SwarmException::class, '#[DurableStreaming] does support');
 });
 
 test('ensureStreamableTopology allows sequential topology', function (): void {
@@ -76,6 +84,49 @@ test('ensureQueueable accepts swarms with no constructor parameters', function (
 
 test('validateForDispatch composes agent + timeout + topology checks', function (): void {
     $this->validator->validateForDispatch(new FakeParallelSwarm);
+
+    expect(true)->toBeTrue();
+});
+
+test('STREAMING_SUPPORTED_TOPOLOGIES wires every topology — a future unwired topology must fail loud (#310 forcing function)', function (): void {
+    // #311 wired hierarchical + static_hierarchical and #312 wired parallel, so every
+    // Topology now streams under #[DurableStreaming] and no production topology reaches
+    // the fail-loud throw anymore. This completeness assertion preserves the guarantee
+    // the per-topology negative cases used to give: if a NEW topology is ever added
+    // without being wired into the allow-list, this fails in CI — forcing it to be wired
+    // (with a positive streaming test) or consciously excluded, never silently pinning
+    // the opt-in and no-op'ing at runtime. The throw branch in
+    // ensureDurableStreamingInfrastructure remains as the runtime backstop for exactly
+    // that future-topology case.
+    $supported = (new ReflectionClassConstant(DispatchValidator::class, 'STREAMING_SUPPORTED_TOPOLOGIES'))->getValue();
+
+    expect($supported)->toEqualCanonicalizing(Topology::cases());
+});
+
+test('ensureDurableStreamingInfrastructure is a no-op for a non-streaming run on any topology', function (): void {
+    // durableStreaming = false (the swarm did not opt in) short-circuits before the
+    // topology guard, so a hierarchical durable run that never opted in is untouched.
+    $this->validator->ensureDurableStreamingInfrastructure(false, Topology::Hierarchical);
+
+    expect(true)->toBeTrue();
+});
+
+test('ensureDurableStreamingInfrastructure allows sequential when the database causal log is ready', function (): void {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+    app()->forgetInstance(DispatchValidator::class);
+
+    app(DispatchValidator::class)->ensureDurableStreamingInfrastructure(true, Topology::Sequential);
+
+    expect(true)->toBeTrue();
+});
+
+test('ensureDurableStreamingInfrastructure allows parallel when the database causal log is ready (#312)', function (): void {
+    config()->set('swarm.persistence.driver', 'database');
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+    app()->forgetInstance(DispatchValidator::class);
+
+    app(DispatchValidator::class)->ensureDurableStreamingInfrastructure(true, Topology::Parallel);
 
     expect(true)->toBeTrue();
 });

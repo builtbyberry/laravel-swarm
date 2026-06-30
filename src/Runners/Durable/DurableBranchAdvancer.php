@@ -23,8 +23,12 @@ use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -43,6 +47,8 @@ use Throwable;
  */
 class DurableBranchAdvancer
 {
+    use RecordsUnknownStreamEvents;
+
     public function __construct(
         protected DurableRunStore $durableRuns,
         protected DatabaseRunHistoryStore $historyStore,
@@ -64,6 +70,8 @@ class DurableBranchAdvancer
         protected SnapshotsMemory $snapshots,
         protected MemoryReplayCoordinator $coordinator,
         protected AgentVisibleMemoryView $view,
+        protected DurableNodeStreamRecorder $nodeStream,
+        protected StreamEventMapper $mapper,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId): void
@@ -92,6 +100,30 @@ class DurableBranchAdvancer
             return;
         }
 
+        // Per-swarm durable-streaming opt-in, pinned on the run row at start (#310);
+        // a relayed/recovered branch reads the run's original decision, never live config.
+        $durableStreaming = (bool) ($run['durable_streaming'] ?? false);
+
+        // Re-read the branch AFTER the lease so `attempts` is the post-acquire value:
+        // acquireBranchLease() does raw('attempts + 1') on every successful acquire
+        // (DatabaseDurableRunStore::acquireBranchLease), so any re-execution bumps the
+        // counter first — making it strictly monotonic per branch and the authoritative
+        // rollback discriminator (gate H1). The pre-lease `$branch` still holds the old value.
+        $branch = $this->durableRuns->findBranch($runId, $branchId) ?? $branch;
+        $branchEpoch = (int) ($branch['attempts'] ?? 0);
+
+        // Branch node id falls back to the stable, unique, resume-stable branch_id when the
+        // row's node_id is null — top-level parallel branches persist node_id = null, which
+        // would otherwise collapse every branch into one void/fold bucket (gate H3).
+        $branchNodeId = is_string($branch['node_id'] ?? null) ? $branch['node_id'] : $branchId;
+
+        // Integrity first (#298 F2/F3): retract this branch's crashed prior attempt before any
+        // fresh event is emitted, under the lease just acquired (F5). Keyed on (branch node id,
+        // branch epoch) so a concurrent sibling's events are never touched. No-op unless the
+        // opt-in is pinned. The seal is on-join, never per-branch-commit (gate H2): a per-branch
+        // seal would prematurely seal a concurrent sibling's in-flight window.
+        $this->nodeStream->voidPriorAttempt($runId, $branchNodeId, $branchEpoch, $durableStreaming);
+
         $context = $this->runs->loadContext($runId);
         $swarm = $this->application->make($run['swarm_class']);
 
@@ -109,7 +141,7 @@ class DurableBranchAdvancer
             $run['swarm_class'],
             $runId,
             (int) $branch['step_index'],
-            function (?MemorySnapshot $existing) use ($run, $branch, $runId, $branchId, $token, $context, $swarm, $stepLeaseSeconds): bool {
+            function (?MemorySnapshot $existing) use ($run, $branch, $runId, $branchId, $token, $context, $swarm, $stepLeaseSeconds, $durableStreaming, $branchEpoch, $branchNodeId): bool {
                 $agent = $this->application->make($branch['agent_class']);
 
                 if (! $agent instanceof Agent) {
@@ -160,17 +192,21 @@ class DurableBranchAdvancer
                     ActiveRunContext::enter($runId, $swarm::class, $context);
 
                     try {
-                        $response = $agent->prompt($branch['input']);
+                        // The kill-switch is consulted per attempt (#310 KS1): when the opt-in is
+                        // pinned AND streaming is active, the branch streams its events into the
+                        // run-scoped causal log via the per-attempt sink, stamped with the branch
+                        // node id + branch epoch; otherwise (unpinned, or operator paused emission)
+                        // it runs the unchanged blocking prompt(). The void above already ran for
+                        // any pinned run regardless of the kill-switch, so a retraction is never
+                        // dropped. Both shapes return [output, usage, snapshot].
+                        [$output, $usage, $snapshot] = $this->nodeStream->streamingActive($durableStreaming)
+                            ? $this->streamBranchAgent($state, $agent, $branch, $snapshot, $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch))
+                            : $this->promptBranchAgent($agent, $branch, $snapshot);
                     } finally {
                         ActiveRunContext::exit();
                     }
-                    $output = (string) $response;
-                    $usage = $response->usage->toArray();
                     $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
 
-                    foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
-                        $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
-                    }
                     $this->guardrails->validateStep(
                         $swarm,
                         GuardrailStepContext::fromState(
@@ -253,6 +289,77 @@ class DurableBranchAdvancer
             $run = $this->runs->requireRun($runId);
             $this->hierarchical->dispatchWaitingBoundary($run, false);
         }
+    }
+
+    /**
+     * Run the branch's agent with the unchanged blocking `prompt()` and fold its
+     * response tool calls into the snapshot — the original branch behavior, kept for
+     * unpinned runs and for the operator kill-switch (pinned but emission paused).
+     *
+     * @param  array<string, mixed>  $branch
+     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot}
+     */
+    protected function promptBranchAgent(Agent $agent, array $branch, MemorySnapshot $snapshot): array
+    {
+        $response = $agent->prompt($branch['input']);
+
+        foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
+            $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
+        }
+
+        return [(string) $response, $response->usage->toArray(), $snapshot];
+    }
+
+    /**
+     * Stream the branch's agent into the causal log (#312): fold every provider event
+     * through the shared {@see StreamEventMapper} — the identity-agnostic fold reused
+     * by every topology — and hand the resulting swarm event to `$sink`, which stamps
+     * it with the branch node id + branch epoch and appends it. Output text, usage, and
+     * paired tool calls accumulate exactly as the live stream and the durable sequential
+     * node do, so the returned triple is shaped identically to {@see promptBranchAgent()}
+     * and the rest of branch commit is unchanged. Unpaired tool calls are flushed in
+     * `finally` so a crash mid-branch still records every tool the agent invoked — its
+     * unsealed events stay retractable on resume.
+     *
+     * @param  array<string, mixed>  $branch
+     * @param  callable(SwarmStreamEvent): void  $sink
+     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot}
+     */
+    protected function streamBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot, callable $sink): array
+    {
+        $accumulator = new StreamStepAccumulator($snapshot);
+
+        try {
+            foreach ($agent->stream($branch['input']) as $event) {
+                $swarmEvent = $this->mapper->map($event, $state, (int) $branch['step_index'], $agent, $accumulator);
+
+                if ($swarmEvent !== null) {
+                    $sink($swarmEvent);
+                }
+            }
+        } finally {
+            foreach ($accumulator->pendingToolCalls as $unpairedCall) {
+                $accumulator->snapshot = $this->snapshots->appendToolCall(
+                    $accumulator->snapshot,
+                    SnapshotToolCallNormalizer::entry($unpairedCall),
+                );
+            }
+
+            // Breadcrumb any provider event the mapper's instanceof chain did not
+            // recognize, mirroring the sequential path (SequentialRunner::streamStep).
+            // Without this a branch silently drops unknown event classes — its frozen
+            // snapshot is the durable replay source, so the drop must stay observable.
+            // Degrade-safe (logs, never throws); fires on the happy path and on a
+            // mid-stream crash alike, so a branch that abandons mid-stream still
+            // records that its snapshot is incomplete.
+            $this->breadcrumbUnknownStreamEvents(
+                $accumulator->unknownEventClasses,
+                $state->context->runId,
+                (int) $branch['step_index'],
+            );
+        }
+
+        return [$accumulator->output, $accumulator->stepUsage, $accumulator->snapshot];
     }
 
     protected function persistBranchStepArtifacts(string $runId, ?SwarmStep $step): void

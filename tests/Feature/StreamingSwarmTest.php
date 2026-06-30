@@ -844,6 +844,7 @@ test('database replay store preserves insertion order', function () {
         'swarm_text_end',
         'swarm_step_end',
         'swarm_stream_end',
+        'swarm_causal_seal_barrier',
     ]);
 });
 
@@ -942,7 +943,7 @@ test('non sequential swarms cannot be streamed', function () {
 
     expect($stream)->toThrow(
         SwarmException::class,
-        'Streaming is only supported for sequential and static_hierarchical swarms. parallel topology does not support streaming.',
+        'The live stream() API only supports sequential, static_hierarchical, and hierarchical swarms; a parallel swarm cannot yield a single ordered live token stream.',
     );
 });
 

@@ -235,6 +235,22 @@ return [
         'stream_parallel_branches' => env('SWARM_STATIC_HIERARCHICAL_STREAM_PARALLEL_BRANCHES', 'concurrent'),
     ],
 
+    'hierarchical' => [
+        /*
+         * How parallel groups behave when a dynamic (Topology::Hierarchical) swarm
+         * is streamed. The coordinator always runs synchronously; this controls the
+         * streaming behaviour of the worker nodes once the plan is resolved.
+         *
+         * concurrent  — branches run via ConcurrencyManager (no live text deltas from branches);
+         *               sequential nodes after the join stream normally.
+         * sequential  — branches stream one at a time in declaration order;
+         *               sequential nodes after the join stream normally.
+         *
+         * Override per swarm with the #[StreamParallelBranches] attribute.
+         */
+        'stream_parallel_branches' => env('SWARM_HIERARCHICAL_STREAM_PARALLEL_BRANCHES', 'concurrent'),
+    ],
+
     'memory' => [
         /*
          * Controls how a durable swarm re-executes after a crash-resume.
@@ -499,6 +515,20 @@ return [
 
     'durable' => [
         'step_timeout' => (int) env('SWARM_DURABLE_STEP_TIMEOUT', 300),
+
+        /*
+         * Operator kill-switch for durable per-node streaming (#310). Per-swarm
+         * opt-in is the #[DurableStreaming] attribute, pinned onto each run at
+         * run-start; this global switch lets an operator stop the per-event causal-log
+         * write load fleet-wide at runtime WITHOUT a redeploy — e.g. when the
+         * swarm_stream_events table is hot. It gates only emission: when off, opted-in
+         * runs fall back to the blocking prompt() path, but every crashed attempt is
+         * still retracted and every committed node still sealed, so the causal-log
+         * fold stays consistent. Defaults to true (streaming honoured for runs whose
+         * pinned attribute opted in). Flipping it mid-run is safe.
+         */
+        'streaming_enabled' => (bool) env('SWARM_DURABLE_STREAMING_ENABLED', true),
+
         /*
          * AdvanceDurableSwarm / AdvanceDurableBranch queue settings.
          * Job timeout is step_timeout + timeout_margin_seconds (not a separate absolute cap).
@@ -574,6 +604,92 @@ return [
         ],
     ],
 
+    'compaction' => [
+
+        /*
+        |--------------------------------------------------------------------------
+        | Compaction Lease Duration
+        |--------------------------------------------------------------------------
+        |
+        | How long (in seconds) a compaction lease is held for a single run.
+        | Tune upward for large event windows or slow databases; the lease
+        | expires naturally if the job process dies.
+        |
+        */
+        'lease_seconds' => (int) env('SWARM_COMPACTION_LEASE_SECONDS', 300),
+
+    ],
+
+    'context_growth' => [
+
+        /*
+        |--------------------------------------------------------------------------
+        | Context-Growth Policy
+        |--------------------------------------------------------------------------
+        |
+        | How the framework reacts when a streaming run's hot working set exceeds
+        | the budget below. This is the framework default; a swarm author may
+        | override it per swarm with #[ContextGrowthPolicy(...)]. The ladder is a
+        | set of cumulative bands — each rung includes the behaviour of every
+        | lower one:
+        |
+        |   ignore          — take no growth action (the hard cap still applies)
+        |   warn            — emit telemetry + a throttled warning
+        |   degrade_to_cold — warn, and nudge background compaction (default)
+        |   backpressure    — warn, degrade, and insert a bounded delay
+        |   refuse          — warn, then abort the run loud (re-dispatchable)
+        |
+        | Applies to the streaming substrate only; non-streaming prompt() runs do
+        | not accumulate a hot causal log and are out of scope.
+        |
+        */
+        'policy' => env('SWARM_CONTEXT_GROWTH_POLICY', 'degrade_to_cold'),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Working-Set Budget (Operator-Supplied)
+        |--------------------------------------------------------------------------
+        |
+        | The soft budget, measured in hot stream events for a run — the same rows
+        | background compaction reclaims. When the working set exceeds this, the
+        | declared policy above acts. Null (the default) leaves the policy inert:
+        | the package ships the machinery and the author's intent, never an
+        | imposed number. A non-positive value disables the budget.
+        |
+        | Intentionally left un-cast: a bare env() preserves null (inert). The
+        | governor's configuredCount() handles the ''/null/non-positive cases.
+        |
+        */
+        'budget_events' => env('SWARM_CONTEXT_GROWTH_BUDGET_EVENTS'),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Working-Set Hard Cap (Operator Veto)
+        |--------------------------------------------------------------------------
+        |
+        | An absolute ceiling that clamps author intent: a breach refuses the run
+        | regardless of the declared policy (even `ignore`). Best-effort
+        | governance, not a correctness invariant — if the policy machinery itself
+        | fails, the run proceeds rather than wedging. Null disables the cap.
+        |
+        */
+        'hard_cap_events' => env('SWARM_CONTEXT_GROWTH_HARD_CAP_EVENTS'),
+
+        /*
+        |--------------------------------------------------------------------------
+        | Backpressure Delay
+        |--------------------------------------------------------------------------
+        |
+        | The bounded delay (milliseconds) inserted at a step boundary under the
+        | `backpressure` rung. Clamped to a safe maximum so it can never wedge a
+        | run; most meaningful for queued/durable execution rather than a
+        | synchronous HTTP stream.
+        |
+        */
+        'backpressure_delay_ms' => (int) env('SWARM_CONTEXT_GROWTH_BACKPRESSURE_DELAY_MS', 250),
+
+    ],
+
     // These table names are honored by the database repositories at runtime.
     // If you change them, publish and update the package migrations as well.
     //
@@ -605,5 +721,6 @@ return [
         'memories' => env('SWARM_MEMORIES_TABLE', 'swarm_memories'),
         'memory_snapshots' => env('SWARM_MEMORY_SNAPSHOTS_TABLE', 'swarm_memory_snapshots'),
         'stream_step_checkpoints' => env('SWARM_STREAM_STEP_CHECKPOINTS_TABLE', 'swarm_stream_step_checkpoints'),
+        'cold_archives' => env('SWARM_COLD_ARCHIVES_TABLE', 'swarm_cold_archives'),
     ],
 ];

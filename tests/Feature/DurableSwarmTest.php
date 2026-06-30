@@ -31,6 +31,7 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
@@ -1557,6 +1558,7 @@ test('durable workers stop cleanly when lease ownership is lost before terminal 
         app(SwarmCapture::class),
         app(DurableRunContext::class),
         app(SwarmAuditDispatcher::class),
+        app(DurableNodeStreamRecorder::class),
     );
 
     app()->bind(DurableRunRecorder::class, function ($app, $params) use ($innerRecorder, $runId) {

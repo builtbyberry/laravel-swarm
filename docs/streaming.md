@@ -1,7 +1,7 @@
 # Streaming
 
 Use `stream()` when a browser, CLI, or other client needs **live typed progress**
-while a **sequential** swarm runs. The method returns a lazy
+while a swarm runs. The method returns a lazy
 `StreamableSwarmResponse` that yields the same kinds of events whether you
 iterate in PHP, return the response from a controller, or replay persisted
 events later.
@@ -23,14 +23,24 @@ Use `prompt()` when the caller only needs the final aggregate result. Use
 `queue()` or `dispatchDurable()` when the work should outlive the request or
 needs background or checkpointed execution.
 
-## Topology: Sequential and Static-Hierarchical
+## Topology: Sequential, Static-Hierarchical, and Hierarchical
 
-Streaming is supported for **sequential** and **static-hierarchical** swarms.
-Static-hierarchical streams worker nodes live, fan parallel groups out in
-`concurrent` or `sequential` mode, and honor [bounded loops](static-hierarchical-topology.md#bounded-loops)
-— a looped worker re-streams up to `max_iterations` before falling through to its
-exit. Dynamic (router-driven) hierarchical workflows use other execution modes
-(`prompt()`, `queue()`, `dispatchDurable()`).
+Streaming is supported for **sequential**, **static-hierarchical**, and
+**hierarchical** (dynamic, coordinator-generated plan) swarms.
+
+Sequential and static-hierarchical swarms stream all agent steps live.
+Static-hierarchical fans parallel groups out in `concurrent` or `sequential`
+mode and honors [bounded loops](static-hierarchical-topology.md#bounded-loops).
+
+For **hierarchical** swarms the coordinator step always runs **synchronously**
+— `laravel/ai` does not support streaming `HasStructuredOutput` agents — so
+only structural causal-log events are emitted for it:
+`SwarmNodeOpened` (role `coordinator`, id `__coordinator__`),
+`SwarmStepStart` / `SwarmStepEnd` (step index 0), `SwarmNodeChildrenDecided`
+(the plan's `startAt` as the sole child), and `SwarmNodeClosed`. Worker nodes
+then stream normally from step index 1 with `__coordinator__` as their initial
+parent. Budget accounting via `#[MaxAgentSteps(N)]` counts the coordinator as
+step 0, so at most `N - 1` worker steps may execute.
 
 ## Consuming Stream Events
 
@@ -128,6 +138,14 @@ Swarm streams emit typed events, including:
 | `swarm_step_end` | Step completion with captured or limited output and usage metadata. |
 | `swarm_stream_end` | Terminal completion with final output and aggregate usage. |
 | `swarm_stream_error` | Terminal failure payload for live failure and persisted replay. |
+| `swarm_node_opened` | A run-structure node opening; self-identifying (`node_id == id`), with its `parent_node_id` and `role`. Recorded before any event tagged with that node id. |
+| `swarm_node_children_decided` | A deciding node declaring its children in chosen order (`child_node_ids`); `node_id` is the deciding node's id. |
+| `swarm_node_closed` | A run-structure node closing, with its `result`; the terminal bracket for every event tagged with that node id. |
+
+Every substantive event also carries a nullable `node_id` tagging the
+run-structure node it belongs to (absent/null = a top-level event with no
+enclosing node). The three `swarm_node_*` events make a run's structure
+first-class on the causal log — "structure as payload".
 
 **Provenance:** For upstream final-agent streamed provider events, Laravel Swarm
 preserves upstream event **IDs** and **timestamps** in typed replay. **Invocation

@@ -27,6 +27,7 @@ final class SwarmStreamStart extends SwarmStreamEvent
         return [
             'id' => $this->id,
             'invocation_id' => $this->invocationId,
+            'node_id' => $this->nodeId,
             'type' => 'swarm_stream_start',
             'run_id' => $this->runId,
             'swarm_class' => $this->swarmClass,

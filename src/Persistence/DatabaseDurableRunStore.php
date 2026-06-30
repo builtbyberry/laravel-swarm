@@ -103,6 +103,9 @@ class DatabaseDurableRunStore implements DurableRunStore
             'swarm_class' => $record->swarm_class,
             'topology' => $record->topology,
             'execution_mode' => $record->execution_mode ?? 'durable',
+            // Pinned per-swarm durable-streaming opt-in (#310). NULL/missing coerces
+            // to false so a pre-migration or unpinned row never streams (fail-safe off).
+            'durable_streaming' => (bool) ($record->durable_streaming ?? false),
             'coordination_profile' => $record->coordination_profile ?? CoordinationProfile::StepDurable->value,
             'status' => $record->status,
             'next_step_index' => (int) $record->next_step_index,
@@ -159,6 +162,7 @@ class DatabaseDurableRunStore implements DurableRunStore
             'swarm_class',
             'topology',
             'execution_mode',
+            'durable_streaming',
             'coordination_profile',
             'status',
             'next_step_index',

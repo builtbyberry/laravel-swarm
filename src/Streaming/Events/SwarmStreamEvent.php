@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
-use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEvent;
 use Illuminate\Http\StreamedEvent;
 use Illuminate\Support\Str;
@@ -43,11 +42,22 @@ abstract class SwarmStreamEvent extends StreamEvent
             'swarm_step_end' => SwarmStepEnd::fromArray($payload),
             'swarm_stream_end' => SwarmStreamEnd::fromArray($payload),
             'swarm_stream_error' => SwarmStreamError::fromArray($payload),
-            default => throw new SwarmException('Unknown persisted swarm stream event type ['.($payload['type'] ?? 'null').'].'),
+            'swarm_causal_void_edge' => SwarmCausalVoidEdge::fromArray($payload),
+            'swarm_node_opened' => SwarmNodeOpened::fromArray($payload),
+            'swarm_node_children_decided' => SwarmNodeChildrenDecided::fromArray($payload),
+            'swarm_node_closed' => SwarmNodeClosed::fromArray($payload),
+            'swarm_causal_seal_barrier' => SwarmCausalSealBarrier::fromArray($payload),
+            default => new SwarmUnknownEvent($payload),
         };
 
         if (is_string($payload['invocation_id'] ?? null)) {
             $event->withInvocationId($payload['invocation_id']);
+        }
+
+        // Restore the structural node tag (#284), mirroring invocation_id. An
+        // absent key on a pre-grammar log leaves nodeId null — a top-level event.
+        if (is_string($payload['node_id'] ?? null)) {
+            $event->withNodeId($payload['node_id']);
         }
 
         return $event;
@@ -100,5 +110,21 @@ abstract class SwarmStreamEvent extends StreamEvent
     protected static function arrayValue(array $payload, string $key): array
     {
         return is_array($payload[$key] ?? null) ? $payload[$key] : [];
+    }
+
+    /**
+     * Read an ordered list of strings — the declared child order of a
+     * structural node (#284). Non-string entries are dropped rather than
+     * coerced, and the surviving order is preserved (it is the contract).
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<int, string>
+     */
+    protected static function stringList(array $payload, string $key): array
+    {
+        return array_values(array_filter(
+            self::arrayValue($payload, $key),
+            'is_string',
+        ));
     }
 }
