@@ -516,6 +516,20 @@ ContentPipeline::assertDispatchedDurably(['document_id' => 100]);
 
 Use database-backed feature tests when you need to prove durable leases, checkpoints, retries, branch joins, wait release, recovery, or webhook idempotency. `SwarmFake` records intent; it does not execute the durable runtime.
 
+To assert that swarm lifecycle events (started, step, completed, failed, …) fired during a real run, add the `InteractsWithSwarmEvents` trait to your test case and call `assertEventFired()` (v0.15.1+):
+
+```php
+use BuiltByBerry\LaravelSwarm\Testing\InteractsWithSwarmEvents;
+
+class ContentPipelineTest extends TestCase
+{
+    use InteractsWithSwarmEvents;
+}
+
+ContentPipeline::make()->run('Draft an intro');
+ContentPipeline::assertEventFired(SwarmCompleted::class);
+```
+
 See [Testing](docs/testing.md) and [Testing Swarms](examples/testing-swarms/README.md).
 
 ## Configuration
