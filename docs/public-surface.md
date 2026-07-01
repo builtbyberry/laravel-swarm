@@ -61,7 +61,8 @@ adding a new public API.
 | `assertDispatchedDurably()` / `assertNeverDispatchedDurably()` | Assert durable dispatch intent. | [Testing](testing.md#database-backed-durable-execution) |
 | Durable fake assertions | Assert signals, waits, progress, labels, details, retries, and child swarm intent. | [Testing](testing.md), [Durable topic guides](durable-execution.md) |
 | `assertPersisted()` | Assert persisted history records. | [Testing](testing.md#asserting-persisted-runs) |
-| `assertEventFired()` | Assert lifecycle events recorded by fakes. | [Testing](testing.md#asserting-lifecycle-events) |
+| `assertEventFired()` | Assert swarm lifecycle events fired during a real run. Requires the `InteractsWithSwarmEvents` trait on the test case to activate recording; fails with a clear message otherwise. | [Testing](testing.md#asserting-lifecycle-events) |
+| `BuiltByBerry\LaravelSwarm\Testing\InteractsWithSwarmEvents` | Test-case trait that activates swarm lifecycle-event recording (the `RefreshDatabase`/`WithFaker` idiom — no manual setup) so `assertEventFired()` has something to assert against, and resets it between tests. The single source of the captured events is `SwarmEventRecorder::recordableEvents()`. (v0.15.1+) | [Testing](testing.md#asserting-lifecycle-events) |
 | `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent` | Abstract base for runnable provider-free agents. Subclasses implement `instructions(): string` and `reply(string $prompt): string`; the shipped `prompt()` wraps the reply in a standard `AgentResponse`. Used by the starter examples (`stubs/examples/`) and scaffolded by `make:swarm:agent`. `stream()`, `queue()`, and broadcast helpers throw with a clear "use a `Promptable` agent + `Agent::fake()`" message — this base is for shape demos and end-to-end smoke tests, not the test-double surface. (v0.8.0+) | [Examples](examples.md), [Generators](generators.md) |
 
 ## Durable Manager Operations
