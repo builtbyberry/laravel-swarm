@@ -113,6 +113,8 @@ test('swarm:compact discovers runs with barriers and dispatches one job per run'
 
     cmd_seedRunHistory('run-cmd-a');
     cmd_seedRunHistory('run-cmd-b');
+    cmd_seedDurableRun('run-cmd-a');
+    cmd_seedDurableRun('run-cmd-b');
     cmd_insertBarrier('run-cmd-a');
     cmd_insertBarrier('run-cmd-b');
 
@@ -123,6 +125,25 @@ test('swarm:compact discovers runs with barriers and dispatches one job per run'
     Queue::assertPushed(CompactSwarmRun::class, 2);
     Queue::assertPushed(CompactSwarmRun::class, fn (CompactSwarmRun $job): bool => $job->runId === 'run-cmd-a');
     Queue::assertPushed(CompactSwarmRun::class, fn (CompactSwarmRun $job): bool => $job->runId === 'run-cmd-b');
+});
+
+// ─── Scenario 1b: a barrier with NO durable anchor is ignored (v0.15.1) ───────
+
+test('swarm:compact ignores a seal barrier that has no durable run row', function (): void {
+    Queue::fake();
+
+    // A live, non-durable stream() run could leave a seal barrier in the hot log
+    // (pre-v0.15.1) but has no swarm_durable_runs row, so SwarmCompactor::acquireLease
+    // can never lease it. Discovery must not dispatch a CompactSwarmRun that would
+    // no-op forever; the hot rows are bounded by swarm:prune (TTL) instead.
+    cmd_seedRunHistory('run-cmd-live');
+    cmd_insertBarrier('run-cmd-live');
+
+    $exitCode = Artisan::call('swarm:compact');
+
+    expect($exitCode)->toBe(0);
+    expect(Artisan::output())->toContain('No runs');
+    Queue::assertNothingPushed();
 });
 
 // ─── Scenario 2: Quarantined runs are excluded from discovery ─────────────────
@@ -174,6 +195,9 @@ test('swarm:compact --limit=2 dispatches at most 2 jobs when 3 eligible runs exi
     cmd_seedRunHistory('run-cmd-limit-1');
     cmd_seedRunHistory('run-cmd-limit-2');
     cmd_seedRunHistory('run-cmd-limit-3');
+    cmd_seedDurableRun('run-cmd-limit-1');
+    cmd_seedDurableRun('run-cmd-limit-2');
+    cmd_seedDurableRun('run-cmd-limit-3');
     cmd_insertBarrier('run-cmd-limit-1');
     cmd_insertBarrier('run-cmd-limit-2');
     cmd_insertBarrier('run-cmd-limit-3');
@@ -233,6 +257,8 @@ test('swarm:compact emits a command.compact audit event with dispatched_count', 
 
     cmd_seedRunHistory('run-cmd-audit-1');
     cmd_seedRunHistory('run-cmd-audit-2');
+    cmd_seedDurableRun('run-cmd-audit-1');
+    cmd_seedDurableRun('run-cmd-audit-2');
     cmd_insertBarrier('run-cmd-audit-1');
     cmd_insertBarrier('run-cmd-audit-2');
 

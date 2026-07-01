@@ -13,6 +13,15 @@ the cold archive, and the compaction lease all live in database tables. The
 cache driver has no causal log to compact; run the substrate on the database
 driver.
 
+> **Scope: compaction bounds _durable_ streaming runs.** The compaction lease is
+> anchored on the `swarm_durable_runs` row, so the only runs `swarm:compact` ever
+> graduates are durable per-node streaming runs (`#[DurableStreaming]`). A live,
+> non-durable `stream()` run is transient: it emits no seal barrier, is never
+> compacted, and its hot `swarm_stream_events` rows carry a TTL and are reclaimed
+> by **`swarm:prune`** — that command, not compaction, is the hot-log bound for
+> live streaming. See the persistence/retention runbook for the `swarm:prune`
+> schedule.
+
 ---
 
 ## 1. The Model in One Page
@@ -25,12 +34,14 @@ cold tier.
 
 Three pieces do that:
 
-- **A seal barrier.** A streaming runner emits a `SwarmCausalSealBarrier`
-  immediately after `SwarmStreamEnd` (and mid-run when a
+- **A seal barrier.** Durable per-node streaming emits a `SwarmCausalSealBarrier`
+  as each node's durable step commits (and mid-run when a
   [rollup](streaming-substrate-author-guide.md#rollup-nodes) seals a window). The
   barrier's DB auto-increment `id` **is** the graduation boundary: everything
   with `id < barrier.id` is sealed and eligible to move to cold. The barrier is
-  filtered from replay output and is never visible to stream consumers.
+  filtered from replay output and is never visible to stream consumers. A live,
+  non-durable `stream()` run emits **no** barrier — it has no durable lease anchor
+  and is never compacted; its hot rows are bounded by `swarm:prune` (TTL).
 - **A base pointer.** The cold tier records one number per run — the boundary
   below which events live in cold and at/above which they live in hot. It only
   ever moves forward.
@@ -54,8 +65,11 @@ use, so an `APP_KEY` rotation after graduation surfaces a re-dispatchable
 
 ## 2. Scheduling Compaction
 
-**The package does not auto-schedule compaction.** You must schedule it, or the
-hot log grows unbounded. The recommended schedule:
+**The package does not auto-schedule compaction.** If you use durable per-node
+streaming, you must schedule it, or the durable hot log grows across steps. (Live,
+non-durable `stream()` runs are not compacted — their hot rows are bounded by TTL
+via `swarm:prune`, so a deployment that only uses live streaming does not need
+this schedule.) The recommended schedule:
 
 ```php
 // bootstrap/app.php  (or routes/console.php)
@@ -63,8 +77,9 @@ $schedule->command('swarm:compact')->hourly();
 ```
 
 `swarm:compact` is a **discover-and-dispatch** command. It does not do the
-compaction work itself — it finds eligible runs (those with a seal barrier, not
-quarantined) and dispatches one `CompactSwarmRun` queue job per run, then reports
+compaction work itself — it finds eligible runs (durable runs with a seal
+barrier, not quarantined) and dispatches one `CompactSwarmRun` queue job per run,
+then reports
 `Dispatched <n> compaction job(s).` (or `No runs with unsealed events were
 found.`). The actual graduation happens asynchronously on your queue. Each
 invocation emits a `command.compact` audit record.

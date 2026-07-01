@@ -39,7 +39,6 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
 use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
-use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeOpened;
@@ -420,18 +419,16 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
             yield $streamEndEvent;
 
-            // Record the seal barrier to the event store — it is an internal
-            // compaction marker. Best-effort: a store failure here must not surface
-            // to the caller.
-            try {
-                $this->streamEvents->record($context->runId, new SwarmCausalSealBarrier(
-                    id: SwarmStreamEvent::newId(),
-                    runId: $context->runId,
-                    timestamp: SwarmStreamEvent::timestamp(),
-                ), $contextTtl);
-            } catch (Throwable) {
-                // Intentionally swallowed.
-            }
+            // No seal barrier is emitted here. The barrier is an internal
+            // compaction marker, and compaction is a durable-streaming concern:
+            // it graduates a sealed hot prefix to cold storage so a durable
+            // resume reads a bounded hot tail. A live stream() run is non-durable
+            // (no swarm_durable_runs row), so it can never acquire a compaction
+            // lease — a barrier here would only generate phantom swarm:compact
+            // discovery and CompactSwarmRun jobs that no-op forever. A live run's
+            // hot log is bounded by TTL via `swarm:prune`. Durable per-node
+            // streaming emits its own barrier (DurableNodeStreamRecorder), where a
+            // lease anchor exists. See docs/operator-runbook-streaming-substrate.md.
 
             return $response;
         } catch (Throwable $exception) {

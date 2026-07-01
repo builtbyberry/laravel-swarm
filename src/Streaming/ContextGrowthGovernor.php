@@ -7,7 +7,6 @@ namespace BuiltByBerry\LaravelSwarm\Streaming;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\GrowthPolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\ContextBudgetExceededException;
-use BuiltByBerry\LaravelSwarm\Jobs\CompactSwarmRun;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -141,7 +140,7 @@ class ContextGrowthGovernor
         }
 
         if ($policy->permits(GrowthPolicy::DegradeToCold)) {
-            $this->nudgeCompactionOnce($runId, $state);
+            $this->warnDegradeToColdUnavailableOnce($runId, $state);
         }
 
         if ($policy->permits(GrowthPolicy::Backpressure)) {
@@ -169,9 +168,26 @@ class ContextGrowthGovernor
     }
 
     /**
+     * Degrade-to-cold is inert for a live (non-durable) stream — warn once.
+     *
+     * This governor is evaluated ONLY by the live stream() runners
+     * (SequentialStreamRunner, StaticHierarchicalStreamRunner), whose runs have no
+     * swarm_durable_runs row and therefore no compaction lease anchor. Compaction
+     * graduates a sealed hot prefix to cold storage for durable resume; there is
+     * nothing to graduate for a transient live stream, and dispatching
+     * CompactSwarmRun would silently no-op (SwarmCompactor::acquireLease updates
+     * zero rows). A live stream's hot log is bounded by TTL via `swarm:prune`.
+     *
+     * We deliberately do NOT gate on the #[DurableStreaming] attribute: a swarm
+     * can carry that attribute and still be invoked via live stream() with no
+     * durable row, so the attribute would be a misleading "is this run durable"
+     * signal and would re-introduce the silent no-op. The rung simply warns once
+     * that cold graduation is unavailable here; any higher rung (backpressure)
+     * still applies.
+     *
      * @param  array<string, bool>  $state
      */
-    protected function nudgeCompactionOnce(string $runId, array &$state): void
+    protected function warnDegradeToColdUnavailableOnce(string $runId, array &$state): void
     {
         if ($state['growth_nudged'] ?? false) {
             return;
@@ -179,18 +195,9 @@ class ContextGrowthGovernor
 
         $state['growth_nudged'] = true;
 
-        // Best-effort: a queue failure here must not break the escalation chain
-        // or wedge the run. Within a single non-rollup run there may be no sealed
-        // prefix to reclaim yet — the nudge materialises when a barrier exists
-        // (run completion, or once rollup nodes #289 land).
-        try {
-            dispatch(new CompactSwarmRun($runId));
-        } catch (Throwable $exception) {
-            $this->safelyLog('warning', 'laravel-swarm: context-growth degrade-to-cold could not nudge compaction.', [
-                'run_id' => $runId,
-                'exception_class' => $exception::class,
-            ]);
-        }
+        $this->safelyLog('warning', 'laravel-swarm: context-growth degrade-to-cold is inert for a live (non-durable) stream; hot events are bounded by swarm:prune (TTL). Use #[DurableStreaming] for durable per-node streaming with cold graduation.', [
+            'run_id' => $runId,
+        ]);
     }
 
     protected function backpressure(): void
