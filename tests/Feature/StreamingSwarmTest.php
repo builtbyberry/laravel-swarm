@@ -833,6 +833,9 @@ test('database replay store preserves insertion order', function () {
         ->pluck('event_type')
         ->all();
 
+    // A live, non-durable stream() run emits NO swarm_causal_seal_barrier: the
+    // barrier is a compaction marker, and a live run has no durable lease anchor
+    // to compact against (v0.15.1). Its hot log is bounded by swarm:prune (TTL).
     expect($storedTypes)->toBe([
         'swarm_stream_start',
         'swarm_step_start',
@@ -844,7 +847,6 @@ test('database replay store preserves insertion order', function () {
         'swarm_text_end',
         'swarm_step_end',
         'swarm_stream_end',
-        'swarm_causal_seal_barrier',
     ]);
 });
 

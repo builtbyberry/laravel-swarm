@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Enums\GrowthPolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\ContextBudgetExceededException;
-use BuiltByBerry\LaravelSwarm\Jobs\CompactSwarmRun;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
@@ -75,16 +74,24 @@ test('warn rung emits telemetry per evaluation but logs once', function () {
     Queue::assertNothingPushed();
 });
 
-test('degrade-to-cold nudges compaction exactly once across evaluations', function () {
+test('degrade-to-cold warns once that compaction is unavailable for a live stream and dispatches nothing', function () {
     Queue::fake();
-    [$governor] = makeGovernor(['budget_events' => 4], GrowthPolicy::DegradeToCold);
+    [$governor, , $logger] = makeGovernor(['budget_events' => 4], GrowthPolicy::DegradeToCold);
 
     $state = [];
     $governor->evaluate(new FakeSequentialSwarm, 'run-deg', 5, $state);
     $governor->evaluate(new FakeSequentialSwarm, 'run-deg', 6, $state);
 
-    Queue::assertPushed(CompactSwarmRun::class, 1);
-    Queue::assertPushed(CompactSwarmRun::class, fn (CompactSwarmRun $job): bool => $job->runId === 'run-deg');
+    // The governor only ever runs in the live (non-durable) stream() runners, which
+    // have no compaction lease anchor. Degrade-to-cold therefore warns once instead
+    // of dispatching a CompactSwarmRun that would no-op forever; the hot log is
+    // bounded by swarm:prune (TTL).
+    Queue::assertNothingPushed();
+    $logger->shouldHaveReceived('warning')->with(
+        Mockery::pattern('/degrade-to-cold is inert/'),
+        Mockery::any(),
+    )->once();
+    expect($state['growth_nudged'] ?? false)->toBeTrue();
 });
 
 test('backpressure rung degrades and returns without throwing', function () {
@@ -94,7 +101,10 @@ test('backpressure rung degrades and returns without throwing', function () {
     $state = [];
     $governor->evaluate(new FakeSequentialSwarm, 'run-bp', 5, $state);
 
-    Queue::assertPushed(CompactSwarmRun::class, 1);
+    // Backpressure permits the degrade-to-cold rung, which now warns instead of
+    // dispatching; the run proceeds without a compaction job.
+    Queue::assertNothingPushed();
+    expect($state['growth_nudged'] ?? false)->toBeTrue();
 });
 
 test('refuse rung throws a re-dispatchable ContextBudgetExceededException', function () {
@@ -181,23 +191,27 @@ test('two runs in one worker keep independent throttle state: each warns once, n
     $logger->shouldHaveReceived('warning')->twice();
 });
 
-test('a degrade-to-cold nudge fires once per run, isolated across two runs in one worker', function () {
-    // The compaction nudge (degrade_to_cold) is likewise gated by per-run `&$state`.
-    // Two runs each dispatch exactly one CompactSwarmRun; one run's nudge must not
-    // consume the other's nudge-once budget.
+test('a degrade-to-cold warning fires once per run, isolated across two runs in one worker', function () {
+    // The degrade-to-cold inert warning is gated by per-run `&$state` just like the
+    // budget warn. Two runs each warn once and never dispatch; one run's warn-once
+    // memory must not consume the other's.
     Queue::fake();
-    [$governor] = makeGovernor(['budget_events' => 4], GrowthPolicy::DegradeToCold);
+    [$governor, , $logger] = makeGovernor(['budget_events' => 4], GrowthPolicy::DegradeToCold);
 
     $stateA = [];
     $stateB = [];
 
     $governor->evaluate(new FakeSequentialSwarm, 'run-a', 5, $stateA);
-    $governor->evaluate(new FakeSequentialSwarm, 'run-a', 6, $stateA); // nudge suppressed for A
+    $governor->evaluate(new FakeSequentialSwarm, 'run-a', 6, $stateA); // warn suppressed for A
     $governor->evaluate(new FakeSequentialSwarm, 'run-b', 5, $stateB);
-    $governor->evaluate(new FakeSequentialSwarm, 'run-b', 6, $stateB); // nudge suppressed for B
+    $governor->evaluate(new FakeSequentialSwarm, 'run-b', 6, $stateB); // warn suppressed for B
 
-    // Exactly one compaction nudge per run — two total, independently gated.
-    Queue::assertPushed(CompactSwarmRun::class, 2);
+    // No compaction is ever dispatched; each run independently warned exactly once.
+    Queue::assertNothingPushed();
+    $logger->shouldHaveReceived('warning')->with(
+        Mockery::pattern('/degrade-to-cold is inert/'),
+        Mockery::any(),
+    )->twice();
     expect($stateA['growth_nudged'] ?? false)->toBeTrue()
         ->and($stateB['growth_nudged'] ?? false)->toBeTrue();
 });

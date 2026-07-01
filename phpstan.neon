@@ -8,6 +8,7 @@ parameters:
         - src
         - database/migrations
         - tests/Fixtures
+        - tests/TestCase.php
     tmpDir: storage/phpstan
     ignoreErrors:
         # Query builder rows are stdClass; naming every column shape across durable/history stores is not practical.

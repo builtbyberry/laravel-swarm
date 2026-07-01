@@ -269,6 +269,14 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.15.1
+
+**No required action.** v0.15.1 is three fixes to v0.15.0, with no migration, no config change, and no breaking API. A few notes if any apply to you:
+
+- **`assertEventFired()` now works.** If you followed the testing docs and hit *"Swarm event recording is only available in tests where the recorder has been activated,"* add `use BuiltByBerry\LaravelSwarm\Testing\InteractsWithSwarmEvents;` to your test case — the trait the docs referenced now ships. See [docs/testing.md](docs/testing.md#asserting-lifecycle-events).
+- **Compaction is now scoped to durable streaming.** `swarm:compact` only ever graduated durable per-node streaming runs (`#[DurableStreaming]`); it now no longer generates phantom work for live, non-durable `stream()` runs. Those runs' hot `swarm_stream_events` rows are bounded by TTL via `swarm:prune` — schedule that command if you run high-volume live streaming and weren't already. (This was the effective behaviour before; v0.15.1 just stops the no-op churn and documents it.)
+- **Streaming a structured-output agent now fails loud in-package.** A worker implementing `HasStructuredOutput` placed on a streaming path previously surfaced a bare `laravel/ai` `InvalidArgumentException`; it now throws a `StructuredOutputStreamingException` naming the node, the agent, and the remedy — and, for `#[DurableStreaming]` swarms, fails at dispatch rather than mid-run. The hierarchical coordinator (which legitimately uses structured output and runs via `prompt()`) is unaffected.
+
 ## Upgrading to v0.15.0
 
 ### New migration: `swarm_cold_archives`

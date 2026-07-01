@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
@@ -1643,6 +1644,11 @@ class HierarchicalRunner
         if (hrtime(true) >= $state->deadlineMonotonic) {
             throw new SwarmTimeoutException('The swarm exceeded its configured timeout while running hierarchically.');
         }
+
+        // A structured-output worker cannot be streamed (#321) — fail loud before
+        // recording a started step or opening the node bracket below. (The blocking
+        // prompt() worker path is unaffected: structured output is valid there.)
+        StructuredOutputStreamingException::guard($agent, "step:{$index}");
 
         $this->stepsRecorder->started($state, $index, $agent::class, $input);
 
