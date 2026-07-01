@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
+use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
@@ -181,6 +182,13 @@ class SequentialRunner
                         storeArtifacts: false,
                     );
                 } elseif ($isFinal) {
+                    // Fail loud before begin() swaps the memory binding: a
+                    // structured-output agent cannot be streamed (#321). Guarding
+                    // here — not just before stream() below — keeps a doomed step
+                    // from opening a replay boundary or leaking the frozen-view swap
+                    // (its restore lives in the streamed step's finally).
+                    StructuredOutputStreamingException::guard($agent, "step:{$index}");
+
                     // The final (streamed) step opens a snapshot-backed replay
                     // boundary so a crash-resume re-run replays byte-identically:
                     // begin() detects a prior frozen snapshot, swaps SwarmMemory to
@@ -437,6 +445,10 @@ class SequentialRunner
         if (hrtime(true) >= $state->deadlineMonotonic) {
             throw new SwarmTimeoutException('The swarm exceeded its configured timeout while streaming sequentially.');
         }
+
+        // A structured-output agent cannot be streamed (#321) — fail loud before
+        // recording a started step or entering the run frame.
+        StructuredOutputStreamingException::guard($agent, "step:{$index}");
 
         $input = $state->context->prompt();
         $this->steps->started($state, $index, $agent::class, $input);

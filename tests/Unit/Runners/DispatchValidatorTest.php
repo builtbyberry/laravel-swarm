@@ -6,10 +6,13 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
+use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableSequentialStructuredWorkerStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\HierarchicalDurableStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SwarmWithoutTopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SwarmWithParallelTopologyAttribute;
 use Illuminate\Support\Facades\Artisan;
@@ -127,6 +130,30 @@ test('ensureDurableStreamingInfrastructure allows parallel when the database cau
     app()->forgetInstance(DispatchValidator::class);
 
     app(DispatchValidator::class)->ensureDurableStreamingInfrastructure(true, Topology::Parallel);
+
+    expect(true)->toBeTrue();
+});
+
+test('ensureDurableStreamingWorkersStreamable fails loud when a #[DurableStreaming] worker is structured-output (#321)', function (): void {
+    // A structured-output worker cannot be streamed; caught at dispatch so the run
+    // never fails mid-execution (and every retry after) at the worker's stream site.
+    expect(fn () => $this->validator->ensureDurableStreamingWorkersStreamable(new DurableSequentialStructuredWorkerStreamingSwarm))
+        ->toThrow(StructuredOutputStreamingException::class, 'cannot be streamed');
+});
+
+test('ensureDurableStreamingWorkersStreamable excludes the hierarchical coordinator (#321)', function (): void {
+    // The coordinator (agents()[0]) legitimately implements HasStructuredOutput and
+    // runs via prompt() — never streamed — so a swarm whose only structured agent is
+    // the coordinator, with plain workers, must NOT fail the guard.
+    $this->validator->ensureDurableStreamingWorkersStreamable(new HierarchicalDurableStreamingSwarm);
+
+    expect(true)->toBeTrue();
+});
+
+test('ensureDurableStreamingWorkersStreamable is a no-op for a swarm that did not opt into #[DurableStreaming] (#321)', function (): void {
+    // Not opted in → the dispatch guard short-circuits; the live stream() sites carry
+    // their own guard for the non-durable path.
+    $this->validator->ensureDurableStreamingWorkersStreamable(new FakeSequentialSwarm);
 
     expect(true)->toBeTrue();
 });

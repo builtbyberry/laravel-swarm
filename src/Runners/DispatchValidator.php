@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
+use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
@@ -130,6 +131,38 @@ class DispatchValidator
             $this->resolver->resolveDurableStreaming($swarm),
             $this->resolver->resolveTopology($swarm),
         );
+
+        $this->ensureDurableStreamingWorkersStreamable($swarm);
+    }
+
+    /**
+     * Fail loud at dispatch when a `#[DurableStreaming]` swarm has a WORKER agent
+     * that implements `HasStructuredOutput` (#321). Such an agent cannot be
+     * streamed, so the durable run would otherwise fail the first time that
+     * worker's `stream()` site is reached (and every retry after) — surfacing the
+     * misconfiguration before any job runs is the louder, earlier failure.
+     *
+     * The hierarchical coordinator (agents()[0] on {@see Topology::Hierarchical})
+     * legitimately implements `HasStructuredOutput` and runs via `prompt()` — it is
+     * never streamed, so it is excluded. Every other topology streams every agent.
+     * Non-opted-in swarms return before any check (the stream-site guards remain the
+     * backstop for the live `stream()` API).
+     */
+    public function ensureDurableStreamingWorkersStreamable(Swarm $swarm): void
+    {
+        if (! $this->resolver->resolveDurableStreaming($swarm)) {
+            return;
+        }
+
+        $workers = $swarm->agents();
+
+        if ($this->resolver->resolveTopology($swarm) === Topology::Hierarchical) {
+            array_shift($workers);
+        }
+
+        foreach ($workers as $worker) {
+            StructuredOutputStreamingException::guard($worker);
+        }
     }
 
     /**
