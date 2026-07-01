@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.15.1 - unreleased
+## v0.15.1 - 2026-07-01
 
 Three follow-up fixes to v0.15.0: compaction is scoped to durable streaming (a live `stream()` run no longer generates compaction work it cannot perform, and `swarm:prune` is the documented hot-log bound for live streaming); streaming a structured-output agent now fails loud in-package instead of leaking an internal `laravel/ai` error; and the documented `Testing\InteractsWithSwarmEvents` trait ships, so `assertEventFired()` is finally usable.
 
