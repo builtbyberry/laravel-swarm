@@ -7,6 +7,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
@@ -21,6 +22,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyHierarchicalCoordinator
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyStreamEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\PlainStreamEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableNonStreamingSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableSequentialStructuredWorkerStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FlakyCoordinatorDurableStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\HierarchicalDurableStreamingSwarm;
@@ -211,6 +213,13 @@ test('the operator kill-switch sheds emission mid-run but the crashed attempt is
                 ->where('event_type', 'swarm_text_delta')
                 ->count()
         )->toBe(0);
+});
+
+test('durable dispatch fails loud when a #[DurableStreaming] worker is structured-output (#321)', function () {
+    // The worker cannot be streamed, so dispatch must fail loud before any job runs —
+    // not mid-execution when the durable worker's stream() site is first reached.
+    expect(fn () => DurableSequentialStructuredWorkerStreamingSwarm::make()->dispatchDurable('task'))
+        ->toThrow(StructuredOutputStreamingException::class, 'cannot be streamed');
 });
 
 test('durable per-node streaming dispatch fails loud when the causal log is not migrated for streaming (#298 F7)', function () {

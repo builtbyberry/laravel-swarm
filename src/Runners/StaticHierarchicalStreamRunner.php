@@ -23,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
+use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
@@ -1034,6 +1035,10 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         $pendingToolCalls = [];
         /** @var array<string, true> $unknownStreamEventClasses */
         $unknownStreamEventClasses = [];
+
+        // A structured-output worker cannot be streamed (#321) — fail loud before
+        // entering the run frame or opening the replay boundary below.
+        StructuredOutputStreamingException::guard($agent, $nodeId ?? "step:{$stepIndex}");
 
         // Publish the active run for the agent's RemembersRunContext trait while
         // its stream is consumed; cleared in finally so it never leaks past the

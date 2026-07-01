@@ -16,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
@@ -327,6 +328,14 @@ class DurableBranchAdvancer
      */
     protected function streamBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot, callable $sink): array
     {
+        // A structured-output branch worker cannot be streamed (#321) — fail loud
+        // before consuming the stream. Mirrors the node_id ?? branch_id labelling
+        // used for this branch's causal-log stamping.
+        $branchLabel = is_string($branch['node_id'] ?? null)
+            ? $branch['node_id']
+            : (is_string($branch['branch_id'] ?? null) ? $branch['branch_id'] : null);
+        StructuredOutputStreamingException::guard($agent, $branchLabel);
+
         $accumulator = new StreamStepAccumulator($snapshot);
 
         try {
