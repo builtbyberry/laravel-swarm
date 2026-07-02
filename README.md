@@ -374,6 +374,22 @@ final class ClaimsReview implements Runnable { /* … */ }
 
 It streams on **every durable topology** — sequential, hierarchical, static_hierarchical, and parallel (including fan-out branches) — with each node's attempt voided-and-retried cleanly on crash-resume (the same append-only causal-log fold the live substrate uses). The hierarchical coordinator streams structural events; token-streaming the coordinator is a follow-up. Declaring the attribute on a topology not yet wired for streaming fails loud at dispatch. An operator kill-switch (`SWARM_DURABLE_STREAMING_ENABLED=false`) pauses emission fleet-wide without a redeploy, safely mid-run. See [Durable Execution — per-node streaming](docs/durable-execution.md#durable-per-node-streaming).
 
+### Operator control contract (v0.16.0)
+
+Pause, resume, cancel, signal, and recover durable runs through the stable public **`SwarmOperator`** contract — resolve it from the container to drive runs from an operator console, HTTP controller, or approval workflow, without reaching into package internals:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator;
+
+$operator = app(SwarmOperator::class);
+
+$result = $operator->pause($runId);
+$result->status;         // DurableLifecycleStatus::Paused | ::PauseScheduled
+$result->isImmediate();  // false when a mid-step run pauses at its next checkpoint
+```
+
+The control verbs return rich result objects (`DurablePauseResult` / `DurableResumeResult` / `DurableCancelResult`, backed by the `DurableLifecycleStatus` enum) that report the **effective** transition — whether the run paused/cancelled immediately or is scheduled to at its next step boundary. The contract is **control-only** (operational reads stay on `SwarmHistory` / `RunHistoryStore`), **authorization-agnostic** (gate the call in your own app), and **fails loud** on an unknown run. The `$response->pause()` / `resume()` / `cancel()` handle methods shown above delegate to it. See [Durable Execution — operator control contract](docs/durable-execution.md#operator-control-contract).
+
 ## Memory (v0.9.0+)
 
 Swarm Memory is a first-class, scoped, snapshot-replayable memory subsystem. It gives agents and application code a place to read and write structured values that persist across steps, survive queue boundaries, and can be replayed deterministically from a frozen snapshot on a crash-resume.

@@ -24,7 +24,10 @@ adding a new public API.
 | `SwarmResponse` | Synchronous output, steps, usage, artifacts, metadata, and in-process context. | [README: Running A Swarm](../README.md#running-a-swarm) |
 | `QueuedSwarmResponse` | Queued dispatch handle with `runId` and pending-dispatch proxy methods. | [README: Queueing A Swarm](../README.md#queueing-a-swarm) |
 | `StreamableSwarmResponse` | Lazy iterable and HTTP response for stream events. | [Streaming](streaming.md) |
-| `DurableSwarmResponse` | Durable dispatch handle with operator helper methods. | [Durable Execution](durable-execution.md), [Durable Waits And Signals](durable-waits-and-signals.md) |
+| `DurableSwarmResponse` | Durable dispatch handle with operator helper methods. `pause()`/`resume()`/`cancel()` return rich lifecycle result objects (not `bool`) as of v0.16.0. | [Durable Execution](durable-execution.md), [Durable Waits And Signals](durable-waits-and-signals.md) |
+| `DurablePauseResult` / `DurableResumeResult` / `DurableCancelResult` | Lifecycle result value objects returned by the `SwarmOperator` control verbs. Each carries the effective status as a typed `DurableLifecycleStatus` enum — `Paused` vs `PauseScheduled`, `Cancelled` vs `CancelScheduled`, `Resumed` vs `Waiting` (with `waitingBoundaryDispatched`) — plus `isImmediate()`/`isWaiting()` convenience methods and `toArray()`. They never hide whether the run actually transitioned. (v0.16.0+) | [Durable Execution](durable-execution.md#operator-control-contract) |
+| `DurableLifecycleStatus` | Backed enum of the effective status a control verb transitioned a run into. Cases: `Paused` (`paused`), `PauseScheduled` (`pause_scheduled`), `Cancelled` (`cancelled`), `CancelScheduled` (`cancel_scheduled`), `Resumed` (`resumed`), `Waiting` (`waiting`). Backs the three lifecycle result objects so the status is a typed public value, not a raw string. (v0.16.0+) | [Durable Execution](durable-execution.md#operator-control-contract) |
+| `DurableSignalResult` | Result of a signal delivery — `accepted`, `duplicate`, recorded `status`, and the stored signal. Returned by `SwarmOperator::signal()` and `DurableSwarmResponse::signal()`. | [Durable Waits And Signals](durable-waits-and-signals.md), [Durable Webhooks](durable-webhooks.md) |
 | `RunContext` | Explicit run input, run ID, data, metadata, artifacts, labels, and details. Implements `ArrayAccess` — `$context['key']` reads and writes directly through to the `SwarmMemory` Run scope (v0.9.0+). `withConversationId()` binds the run to a conversation (read back with `conversationId()`), making `MemoryScope::Conversation` addressable for snapshot gathering and the `Recall`/`Remember` tools; the id threads through every execution path via run metadata (v0.12.0+). | [Structured Input](structured-input.md), [Persistence And History](persistence-and-history.md), [Swarm Memory](memory.md#runcontext-write-through), [Conversation-scoped memory](memory.md#conversation-scoped-memory) |
 | `SwarmHistory` | Query persisted history and replay stored stream events. | [Persistence And History](persistence-and-history.md), [Run Inspector](../examples/run-inspector/README.md) |
 | `AuditDrainResult` | Result of an `AuditOutbox::drain()` invocation — `replayed`, `dead_lettered`, `failed`, `claimed`, `reclaimed`. (v0.5.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
@@ -65,7 +68,31 @@ adding a new public API.
 | `BuiltByBerry\LaravelSwarm\Testing\InteractsWithSwarmEvents` | Test-case trait that activates swarm lifecycle-event recording (the `RefreshDatabase`/`WithFaker` idiom — no manual setup) so `assertEventFired()` has something to assert against, and resets it between tests. The single source of the captured events is `SwarmEventRecorder::recordableEvents()`. (v0.15.1+) | [Testing](testing.md#asserting-lifecycle-events) |
 | `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent` | Abstract base for runnable provider-free agents. Subclasses implement `instructions(): string` and `reply(string $prompt): string`; the shipped `prompt()` wraps the reply in a standard `AgentResponse`. Used by the starter examples (`stubs/examples/`) and scaffolded by `make:swarm:agent`. `stream()`, `queue()`, and broadcast helpers throw with a clear "use a `Promptable` agent + `Agent::fake()`" message — this base is for shape demos and end-to-end smoke tests, not the test-double surface. (v0.8.0+) | [Examples](examples.md), [Generators](generators.md) |
 
+## Operator Control Contract (v0.16.0+)
+
+The public, container-bound `SwarmOperator` contract is the supported way to
+control durable runs from application code (an operator console, an HTTP
+controller, an approval workflow, or scheduled maintenance). Resolve it with
+`app(SwarmOperator::class)`. It is CONTROL-ONLY — operational reads stay on the
+`SwarmHistory` / `RunHistoryStore` path below. The contract is deliberately
+authorization-agnostic: authorizing that a caller may control a given run is
+the consuming application's responsibility. Verbs fail loud (throw
+`SwarmException`) on an unknown run — never a silent no-op.
+
+| Surface | Purpose | Primary documentation |
+| --- | --- | --- |
+| `SwarmOperator::pause()` | Pause a run; returns a `DurablePauseResult` reporting `paused` vs `pause_scheduled`. | [Durable Execution](durable-execution.md#operator-control-contract) |
+| `SwarmOperator::resume()` | Resume a paused run; returns a `DurableResumeResult` reporting `resumed` vs `waiting`. | [Durable Execution](durable-execution.md#operator-control-contract) |
+| `SwarmOperator::cancel()` | Cancel a run (cascading to children); returns a `DurableCancelResult` reporting `cancelled` vs `cancel_scheduled`. | [Durable Execution](durable-execution.md#operator-control-contract) |
+| `SwarmOperator::signal()` | Deliver a named signal (idempotent per `idempotencyKey`); returns a `DurableSignalResult`. | [Durable Waits And Signals](durable-waits-and-signals.md), [Durable Webhooks](durable-webhooks.md) |
+| `SwarmOperator::recover()` | Redispatch recoverable runs, branches, waits, retries, and child reconciliations; returns the redispatched run ids. Lease-guarded and idempotent. | [Durable Execution](durable-execution.md#operator-control-contract), [Maintenance](maintenance.md#scheduling) |
+
 ## Durable Manager Operations
+
+The `DurableSwarmManager` and `DurableRunInspector` are `@internal` engine
+types, not a supported contract. For control use the `SwarmOperator` contract
+above; for reads use `SwarmHistory` / `RunHistoryStore`. The rows below describe
+engine behavior for orientation only.
 
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
@@ -102,7 +129,7 @@ adding a new public API.
 | `swarm:pause` | Pause a durable run at the next safe boundary. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover) |
 | `swarm:resume` | Resume a paused durable run. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover) |
 | `swarm:cancel` | Cancel a durable run. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover) |
-| `swarm:relay` | Drain the durable outbox and audit outbox in a single pass, dispatching queued step/branch jobs and replaying failed audit evidence. Must be scheduled (`everyMinute()`). Options: `--type=step\|branch\|audit` (v0.5.0 adds the `audit` lane), `--limit=N`, `--drain-until-empty`, `--max-attempts=N`. | [Maintenance](maintenance.md#scheduling) |
+| `swarm:relay` | Drain the durable outbox and audit outbox in a single pass, dispatching queued step/branch jobs and replaying failed audit evidence. Must be scheduled (`everyMinute()`). Options: `--type=step\|branch\|queued_resume\|audit` (v0.5.0 adds the `audit` lane), `--limit=N`, `--drain-until-empty`, `--max-attempts=N`. | [Maintenance](maintenance.md#scheduling) |
 | `swarm:recover` | Redispatch recoverable durable work. | [Durable Execution](durable-execution.md#pause-resume-cancel-and-recover), [Maintenance](maintenance.md#scheduling) |
 | `swarm:prune` | Remove expired database persistence rows. | [Maintenance](maintenance.md#pruning-expired-records) |
 | `swarm:compact` | Discover streaming runs with a sealed window and dispatch a `CompactSwarmRun` queue job per run to graduate the sealed hot-event prefix to cold storage. **Must be explicitly scheduled** by the consumer app (`->hourly()` recommended); the package does not auto-schedule it. Database driver only. Flags: `--run-id=<id>` (target one run), `--limit=50` (max runs discovered per sweep). (v0.15.0+) | [Operator Runbook: Streaming Substrate](operator-runbook-streaming-substrate.md), [Maintenance](maintenance.md#scheduling) |
@@ -147,13 +174,18 @@ adding a new public API.
 | `CapturePolicy` | Decide whether each evidence payload (inputs, outputs, artifacts, active context) is captured, redacted, or omitted. Returns `CaptureDecision`. Default `BooleanCapturePolicy` reads `swarm.capture.*` and returns only `Full`/`Redact`. | [Audit Evidence Contract](audit-evidence-contract.md#capture-policy) |
 | `CaptureDecision` | Enum of capture outcomes: `Full` (as-is), `Redact` (scalars → `[redacted]`, keys preserved), `Skip` (**true omission on the evidence surfaces as of v0.12.0** — key absent / evidence column `NULL` / `error.message` dropped; the operational active-context input is retained for durable resume; behaved like `Redact` through v0.4–v0.11). | [Audit Evidence Contract](audit-evidence-contract.md#capture-policy) |
 | `SwarmAuditSigner` | Sign audit envelopes for tamper-evident chains. | [Audit Evidence Contract](audit-evidence-contract.md#audit-signing) |
+| `IdentifiesSigningKey` | Opt-in companion to `SwarmAuditSigner` that adds `keyId(): ?string`. When a signer implements it and returns a non-empty, non-secret id, the dispatcher stamps the package-standardized `signature_key_id` field onto signed records so sinks can select the right verification key across a rotation window. Dispatcher-owned (signers MUST NOT set the field in `sign()`); a throwing `keyId()` is treated as absent. (v0.16.0+) | [Audit Evidence Contract](audit-evidence-contract.md#exposing-the-key-id) |
 | `SinkFailureHandler` | Decide how to react when an audit sink throws. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `SinkFailureDecision` | Enum of sink failure outcomes (`Swallow`, `RetryInline`, `Halt`, `Queue`, `DeadLetter`). `Queue` and `DeadLetter` added in v0.5.0 alongside the audit outbox. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `AuditOutbox` | Persisted retry surface for audit evidence that failed to emit. Drained by `swarm:relay --type=audit`. (v0.5.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `Enums\RelayLane` | Enum naming the outbox lane a `swarm:relay` invocation drains. Cases: `Durable` (`durable`) and `Audit` (`audit`); the `Audit` value is the `swarm:relay --type=audit` keyword. Extensible for future lanes. (v0.16.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `Enums\DurableDispatchType` | Enum of the durable-run dispatch kinds persisted in the `swarm_durable_outbox` `dispatch_type` column and accepted by `swarm:relay --type=…`. Cases: `Step` (`step`), `Branch` (`branch`), `QueuedResume` (`queued_resume`). The string values are a persisted contract and never change. (v0.16.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `Enums\OutboxDispatchType` | **Deprecated since v0.16.0** — split into `RelayLane` (the lane) + `DurableDispatchType` (the durable dispatch kind) because its `Audit` case never reached the durable dispatcher. Retained unchanged for backward compatibility; scheduled for removal in a future major release. See [Upgrading to v0.16.0](../UPGRADING.md#upgrading-to-v0160). | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
 | `ReadableSwarmAuditSink` | Optional extension of `SwarmAuditSink` that adds `forRun(string $runId): iterable` so the sink can participate in `swarm:trace`. Opt-in; the default `NoOpSwarmAuditSink` does not implement it and existing custom sinks remain valid. (v0.7.0+) | [Audit Evidence Contract](audit-evidence-contract.md#reading-the-audit-chain) |
 | `LogChannelSwarmAuditSink` | Concrete `SwarmAuditSink` implementation that writes every audit record as a structured log entry (`swarm.audit.<category>`) to the configured Laravel log channel (defaults to `audit`, falls back to the default channel when `audit` is not configured). Dev/staging-friendly zero-config sink; production deployments should ship a bounded backend. Bound by `swarm:install:audit --sink=readable`. Does not implement `ReadableSwarmAuditSink` (log channels are not queryable); `swarm:trace` degrades gracefully when this sink is bound. (v0.8.0+) | [Audit Evidence Contract](audit-evidence-contract.md#quick-setup) |
 | `HaltsSwarmExecution` | Marker interface for sink failure exceptions that must halt the run. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `AuditSinkHaltedException` | Raised when a sink failure handler halts execution. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
+| `SinkEnvelopeValidator` | Sink-side convenience for tolerant `schema_version` validation during a rolling-deploy bump window: `acceptsSchemaVersion(string): bool` and `supportedVersions(): array`. The in-band set is derived from the envelope version history (current + previous value for a two-minor window), so a bump auto-widens then closes the window. Opt-in; the dispatcher never consults it and strict-version sinks remain valid. (v0.16.0+) | [Audit Evidence Contract](audit-evidence-contract.md#versioning) |
 
 ## Memory (v0.9.0+)
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Audit;
 
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
@@ -76,6 +77,7 @@ class SwarmAuditDispatcher
             try {
                 $enriched = $this->signer->sign($category, $enriched);
                 $this->assertSignedPayloadIsVerifiable($category, $enriched);
+                $enriched = $this->stampSignatureKeyId($enriched);
             } catch (Throwable $exception) {
                 $decision = $this->failureHandler->handle($this->sink, $category, $enriched, $exception);
 
@@ -184,6 +186,77 @@ class SwarmAuditDispatcher
             .'add it alongside "signature" (see docs/audit-evidence-contract.md "Audit Signing").',
             $category,
         ));
+    }
+
+    /**
+     * Stamp the signer's key id onto a signed payload as "signature_key_id".
+     *
+     * This runs exactly once, at sign time — immediately after signing and the
+     * verifiability guard, before the record is handed to the sink or routed to
+     * the outbox — so the one stamped payload carries the key id down BOTH the
+     * direct-emit and the outbox-enqueue paths. The outbox replays the stored
+     * payload verbatim and never re-runs this stamp, so the id names the key
+     * that produced the record's original signature and survives a
+     * rotation between enqueue and drain (see docs/audit-evidence-contract.md
+     * "Signer rotation").
+     *
+     * "signature_key_id" is dispatcher-owned: we read it from the signer's
+     * {@see IdentifiesSigningKey::keyId()} and stamp it here. Any value a signer
+     * set in sign() is unset first, so a signer can never own the field — when
+     * keyId() yields nothing, the field is ABSENT rather than leaking a stray
+     * signer value.
+     *
+     * The key id is a NON-AUTHORITATIVE selection hint stamped outside the
+     * signed content: a sink SHOULD try the named key first but MUST retain its
+     * try-all fallback, so a wrong or absent key id can never fail a
+     * legitimately-signed record nor validate a forged one.
+     *
+     * Mirroring assertSignedPayloadIsVerifiable(), this only acts when a
+     * non-empty "signature" is present. The key id is read only from signers
+     * that opt in via {@see IdentifiesSigningKey}; signers without it, or whose
+     * keyId() returns null/empty, leave the field absent — we never emit
+     * "signature_key_id": null. keyId() resolution failures (e.g. a transient
+     * keystore lookup that throws) are caught and treated as ABSENT: key-id
+     * resolution must never demote a record that already passed
+     * assertSignedPayloadIsVerifiable() into a signing failure.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    protected function stampSignatureKeyId(array $payload): array
+    {
+        $signature = $payload['signature'] ?? null;
+
+        if (! is_string($signature) || $signature === '') {
+            // Unsigned, or the signer opted out of this category — nothing to stamp.
+            return $payload;
+        }
+
+        // signature_key_id is dispatcher-owned. Drop any signer-supplied value
+        // so an absent key id can never leak a stray field the signer set.
+        unset($payload['signature_key_id']);
+
+        if (! $this->signer instanceof IdentifiesSigningKey) {
+            // Signer does not expose a key id — omit the field.
+            return $payload;
+        }
+
+        try {
+            $keyId = $this->signer->keyId();
+        } catch (Throwable) {
+            // A throwing key-id lookup (transient KMS/keystore outage) must not
+            // demote an already-verifiable record. Treat it as absent.
+            return $payload;
+        }
+
+        if (! is_string($keyId) || $keyId === '') {
+            // Signer tracks no key id — omit the field, never emit null.
+            return $payload;
+        }
+
+        $payload['signature_key_id'] = $keyId;
+
+        return $payload;
     }
 
     /**

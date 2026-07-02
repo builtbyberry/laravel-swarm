@@ -269,6 +269,32 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.16.0
+
+**No required action for most applications.** v0.16.0 is additive and backward-compatible — it promotes a public operator control contract and finalizes several audit and relay surfaces. Notes if any apply to you:
+
+- **Prefer the new `SwarmOperator` contract for programmatic control.** To pause, resume, cancel, signal, or recover durable runs from application code, resolve `BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator` (`app(SwarmOperator::class)`) instead of reaching into `DurableSwarmManager`, which stays `@internal`. The contract is control-only (reads stay on `SwarmHistory` / `RunHistoryStore`), authorization-agnostic (gate the call in your own app), and fails loud on an unknown run. See [docs/durable-execution.md](docs/durable-execution.md#operator-control-contract).
+- **`DurableSwarmResponse::pause()`, `resume()`, and `cancel()` return result objects, not `bool`.** They previously returned `true`-or-throw. They now return `DurablePauseResult`, `DurableResumeResult`, and `DurableCancelResult`, which report the *effective* transition (`paused` vs `pause_scheduled`, `cancelled` vs `cancel_scheduled`, `resumed` vs `waiting`). If you assigned the return to a `bool`-typed variable or asserted `=== true`, update it — read `->status` / `->isImmediate()` instead. Most callers ignored the return and need no change; the verbs still throw on an invalid transition exactly as before.
+- **`signature_key_id` on signed evidence + `IdentifiesSigningKey` (#49) — no required action; additive and opt-in.** Signed records now carry a `signature_key_id` naming the key that produced the signature, but only when your `SwarmAuditSigner` *also* implements the new opt-in `BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey` interface (`keyId(): ?string`). Existing signers that implement only `sign()` are unaffected — no field is stamped. To adopt it, implement `IdentifiesSigningKey` and return a **non-secret** key identifier (HMAC key id, cert fingerprint, key-version label); sinks should treat the field as a routing *hint* and retain a try-all-keys fallback. See [docs/audit-evidence-contract.md](docs/audit-evidence-contract.md#exposing-the-key-id).
+- **Tolerant `schema_version` verifier — `SinkEnvelopeValidator` (#50) — no required action; additive and opt-in.** A new sink-side helper (`BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator`) manages the accepted-`schema_version` set for you across rolling deploys. The dispatcher does not consult it and strict-version sinks are unaffected; adopt it only if you want the package to own the supported-versions list. See [docs/audit-evidence-contract.md](docs/audit-evidence-contract.md#versioning).
+- **The `@internal` promotion survey (#52) promoted nothing new — no action.** The pre-1.0 audit of `@internal` markers (`docs/internal-audit-1.0.md`) concluded the public extension surface is already correctly drawn. If you were depending on `RunAuditEmitter`, `DispatchValidator`, `LeaseManager`, `SwarmAuditDispatcher`, or a concrete `AuditOutbox` implementation directly (all still `@internal`): don't — customize audit and dispatch behavior by binding the already-public `SwarmAuditSink`, `SinkFailureHandler`, `AuditOutbox`, and `SwarmAuditSigner` contracts instead. The `AuditOutbox` contract and `AuditDrainResult` have been public since v0.5.0 and are unchanged.
+
+### `OutboxDispatchType` is deprecated, split into `RelayLane` + `DurableDispatchType`
+
+`BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType` was named for durable-job dispatching but also carried an `Audit` case for `swarm:relay --type=audit` — even though `Audit` never reaches the durable dispatcher (the audit lane drains a separate outbox). v0.16.0 splits the concept in two:
+
+- **`Enums\RelayLane`** — names the lane a `swarm:relay` invocation drains: `Durable` and `Audit`.
+- **`Enums\DurableDispatchType`** — the durable-run dispatch kinds persisted in the `swarm_durable_outbox` `dispatch_type` column: `Step`, `Branch`, `QueuedResume`.
+
+**Nothing you run changes.** The `swarm:relay --type=step|branch|queued_resume|audit` CLI surface is preserved exactly — the flag strings, validation, and lane routing are unchanged. The persisted `dispatch_type` column values (`step`, `branch`, `queued_resume`) are identical, so no migration is required. `OutboxDispatchType` still exists with all four cases and its `isAudit()` method, so existing code keeps working.
+
+**If you reference `OutboxDispatchType` directly** (uncommon — it is not part of the documented facade/command surface), migrate at your convenience:
+
+- `OutboxDispatchType::Audit` / `->isAudit()` → `RelayLane::Audit`.
+- `OutboxDispatchType::Step|Branch|QueuedResume` → `DurableDispatchType::Step|Branch|QueuedResume`. The `DurableOutbox::drain()` contract now type-hints `array<DurableDispatchType>`; pass `DurableDispatchType` cases to it.
+
+The enum is scheduled for removal in a future major release.
+
 ## Upgrading to v0.15.1
 
 **No required action.** v0.15.1 is three fixes to v0.15.0, with no migration, no config change, and no breaking API. A few notes if any apply to you:

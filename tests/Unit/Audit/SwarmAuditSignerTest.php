@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\SinkFailureDecision;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\HaltsSwarmExecution;
+use BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
@@ -275,6 +276,199 @@ test('signing failure with Halt decision throws AuditSinkHaltedException', funct
         expect($halt->getPrevious())->toBeInstanceOf(RuntimeException::class);
         expect($halt->getPrevious()->getMessage())->toBe('signer key unavailable');
     }
+});
+
+test('a legacy signer without keyId() produces no signature_key_id field', function (): void {
+    // FakeHmacSigner declares only sign() — it predates keyId(). The dispatcher
+    // reads keyId() defensively, so the signed record carries no key id.
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new FakeHmacSigner);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record)->toHaveKey('signature');
+    expect($record)->not->toHaveKey('signature_key_id');
+});
+
+test('a signer with a non-empty keyId() stamps signature_key_id on signed records', function (): void {
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements IdentifiesSigningKey, SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature'] = 'signed';
+            $payload['signature_algorithm'] = 'sha256';
+
+            return $payload;
+        }
+
+        public function keyId(): ?string
+        {
+            return 'hmac-2026-07';
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record['signature_key_id'])->toBe('hmac-2026-07');
+});
+
+test('a throwing keyId() does not demote an already-verifiable record', function (): void {
+    // A signer whose keyId() throws (e.g. a transient keystore/KMS lookup)
+    // already produced a verifiable signature. Key-id resolution is a
+    // non-authoritative hint, so a throw must be treated as ABSENT — the signed
+    // record still reaches the sink, just without signature_key_id, rather than
+    // becoming a signing failure that swallows/halts/dead-letters the evidence.
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements IdentifiesSigningKey, SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature'] = 'signed';
+            $payload['signature_algorithm'] = 'sha256';
+
+            return $payload;
+        }
+
+        public function keyId(): ?string
+        {
+            throw new RuntimeException('keystore lookup failed');
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $records = $sink->allRecords();
+    expect($records)->toHaveCount(1);
+    expect($records[0])->toHaveKey('signature'); // record was NOT demoted
+    expect($records[0])->not->toHaveKey('signature_key_id');
+});
+
+test('a signer-supplied signature_key_id is dropped when the signer does not identify a key', function (): void {
+    // signature_key_id is dispatcher-owned. A plain SwarmAuditSigner that tries
+    // to set it in sign() must not leak that value: the dispatcher unsets any
+    // signer-supplied field before stamping, and this signer exposes no keyId(),
+    // so the field must be absent.
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature'] = 'signed';
+            $payload['signature_algorithm'] = 'sha256';
+            $payload['signature_key_id'] = 'signer-set-stray'; // reserved — must be dropped
+
+            return $payload;
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record)->not->toHaveKey('signature_key_id');
+});
+
+test('a dispatcher-owned signature_key_id overrides any signer-supplied value', function (): void {
+    // When the signer both sets a stray signature_key_id AND identifies a key,
+    // the dispatcher-stamped value wins (the stray is unset first).
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements IdentifiesSigningKey, SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature'] = 'signed';
+            $payload['signature_algorithm'] = 'sha256';
+            $payload['signature_key_id'] = 'signer-set-stray';
+
+            return $payload;
+        }
+
+        public function keyId(): ?string
+        {
+            return 'dispatcher-owned-id';
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record['signature_key_id'])->toBe('dispatcher-owned-id');
+});
+
+test('no signer bound produces no signature_key_id field', function (): void {
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record)->not->toHaveKey('signature_key_id');
+});
+
+test('a signer whose keyId() returns null or empty leaves the field absent', function (): void {
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements IdentifiesSigningKey, SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature'] = 'signed';
+            $payload['signature_algorithm'] = 'sha256';
+
+            return $payload;
+        }
+
+        public function keyId(): ?string
+        {
+            return null;
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record)->toHaveKey('signature');
+    expect($record)->not->toHaveKey('signature_key_id');
+});
+
+test('keyId() is not stamped when the signer opts out (no signature)', function (): void {
+    // A signer that returns the payload unchanged for a category — the opt-out
+    // path — is unsigned, so keyId() must never produce a stray signature_key_id.
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements IdentifiesSigningKey, SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            return $payload; // opts out of every category
+        }
+
+        public function keyId(): ?string
+        {
+            return 'hmac-2026-07';
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record)->not->toHaveKey('signature');
+    expect($record)->not->toHaveKey('signature_key_id');
 });
 
 test('signer sees the enriched envelope including schema_version and category', function (): void {

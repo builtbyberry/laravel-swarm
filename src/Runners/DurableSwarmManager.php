@@ -11,7 +11,10 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Responses\DurableCancelResult;
 use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
+use BuiltByBerry\LaravelSwarm\Responses\DurablePauseResult;
+use BuiltByBerry\LaravelSwarm\Responses\DurableResumeResult;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSignalResult;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBoundaryCoordinator;
@@ -206,25 +209,27 @@ class DurableSwarmManager
         return $this->children->dispatchChildSwarm($parentRunId, $childSwarmClass, $task, $dedupeKey);
     }
 
-    public function pause(string $runId): bool
+    public function pause(string $runId): DurablePauseResult
     {
         return $this->lifecycle->pause($runId);
     }
 
-    public function resume(string $runId): bool
+    public function resume(string $runId): DurableResumeResult
     {
-        $result = $this->lifecycle->resume($runId);
+        return $this->lifecycle->resume($runId, function (array $waiting): bool {
+            $this->dispatchWaitingBoundary($waiting, true);
 
-        if ($result['waiting'] !== null) {
-            $this->dispatchWaitingBoundary($result['waiting'], true);
-        }
-
-        return true;
+            return true;
+        });
     }
 
-    public function cancel(string $runId): bool
+    public function cancel(string $runId): DurableCancelResult
     {
-        return $this->lifecycle->cancel($runId, fn (string $childRunId): bool => $this->cancel($childRunId));
+        return $this->lifecycle->cancel($runId, function (string $childRunId): bool {
+            $this->cancel($childRunId);
+
+            return true;
+        });
     }
 
     /**

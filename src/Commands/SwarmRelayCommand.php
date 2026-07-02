@@ -8,7 +8,8 @@ use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
-use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
+use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
+use BuiltByBerry\LaravelSwarm\Enums\RelayLane;
 use BuiltByBerry\LaravelSwarm\Responses\AuditDrainResult;
 use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use Illuminate\Console\Command;
@@ -71,11 +72,18 @@ class SwarmRelayCommand extends Command
 
     public function handle(DurableOutbox $outbox, AuditOutbox $auditOutbox, SwarmAuditDispatcher $audit, ConfigRepository $config): int
     {
-        $types = $this->resolveTypes();
+        $selection = $this->resolveTypes();
 
-        if ($types === false) {
+        if ($selection === false) {
             return self::FAILURE;
         }
+
+        [
+            'raw' => $selectedTypeValues,
+            'durable' => $durableTypes,
+            'drainDurable' => $shouldDrainDurable,
+            'drainAudit' => $shouldDrainAudit,
+        ] = $selection;
 
         $limit = $this->resolveLimit($config);
         $drainUntilEmpty = (bool) $this->option('drain-until-empty');
@@ -84,15 +92,6 @@ class SwarmRelayCommand extends Command
         if ($maxAttempts !== null && ! $drainUntilEmpty) {
             $this->components->warn('--max-attempts has no effect without --drain-until-empty.');
         }
-
-        // Partition selected types into the durable lane and the audit lane.
-        // Empty $types means drain both lanes.
-        $durableTypes = array_values(array_filter(
-            $types,
-            static fn (OutboxDispatchType $t): bool => ! $t->isAudit(),
-        ));
-        $shouldDrainDurable = $types === [] || $durableTypes !== [];
-        $shouldDrainAudit = $types === [] || array_filter($types, static fn (OutboxDispatchType $t): bool => $t->isAudit()) !== [];
 
         $totalDispatched = 0;
         $totalSkipped = 0;
@@ -147,7 +146,7 @@ class SwarmRelayCommand extends Command
 
         } catch (Throwable $exception) {
             $audit->emit('command.relay', [
-                'types' => array_map(static fn (OutboxDispatchType $t): string => $t->value, $types),
+                'types' => $selectedTypeValues,
                 'limit' => $limit,
                 'drain_until_empty' => $drainUntilEmpty,
                 'max_attempts' => $maxAttempts,
@@ -172,7 +171,7 @@ class SwarmRelayCommand extends Command
         $hasUnresolvedTransient = ($lastDurableFailed + $lastAuditFailed) > 0;
 
         $audit->emit('command.relay', [
-            'types' => array_map(static fn (OutboxDispatchType $t): string => $t->value, $types),
+            'types' => $selectedTypeValues,
             'limit' => $limit,
             'drain_until_empty' => $drainUntilEmpty,
             'max_attempts' => $maxAttempts,
@@ -228,33 +227,58 @@ class SwarmRelayCommand extends Command
     }
 
     /**
-     * @return array<OutboxDispatchType>|false false signals a validation failure
+     * Resolve the `--type` flag into the lanes to drain.
+     *
+     * The CLI flag accepts the three durable dispatch types (step, branch,
+     * queued_resume) plus the audit lane keyword (audit) — the exact surface
+     * documented since v0.5.0. This maps each string to its lane: durable types
+     * become DurableDispatchType cases restricting the durable drain, and `audit`
+     * selects the audit lane. No flag means drain both lanes.
+     *
+     * @return array{raw: list<string>, durable: list<DurableDispatchType>, drainDurable: bool, drainAudit: bool}|false
+     *                                                                                                                  false signals a validation failure
      */
     protected function resolveTypes(): array|false
     {
         $raw = (array) $this->option('type');
-        $raw = array_filter($raw, static fn (mixed $v): bool => is_string($v) && $v !== '');
+        $raw = array_values(array_filter($raw, static fn (mixed $v): bool => is_string($v) && $v !== ''));
 
+        // No --type flag: drain both lanes with no durable-type restriction.
         if ($raw === []) {
-            return [];
+            return ['raw' => [], 'durable' => [], 'drainDurable' => true, 'drainAudit' => true];
         }
 
-        $resolved = [];
+        $durable = [];
+        $drainAudit = false;
 
-        foreach (array_values($raw) as $value) {
-            $type = OutboxDispatchType::tryFrom($value);
+        foreach ($raw as $value) {
+            if ($value === RelayLane::Audit->value) {
+                $drainAudit = true;
+
+                continue;
+            }
+
+            $type = DurableDispatchType::tryFrom($value);
 
             if ($type === null) {
-                $valid = implode(', ', array_column(OutboxDispatchType::cases(), 'value'));
+                $valid = implode(', ', [
+                    ...array_column(DurableDispatchType::cases(), 'value'),
+                    RelayLane::Audit->value,
+                ]);
                 $this->components->error("Unknown dispatch type [{$value}]. Valid types: {$valid}.");
 
                 return false;
             }
 
-            $resolved[] = $type;
+            $durable[] = $type;
         }
 
-        return $resolved;
+        return [
+            'raw' => $raw,
+            'durable' => $durable,
+            'drainDurable' => $durable !== [],
+            'drainAudit' => $drainAudit,
+        ];
     }
 
     protected function resolveLimit(ConfigRepository $config): int

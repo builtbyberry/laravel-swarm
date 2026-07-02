@@ -18,6 +18,11 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
  * signature fields ("signature", "signature_algorithm", "signed_at", and
  * optionally "previous_signature_id" for chain-signing audit trails).
  *
+ * "signature_key_id" is reserved: it is dispatcher-owned, stamped from an
+ * opt-in {@see IdentifiesSigningKey} signer (see below), so implementations
+ * MUST NOT set it in sign() — the dispatcher unsets any signer-supplied value
+ * before stamping.
+ *
  * When an implementation adds a non-empty "signature", it MUST also add a
  * non-empty "signature_algorithm": the package signs on emit but never
  * verifies on read (verification is the sink's responsibility), so the
@@ -35,6 +40,16 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
  * filtering ("sign run.* but not step.*") is an implementation concern —
  * the signer may return the input payload unchanged when it chooses not
  * to sign a given category.
+ *
+ * To expose the id of the key that produced the signature, a signer additionally
+ * implements the opt-in {@see IdentifiesSigningKey} companion interface, whose
+ * keyId(): ?string the dispatcher reads to stamp the package-standardized
+ * "signature_key_id" field onto signed records (see
+ * SwarmAuditDispatcher::emit()). The opt-in is a separate interface rather than
+ * a method on this contract, so existing signers that implement only sign()
+ * keep working unchanged and are simply treated as if no key id were available.
+ * The shipped `RecordingSwarmAuditSigner` test double implements it and
+ * defaults to null (no key id → field absent).
  */
 interface SwarmAuditSigner
 {
