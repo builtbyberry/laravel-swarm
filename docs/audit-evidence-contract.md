@@ -175,6 +175,21 @@ a key-rotation window must accept old keys for at least the duration of
 the longest expected outbox backlog (typically bounded by
 `max_attempts × reservation_timeout`).
 
+If your signer opts in via `IdentifiesSigningKey`, the dispatcher stamps `signature_key_id`
+onto the envelope at that same original emit — **exactly once, at sign time**,
+never on the drain path. The stored envelope carries that id verbatim through
+enqueue → drain → replay, so `signature_key_id` always names the key that
+produced the record's *original* signature even if the signer rotated between
+enqueue and drain. A sink resolving which key to verify against SHOULD read
+`signature_key_id` to pick the right key first, but MUST retain its try-all
+fallback across the rotation window: because the id is stamped **outside** the
+signed content, a corrupted or wrong id could otherwise fail a legitimately
+signed record. Treat a `signature_key_id` mismatch as tamper only *after* the
+try-all fallback also fails to verify. This keeps the id a non-authoritative
+selection hint — it can never turn a valid record invalid (fallback still
+verifies it) and can never enable forgery (a wrong key simply fails to
+verify). See [Audit Signing](#audit-signing).
+
 ### Health visibility
 
 `swarm:health` runs two audit outbox checks by default:
@@ -460,6 +475,23 @@ checkpoint categories), the envelope carries:
 |-----------------|-----------------------|-----------------------------------------------------------------------|
 | `metadata_keys` | array&lt;string&gt;   | All original metadata key names, sorted. Always emitted.              |
 | `metadata`      | array&lt;string, mixed&gt; | Allowlisted metadata values plus reserved keys. May be empty.    |
+
+On signed records only, the dispatcher also stamps one optional field when the
+bound signer opts in via `IdentifiesSigningKey` (see
+[Audit Signing](#audit-signing)):
+
+| Field               | Type   | Notes                                                                 |
+|---------------------|--------|-----------------------------------------------------------------------|
+| `signature_key_id`  | string | Present only when a signature is present AND an `IdentifiesSigningKey` signer's `keyId()` returns a non-empty, non-secret identifier. Names the key that produced the record's original signature; travels verbatim through the outbox. Dispatcher-owned (a signer MUST NOT set it in `sign()`). Omitted (never `null`) otherwise. |
+
+This is an additive optional field, not a universal frozen field — it appears
+only on signed records with a key id. It carries no `schema_version` bump under
+the [forward-compat contract](#stability-promise) ("New optional fields may be
+added… Sinks MUST tolerate unknown keys"). Unlike signer-supplied fields (which
+are [not frozen](#what-is-not-frozen) and implementation-owned), the *name*
+`signature_key_id` is package-standardized: the dispatcher stamps it from
+`keyId()`, so every sink reads one field name regardless of which signer is
+bound.
 
 The `metadata` array always includes any reserved keys present on the run,
 regardless of the configured allowlist. The reserved set is published as
@@ -948,7 +980,86 @@ interface SwarmAuditSigner
 Implementations MUST NOT mutate or remove existing keys. Signature fields are
 added alongside the existing envelope — conventionally `signature`,
 `signature_algorithm`, `signed_at`, and optionally `previous_signature_id` for
-chain-signing trails.
+chain-signing trails. `signature_key_id` is **reserved and dispatcher-owned**
+(see below): a signer MUST NOT set it in `sign()`; the dispatcher unsets any
+signer-supplied value before stamping.
+
+#### Exposing the key id
+
+A signer that wants to name its key implements the opt-in
+`IdentifiesSigningKey` companion interface. When its `keyId()` returns a
+non-empty string, the dispatcher stamps it onto signed records as the
+package-standardized `signature_key_id` field, so every sink reads one field
+name for the verification-key hint regardless of which signer is bound:
+
+```php
+namespace BuiltByBerry\LaravelSwarm\Contracts;
+
+interface IdentifiesSigningKey
+{
+    public function keyId(): ?string;
+}
+```
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
+
+class HmacAuditSigner implements IdentifiesSigningKey, SwarmAuditSigner
+{
+    public function __construct(
+        private readonly string $key,
+        private readonly string $keyId,
+    ) {}
+
+    public function sign(string $category, array $payload): array
+    {
+        $canonical = json_encode($payload, JSON_UNESCAPED_SLASHES);
+
+        return $payload + [
+            'signature' => hash_hmac('sha256', $canonical, $this->key),
+            'signature_algorithm' => 'hmac-sha256',
+            'signed_at' => now()->toIso8601String(),
+        ];
+    }
+
+    public function keyId(): ?string
+    {
+        return $this->keyId; // e.g. 'hmac-2026-07' — a key-version label
+    }
+}
+```
+
+`keyId()` returns a **NON-SECRET** identifier — an HMAC key id, a certificate
+fingerprint, or a key-version label — never the key material. It is emitted
+verbatim under the same exposure model as `signature_algorithm` and is **not**
+routed through capture or redaction, so keep it non-secret.
+
+The interface is opt-in and backward compatible: existing signers that
+implement only `SwarmAuditSigner` keep working and are treated as if no key id
+were available. Returning `null` or an empty string — or not implementing
+`IdentifiesSigningKey` — omits `signature_key_id` entirely; the field is never
+emitted as `null`. Because `signature_key_id` is dispatcher-owned, a value the
+signer sets in `sign()` is unset before stamping, so an absent key id can never
+leak a stray signer field. If `keyId()` throws (for example a transient
+keystore or KMS lookup), the dispatcher treats it as absent and still emits the
+already-verifiable record without the field — key-id resolution never demotes a
+signed record into a signing failure. The dispatcher stamps the field **exactly
+once, at the original sign time** (never on the outbox drain path), so it names
+the key that produced the record's original signature and survives a rotation
+between enqueue and replay (see [Signer rotation](#signer-rotation)).
+
+`signature_key_id` is an unauthenticated routing hint, **not** itself attestable
+provenance — the `signature` (verified against the key and
+`signature_algorithm`) is what a compliance reader trusts. Treat the key id as a
+convenience for selecting a verification key, never as evidence of who signed a
+record.
+
+Because the id is stamped **outside** the signed content, it is a
+non-authoritative hint: a verifying sink SHOULD try the named key first but MUST
+keep its try-all fallback (or treat a mismatch as tamper only after the fallback
+fails). A wrong or corrupted id can never fail a legitimately signed record, and
+can never enable forgery.
 
 ```php
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
@@ -1009,9 +1120,10 @@ records must re-verify `signature` against the stored `signature_algorithm`
 (and your key) before trusting a record. `swarm:trace` is a forensic timeline,
 not a cryptographic check.
 
-To keep rotation possible, **persist `signature_algorithm` (and a key id)
-alongside the signature**, and accept old keys for at least the longest
-expected outbox backlog (see [Signer rotation](#signer-rotation)). Because of
+To keep rotation possible, **persist `signature_algorithm` (and the
+`signature_key_id`, when your signer implements `IdentifiesSigningKey`) alongside the
+signature**, and accept old keys for at least the longest expected outbox
+backlog (see [Signer rotation](#signer-rotation)). Because of
 this, the dispatcher enforces one rule: if your signer adds a non-empty
 `signature`, it must also add a non-empty `signature_algorithm`. A signature
 without an algorithm name can never be re-verified after a key or algorithm
