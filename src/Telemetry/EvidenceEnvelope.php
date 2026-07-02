@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Telemetry;
 
+use BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
 /**
@@ -16,6 +17,42 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 final class EvidenceEnvelope
 {
     public const SCHEMA_VERSION = '3';
+
+    /**
+     * The package MINOR series currently shipping (the `N` in `0.N.x`).
+     *
+     * This anchors the "how long ago was a schema_version introduced" clock that
+     * {@see SinkEnvelopeValidator} uses to widen
+     * and then close the tolerant rolling-deploy window. It is bumped once per
+     * minor release alongside the CHANGELOG entry — the same release-time edit
+     * that already happens — and is the single source of truth for "now" so the
+     * validator never hard-codes a resolved accept-list.
+     */
+    public const CURRENT_MINOR = 16;
+
+    /**
+     * Every `schema_version` value the envelope has ever emitted, mapped to the
+     * package MINOR in which it was introduced.
+     *
+     * This is the authoritative version history. On a bump, append the new value
+     * with its introducing minor and update {@see SCHEMA_VERSION} — nothing else.
+     * The tolerant sink verifier derives its supported set from this map plus
+     * {@see CURRENT_MINOR}, so the rolling-deploy window widens automatically on
+     * the next bump and closes automatically two minors later, with no
+     * hand-maintained accept-list.
+     *
+     * History: "1" (v0.4), "2" (v0.5.0), "3" (v0.12.0). Note PHP casts the
+     * numeric-string version keys to int on the way in; the sink verifier
+     * re-stringifies them so `schema_version` stays a string everywhere it is
+     * compared.
+     *
+     * @var array<int, int>
+     */
+    public const SCHEMA_VERSION_HISTORY = [
+        '1' => 4,
+        '2' => 5,
+        '3' => 12,
+    ];
 
     /**
      * Top-level metadata keys that are always emitted on audit and telemetry

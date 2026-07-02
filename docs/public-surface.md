@@ -154,6 +154,7 @@ adding a new public API.
 | `LogChannelSwarmAuditSink` | Concrete `SwarmAuditSink` implementation that writes every audit record as a structured log entry (`swarm.audit.<category>`) to the configured Laravel log channel (defaults to `audit`, falls back to the default channel when `audit` is not configured). Dev/staging-friendly zero-config sink; production deployments should ship a bounded backend. Bound by `swarm:install:audit --sink=readable`. Does not implement `ReadableSwarmAuditSink` (log channels are not queryable); `swarm:trace` degrades gracefully when this sink is bound. (v0.8.0+) | [Audit Evidence Contract](audit-evidence-contract.md#quick-setup) |
 | `HaltsSwarmExecution` | Marker interface for sink failure exceptions that must halt the run. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `AuditSinkHaltedException` | Raised when a sink failure handler halts execution. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
+| `SinkEnvelopeValidator` | Sink-side convenience for tolerant `schema_version` validation during a rolling-deploy bump window: `acceptsSchemaVersion(string): bool` and `supportedVersions(): array`. The in-band set is derived from the envelope version history (current + previous value for a two-minor window), so a bump auto-widens then closes the window. Opt-in; the dispatcher never consults it and strict-version sinks remain valid. (v0.16.0+) | [Audit Evidence Contract](audit-evidence-contract.md#versioning) |
 
 ## Memory (v0.9.0+)
 
