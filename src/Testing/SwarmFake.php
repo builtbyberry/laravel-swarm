@@ -244,6 +244,19 @@ class SwarmFake implements Swarm
         $this->recordedDurableOperations['inspections'][] = true;
     }
 
+    /**
+     * @return class-string
+     */
+    public function fakeSwarmClass(): string
+    {
+        return $this->swarmClass;
+    }
+
+    public function fakeTopology(): string
+    {
+        return $this->fakeTopology;
+    }
+
     public function durableRunDetail(string $runId): DurableRunDetail
     {
         return new DurableRunDetail(

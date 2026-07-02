@@ -304,9 +304,9 @@ test('fake durable response records operations without the database manager', fu
     $response = EmptyRunnableSwarm::make()->dispatchDurable('durable-task');
 
     expect($response->signal('approval_received', ['approved' => true], 'signal-1')->accepted)->toBeTrue()
-        ->and($response->pause())->toBeTrue()
-        ->and($response->resume())->toBeTrue()
-        ->and($response->cancel())->toBeTrue()
+        ->and($response->pause()->status)->toBe('paused')
+        ->and($response->resume()->status)->toBe('resumed')
+        ->and($response->cancel()->status)->toBe('cancelled')
         ->and($response->inspect()->run['status'])->toBe('fake');
 
     EmptyRunnableSwarm::assertDurableSignalled('approval_received');

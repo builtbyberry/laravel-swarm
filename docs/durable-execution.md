@@ -621,6 +621,60 @@ branch checkpoint commits but before the parent join job is dispatched.
 It also releases timed-out durable run waits so a waiting run can continue with
 a timeout outcome.
 
+## Operator Control Contract
+
+The Artisan commands above are thin wrappers over a public, container-bound
+contract you can call from application code — an operator console, an HTTP
+controller, an approval workflow, or scheduled maintenance. Resolve
+`BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator;
+
+$operator = app(SwarmOperator::class);
+
+$pause  = $operator->pause($runId);   // DurablePauseResult
+$resume = $operator->resume($runId);  // DurableResumeResult
+$cancel = $operator->cancel($runId);  // DurableCancelResult
+$signal = $operator->signal($runId, 'approved', ['by' => $userId], idempotencyKey: $requestId);
+$ids    = $operator->recover(runId: $runId); // array<string> of redispatched run ids
+```
+
+Every control verb returns a **rich lifecycle result**, not a bare `bool`, so
+you always know what actually happened. `pause()`/`cancel()` are step-boundary
+controls: a run idle at a checkpoint transitions immediately, while a run
+mid-step is marked to transition at its next safe boundary. The result reports
+which:
+
+```php
+$pause->status;        // 'paused' or 'pause_scheduled'
+$pause->isImmediate(); // true when it paused now
+
+$cancel->status;       // 'cancelled' or 'cancel_scheduled'
+
+$resume->status;                     // 'resumed' or 'waiting'
+$resume->waitingBoundaryDispatched;  // true when a waiting boundary was re-armed
+```
+
+The contract is **control-only**. Operational reads — status, current step,
+queue routing, labels — stay on the public history path (`SwarmHistory` /
+`RunHistoryStore`, and the read commands below), so a dashboard reads there and
+controls here.
+
+The contract is **authorization-agnostic**: it performs no permission checks.
+Deciding whether a caller may control a given run is your application's
+responsibility — put a policy, gate, or middleware in front of the call.
+
+Control verbs **fail loud**: an unknown or foreign `runId`, or a run in a status
+the verb cannot act on, throws
+`BuiltByBerry\LaravelSwarm\Exceptions\SwarmException`. A verb never silently
+no-ops. `signal()` is idempotent per `idempotencyKey` (a duplicate delivery is
+reported as `duplicate`, not re-applied) and `recover()` is lease-guarded, so a
+double dispatch is safe.
+
+The same result objects back `DurableSwarmResponse::pause()`/`resume()`/`cancel()`
+and `signal()`.
+
 ## Durable Operator Surfaces
 
 Durable runs can now carry indexed labels, structured details, latest progress

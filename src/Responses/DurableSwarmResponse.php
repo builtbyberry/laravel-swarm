@@ -26,17 +26,17 @@ class DurableSwarmResponse
         return $this->manager->inspect($this->runId);
     }
 
-    public function pause(): bool
+    public function pause(): DurablePauseResult
     {
         return $this->manager->pause($this->runId);
     }
 
-    public function resume(): bool
+    public function resume(): DurableResumeResult
     {
         return $this->manager->resume($this->runId);
     }
 
-    public function cancel(): bool
+    public function cancel(): DurableCancelResult
     {
         return $this->manager->cancel($this->runId);
     }
