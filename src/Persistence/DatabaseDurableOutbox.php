@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
-use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
+use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
+use BuiltByBerry\LaravelSwarm\Enums\RelayLane;
 use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
 use BuiltByBerry\LaravelSwarm\Support\SafeReporting;
@@ -31,21 +32,21 @@ class DatabaseDurableOutbox implements DurableOutbox
 
     public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void
     {
-        $this->insert(OutboxDispatchType::Step, $runId, ['step_index' => $stepIndex], $connection, $queue);
+        $this->insert(DurableDispatchType::Step, $runId, ['step_index' => $stepIndex], $connection, $queue);
     }
 
     public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void
     {
-        $this->insert(OutboxDispatchType::Branch, $runId, ['branch_id' => $branchId], $connection, $queue);
+        $this->insert(DurableDispatchType::Branch, $runId, ['branch_id' => $branchId], $connection, $queue);
     }
 
     public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void
     {
-        $this->insert(OutboxDispatchType::QueuedResume, $runId, [], $connection, $queue);
+        $this->insert(DurableDispatchType::QueuedResume, $runId, [], $connection, $queue);
     }
 
     /**
-     * @param  array<OutboxDispatchType>  $types
+     * @param  array<DurableDispatchType>  $types
      */
     public function drain(array $types = [], int $limit = 100): DrainResult
     {
@@ -57,7 +58,7 @@ class DatabaseDurableOutbox implements DurableOutbox
         $now = Carbon::now('UTC');
         $staleThreshold = $now->copy()->subSeconds($reservationTimeoutSeconds);
 
-        $typeValues = array_map(static fn (OutboxDispatchType $t): string => $t->value, $types);
+        $typeValues = array_map(static fn (DurableDispatchType $t): string => $t->value, $types);
 
         // Validate the stored queue connection against the application's known connections
         // so a tampered or stale DB row cannot reroute jobs to an unexpected driver.
@@ -161,7 +162,18 @@ class DatabaseDurableOutbox implements DurableOutbox
      */
     protected function dispatchEntry(object $entry, array $knownConnections): void
     {
-        $type = OutboxDispatchType::tryFrom($entry->dispatch_type);
+        // A misrouted audit row is a distinct, diagnosable failure: audit evidence
+        // belongs in swarm_audit_outbox and is drained by AuditOutbox, never here.
+        // Name it explicitly rather than letting it fall through to the generic
+        // "unknown dispatch_type" message below.
+        if ($entry->dispatch_type === RelayLane::Audit->value) {
+            throw new UnexpectedValueException(
+                "Audit dispatch type [{$entry->dispatch_type}] for entry [{$entry->id}] was routed to the durable outbox; "
+                .'audit records belong in the swarm_audit_outbox table and are drained by AuditOutbox.'
+            );
+        }
+
+        $type = DurableDispatchType::tryFrom($entry->dispatch_type);
 
         if ($type === null) {
             throw new UnexpectedValueException(
@@ -204,26 +216,22 @@ class DatabaseDurableOutbox implements DurableOutbox
         $queue = $entry->queue_name ?: null;
 
         match ($type) {
-            OutboxDispatchType::Step => $this->jobs->dispatchStep(
+            DurableDispatchType::Step => $this->jobs->dispatchStep(
                 $entry->run_id,
                 $this->extractStepIndex($entry->id, $payload),
                 $connection,
                 $queue,
             ),
-            OutboxDispatchType::Branch => $this->jobs->dispatchBranch(
+            DurableDispatchType::Branch => $this->jobs->dispatchBranch(
                 $entry->run_id,
                 $this->extractBranchId($entry->id, $payload),
                 $connection,
                 $queue,
             ),
-            OutboxDispatchType::QueuedResume => $this->jobs->dispatchQueuedResumeById(
+            DurableDispatchType::QueuedResume => $this->jobs->dispatchQueuedResumeById(
                 $entry->run_id,
                 $connection,
                 $queue,
-            ),
-            OutboxDispatchType::Audit => throw new UnexpectedValueException(
-                "Audit dispatch type [{$entry->dispatch_type}] for entry [{$entry->id}] was routed to the durable outbox; "
-                .'audit records belong in the swarm_audit_outbox table and are drained by AuditOutbox.'
             ),
         };
     }
@@ -281,7 +289,7 @@ class DatabaseDurableOutbox implements DurableOutbox
     /**
      * @param  array<string, mixed>  $payload
      */
-    protected function insert(OutboxDispatchType $type, string $runId, array $payload, ?string $connection, ?string $queue): void
+    protected function insert(DurableDispatchType $type, string $runId, array $payload, ?string $connection, ?string $queue): void
     {
         $now = Carbon::now('UTC');
 

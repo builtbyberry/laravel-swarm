@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
-use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
+use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
 use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 
 interface DurableOutbox
@@ -45,7 +45,7 @@ interface DurableOutbox
      *                 did not complete these entries (e.g. the relay process was killed or
      *                 timed out mid-run). A non-zero value signals a falling-behind relay.
      *
-     * @param  array<OutboxDispatchType>  $types  Restrict to these types; empty means all.
+     * @param  array<DurableDispatchType>  $types  Restrict to these types; empty means all.
      * @param  int  $limit  Maximum rows to claim per call. Values < 1 return an empty DrainResult immediately.
      */
     public function drain(array $types = [], int $limit = 100): DrainResult;
