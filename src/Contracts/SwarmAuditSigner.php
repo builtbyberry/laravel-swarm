@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
-use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSigner;
-
 /**
  * Cryptographically signs (or hashes) audit evidence payloads before they
  * reach the bound SwarmAuditSink.
@@ -50,8 +48,8 @@ use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSigner;
  * SwarmAuditDispatcher::emit()). The opt-in is a separate interface rather than
  * a method on this contract, so existing signers that implement only sign()
  * keep working unchanged and are simply treated as if no key id were available.
- * The shipped {@see RecordingSwarmAuditSigner} implements it and defaults to
- * null (no key id → field absent).
+ * The shipped `RecordingSwarmAuditSigner` test double implements it and
+ * defaults to null (no key id → field absent).
  */
 interface SwarmAuditSigner
 {
