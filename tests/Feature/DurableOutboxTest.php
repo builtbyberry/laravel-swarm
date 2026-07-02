@@ -22,6 +22,7 @@ use Illuminate\Contracts\Config\Repository;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Exceptions;
 
 function outboxConfigureDurableRuntime(): void
 {
@@ -128,6 +129,39 @@ test('drain reports and deletes permanently invalid entries when draining withou
         ->and($result->skipped)->toBe(1)
         ->and($result->total())->toBe(2)
         ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(0);
+});
+
+test('drain fails loud with a dedicated diagnostic when an audit row reaches the durable outbox', function (): void {
+    // The audit lane drains a separate outbox; an 'audit' dispatch_type must never
+    // reach the durable dispatcher. If one is misrouted here, dispatchEntry() throws
+    // an UnexpectedValueException naming the misroute — caught by the drain loop as a
+    // permanently-invalid entry (reported + deleted + counted as skipped), never a
+    // silent no-op. Locks the early guard that used to live as a match arm.
+    Exceptions::fake();
+
+    $outbox = app(DurableOutbox::class);
+    $response = FakeSequentialSwarm::make()->dispatchDurable('task');
+    $outbox->drain([], 100); // drain the initial row
+
+    DB::table('swarm_durable_outbox')->insert([
+        'run_id' => $response->runId,
+        'dispatch_type' => 'audit',
+        'payload' => '{}',
+        'queue_connection' => null,
+        'queue_name' => null,
+        'available_at' => now(),
+        'reserved_at' => null,
+        'created_at' => now(),
+    ]);
+
+    $result = $outbox->drain([], 100);
+
+    expect($result->dispatched)->toBe(0)
+        ->and($result->skipped)->toBe(1)
+        ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(0);
+
+    Exceptions::assertReported(fn (UnexpectedValueException $e): bool => str_contains($e->getMessage(), 'was routed to the durable outbox')
+        && str_contains($e->getMessage(), 'swarm_audit_outbox'));
 });
 
 test('drain treats a null-json payload as invalid and skips the entry', function (): void {
