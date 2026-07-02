@@ -271,7 +271,10 @@ stability settings while Laravel AI remains pre-stable.
 
 ## Upgrading to v0.16.0
 
-**No required action.** v0.16.0 is additive and backward-compatible. One deprecation notice if you reference the enum below:
+**No required action for most applications.** v0.16.0 is additive and backward-compatible — it promotes a public operator control contract and finalizes several audit and relay surfaces. Notes if any apply to you:
+
+- **Prefer the new `SwarmOperator` contract for programmatic control.** To pause, resume, cancel, signal, or recover durable runs from application code, resolve `BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator` (`app(SwarmOperator::class)`) instead of reaching into `DurableSwarmManager`, which stays `@internal`. The contract is control-only (reads stay on `SwarmHistory` / `RunHistoryStore`), authorization-agnostic (gate the call in your own app), and fails loud on an unknown run. See [docs/durable-execution.md](docs/durable-execution.md#operator-control-contract).
+- **`DurableSwarmResponse::pause()`, `resume()`, and `cancel()` return result objects, not `bool`.** They previously returned `true`-or-throw. They now return `DurablePauseResult`, `DurableResumeResult`, and `DurableCancelResult`, which report the *effective* transition (`paused` vs `pause_scheduled`, `cancelled` vs `cancel_scheduled`, `resumed` vs `waiting`). If you assigned the return to a `bool`-typed variable or asserted `=== true`, update it — read `->status` / `->isImmediate()` instead. Most callers ignored the return and need no change; the verbs still throw on an invalid transition exactly as before.
 
 ### `OutboxDispatchType` is deprecated, split into `RelayLane` + `DurableDispatchType`
 

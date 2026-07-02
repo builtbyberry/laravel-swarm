@@ -8,6 +8,10 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
+use BuiltByBerry\LaravelSwarm\Responses\DurableCancelResult;
+use BuiltByBerry\LaravelSwarm\Responses\DurablePauseResult;
+use BuiltByBerry\LaravelSwarm\Responses\DurableResumeResult;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -55,25 +59,25 @@ function bindFailingDurableManagerForAudit(string $method): void
     {
         public function __construct(protected string $method) {}
 
-        public function pause(string $runId): bool
+        public function pause(string $runId): DurablePauseResult
         {
             $this->throwIfTarget('pause');
 
-            return true;
+            return new DurablePauseResult($runId, 'ExampleSwarm', 'sequential', DurableLifecycleStatus::Paused);
         }
 
-        public function resume(string $runId): bool
+        public function resume(string $runId): DurableResumeResult
         {
             $this->throwIfTarget('resume');
 
-            return true;
+            return new DurableResumeResult($runId, 'ExampleSwarm', 'sequential', DurableLifecycleStatus::Resumed);
         }
 
-        public function cancel(string $runId): bool
+        public function cancel(string $runId): DurableCancelResult
         {
             $this->throwIfTarget('cancel');
 
-            return true;
+            return new DurableCancelResult($runId, 'ExampleSwarm', 'sequential', DurableLifecycleStatus::Cancelled);
         }
 
         public function recover(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array

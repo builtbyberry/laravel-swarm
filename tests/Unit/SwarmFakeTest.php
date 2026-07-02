@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
@@ -304,12 +305,35 @@ test('fake durable response records operations without the database manager', fu
     $response = EmptyRunnableSwarm::make()->dispatchDurable('durable-task');
 
     expect($response->signal('approval_received', ['approved' => true], 'signal-1')->accepted)->toBeTrue()
-        ->and($response->pause())->toBeTrue()
-        ->and($response->resume())->toBeTrue()
-        ->and($response->cancel())->toBeTrue()
+        ->and($response->pause()->status)->toBe(DurableLifecycleStatus::Paused)
+        ->and($response->resume()->status)->toBe(DurableLifecycleStatus::Resumed)
+        ->and($response->cancel()->status)->toBe(DurableLifecycleStatus::Cancelled)
         ->and($response->inspect()->run['status'])->toBe('fake');
 
     EmptyRunnableSwarm::assertDurableSignalled('approval_received');
+});
+
+test('fake durable lifecycle statuses are configurable so tests can observe the scheduled and waiting branches', function () {
+    $fake = EmptyRunnableSwarm::fake();
+    $fake->fakeDurableLifecycleStatus(
+        pause: DurableLifecycleStatus::PauseScheduled,
+        resume: DurableLifecycleStatus::Waiting,
+        cancel: DurableLifecycleStatus::CancelScheduled,
+    );
+
+    $response = EmptyRunnableSwarm::make()->dispatchDurable('durable-task');
+
+    $pause = $response->pause();
+    $resume = $response->resume();
+    $cancel = $response->cancel();
+
+    expect($pause->status)->toBe(DurableLifecycleStatus::PauseScheduled)
+        ->and($pause->isImmediate())->toBeFalse()
+        ->and($resume->status)->toBe(DurableLifecycleStatus::Waiting)
+        ->and($resume->isWaiting())->toBeTrue()
+        ->and($resume->waitingBoundaryDispatched)->toBeTrue()
+        ->and($cancel->status)->toBe(DurableLifecycleStatus::CancelScheduled)
+        ->and($cancel->isImmediate())->toBeFalse();
 });
 
 test('fake durable assertions cover durable runtime surfaces', function () {

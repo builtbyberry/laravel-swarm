@@ -62,6 +62,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\CacheMemoryStore;
@@ -113,6 +114,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSequentialStepAdvancer;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableStepAdvancer;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableStepCheckpointCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableStepExecutionBuilder;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSwarmOperator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSwarmStarter;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableTopLevelParallelAdvancer;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\QueuedHierarchicalDurableCoordinator;
@@ -304,6 +306,9 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->bind(DurableBranchAdvancer::class);
         $this->app->bind(DurableRunRecorder::class);
         $this->app->singleton(DurableSwarmManager::class);
+        // Public operator control contract (#329). A thin, stateless adapter over
+        // the @internal manager; safe as a shared singleton under Octane.
+        $this->app->singleton(SwarmOperator::class, DurableSwarmOperator::class);
         $this->app->singleton(DurableRunStore::class, DatabaseDurableRunStore::class);
         $this->app->singleton(DurableOutbox::class, DatabaseDurableOutbox::class);
 

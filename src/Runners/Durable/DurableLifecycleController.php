@@ -8,11 +8,15 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Responses\DurableCancelResult;
+use BuiltByBerry\LaravelSwarm\Responses\DurablePauseResult;
+use BuiltByBerry\LaravelSwarm\Responses\DurableResumeResult;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Connection;
@@ -36,7 +40,7 @@ class DurableLifecycleController
         protected DurableOutbox $outbox,
     ) {}
 
-    public function pause(string $runId): bool
+    public function pause(string $runId): DurablePauseResult
     {
         $run = $this->runs->requireRun($runId);
         $context = null;
@@ -80,13 +84,22 @@ class DurableLifecycleController
             'immediately_paused' => $immediatelyPaused,
         ]);
 
-        return true;
+        return new DurablePauseResult(
+            runId: $runId,
+            swarmClass: (string) $run['swarm_class'],
+            topology: (string) $run['topology'],
+            status: $immediatelyPaused ? DurableLifecycleStatus::Paused : DurableLifecycleStatus::PauseScheduled,
+        );
     }
 
     /**
-     * @return array{waiting: array<string, mixed>|null}
+     * Resume a paused run. When the run resumes back into a waiting boundary,
+     * the returned run row is handed to $dispatchWaiting so the boundary is
+     * re-armed; the closure reports whether it actually re-dispatched one.
+     *
+     * @param  callable(array<string, mixed>): bool  $dispatchWaiting
      */
-    public function resume(string $runId): array
+    public function resume(string $runId, callable $dispatchWaiting): DurableResumeResult
     {
         $run = $this->runs->requireRun($runId);
 
@@ -122,7 +135,7 @@ class DurableLifecycleController
             return true;
         });
 
-        if (! $resumed || $context === null) {
+        if (! $resumed || $context === null || ! is_array($updated)) {
             throw new SwarmException("Durable run [{$runId}] could not be resumed.");
         }
 
@@ -141,10 +154,19 @@ class DurableLifecycleController
             'status' => 'resumed',
         ]);
 
-        return ['waiting' => is_array($updated) && $updated['status'] === 'waiting' ? $updated : null];
+        $waiting = $updated['status'] === 'waiting';
+        $waitingBoundaryDispatched = $waiting ? $dispatchWaiting($updated) : false;
+
+        return new DurableResumeResult(
+            runId: $runId,
+            swarmClass: (string) $run['swarm_class'],
+            topology: (string) $run['topology'],
+            status: $waiting ? DurableLifecycleStatus::Waiting : DurableLifecycleStatus::Resumed,
+            waitingBoundaryDispatched: $waitingBoundaryDispatched,
+        );
     }
 
-    public function cancel(string $runId, callable $cancelChild): bool
+    public function cancel(string $runId, callable $cancelChild): DurableCancelResult
     {
         $run = $this->runs->requireRun($runId);
 
@@ -197,7 +219,12 @@ class DurableLifecycleController
             'immediately_cancelled' => $immediatelyCancelled,
         ]);
 
-        return true;
+        return new DurableCancelResult(
+            runId: $runId,
+            swarmClass: (string) $run['swarm_class'],
+            topology: (string) $run['topology'],
+            status: $immediatelyCancelled ? DurableLifecycleStatus::Cancelled : DurableLifecycleStatus::CancelScheduled,
+        );
     }
 
     public function updateQueueRouting(string $runId, ?string $connection, ?string $queue): void

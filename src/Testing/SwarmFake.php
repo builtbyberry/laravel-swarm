@@ -16,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
@@ -90,6 +91,12 @@ class SwarmFake implements Swarm
     ];
 
     private string $fakeTopology;
+
+    private DurableLifecycleStatus $fakePauseStatus = DurableLifecycleStatus::Paused;
+
+    private DurableLifecycleStatus $fakeResumeStatus = DurableLifecycleStatus::Resumed;
+
+    private DurableLifecycleStatus $fakeCancelStatus = DurableLifecycleStatus::Cancelled;
 
     /**
      * @param  class-string  $swarmClass
@@ -242,6 +249,54 @@ class SwarmFake implements Swarm
     public function recordDurableInspect(): void
     {
         $this->recordedDurableOperations['inspections'][] = true;
+    }
+
+    /**
+     * @return class-string
+     */
+    public function fakeSwarmClass(): string
+    {
+        return $this->swarmClass;
+    }
+
+    public function fakeTopology(): string
+    {
+        return $this->fakeTopology;
+    }
+
+    /**
+     * Configure the lifecycle statuses the fake's pause/resume/cancel return.
+     *
+     * By default the fake models only the IMMEDIATE branch
+     * (`Paused`/`Resumed`/`Cancelled`). Use this to drive the SCHEDULED /
+     * WAITING branch in a consumer test double — e.g.
+     * `->fakeDurableLifecycleStatus(pause: DurableLifecycleStatus::PauseScheduled)`.
+     */
+    public function fakeDurableLifecycleStatus(
+        ?DurableLifecycleStatus $pause = null,
+        ?DurableLifecycleStatus $resume = null,
+        ?DurableLifecycleStatus $cancel = null,
+    ): self {
+        $this->fakePauseStatus = $pause ?? $this->fakePauseStatus;
+        $this->fakeResumeStatus = $resume ?? $this->fakeResumeStatus;
+        $this->fakeCancelStatus = $cancel ?? $this->fakeCancelStatus;
+
+        return $this;
+    }
+
+    public function fakePauseStatus(): DurableLifecycleStatus
+    {
+        return $this->fakePauseStatus;
+    }
+
+    public function fakeResumeStatus(): DurableLifecycleStatus
+    {
+        return $this->fakeResumeStatus;
+    }
+
+    public function fakeCancelStatus(): DurableLifecycleStatus
+    {
+        return $this->fakeCancelStatus;
     }
 
     public function durableRunDetail(string $runId): DurableRunDetail
