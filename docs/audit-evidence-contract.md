@@ -348,6 +348,60 @@ documented in the changelog.
 Adding new optional fields does not increment `schema_version`. Applications
 should handle unknown keys gracefully.
 
+### Tolerant validation during a bump
+
+A `schema_version` bump lands with a rolling-deploy window: for a short period,
+sinks receive payloads carrying both the previous and the current value. The
+supported-versions policy is **the current value plus the previous minor's
+value**; a value is dropped from the in-band set two minors after the release
+that introduced it, since by then no supported rolling-deploy window can still
+be emitting it. (History: `"1"` in v0.4, `"2"` in v0.5.0, `"3"` since v0.12.0 —
+so `"1"` and `"2"` are long past the window and no longer in-band.)
+
+Sinks that branch on `schema_version` do not need to hard-code this accept-list.
+`BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator` ships it:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator;
+
+SinkEnvelopeValidator::acceptsSchemaVersion('3');          // true (current)
+SinkEnvelopeValidator::acceptsSchemaVersion('1');          // false (aged out)
+SinkEnvelopeValidator::SUPPORTED_VERSIONS;                 // in-band accept-list
+SinkEnvelopeValidator::supportedVersions();                // same, as a method
+```
+
+A sink can quarantine anything out-of-band instead of trusting a stale or
+foreign envelope:
+
+```php
+use BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+
+final class TolerantAuditSink implements SwarmAuditSink
+{
+    public function emit(string $category, array $payload): void
+    {
+        $version = (string) ($payload['schema_version'] ?? '');
+
+        if (! SinkEnvelopeValidator::acceptsSchemaVersion($version)) {
+            // Out-of-band: route to a quarantine/dead-letter path and alert
+            // rather than persisting an envelope this release does not know how
+            // to read. Do not silently drop compliance evidence.
+            $this->quarantine($category, $payload);
+
+            return;
+        }
+
+        // ...persist the in-band payload to your append-only store.
+    }
+}
+```
+
+This helper is a **sink-side convenience only** — the dispatcher does not
+consult it, and strict-version sinks that pin a single value remain valid. Use
+it to opt in to the package's tolerant accept-list instead of maintaining your
+own.
+
 > **Replaying a `Skip` stream.** Persisted stream events round-trip the omitted
 > output as `null`, so iterating the raw events of a replay preserves the
 > Skip-vs-empty distinction. The convenience `StreamedSwarmResponse` rebuilt from
