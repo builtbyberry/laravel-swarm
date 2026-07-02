@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.16.1 - unreleased
+
+Core hardening pass: tighten the operator-contract surface shipped in v0.16.0 before v0.17.0 Phase-0 (Pulse extract + contract prune + driver-surface promotions) and the adoption packages. Scoped via `/improve-laravel` audit rather than pre-filed issues.
+
+### Fixed
+
+_To be filled in during release wrap-up._
+
 ## v0.16.0 - 2026-07-02
 
 Public surface & operator contract: promote a stable public operator control contract out of `@internal DurableSwarmManager` (the epic #254 keystone), complete the `@internal` promotion survey, and finalize the audit contract/envelope shapes (`RelayLane` split, tolerant `schema_version` verifier, `signature_key_id`). Additive and backward-compatible.
