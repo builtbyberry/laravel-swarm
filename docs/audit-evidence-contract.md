@@ -175,7 +175,7 @@ a key-rotation window must accept old keys for at least the duration of
 the longest expected outbox backlog (typically bounded by
 `max_attempts × reservation_timeout`).
 
-If your signer exposes a `keyId()`, the dispatcher stamps `signature_key_id`
+If your signer opts in via `IdentifiesSigningKey`, the dispatcher stamps `signature_key_id`
 onto the envelope at that same original emit — **exactly once, at sign time**,
 never on the drain path. The stored envelope carries that id verbatim through
 enqueue → drain → replay, so `signature_key_id` always names the key that
@@ -419,11 +419,12 @@ checkpoint categories), the envelope carries:
 | `metadata`      | array&lt;string, mixed&gt; | Allowlisted metadata values plus reserved keys. May be empty.    |
 
 On signed records only, the dispatcher also stamps one optional field when the
-bound `SwarmAuditSigner` exposes a key id (see [Audit Signing](#audit-signing)):
+bound signer opts in via `IdentifiesSigningKey` (see
+[Audit Signing](#audit-signing)):
 
 | Field               | Type   | Notes                                                                 |
 |---------------------|--------|-----------------------------------------------------------------------|
-| `signature_key_id`  | string | Present only when a signature is present AND the signer's `keyId()` returns a non-empty, non-secret identifier. Names the key that produced the record's original signature; travels verbatim through the outbox. Omitted (never `null`) otherwise. |
+| `signature_key_id`  | string | Present only when a signature is present AND an `IdentifiesSigningKey` signer's `keyId()` returns a non-empty, non-secret identifier. Names the key that produced the record's original signature; travels verbatim through the outbox. Dispatcher-owned (a signer MUST NOT set it in `sign()`). Omitted (never `null`) otherwise. |
 
 This is an additive optional field, not a universal frozen field — it appears
 only on signed records with a key id. It carries no `schema_version` bump under
@@ -921,17 +922,32 @@ interface SwarmAuditSigner
 Implementations MUST NOT mutate or remove existing keys. Signature fields are
 added alongside the existing envelope — conventionally `signature`,
 `signature_algorithm`, `signed_at`, and optionally `previous_signature_id` for
-chain-signing trails.
+chain-signing trails. `signature_key_id` is **reserved and dispatcher-owned**
+(see below): a signer MUST NOT set it in `sign()`; the dispatcher unsets any
+signer-supplied value before stamping.
 
 #### Exposing the key id
 
-A signer may optionally declare a `keyId(): ?string` method. When it returns a
+A signer that wants to name its key implements the opt-in
+`IdentifiesSigningKey` companion interface. When its `keyId()` returns a
 non-empty string, the dispatcher stamps it onto signed records as the
 package-standardized `signature_key_id` field, so every sink reads one field
 name for the verification-key hint regardless of which signer is bound:
 
 ```php
-class HmacAuditSigner implements SwarmAuditSigner
+namespace BuiltByBerry\LaravelSwarm\Contracts;
+
+interface IdentifiesSigningKey
+{
+    public function keyId(): ?string;
+}
+```
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
+
+class HmacAuditSigner implements IdentifiesSigningKey, SwarmAuditSigner
 {
     public function __construct(
         private readonly string $key,
@@ -961,14 +977,25 @@ fingerprint, or a key-version label — never the key material. It is emitted
 verbatim under the same exposure model as `signature_algorithm` and is **not**
 routed through capture or redaction, so keep it non-secret.
 
-The method is optional and backward compatible: it is read defensively, so
-existing signers that declare only `sign()` keep working and are treated as if
-`keyId()` returned `null`. Returning `null` or an empty string — or not
-declaring the method — omits `signature_key_id` entirely; the field is never
-emitted as `null`. The dispatcher stamps it **exactly once, at the original
-sign time** (never on the outbox drain path), so it names the key that produced
-the record's original signature and survives a rotation between enqueue and
-replay (see [Signer rotation](#signer-rotation)).
+The interface is opt-in and backward compatible: existing signers that
+implement only `SwarmAuditSigner` keep working and are treated as if no key id
+were available. Returning `null` or an empty string — or not implementing
+`IdentifiesSigningKey` — omits `signature_key_id` entirely; the field is never
+emitted as `null`. Because `signature_key_id` is dispatcher-owned, a value the
+signer sets in `sign()` is unset before stamping, so an absent key id can never
+leak a stray signer field. If `keyId()` throws (for example a transient
+keystore or KMS lookup), the dispatcher treats it as absent and still emits the
+already-verifiable record without the field — key-id resolution never demotes a
+signed record into a signing failure. The dispatcher stamps the field **exactly
+once, at the original sign time** (never on the outbox drain path), so it names
+the key that produced the record's original signature and survives a rotation
+between enqueue and replay (see [Signer rotation](#signer-rotation)).
+
+`signature_key_id` is an unauthenticated routing hint, **not** itself attestable
+provenance — the `signature` (verified against the key and
+`signature_algorithm`) is what a compliance reader trusts. Treat the key id as a
+convenience for selecting a verification key, never as evidence of who signed a
+record.
 
 Because the id is stamped **outside** the signed content, it is a
 non-authoritative hint: a verifying sink SHOULD try the named key first but MUST
@@ -1036,7 +1063,7 @@ records must re-verify `signature` against the stored `signature_algorithm`
 not a cryptographic check.
 
 To keep rotation possible, **persist `signature_algorithm` (and the
-`signature_key_id`, when your signer exposes a `keyId()`) alongside the
+`signature_key_id`, when your signer implements `IdentifiesSigningKey`) alongside the
 signature**, and accept old keys for at least the longest expected outbox
 backlog (see [Signer rotation](#signer-rotation)). Because of
 this, the dispatcher enforces one rule: if your signer adds a non-empty

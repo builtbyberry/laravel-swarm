@@ -20,6 +20,11 @@ use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSigner;
  * signature fields ("signature", "signature_algorithm", "signed_at", and
  * optionally "previous_signature_id" for chain-signing audit trails).
  *
+ * "signature_key_id" is reserved: it is dispatcher-owned, stamped from an
+ * opt-in {@see IdentifiesSigningKey} signer (see below), so implementations
+ * MUST NOT set it in sign() — the dispatcher unsets any signer-supplied value
+ * before stamping.
+ *
  * When an implementation adds a non-empty "signature", it MUST also add a
  * non-empty "signature_algorithm": the package signs on emit but never
  * verifies on read (verification is the sink's responsibility), so the
@@ -38,32 +43,15 @@ use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSigner;
  * the signer may return the input payload unchanged when it chooses not
  * to sign a given category.
  *
- * Optionally, an implementation may expose the id of the key that produced the
- * signature via a keyId(): ?string method:
- *
- *     public function keyId(): ?string
- *     {
- *         return 'hmac-2026-07'; // non-secret key-version label
- *     }
- *
- * When keyId() is declared and returns a non-empty string, the dispatcher
- * stamps it onto signed records as "signature_key_id" (see
- * SwarmAuditDispatcher::emit()), so a sink can select the right verification
- * key across a rotation window without guessing. It is a NON-SECRET identifier
- * — an HMAC key id, a certificate fingerprint, or a key-version tag — carried
- * verbatim on the envelope under the same exposure model as
- * "signature_algorithm"; it is NOT routed through capture or redaction, so it
- * must never contain key material.
- *
- * keyId() is OPTIONAL and read defensively (the same way this package treats
- * other optional contract methods, e.g. a store's assertReady()): a signer
- * that declares only sign() keeps working unchanged and is treated exactly as
- * if keyId() returned null — the field is simply omitted. It is documented as
- * a method rather than added to the interface signature precisely so existing
- * implementers are not broken. New implementers SHOULD declare it; returning
- * null (the default behavior of the shipped
- * {@see RecordingSwarmAuditSigner})
- * keeps the field absent.
+ * To expose the id of the key that produced the signature, a signer additionally
+ * implements the opt-in {@see IdentifiesSigningKey} companion interface, whose
+ * keyId(): ?string the dispatcher reads to stamp the package-standardized
+ * "signature_key_id" field onto signed records (see
+ * SwarmAuditDispatcher::emit()). The opt-in is a separate interface rather than
+ * a method on this contract, so existing signers that implement only sign()
+ * keep working unchanged and are simply treated as if no key id were available.
+ * The shipped {@see RecordingSwarmAuditSigner} implements it and defaults to
+ * null (no key id → field absent).
  */
 interface SwarmAuditSigner
 {

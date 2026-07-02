@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Testing\Audit;
 
+use BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use Illuminate\Testing\Assert as PHPUnit;
@@ -23,7 +24,7 @@ use Illuminate\Testing\Assert as PHPUnit;
  * recorder during the real run and records the signing path without
  * SwarmFake itself ever invoking the dispatcher.
  */
-class RecordingSwarmAuditSigner implements SwarmAuditSigner
+class RecordingSwarmAuditSigner implements IdentifiesSigningKey, SwarmAuditSigner
 {
     /**
      * @var array<int, array{category: string, input: array<string, mixed>, output: array<string, mixed>}>
@@ -51,7 +52,7 @@ class RecordingSwarmAuditSigner implements SwarmAuditSigner
 
     /**
      * Forward the wrapped delegate's key id, or null when there is no delegate
-     * or the delegate does not track one.
+     * or the delegate does not identify a signing key.
      *
      * The recorder is transparent: it mirrors whatever the real signer under
      * test would expose so the dispatcher stamps "signature_key_id" identically
@@ -59,11 +60,9 @@ class RecordingSwarmAuditSigner implements SwarmAuditSigner
      */
     public function keyId(): ?string
     {
-        if ($this->delegate === null || ! method_exists($this->delegate, 'keyId')) {
-            return null;
-        }
-
-        return $this->delegate->keyId();
+        return $this->delegate instanceof IdentifiesSigningKey
+            ? $this->delegate->keyId()
+            : null;
     }
 
     /**

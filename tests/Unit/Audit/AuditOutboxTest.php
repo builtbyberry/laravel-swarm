@@ -5,6 +5,7 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Audit\NoOpAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
@@ -352,7 +353,7 @@ test('DatabaseAuditOutbox preserves the original signature_key_id across replay 
     {
         public string $currentKey = 'K1';
     };
-    $signer = new class($keyHolder) implements SwarmAuditSigner
+    $signer = new class($keyHolder) implements IdentifiesSigningKey, SwarmAuditSigner
     {
         public function __construct(private readonly object $keyHolder) {}
 
@@ -398,6 +399,62 @@ test('DatabaseAuditOutbox preserves the original signature_key_id across replay 
     expect($replayed)->toHaveCount(1);
     expect($replayed[0]['signature_key_id'])->toBe('K1');
     expect($replayed[0]['signature'])->toBe('sig-under-K1');
+});
+
+test('a directly-emitted and a queued-then-drained record carry the same signature_key_id', function (): void {
+    // The "one stamped payload down both paths" claim: the dispatcher stamps
+    // signature_key_id once, at sign time, so a record that emits straight
+    // through and a record that fails, queues, and later drains must carry the
+    // identical id. Same signer, one direct emit and one outbox round-trip.
+    $signer = new class implements IdentifiesSigningKey, SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature'] = 'signed';
+            $payload['signature_algorithm'] = 'sha256';
+
+            return $payload;
+        }
+
+        public function keyId(): ?string
+        {
+            return 'kid-both-paths';
+        }
+    };
+    app()->instance(SwarmAuditSigner::class, $signer);
+
+    // Direct-emit path: recording sink accepts the emit.
+    $directSink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $directSink);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+    app(SwarmAuditDispatcher::class)->emit('run.completed', ['run_id' => 'r-direct']);
+
+    // Outbox path: a rejecting sink routes the same signer's record to the
+    // outbox under the queue policy; a later drain replays it.
+    app()->instance(SwarmAuditSink::class, new class implements SwarmAuditSink
+    {
+        public function emit(string $category, array $payload): void
+        {
+            throw new RuntimeException('sink rejects fresh emits');
+        }
+    });
+    config()->set('swarm.audit.failure_policy', 'queue');
+    app()->forgetInstance(AuditOutbox::class);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+    app(SwarmAuditDispatcher::class)->emit('run.completed', ['run_id' => 'r-queued']);
+
+    $drainSink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $drainSink);
+    app()->forgetInstance(AuditOutbox::class);
+    app(AuditOutbox::class)->drain();
+
+    $direct = $directSink->recordsForCategory('run.completed');
+    $drained = $drainSink->recordsForCategory('run.completed');
+    expect($direct)->toHaveCount(1);
+    expect($drained)->toHaveCount(1);
+    expect($direct[0]['signature_key_id'])->toBe('kid-both-paths');
+    expect($drained[0]['signature_key_id'])->toBe('kid-both-paths');
+    expect($drained[0]['signature_key_id'])->toBe($direct[0]['signature_key_id']);
 });
 
 test('DatabaseAuditOutbox drain skips dead_letter rows', function (): void {
