@@ -352,22 +352,26 @@ should handle unknown keys gracefully.
 
 A `schema_version` bump lands with a rolling-deploy window: for a short period,
 sinks receive payloads carrying both the previous and the current value. The
-supported-versions policy is **the current value plus the previous minor's
-value**; a value is dropped from the in-band set two minors after the release
-that introduced it, since by then no supported rolling-deploy window can still
-be emitting it. (History: `"1"` in v0.4, `"2"` in v0.5.0, `"3"` since v0.12.0 —
-so `"1"` and `"2"` are long past the window and no longer in-band.)
+supported-versions policy is **the current value plus the previous value**; a
+value is dropped from the in-band set two minors after the release that
+introduced its successor (i.e. two minors after it stopped being emitted), since
+by then no supported rolling-deploy window can still be emitting it. (History:
+`"1"` in v0.4, `"2"` in v0.5.0, `"3"` since v0.12.0 — so `"1"` and `"2"` are long
+past the window and no longer in-band.)
 
 Sinks that branch on `schema_version` do not need to hard-code this accept-list.
-`BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator` ships it:
+`BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator` ships it, **derived** from
+the envelope's version history (`EvidenceEnvelope::SCHEMA_VERSION_HISTORY` plus
+`CURRENT_MINOR`) rather than a hand-maintained list — so the next bump
+automatically widens the window to accept both the new and previous value for
+its two-minor life, then closes it, with no code edit to the accept-list:
 
 ```php
 use BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator;
 
 SinkEnvelopeValidator::acceptsSchemaVersion('3');          // true (current)
 SinkEnvelopeValidator::acceptsSchemaVersion('1');          // false (aged out)
-SinkEnvelopeValidator::SUPPORTED_VERSIONS;                 // in-band accept-list
-SinkEnvelopeValidator::supportedVersions();                // same, as a method
+SinkEnvelopeValidator::supportedVersions();                // ['3'] today; ['4','3'] for two minors after a "3"->"4" bump
 ```
 
 A sink can quarantine anything out-of-band instead of trusting a stale or
