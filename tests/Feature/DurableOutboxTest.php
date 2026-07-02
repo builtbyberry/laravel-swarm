@@ -7,7 +7,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
-use BuiltByBerry\LaravelSwarm\Enums\OutboxDispatchType;
+use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
@@ -50,7 +50,7 @@ test('drain dispatches pending step entries and deletes them', function (): void
 
     $outbox->enqueueStep($response->runId, 1, null, null);
 
-    $result = $outbox->drain([OutboxDispatchType::Step], 100);
+    $result = $outbox->drain([DurableDispatchType::Step], 100);
 
     expect($result)->toBeInstanceOf(DrainResult::class)
         ->and($result->dispatched)->toBe(1)
@@ -69,7 +69,7 @@ test('drain reclaims stale reservations after reservation timeout', function ():
         ->where('run_id', $response->runId)
         ->update(['reserved_at' => now()->subMinutes(5)]);
 
-    $result = $outbox->drain([OutboxDispatchType::Step], 100);
+    $result = $outbox->drain([DurableDispatchType::Step], 100);
 
     expect($result->dispatched)->toBe(1)
         ->and($result->skipped)->toBe(0)
@@ -94,7 +94,7 @@ test('drain skips entries with invalid dispatch_type when type-filtered', functi
         'created_at' => now(),
     ]);
 
-    $result = $outbox->drain([OutboxDispatchType::Step], 100);
+    $result = $outbox->drain([DurableDispatchType::Step], 100);
 
     // Valid step entry dispatched, bad entry excluded by filter (1 row remains)
     expect($result->dispatched)->toBe(1)
@@ -138,7 +138,7 @@ test('drain treats a null-json payload as invalid and skips the entry', function
 
     DB::table('swarm_durable_outbox')->insert([
         'run_id' => $response->runId,
-        'dispatch_type' => OutboxDispatchType::Step->value,
+        'dispatch_type' => DurableDispatchType::Step->value,
         'payload' => 'null',  // valid JSON, but not an array
         'queue_connection' => null,
         'queue_name' => null,
@@ -162,7 +162,7 @@ test('drain filters by dispatch_type when specified', function (): void {
     $outbox->enqueueStep($response->runId, 2, null, null);
 
     // Only drain branch type — should dispatch 0 (none are branch type)
-    $result = $outbox->drain([OutboxDispatchType::Branch], 100);
+    $result = $outbox->drain([DurableDispatchType::Branch], 100);
 
     expect($result->dispatched)->toBe(0)
         ->and($result->skipped)->toBe(0)
@@ -211,7 +211,7 @@ test('drain reports claimed and reclaimed counts when a stale reservation is re-
         ->where('run_id', $response->runId)
         ->update(['reserved_at' => now()->subMinutes(5)]);
 
-    $result = $outbox->drain([OutboxDispatchType::Step], 100);
+    $result = $outbox->drain([DurableDispatchType::Step], 100);
 
     expect($result->claimed)->toBe(1)
         ->and($result->reclaimed)->toBe(1);
@@ -228,7 +228,7 @@ test('drain reports claimed count and zero reclaimed for fresh unclaimed rows', 
     $outbox->enqueueStep($response->runId, 2, null, null);
     $outbox->enqueueStep($response->runId, 3, null, null);
 
-    $result = $outbox->drain([OutboxDispatchType::Step], 100);
+    $result = $outbox->drain([DurableDispatchType::Step], 100);
 
     expect($result->claimed)->toBe(3)
         ->and($result->reclaimed)->toBe(0);
@@ -588,7 +588,7 @@ test('drain treats an unknown queue_connection as permanently invalid and delete
 
     DB::table('swarm_durable_outbox')->insert([
         'run_id' => $response->runId,
-        'dispatch_type' => OutboxDispatchType::Step->value,
+        'dispatch_type' => DurableDispatchType::Step->value,
         'payload' => '{"step_index":1}',
         'queue_connection' => 'unknown-connection-that-does-not-exist',
         'queue_name' => null,
@@ -643,7 +643,7 @@ test('drain treats a missing step_index field as permanently invalid', function 
 
     DB::table('swarm_durable_outbox')->insert([
         'run_id' => $response->runId,
-        'dispatch_type' => OutboxDispatchType::Step->value,
+        'dispatch_type' => DurableDispatchType::Step->value,
         'payload' => '{}', // missing step_index
         'queue_connection' => null,
         'queue_name' => null,
@@ -665,7 +665,7 @@ test('drain treats a non-integer step_index as permanently invalid', function ()
 
     DB::table('swarm_durable_outbox')->insert([
         'run_id' => $response->runId,
-        'dispatch_type' => OutboxDispatchType::Step->value,
+        'dispatch_type' => DurableDispatchType::Step->value,
         'payload' => '{"step_index":"not-an-int"}',
         'queue_connection' => null,
         'queue_name' => null,
@@ -687,7 +687,7 @@ test('drain treats a missing branch_id field as permanently invalid', function (
 
     DB::table('swarm_durable_outbox')->insert([
         'run_id' => $response->runId,
-        'dispatch_type' => OutboxDispatchType::Branch->value,
+        'dispatch_type' => DurableDispatchType::Branch->value,
         'payload' => '{}', // missing branch_id
         'queue_connection' => null,
         'queue_name' => null,
@@ -709,7 +709,7 @@ test('drain treats an empty string branch_id as permanently invalid', function (
 
     DB::table('swarm_durable_outbox')->insert([
         'run_id' => $response->runId,
-        'dispatch_type' => OutboxDispatchType::Branch->value,
+        'dispatch_type' => DurableDispatchType::Branch->value,
         'payload' => '{"branch_id":""}',
         'queue_connection' => null,
         'queue_name' => null,
