@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
+
 /**
  * Outcome of a durable resume request.
  *
@@ -19,8 +21,8 @@ class DurableResumeResult
         public readonly string $runId,
         public readonly string $swarmClass,
         public readonly string $topology,
-        /** Either 'resumed' (a step was re-dispatched) or 'waiting' (resumed back into a waiting boundary). */
-        public readonly string $status,
+        /** Either DurableLifecycleStatus::Resumed (a step was re-dispatched) or ::Waiting (resumed back into a waiting boundary). */
+        public readonly DurableLifecycleStatus $status,
         /** True when resuming re-dispatched a waiting boundary rather than a step. */
         public readonly bool $waitingBoundaryDispatched = false,
     ) {}
@@ -31,7 +33,7 @@ class DurableResumeResult
      */
     public function isWaiting(): bool
     {
-        return $this->status === 'waiting';
+        return $this->status === DurableLifecycleStatus::Waiting;
     }
 
     /**
@@ -43,7 +45,7 @@ class DurableResumeResult
             'run_id' => $this->runId,
             'swarm_class' => $this->swarmClass,
             'topology' => $this->topology,
-            'status' => $this->status,
+            'status' => $this->status->value,
             'waiting_boundary_dispatched' => $this->waitingBoundaryDispatched,
         ];
     }

@@ -150,7 +150,7 @@ function swarmOperatorControlCancelWorker(array $runIds): Closure
 
         foreach ($runIds as $runId) {
             try {
-                $outcomes[$runId] = $operator->cancel($runId)->status;
+                $outcomes[$runId] = $operator->cancel($runId)->status->value;
             } catch (SwarmException $e) {
                 // Fail-loud: the run was already terminal (advance won) or the
                 // control verb lost the row contention and rolled back. Both are

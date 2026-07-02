@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
+
 /**
  * Outcome of a durable cancel request.
  *
@@ -18,8 +20,8 @@ class DurableCancelResult
         public readonly string $runId,
         public readonly string $swarmClass,
         public readonly string $topology,
-        /** Either 'cancelled' (applied now) or 'cancel_scheduled' (will cancel at the next boundary). */
-        public readonly string $status,
+        /** Either DurableLifecycleStatus::Cancelled (applied now) or ::CancelScheduled (will cancel at the next boundary). */
+        public readonly DurableLifecycleStatus $status,
     ) {}
 
     /**
@@ -28,7 +30,7 @@ class DurableCancelResult
      */
     public function isImmediate(): bool
     {
-        return $this->status === 'cancelled';
+        return $this->status === DurableLifecycleStatus::Cancelled;
     }
 
     /**
@@ -40,7 +42,7 @@ class DurableCancelResult
             'run_id' => $this->runId,
             'swarm_class' => $this->swarmClass,
             'topology' => $this->topology,
-            'status' => $this->status,
+            'status' => $this->status->value,
             'immediate' => $this->isImmediate(),
         ];
     }

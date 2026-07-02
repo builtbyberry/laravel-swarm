@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Testing;
 
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Responses\DurableCancelResult;
 use BuiltByBerry\LaravelSwarm\Responses\DurablePauseResult;
 use BuiltByBerry\LaravelSwarm\Responses\DurableResumeResult;
@@ -46,6 +47,10 @@ class FakeDurableSwarmManager extends DurableSwarmManager
         return $this->fake->durableRunDetail($runId);
     }
 
+    /**
+     * The fake defaults to the IMMEDIATE branch (`Paused`); drive the scheduled
+     * branch with {@see SwarmFake::fakeDurableLifecycleStatus()}.
+     */
     public function pause(string $runId): DurablePauseResult
     {
         $this->fake->recordDurableOperation('pause');
@@ -54,22 +59,33 @@ class FakeDurableSwarmManager extends DurableSwarmManager
             runId: $runId,
             swarmClass: $this->fake->fakeSwarmClass(),
             topology: $this->fake->fakeTopology(),
-            status: 'paused',
+            status: $this->fake->fakePauseStatus(),
         );
     }
 
+    /**
+     * The fake defaults to the `Resumed` branch; drive the waiting branch with
+     * {@see SwarmFake::fakeDurableLifecycleStatus()}.
+     */
     public function resume(string $runId): DurableResumeResult
     {
         $this->fake->recordDurableOperation('resume');
+
+        $status = $this->fake->fakeResumeStatus();
 
         return new DurableResumeResult(
             runId: $runId,
             swarmClass: $this->fake->fakeSwarmClass(),
             topology: $this->fake->fakeTopology(),
-            status: 'resumed',
+            status: $status,
+            waitingBoundaryDispatched: $status === DurableLifecycleStatus::Waiting,
         );
     }
 
+    /**
+     * The fake defaults to the IMMEDIATE branch (`Cancelled`); drive the
+     * scheduled branch with {@see SwarmFake::fakeDurableLifecycleStatus()}.
+     */
     public function cancel(string $runId): DurableCancelResult
     {
         $this->fake->recordDurableOperation('cancel');
@@ -78,7 +94,7 @@ class FakeDurableSwarmManager extends DurableSwarmManager
             runId: $runId,
             swarmClass: $this->fake->fakeSwarmClass(),
             topology: $this->fake->fakeTopology(),
-            status: 'cancelled',
+            status: $this->fake->fakeCancelStatus(),
         );
     }
 }

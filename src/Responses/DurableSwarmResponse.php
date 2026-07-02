@@ -26,16 +26,34 @@ class DurableSwarmResponse
         return $this->manager->inspect($this->runId);
     }
 
+    /**
+     * Pause the durable run.
+     *
+     * Return type changed from `bool` to {@see DurablePauseResult} in v0.16.0 —
+     * read `->status` / `->isImmediate()` for the effective transition. See UPGRADING.md.
+     */
     public function pause(): DurablePauseResult
     {
         return $this->manager->pause($this->runId);
     }
 
+    /**
+     * Resume the paused durable run.
+     *
+     * Return type changed from `bool` to {@see DurableResumeResult} in v0.16.0 —
+     * read `->status` / `->isWaiting()` for the effective transition. See UPGRADING.md.
+     */
     public function resume(): DurableResumeResult
     {
         return $this->manager->resume($this->runId);
     }
 
+    /**
+     * Cancel the durable run.
+     *
+     * Return type changed from `bool` to {@see DurableCancelResult} in v0.16.0 —
+     * read `->status` / `->isImmediate()` for the effective transition. See UPGRADING.md.
+     */
     public function cancel(): DurableCancelResult
     {
         return $this->manager->cancel($this->runId);

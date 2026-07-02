@@ -6,7 +6,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator;
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\DurableCancelResult;
 use BuiltByBerry\LaravelSwarm\Responses\DurablePauseResult;
 use BuiltByBerry\LaravelSwarm\Responses\DurableResumeResult;
@@ -15,7 +17,9 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSwarmOperator;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use Illuminate\Support\Facades\DB;
 
 beforeEach(function (): void {
     config()->set('swarm.persistence.driver', 'database');
@@ -55,7 +59,7 @@ test('SwarmOperator pause returns a rich result reporting the effective status',
 
     expect($result)->toBeInstanceOf(DurablePauseResult::class)
         ->and($result->runId)->toBe($runId)
-        ->and($result->status)->toBe('paused')
+        ->and($result->status)->toBe(DurableLifecycleStatus::Paused)
         ->and($result->isImmediate())->toBeTrue()
         ->and(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('paused');
 });
@@ -68,7 +72,7 @@ test('SwarmOperator resume returns a rich result and re-dispatches the run', fun
 
     expect($result)->toBeInstanceOf(DurableResumeResult::class)
         ->and($result->runId)->toBe($runId)
-        ->and($result->status)->toBe('resumed')
+        ->and($result->status)->toBe(DurableLifecycleStatus::Resumed)
         ->and($result->isWaiting())->toBeFalse()
         ->and($result->waitingBoundaryDispatched)->toBeFalse()
         ->and(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending');
@@ -81,9 +85,81 @@ test('SwarmOperator cancel returns a rich result reporting the effective status'
 
     expect($result)->toBeInstanceOf(DurableCancelResult::class)
         ->and($result->runId)->toBe($runId)
-        ->and($result->status)->toBe('cancelled')
+        ->and($result->status)->toBe(DurableLifecycleStatus::Cancelled)
         ->and($result->isImmediate())->toBeTrue()
         ->and(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('cancelled');
+});
+
+test('SwarmOperator pause on a mid-step run reports the SCHEDULED branch, not immediate', function () {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('operator-task')->runId;
+
+    // Put the run mid-step (running with a live lease): pause() succeeds but
+    // cannot apply immediately — it schedules a pause at the next boundary.
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'status' => 'running',
+            'execution_token' => 'in-flight-token',
+            'leased_until' => now('UTC')->addMinutes(5),
+            'updated_at' => now('UTC'),
+        ]);
+
+    $result = app(SwarmOperator::class)->pause($runId);
+
+    expect($result)->toBeInstanceOf(DurablePauseResult::class)
+        ->and($result->status)->toBe(DurableLifecycleStatus::PauseScheduled)
+        ->and($result->isImmediate())->toBeFalse()
+        // The run keeps running; only pause_requested_at is stamped.
+        ->and(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('running')
+        ->and(app(DurableSwarmManager::class)->find($runId)['pause_requested_at'])->not->toBeNull();
+});
+
+test('SwarmOperator cancel on a mid-step run reports the SCHEDULED branch, not immediate', function () {
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('operator-task')->runId;
+
+    DB::table('swarm_durable_runs')
+        ->where('run_id', $runId)
+        ->update([
+            'status' => 'running',
+            'execution_token' => 'in-flight-token',
+            'leased_until' => now('UTC')->addMinutes(5),
+            'updated_at' => now('UTC'),
+        ]);
+
+    $result = app(SwarmOperator::class)->cancel($runId);
+
+    expect($result)->toBeInstanceOf(DurableCancelResult::class)
+        ->and($result->status)->toBe(DurableLifecycleStatus::CancelScheduled)
+        ->and($result->isImmediate())->toBeFalse()
+        ->and(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('running')
+        ->and(app(DurableSwarmManager::class)->find($runId)['cancel_requested_at'])->not->toBeNull();
+});
+
+test('SwarmOperator resume of a run paused at a branch boundary reports the WAITING branch', function () {
+    $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-durable-task')->runId;
+
+    // Advance into the parallel fan-out so the run has a branch boundary, then
+    // mark the branches so a resume re-arms the waiting boundary rather than
+    // dispatching the join step.
+    (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class));
+
+    DB::table('swarm_durable_branches')
+        ->where('run_id', $runId)
+        ->where('branch_id', 'parallel:2')
+        ->update([
+            'status' => 'running',
+            'leased_until' => now('UTC')->addMinutes(5),
+            'execution_token' => 'active-branch-token',
+        ]);
+
+    app(SwarmOperator::class)->pause($runId);
+    $result = app(SwarmOperator::class)->resume($runId);
+
+    expect($result)->toBeInstanceOf(DurableResumeResult::class)
+        ->and($result->status)->toBe(DurableLifecycleStatus::Waiting)
+        ->and($result->isWaiting())->toBeTrue()
+        ->and($result->waitingBoundaryDispatched)->toBeTrue()
+        ->and(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('waiting');
 });
 
 test('SwarmOperator signal returns the existing DurableSignalResult shape', function () {

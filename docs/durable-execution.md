@@ -646,13 +646,19 @@ controls: a run idle at a checkpoint transitions immediately, while a run
 mid-step is marked to transition at its next safe boundary. The result reports
 which:
 
+The `status` is a typed `BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus`
+enum, and each result exposes convenience predicates:
+
 ```php
-$pause->status;        // 'paused' or 'pause_scheduled'
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
+
+$pause->status;        // DurableLifecycleStatus::Paused or ::PauseScheduled
 $pause->isImmediate(); // true when it paused now
 
-$cancel->status;       // 'cancelled' or 'cancel_scheduled'
+$cancel->status;       // DurableLifecycleStatus::Cancelled or ::CancelScheduled
 
-$resume->status;                     // 'resumed' or 'waiting'
+$resume->status;                     // DurableLifecycleStatus::Resumed or ::Waiting
+$resume->isWaiting();                // true when it resumed back into a waiting boundary
 $resume->waitingBoundaryDispatched;  // true when a waiting boundary was re-armed
 ```
 

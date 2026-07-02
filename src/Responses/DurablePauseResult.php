@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
+
 /**
  * Outcome of a durable pause request.
  *
@@ -18,8 +20,8 @@ class DurablePauseResult
         public readonly string $runId,
         public readonly string $swarmClass,
         public readonly string $topology,
-        /** Either 'paused' (applied now) or 'pause_scheduled' (will pause at the next boundary). */
-        public readonly string $status,
+        /** Either DurableLifecycleStatus::Paused (applied now) or ::PauseScheduled (will pause at the next boundary). */
+        public readonly DurableLifecycleStatus $status,
     ) {}
 
     /**
@@ -28,7 +30,7 @@ class DurablePauseResult
      */
     public function isImmediate(): bool
     {
-        return $this->status === 'paused';
+        return $this->status === DurableLifecycleStatus::Paused;
     }
 
     /**
@@ -40,7 +42,7 @@ class DurablePauseResult
             'run_id' => $this->runId,
             'swarm_class' => $this->swarmClass,
             'topology' => $this->topology,
-            'status' => $this->status,
+            'status' => $this->status->value,
             'immediate' => $this->isImmediate(),
         ];
     }

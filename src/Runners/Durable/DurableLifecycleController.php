@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Events\SwarmResumed;
@@ -87,7 +88,7 @@ class DurableLifecycleController
             runId: $runId,
             swarmClass: (string) $run['swarm_class'],
             topology: (string) $run['topology'],
-            status: $immediatelyPaused ? 'paused' : 'pause_scheduled',
+            status: $immediatelyPaused ? DurableLifecycleStatus::Paused : DurableLifecycleStatus::PauseScheduled,
         );
     }
 
@@ -160,7 +161,7 @@ class DurableLifecycleController
             runId: $runId,
             swarmClass: (string) $run['swarm_class'],
             topology: (string) $run['topology'],
-            status: $waiting ? 'waiting' : 'resumed',
+            status: $waiting ? DurableLifecycleStatus::Waiting : DurableLifecycleStatus::Resumed,
             waitingBoundaryDispatched: $waitingBoundaryDispatched,
         );
     }
@@ -222,7 +223,7 @@ class DurableLifecycleController
             runId: $runId,
             swarmClass: (string) $run['swarm_class'],
             topology: (string) $run['topology'],
-            status: $immediatelyCancelled ? 'cancelled' : 'cancel_scheduled',
+            status: $immediatelyCancelled ? DurableLifecycleStatus::Cancelled : DurableLifecycleStatus::CancelScheduled,
         );
     }
 
