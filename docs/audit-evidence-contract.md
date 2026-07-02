@@ -175,6 +175,21 @@ a key-rotation window must accept old keys for at least the duration of
 the longest expected outbox backlog (typically bounded by
 `max_attempts × reservation_timeout`).
 
+If your signer exposes a `keyId()`, the dispatcher stamps `signature_key_id`
+onto the envelope at that same original emit — **exactly once, at sign time**,
+never on the drain path. The stored envelope carries that id verbatim through
+enqueue → drain → replay, so `signature_key_id` always names the key that
+produced the record's *original* signature even if the signer rotated between
+enqueue and drain. A sink resolving which key to verify against SHOULD read
+`signature_key_id` to pick the right key first, but MUST retain its try-all
+fallback across the rotation window: because the id is stamped **outside** the
+signed content, a corrupted or wrong id could otherwise fail a legitimately
+signed record. Treat a `signature_key_id` mismatch as tamper only *after* the
+try-all fallback also fails to verify. This keeps the id a non-authoritative
+selection hint — it can never turn a valid record invalid (fallback still
+verifies it) and can never enable forgery (a wrong key simply fails to
+verify). See [Audit Signing](#audit-signing).
+
 ### Health visibility
 
 `swarm:health` runs two audit outbox checks by default:
@@ -402,6 +417,22 @@ checkpoint categories), the envelope carries:
 |-----------------|-----------------------|-----------------------------------------------------------------------|
 | `metadata_keys` | array&lt;string&gt;   | All original metadata key names, sorted. Always emitted.              |
 | `metadata`      | array&lt;string, mixed&gt; | Allowlisted metadata values plus reserved keys. May be empty.    |
+
+On signed records only, the dispatcher also stamps one optional field when the
+bound `SwarmAuditSigner` exposes a key id (see [Audit Signing](#audit-signing)):
+
+| Field               | Type   | Notes                                                                 |
+|---------------------|--------|-----------------------------------------------------------------------|
+| `signature_key_id`  | string | Present only when a signature is present AND the signer's `keyId()` returns a non-empty, non-secret identifier. Names the key that produced the record's original signature; travels verbatim through the outbox. Omitted (never `null`) otherwise. |
+
+This is an additive optional field, not a universal frozen field — it appears
+only on signed records with a key id. It carries no `schema_version` bump under
+the [forward-compat contract](#stability-promise) ("New optional fields may be
+added… Sinks MUST tolerate unknown keys"). Unlike signer-supplied fields (which
+are [not frozen](#what-is-not-frozen) and implementation-owned), the *name*
+`signature_key_id` is package-standardized: the dispatcher stamps it from
+`keyId()`, so every sink reads one field name regardless of which signer is
+bound.
 
 The `metadata` array always includes any reserved keys present on the run,
 regardless of the configured allowlist. The reserved set is published as
@@ -892,6 +923,59 @@ added alongside the existing envelope — conventionally `signature`,
 `signature_algorithm`, `signed_at`, and optionally `previous_signature_id` for
 chain-signing trails.
 
+#### Exposing the key id
+
+A signer may optionally declare a `keyId(): ?string` method. When it returns a
+non-empty string, the dispatcher stamps it onto signed records as the
+package-standardized `signature_key_id` field, so every sink reads one field
+name for the verification-key hint regardless of which signer is bound:
+
+```php
+class HmacAuditSigner implements SwarmAuditSigner
+{
+    public function __construct(
+        private readonly string $key,
+        private readonly string $keyId,
+    ) {}
+
+    public function sign(string $category, array $payload): array
+    {
+        $canonical = json_encode($payload, JSON_UNESCAPED_SLASHES);
+
+        return $payload + [
+            'signature' => hash_hmac('sha256', $canonical, $this->key),
+            'signature_algorithm' => 'hmac-sha256',
+            'signed_at' => now()->toIso8601String(),
+        ];
+    }
+
+    public function keyId(): ?string
+    {
+        return $this->keyId; // e.g. 'hmac-2026-07' — a key-version label
+    }
+}
+```
+
+`keyId()` returns a **NON-SECRET** identifier — an HMAC key id, a certificate
+fingerprint, or a key-version label — never the key material. It is emitted
+verbatim under the same exposure model as `signature_algorithm` and is **not**
+routed through capture or redaction, so keep it non-secret.
+
+The method is optional and backward compatible: it is read defensively, so
+existing signers that declare only `sign()` keep working and are treated as if
+`keyId()` returned `null`. Returning `null` or an empty string — or not
+declaring the method — omits `signature_key_id` entirely; the field is never
+emitted as `null`. The dispatcher stamps it **exactly once, at the original
+sign time** (never on the outbox drain path), so it names the key that produced
+the record's original signature and survives a rotation between enqueue and
+replay (see [Signer rotation](#signer-rotation)).
+
+Because the id is stamped **outside** the signed content, it is a
+non-authoritative hint: a verifying sink SHOULD try the named key first but MUST
+keep its try-all fallback (or treat a mismatch as tamper only after the fallback
+fails). A wrong or corrupted id can never fail a legitimately signed record, and
+can never enable forgery.
+
 ```php
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 
@@ -951,9 +1035,10 @@ records must re-verify `signature` against the stored `signature_algorithm`
 (and your key) before trusting a record. `swarm:trace` is a forensic timeline,
 not a cryptographic check.
 
-To keep rotation possible, **persist `signature_algorithm` (and a key id)
-alongside the signature**, and accept old keys for at least the longest
-expected outbox backlog (see [Signer rotation](#signer-rotation)). Because of
+To keep rotation possible, **persist `signature_algorithm` (and the
+`signature_key_id`, when your signer exposes a `keyId()`) alongside the
+signature**, and accept old keys for at least the longest expected outbox
+backlog (see [Signer rotation](#signer-rotation)). Because of
 this, the dispatcher enforces one rule: if your signer adds a non-empty
 `signature`, it must also add a non-empty `signature_algorithm`. A signature
 without an algorithm name can never be re-verified after a key or algorithm

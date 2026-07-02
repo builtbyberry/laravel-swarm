@@ -50,6 +50,23 @@ class RecordingSwarmAuditSigner implements SwarmAuditSigner
     }
 
     /**
+     * Forward the wrapped delegate's key id, or null when there is no delegate
+     * or the delegate does not track one.
+     *
+     * The recorder is transparent: it mirrors whatever the real signer under
+     * test would expose so the dispatcher stamps "signature_key_id" identically
+     * whether or not SwarmFake intercepted the signer.
+     */
+    public function keyId(): ?string
+    {
+        if ($this->delegate === null || ! method_exists($this->delegate, 'keyId')) {
+            return null;
+        }
+
+        return $this->delegate->keyId();
+    }
+
+    /**
      * Every recorded signing call in the order it was emitted.
      *
      * @return array<int, array{category: string, input: array<string, mixed>, output: array<string, mixed>}>

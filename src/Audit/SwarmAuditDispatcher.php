@@ -76,6 +76,7 @@ class SwarmAuditDispatcher
             try {
                 $enriched = $this->signer->sign($category, $enriched);
                 $this->assertSignedPayloadIsVerifiable($category, $enriched);
+                $enriched = $this->stampSignatureKeyId($enriched);
             } catch (Throwable $exception) {
                 $decision = $this->failureHandler->handle($this->sink, $category, $enriched, $exception);
 
@@ -184,6 +185,57 @@ class SwarmAuditDispatcher
             .'add it alongside "signature" (see docs/audit-evidence-contract.md "Audit Signing").',
             $category,
         ));
+    }
+
+    /**
+     * Stamp the signer's key id onto a signed payload as "signature_key_id".
+     *
+     * This runs exactly once, at sign time — immediately after signing and the
+     * verifiability guard, before the record is handed to the sink or routed to
+     * the outbox — so the one stamped payload carries the key id down BOTH the
+     * direct-emit and the outbox-enqueue paths. The outbox replays the stored
+     * payload verbatim and never re-runs this stamp, so the id names the key
+     * that produced the record's original signature and survives a
+     * rotation between enqueue and drain (see docs/audit-evidence-contract.md
+     * "Signer rotation").
+     *
+     * The key id is a NON-AUTHORITATIVE selection hint stamped outside the
+     * signed content: a sink SHOULD try the named key first but MUST retain its
+     * try-all fallback, so a wrong or absent key id can never fail a
+     * legitimately-signed record nor validate a forged one.
+     *
+     * Mirroring assertSignedPayloadIsVerifiable(), this only acts when a
+     * non-empty "signature" is present. keyId() is read defensively: signers
+     * that predate the method, do not declare it, or return null/empty leave
+     * the field absent — we never emit "signature_key_id": null.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    protected function stampSignatureKeyId(array $payload): array
+    {
+        $signature = $payload['signature'] ?? null;
+
+        if (! is_string($signature) || $signature === '') {
+            // Unsigned, or the signer opted out of this category — nothing to stamp.
+            return $payload;
+        }
+
+        if (! method_exists($this->signer, 'keyId')) {
+            // Legacy signer that predates keyId() — treat exactly as null.
+            return $payload;
+        }
+
+        $keyId = $this->signer->keyId();
+
+        if (! is_string($keyId) || $keyId === '') {
+            // Signer tracks no key id — omit the field, never emit null.
+            return $payload;
+        }
+
+        $payload['signature_key_id'] = $keyId;
+
+        return $payload;
     }
 
     /**

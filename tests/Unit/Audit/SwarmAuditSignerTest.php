@@ -277,6 +277,111 @@ test('signing failure with Halt decision throws AuditSinkHaltedException', funct
     }
 });
 
+test('a legacy signer without keyId() produces no signature_key_id field', function (): void {
+    // FakeHmacSigner declares only sign() — it predates keyId(). The dispatcher
+    // reads keyId() defensively, so the signed record carries no key id.
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new FakeHmacSigner);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record)->toHaveKey('signature');
+    expect($record)->not->toHaveKey('signature_key_id');
+});
+
+test('a signer with a non-empty keyId() stamps signature_key_id on signed records', function (): void {
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature'] = 'signed';
+            $payload['signature_algorithm'] = 'sha256';
+
+            return $payload;
+        }
+
+        public function keyId(): ?string
+        {
+            return 'hmac-2026-07';
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record['signature_key_id'])->toBe('hmac-2026-07');
+});
+
+test('no signer bound produces no signature_key_id field', function (): void {
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record)->not->toHaveKey('signature_key_id');
+});
+
+test('a signer whose keyId() returns null or empty leaves the field absent', function (): void {
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            $payload['signature'] = 'signed';
+            $payload['signature_algorithm'] = 'sha256';
+
+            return $payload;
+        }
+
+        public function keyId(): ?string
+        {
+            return null;
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record)->toHaveKey('signature');
+    expect($record)->not->toHaveKey('signature_key_id');
+});
+
+test('keyId() is not stamped when the signer opts out (no signature)', function (): void {
+    // A signer that returns the payload unchanged for a category — the opt-out
+    // path — is unsigned, so keyId() must never produce a stray signature_key_id.
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->instance(SwarmAuditSigner::class, new class implements SwarmAuditSigner
+    {
+        public function sign(string $category, array $payload): array
+        {
+            return $payload; // opts out of every category
+        }
+
+        public function keyId(): ?string
+        {
+            return 'hmac-2026-07';
+        }
+    });
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+
+    app(SwarmAuditDispatcher::class)->emit('run.started', ['run_id' => 'x']);
+
+    $record = $sink->allRecords()[0];
+    expect($record)->not->toHaveKey('signature');
+    expect($record)->not->toHaveKey('signature_key_id');
+});
+
 test('signer sees the enriched envelope including schema_version and category', function (): void {
     $captured = [];
 
