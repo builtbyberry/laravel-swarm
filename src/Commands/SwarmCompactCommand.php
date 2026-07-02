@@ -78,11 +78,6 @@ class SwarmCompactCommand extends Command
         $hotTable = (string) $config->get('swarm.tables.stream_events', 'swarm_stream_events');
         $durableTable = (string) $config->get('swarm.tables.durable', 'swarm_durable_runs');
 
-        $quarantinedIds = $connection->table($durableTable)
-            ->whereNotNull('compaction_quarantined_at')
-            ->pluck('run_id')
-            ->all();
-
         $query = $connection->table($hotTable)
             ->select('run_id')
             ->where('event_type', 'swarm_causal_seal_barrier')
@@ -95,12 +90,14 @@ class SwarmCompactCommand extends Command
             ->whereIn('run_id', function ($durable) use ($durableTable): void {
                 $durable->select('run_id')->from($durableTable);
             })
+            ->whereNotExists(function ($quarantined) use ($hotTable, $durableTable): void {
+                $quarantined->select($quarantined->raw(1))
+                    ->from($durableTable)
+                    ->whereColumn($durableTable.'.run_id', $hotTable.'.run_id')
+                    ->whereNotNull($durableTable.'.compaction_quarantined_at');
+            })
             ->distinct()
             ->limit($limit);
-
-        if ($quarantinedIds !== []) {
-            $query->whereNotIn('run_id', $quarantinedIds);
-        }
 
         /** @var list<string> */
         return $query->pluck('run_id')->all();
