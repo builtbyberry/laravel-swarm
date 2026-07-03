@@ -23,6 +23,17 @@ from the repository root unless a test or reproduction explicitly uses a
 Testbench application. If you need Artisan behavior, prefer a focused package
 test over ad hoc manual setup.
 
+Install the local commit-msg hook once per clone to validate Conventional Commits
+format before you commit:
+
+```bash
+composer hooks:install
+```
+
+This is a local-only check (`tools/git-hooks/commit-msg`) — it does not run in CI.
+Branch naming is enforced separately, server-side, by
+`.github/workflows/branch-naming.yml`.
+
 ## Required Checks
 
 Before opening a pull request, run the checks that match your change:
