@@ -269,6 +269,10 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.16.1
+
+**No required action.** v0.16.1 is a core hardening pass with no migration, no config change, and no breaking API — `swarm:compact` discovery is now a bounded SQL query instead of an unbounded in-memory pluck (#339), `DatabaseAuditOutbox::drain()` batches its retry/dead-letter writes with a per-row fallback (no observable change to `AuditDrainResult`'s shape or the audit trail), and two documentation lines (`AGENTS.md`'s `laravel/ai` version, `CONTRIBUTING.md`'s hook setup step) were corrected.
+
 ## Upgrading to v0.16.0
 
 **No required action for most applications.** v0.16.0 is additive and backward-compatible — it promotes a public operator control contract and finalizes several audit and relay surfaces. Notes if any apply to you:
