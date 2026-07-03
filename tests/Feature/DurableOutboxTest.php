@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -344,6 +345,29 @@ test('swarm:relay --type=step filters by step type', function (): void {
 
     expect($exitCode)->toBe(0)
         ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(0);
+});
+
+test('swarm:relay --type=audit filters to the audit lane and leaves the durable lane untouched', function (): void {
+    $outbox = app(DurableOutbox::class);
+    $response = FakeSequentialSwarm::make()->dispatchDurable('task');
+
+    // Drain the initial row first
+    $outbox->drain([], 100);
+
+    // Seed the durable lane — must stay untouched by an audit-only relay.
+    $outbox->enqueueStep($response->runId, 1, null, null);
+
+    // Seed the audit lane.
+    app(AuditOutbox::class)->enqueue('run.failed', [
+        'run_id' => 'r-audit-only',
+        'category' => 'run.failed',
+    ]);
+
+    $exitCode = Artisan::call('swarm:relay --type=audit');
+
+    expect($exitCode)->toBe(0)
+        ->and(DB::table('swarm_audit_outbox')->where('run_id', 'r-audit-only')->count())->toBe(0)
+        ->and(DB::table('swarm_durable_outbox')->where('run_id', $response->runId)->count())->toBe(1);
 });
 
 test('swarm:relay --type=bogus exits failure with error message', function (): void {

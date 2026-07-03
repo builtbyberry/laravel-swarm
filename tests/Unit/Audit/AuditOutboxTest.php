@@ -9,7 +9,11 @@ use BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\CountingThrowingSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
+use Illuminate\Contracts\Config\Repository;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -455,6 +459,96 @@ test('a directly-emitted and a queued-then-drained record carry the same signatu
     expect($direct[0]['signature_key_id'])->toBe('kid-both-paths');
     expect($drained[0]['signature_key_id'])->toBe('kid-both-paths');
     expect($drained[0]['signature_key_id'])->toBe($direct[0]['signature_key_id']);
+});
+
+test('a batch of failed entries retains each entry\'s own attempts and error, not a mixed-up value', function (): void {
+    $sink = new CountingThrowingSink(failFirstN: PHP_INT_MAX);
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(AuditOutbox::class);
+
+    $outbox = app(AuditOutbox::class);
+    $outbox->enqueue('category.a', ['run_id' => 'r-a']);
+    $outbox->enqueue('category.b', ['run_id' => 'r-b']);
+    $outbox->enqueue('category.c', ['run_id' => 'r-c']);
+
+    $outbox->drain(100);
+
+    $rows = DB::table('swarm_audit_outbox')->orderBy('run_id')->get()->keyBy('run_id');
+
+    expect($rows)->toHaveCount(3);
+    expect((int) $rows['r-a']->attempts)->toBe(1);
+    expect((int) $rows['r-b']->attempts)->toBe(1);
+    expect((int) $rows['r-c']->attempts)->toBe(1);
+    // Each row's reservation must be released so it's re-claimable, not stuck.
+    expect($rows['r-a']->reserved_at)->toBeNull();
+    expect($rows['r-b']->reserved_at)->toBeNull();
+    expect($rows['r-c']->reserved_at)->toBeNull();
+});
+
+test('a failing batch upsert falls back to per-row writes and still persists every entry in the group', function (): void {
+    $sink = new CountingThrowingSink(failFirstN: PHP_INT_MAX);
+    app()->instance(SwarmAuditSink::class, $sink);
+
+    $outbox = new class(app(Connection::class), app(Repository::class), app(SwarmAuditSink::class), app(SwarmPersistenceCipher::class)) extends DatabaseAuditOutbox
+    {
+        public int $upsertCalls = 0;
+
+        protected function upsertBatch(array $rows, array $updateColumns): void
+        {
+            $this->upsertCalls++;
+
+            // Fail every batch call once to force the fallback path.
+            throw new RuntimeException('simulated batch upsert failure');
+        }
+    };
+
+    $outbox->enqueue('category.a', ['run_id' => 'r-fallback-a']);
+    $outbox->enqueue('category.b', ['run_id' => 'r-fallback-b']);
+
+    $result = $outbox->drain(100);
+
+    expect($result->failed)->toBe(2);
+    expect($outbox->upsertCalls)->toBeGreaterThan(0);
+
+    $rows = DB::table('swarm_audit_outbox')->orderBy('run_id')->get()->keyBy('run_id');
+    expect($rows)->toHaveCount(2);
+    expect((int) $rows['r-fallback-a']->attempts)->toBe(1);
+    expect((int) $rows['r-fallback-b']->attempts)->toBe(1);
+});
+
+test('a batch with both a failed entry and a dead-lettered entry writes each to its correct final state', function (): void {
+    config()->set('swarm.audit.outbox.max_attempts', 2);
+
+    $sink = new CountingThrowingSink(failFirstN: PHP_INT_MAX);
+    app()->instance(SwarmAuditSink::class, $sink);
+    app()->forgetInstance(AuditOutbox::class);
+
+    $outbox = app(AuditOutbox::class);
+    $outbox->enqueue('category.a', ['run_id' => 'r-repeat-fail']);
+
+    // First drain bumps r-repeat-fail to attempts=1 (still under max_attempts=2, stays pending).
+    $outbox->drain(100);
+
+    // Second entry enters fresh, so this drain call processes both:
+    // r-repeat-fail reaches attempts=2 (dead-lettered), r-fresh-fail reaches
+    // attempts=1 (stays failed/pending) — writeFailedGroup() and
+    // writeDeadLetterGroup() both run in the same drain() call.
+    $outbox->enqueue('category.b', ['run_id' => 'r-fresh-fail']);
+    $result = $outbox->drain(100);
+
+    expect($result->failed)->toBe(1);
+    expect($result->deadLettered)->toBe(1);
+
+    $rows = DB::table('swarm_audit_outbox')->orderBy('run_id')->get()->keyBy('run_id');
+    expect($rows)->toHaveCount(2);
+
+    expect($rows['r-repeat-fail']->status)->toBe('dead_letter');
+    expect((int) $rows['r-repeat-fail']->attempts)->toBe(2);
+    expect($rows['r-repeat-fail']->reserved_at)->toBeNull();
+
+    expect($rows['r-fresh-fail']->status)->toBe('pending');
+    expect((int) $rows['r-fresh-fail']->attempts)->toBe(1);
+    expect($rows['r-fresh-fail']->reserved_at)->toBeNull();
 });
 
 test('DatabaseAuditOutbox drain skips dead_letter rows', function (): void {

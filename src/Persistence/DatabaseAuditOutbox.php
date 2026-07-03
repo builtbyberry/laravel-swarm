@@ -118,6 +118,10 @@ class DatabaseAuditOutbox implements AuditOutbox
         $deadLettered = 0;
         $failed = 0;
         $replayedIds = [];
+        /** @var list<array{id: int, category: string, run_id: ?string, attempts: int, error: string}> $failedGroup */
+        $failedGroup = [];
+        /** @var list<array{id: int, category: string, run_id: ?string, attempts: int, error: string}> $deadLetterGroup */
+        $deadLetterGroup = [];
 
         foreach ($entries as $entry) {
             $attempts = (int) $entry->attempts + 1;
@@ -131,14 +135,14 @@ class DatabaseAuditOutbox implements AuditOutbox
                 // Permanently invalid stored payload; route to dead-letter and
                 // surface via the error handler so it's investigable.
                 $this->safeReport($exception);
-                $this->markDeadLetter((int) $entry->id, (string) $entry->category, $entry->run_id, $attempts, 'invalid_json');
+                $deadLetterGroup[] = ['id' => (int) $entry->id, 'category' => (string) $entry->category, 'run_id' => $entry->run_id, 'attempts' => $attempts, 'error' => 'invalid_json'];
                 $deadLettered++;
 
                 continue;
             }
 
             if (! is_array($payload)) {
-                $this->markDeadLetter((int) $entry->id, (string) $entry->category, $entry->run_id, $attempts, 'payload_not_array');
+                $deadLetterGroup[] = ['id' => (int) $entry->id, 'category' => (string) $entry->category, 'run_id' => $entry->run_id, 'attempts' => $attempts, 'error' => 'payload_not_array'];
                 $deadLettered++;
 
                 continue;
@@ -153,16 +157,10 @@ class DatabaseAuditOutbox implements AuditOutbox
                 $error = mb_substr($exception->getMessage(), 0, 1000);
 
                 if ($attempts >= $maxAttempts) {
-                    $this->markDeadLetter((int) $entry->id, (string) $entry->category, $entry->run_id, $attempts, $error);
+                    $deadLetterGroup[] = ['id' => (int) $entry->id, 'category' => (string) $entry->category, 'run_id' => $entry->run_id, 'attempts' => $attempts, 'error' => $error];
                     $deadLettered++;
                 } else {
-                    $this->table()->where('id', $entry->id)->update([
-                        'attempts' => $attempts,
-                        'last_error' => $this->cipher->seal($error),
-                        'last_attempted_at' => Carbon::now('UTC'),
-                        'reserved_at' => null,
-                        'updated_at' => Carbon::now('UTC'),
-                    ]);
+                    $failedGroup[] = ['id' => (int) $entry->id, 'category' => (string) $entry->category, 'run_id' => $entry->run_id, 'attempts' => $attempts, 'error' => $error];
                     $failed++;
                 }
             }
@@ -172,31 +170,124 @@ class DatabaseAuditOutbox implements AuditOutbox
             $this->table()->whereIn('id', $replayedIds)->delete();
         }
 
+        if ($failedGroup !== []) {
+            $this->writeFailedGroup($failedGroup);
+        }
+
+        if ($deadLetterGroup !== []) {
+            $this->writeDeadLetterGroup($deadLetterGroup);
+        }
+
         return new AuditDrainResult($replayed, $deadLettered, $failed, $claimed, $reclaimed);
     }
 
     /**
-     * Mark a single entry as dead-lettered, persist the sealed last_error, and
-     * emit a Log::error at the moment of transition so monitoring stacks can
-     * alert on undelivered audit evidence.
+     * Batch-persist a group of retry writes via upsert(), falling back to
+     * independent per-row updates if the atomic batch statement fails (e.g. a
+     * single malformed row) so the rest of the group still persists.
+     *
+     * @param  list<array{id: int, category: string, run_id: ?string, attempts: int, error: string}>  $group
      */
-    protected function markDeadLetter(int $id, string $category, ?string $runId, int $attempts, string $reason): void
+    protected function writeFailedGroup(array $group): void
     {
-        $this->table()->where('id', $id)->update([
-            'status' => 'dead_letter',
-            'attempts' => $attempts,
-            'last_error' => $this->cipher->seal($reason),
-            'last_attempted_at' => Carbon::now('UTC'),
+        $now = Carbon::now('UTC');
+        $rows = array_map(fn (array $e): array => [
+            'id' => $e['id'],
+            'attempts' => $e['attempts'],
+            'last_error' => $this->cipher->seal($e['error']),
+            'last_attempted_at' => $now,
             'reserved_at' => null,
-            'updated_at' => Carbon::now('UTC'),
-        ]);
+            'updated_at' => $now,
+        ], $group);
 
+        try {
+            $this->upsertBatch($rows, ['attempts', 'last_error', 'last_attempted_at', 'reserved_at', 'updated_at']);
+
+            return;
+        } catch (Throwable $exception) {
+            // A single malformed row can fail the whole atomic upsert statement.
+            // Fall back to independent per-row writes so the rest of the group
+            // still persists — matches the pre-batching failure isolation.
+            $this->safeReport($exception);
+        }
+
+        foreach ($group as $entry) {
+            $this->table()->where('id', $entry['id'])->update([
+                'attempts' => $entry['attempts'],
+                'last_error' => $this->cipher->seal($entry['error']),
+                'last_attempted_at' => $now,
+                'reserved_at' => null,
+                'updated_at' => $now,
+            ]);
+        }
+    }
+
+    /**
+     * Batch-persist a group of dead-letter transitions via upsert(), falling
+     * back to independent per-row updates on batch failure. The per-row
+     * dead-letter log fires only after that row's write has succeeded,
+     * regardless of which write path ran.
+     *
+     * @param  list<array{id: int, category: string, run_id: ?string, attempts: int, error: string}>  $group
+     */
+    protected function writeDeadLetterGroup(array $group): void
+    {
+        $now = Carbon::now('UTC');
+        $rows = array_map(fn (array $e): array => [
+            'id' => $e['id'],
+            'status' => 'dead_letter',
+            'attempts' => $e['attempts'],
+            'last_error' => $this->cipher->seal($e['error']),
+            'last_attempted_at' => $now,
+            'reserved_at' => null,
+            'updated_at' => $now,
+        ], $group);
+
+        try {
+            $this->upsertBatch($rows, ['status', 'attempts', 'last_error', 'last_attempted_at', 'reserved_at', 'updated_at']);
+
+            foreach ($group as $entry) {
+                $this->logDeadLetter($entry);
+            }
+
+            return;
+        } catch (Throwable $exception) {
+            $this->safeReport($exception);
+        }
+
+        foreach ($group as $entry) {
+            $this->table()->where('id', $entry['id'])->update([
+                'status' => 'dead_letter',
+                'attempts' => $entry['attempts'],
+                'last_error' => $this->cipher->seal($entry['error']),
+                'last_attempted_at' => $now,
+                'reserved_at' => null,
+                'updated_at' => $now,
+            ]);
+            $this->logDeadLetter($entry);
+        }
+    }
+
+    /**
+     * @param  array{id: int, category: string, run_id: ?string, attempts: int, error: string}  $entry
+     */
+    protected function logDeadLetter(array $entry): void
+    {
         $this->safeLog($this->logger, 'error', 'Swarm audit record reached dead_letter status.', [
-            'category' => $category,
-            'run_id' => $runId,
-            'attempts' => $attempts,
-            'last_error' => $reason,
+            'category' => $entry['category'],
+            'run_id' => $entry['run_id'],
+            'attempts' => $entry['attempts'],
+            'last_error' => $entry['error'],
         ]);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @param  list<string>  $updateColumns
+     */
+    protected function upsertBatch(array $rows, array $updateColumns): void
+    {
+        $this->table()->upsert($rows, ['id'], $updateColumns);
     }
 
     public function isAvailable(): bool

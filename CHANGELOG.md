@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.16.1 - 2026-07-03
+
+Core hardening pass: tighten the operator-contract surface shipped in v0.16.0 before v0.17.0 Phase-0 (Pulse extract + contract prune + driver-surface promotions) and the adoption packages. Scoped via an `/improve-laravel` audit rather than pre-filed issues.
+
+### Fixed
+
+- **`swarm:compact` discovery no longer plucks the full quarantined-run-id set into memory (#339).** `SwarmCompactCommand::discoverEligibleRuns()` loaded every quarantined `run_id` from `swarm_durable_runs` into a PHP array, then built an unbounded `whereNotIn()` from it, before applying the discovery `--limit`. Replaced with a `whereNotExists` correlated subquery against `swarm_durable_runs`, so the exclusion runs entirely in SQL and scales with the quarantine table size instead of the process's memory. Scoped strictly to the discovery query — no change to leasing, sealing, or graduation. No public API change.
+- **`DatabaseAuditOutbox::drain()` batches retry/dead-letter writes instead of issuing one `UPDATE` per row (#345 improve-laravel finding, hardened via a pre-implementation design gate).** A drain batch with many failed or dead-lettered entries (e.g. during a sustained sink outage) previously issued one individual `UPDATE ... WHERE id = ?` per entry. Writes are now batched via two `upsert()` calls (failed vs. dead-lettered — different column sets), each falling back to the original independent per-row `UPDATE` loop if the atomic batch statement throws. The fallback exists because a single-statement `upsert()` is all-or-nothing: one malformed row would otherwise fail the whole batch's writes, silently losing already-computed state for every sibling in the group — a regression the design gate caught before any code was written. The per-row `Log::error` dead-letter alert still fires once per row, only after that row's write has actually succeeded, matching the original ordering. No public API change; `AuditDrainResult`'s shape is unchanged.
+
+### Tested
+
+- **`swarm:relay --type=audit` lane isolation now has direct coverage (#338).** `--type=audit` alone was untested — only `--type=step`, `--type=bogus`, and the no-flag (both-lanes) case were covered. A new test asserts an audit-only relay drains the audit lane while leaving a pending durable-lane entry untouched, mirroring the existing `--type=step` asymmetric-drain test.
+- **A batch spanning both the failed and dead-lettered outcome in one `drain()` call is now covered (change-review F1).** The two regression tests added for the batching fix above each exercised only one outcome group; a new test seeds one entry that stays failed and another that reaches `dead_letter` within a single `drain()` call, confirming the two independent `upsert()` calls don't interfere with each other.
+
+### Documentation
+
+- **`AGENTS.md`'s Tech Stack section corrected to `laravel/ai` `^0.8`.** It still read `^0.6`, one range behind the floor `composer.json` has required since v0.13.0.
+- **`CONTRIBUTING.md` documents the `composer hooks:install` setup step.** The local commit-msg Conventional Commits hook (`tools/git-hooks/commit-msg`) existed but was never mentioned in the contributor setup docs — a new paragraph in "Local Setup" covers it.
+
 ## v0.16.0 - 2026-07-02
 
 Public surface & operator contract: promote a stable public operator control contract out of `@internal DurableSwarmManager` (the epic #254 keystone), complete the `@internal` promotion survey, and finalize the audit contract/envelope shapes (`RelayLane` split, tolerant `schema_version` verifier, `signature_key_id`). Additive and backward-compatible.
