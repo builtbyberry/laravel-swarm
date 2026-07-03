@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.17.0 - unreleased
+
+Phase-0 surface-settle: Pulse extract + contract prune + driver-surface promotions — settle the core public surface before the adoption packages (Filament/MCP/driver-family) bind it.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.16.1 - 2026-07-03
 
 Core hardening pass: tighten the operator-contract surface shipped in v0.16.0 before v0.17.0 Phase-0 (Pulse extract + contract prune + driver-surface promotions) and the adoption packages. Scoped via an `/improve-laravel` audit rather than pre-filed issues.
