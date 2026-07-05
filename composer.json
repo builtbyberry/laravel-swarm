@@ -35,16 +35,12 @@
     "require-dev": {
         "larastan/larastan": "^3.10",
         "laravel/pint": "^1.29",
-        "laravel/pulse": "^1.7",
         "orchestra/testbench": "^11.1",
         "pestphp/pest": "^4.7",
         "pestphp/pest-plugin-laravel": "^4.1"
     },
     "conflict": {
         "guzzlehttp/guzzle": "<7.12.1"
-    },
-    "suggest": {
-        "laravel/pulse": "Optional Pulse cards and recorders for swarm observability."
     },
     "autoload": {
         "psr-4": {

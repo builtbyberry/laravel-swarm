@@ -95,7 +95,9 @@ extension-point shape. Grouped:
   used only within the package. **KEEP.**
 - **Pulse / telemetry internals** — `Pulse/Livewire/*`, `Pulse/Support/*`, and
   the `Telemetry/*` dispatcher/listener/record set (the public seam is
-  `SwarmTelemetrySink`). **KEEP.**
+  `SwarmTelemetrySink`). **KEEP.** (`Pulse/*` extracted to the
+  `builtbyberry/laravel-swarm-pulse` companion package in v0.17.0 — this
+  audit predates that move and reflects the survey's point-in-time state.)
 - **Streaming internals** — `StreamEventMapper`, `StreamStepAccumulator`,
   `ContextGrowthGovernor`, `SwarmUnknownEvent`, `SwarmCausalSealBarrier` (public
   seams are the `#[ContextGrowthPolicy]`/`GrowthPolicy` and `CausalLogView`

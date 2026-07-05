@@ -14,8 +14,7 @@ use Symfony\Component\Console\Output\BufferedOutput;
 /**
  * Test double that reports the vector companion as installed, so the `--vector`
  * generation path can be exercised without the optional companion package being
- * a dependency of this repo. Mirrors `InstallPulseCommandWithoutPulse` in
- * tests/Installer/InstallPulseCommandTest.php.
+ * a dependency of this repo.
  */
 final class MakeMemoryToolCommandWithVector extends MakeMemoryToolCommand
 {

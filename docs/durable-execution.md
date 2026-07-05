@@ -415,7 +415,7 @@ These entry points are part of the contract: they resolve durable state through
 | `swarm:pause` / `resume` / `cancel` | lifecycle controllers → `DurableRunStore` mutations | Typed status / lease / pause columns |
 | `swarm:health --durable` | store readiness probe | Connection to configured durable tables |
 | `swarm:prune` | category pruning over configured `swarm.tables.*` roles | All durable family tables (bounded batches) |
-| Pulse `SwarmRuns` / `SwarmStepDurations` | **Event-driven** aggregates on `SwarmCompleted`, `SwarmFailed`, `SwarmStepCompleted` | Laravel Pulse tables only — **no** direct durable SQL |
+| Pulse `SwarmRuns` / `SwarmStepDurations` (companion package, v0.17.0+) | **Event-driven** aggregates on `SwarmCompleted`, `SwarmFailed`, `SwarmStepCompleted` | Laravel Pulse tables only — **no** direct durable SQL |
 
 `swarm:status` and `swarm:history` read **run history** (`RunHistoryStore` /
 `swarm_run_histories`), not durable tables. Treat history as the listing API for
@@ -493,11 +493,12 @@ covering indexes in application migrations.
 
 ### Pulse and the contract
 
-Shipped Pulse recorders aggregate **lifecycle events**, not durable SQL. They
-remain aligned with the contract because keys are derived from typed event
-properties (`swarmClass`, `topology`, `status`, `durationMs`). If you extend
-Pulse cards, keep the same rule: derive aggregates from events or from **typed**
-durable columns — never from JSON-path filters across durable tables.
+The [Pulse companion package](pulse.md)'s recorders aggregate **lifecycle
+events**, not durable SQL. They remain aligned with the contract because keys
+are derived from typed event properties (`swarmClass`, `topology`, `status`,
+`durationMs`). If you extend Pulse cards, keep the same rule: derive
+aggregates from events or from **typed** durable columns — never from
+JSON-path filters across durable tables.
 
 ### Application-owned projections
 
@@ -565,7 +566,7 @@ copy sensitive prompts into analytics tables unless required.
 ### CI static guard (non-exhaustive)
 
 `tests/Unit/DurableOperationalQueryContractStaticTest` scans only
-`src/Persistence/`, `src/Commands/`, `src/Runners/`, and `src/Pulse/` and fails
+`src/Persistence/`, `src/Commands/`, and `src/Runners/` and fails
 the build if `whereJson*`, `JSON_EXTRACT`, or `json_extract(` appears in those
 trees. Under **`src/Persistence/`** it also flags common **Laravel JSON column
 path** call shapes: quoted strings such as `where('col->key', …)` and

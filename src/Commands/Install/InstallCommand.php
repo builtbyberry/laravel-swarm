@@ -12,7 +12,6 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
-use Laravel\Pulse\Pulse;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
@@ -26,9 +25,9 @@ use function Laravel\Prompts\select;
  *
  * This is the orchestrator. It does not duplicate the logic of the targeted
  * sub-installers (`swarm:install:durable`, `swarm:install:audit`,
- * `swarm:install:pulse`, `swarm:install:examples`); it dispatches into them
- * after asking the operator (or, in `--no-interaction` mode, after consulting
- * the matching flag) whether each one is wanted.
+ * `swarm:install:examples`); it dispatches into them after asking the
+ * operator (or, in `--no-interaction` mode, after consulting the matching
+ * flag) whether each one is wanted.
  *
  * What this command owns directly:
  *
@@ -59,8 +58,6 @@ class InstallCommand extends Command
         {--without-durable : Skip swarm:install:durable in --no-interaction mode}
         {--with-audit : Dispatch swarm:install:audit after the base install}
         {--without-audit : Skip swarm:install:audit in --no-interaction mode}
-        {--with-pulse : Dispatch swarm:install:pulse when Laravel Pulse is detected}
-        {--without-pulse : Skip swarm:install:pulse in --no-interaction mode}
         {--with-examples : Dispatch swarm:install:examples (installs all starter examples)}
         {--without-examples : Skip swarm:install:examples in --no-interaction mode}
         {--with-memory : Dispatch swarm:install:memory after the base install}
@@ -646,17 +643,6 @@ class InstallCommand extends Command
                 : 'swarm:install:audit returned a non-zero exit code (review its output above)';
         }
 
-        // Pulse: only offer when laravel/pulse is installed. Otherwise stay
-        // silent — there is no nudge to install Pulse from the base installer.
-        if ($this->pulseIsInstalled()) {
-            if ($this->shouldDispatch('pulse', defaultYes: true)) {
-                $exit = $this->call('swarm:install:pulse', $this->forwardingArgs());
-                $results[] = $exit === self::SUCCESS
-                    ? 'Dispatched swarm:install:pulse'
-                    : 'swarm:install:pulse returned a non-zero exit code (review its output above)';
-            }
-        }
-
         // Memory: always worth offering. Default yes interactively.
         if ($this->shouldDispatch('memory', defaultYes: true)) {
             $exit = $this->call('swarm:install:memory', $this->forwardingArgs());
@@ -746,16 +732,6 @@ class InstallCommand extends Command
         }
 
         return $args;
-    }
-
-    /**
-     * Pulse detection via class_exists. Mirrors the convention used by
-     * `InstallPulseCommand::pulseIsInstalled()`. Protected so tests can
-     * substitute a subclass that simulates the absent path.
-     */
-    protected function pulseIsInstalled(): bool
-    {
-        return class_exists(Pulse::class);
     }
 
     /**

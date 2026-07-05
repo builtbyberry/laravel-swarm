@@ -14,7 +14,7 @@ it('forbids json-path sql predicates in durable query surfaces', function (): vo
     $packageRoot = dirname(__DIR__, 2);
 
     /**
-     * Scope to paths where durable/list SQL and Pulse/recorder code live. Scanning all of
+     * Scope to paths where durable/list SQL code lives. Scanning all of
      * `src/` was unnecessarily brittle for unrelated package code; extend this list if a
      * new directory introduces operational queries against durable tables.
      *
@@ -24,7 +24,6 @@ it('forbids json-path sql predicates in durable query surfaces', function (): vo
         'src/Persistence',
         'src/Commands',
         'src/Runners',
-        'src/Pulse',
     ];
 
     /**

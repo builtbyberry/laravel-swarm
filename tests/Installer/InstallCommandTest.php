@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use BuiltByBerry\LaravelSwarm\Tests\Installer\Fixtures\PulseAbsentInstallCommand;
 use BuiltByBerry\LaravelSwarm\Tests\Installer\InstallerTestCase;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 
@@ -21,7 +20,6 @@ uses(InstallerTestCase::class);
  *   - --persistence validation
  *   - sync-queue warning surfaces on stderr
  *   - --without-* short-circuits sub-installer dispatch
- *   - Pulse-absent path silently skips the pulse sub-installer
  *   - --force re-publishes config/swarm.php in place
  */
 beforeEach(function () {
@@ -36,7 +34,6 @@ test('swarm:install runs the happy path with database persistence and seeds env 
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -75,7 +72,6 @@ test('swarm:install --persistence=cache scaffolds LaravelSwarm::ignoreMigrations
         '--persistence' => 'cache',
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -98,7 +94,6 @@ test('swarm:install is idempotent on a second --no-interaction run', function ()
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -123,7 +118,6 @@ test('swarm:install leaves operator-overridden non-persistence env values untouc
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -159,7 +153,6 @@ test('swarm:install warns when QUEUE_CONNECTION=sync', function () {
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -175,7 +168,6 @@ test('swarm:install --with-examples dispatches the examples sub-installer', func
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--with-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -193,7 +185,6 @@ test('swarm:install --with-audit dispatches the audit sub-installer', function (
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--with-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -207,26 +198,6 @@ test('swarm:install --with-audit dispatches the audit sub-installer', function (
     expect($provider)->toContain('swarm:install:audit');
 });
 
-test('swarm:install silently skips swarm:install:pulse when Pulse is not installed', function () {
-    $this->registerInstallerCommand(PulseAbsentInstallCommand::class);
-
-    $result = $this->runInstaller('swarm:install', [
-        '--persistence' => 'database',
-        '--skip-migrate' => true,
-        '--without-durable' => true,
-        '--without-audit' => true,
-        '--with-pulse' => true,
-        '--without-examples' => true,
-        '--without-memory' => true,
-        '--no-interaction' => true,
-    ])->assertSucceeded();
-
-    // The pulse sub-installer should not have been dispatched. The "Pulse is
-    // not installed" message that swarm:install:pulse emits when reached via
-    // the regular surface must not appear here.
-    expect($result->output)->not->toContain('Dispatched swarm:install:pulse');
-});
-
 test('swarm:install --force re-publishes config/swarm.php in place', function () {
     // First run publishes.
     $this->runInstaller('swarm:install', [
@@ -234,7 +205,6 @@ test('swarm:install --force re-publishes config/swarm.php in place', function ()
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -250,7 +220,6 @@ test('swarm:install --force re-publishes config/swarm.php in place', function ()
         '--force' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -266,7 +235,6 @@ test('swarm:install cache-only scaffold is idempotent', function () {
         '--persistence' => 'cache',
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -294,7 +262,6 @@ test('swarm:install refuses when --persistence flag conflicts with existing .env
             '--skip-migrate' => true,
             '--without-durable' => true,
             '--without-audit' => true,
-            '--without-pulse' => true,
             '--without-examples' => true,
             '--without-memory' => true,
             '--no-interaction' => true,
@@ -318,7 +285,6 @@ test('swarm:install --force-env overwrites the existing SWARM_PERSISTENCE_DRIVER
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -348,7 +314,6 @@ test('swarm:install extends the existing managed env block when only some keys a
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--without-memory' => true,
         '--no-interaction' => true,
@@ -374,7 +339,6 @@ test('swarm:install refuses when both --with-durable and --without-durable are p
             '--with-durable' => true,
             '--without-durable' => true,
             '--without-audit' => true,
-            '--without-pulse' => true,
             '--without-examples' => true,
             '--without-memory' => true,
             '--no-interaction' => true,
@@ -389,7 +353,6 @@ test('swarm:install --with-memory dispatches the memory sub-installer', function
         '--skip-migrate' => true,
         '--without-durable' => true,
         '--without-audit' => true,
-        '--without-pulse' => true,
         '--without-examples' => true,
         '--with-memory' => true,
         '--no-interaction' => true,
@@ -410,7 +373,6 @@ test('swarm:install refuses when both --with-memory and --without-memory are pas
             '--skip-migrate' => true,
             '--without-durable' => true,
             '--without-audit' => true,
-            '--without-pulse' => true,
             '--without-examples' => true,
             '--with-memory' => true,
             '--without-memory' => true,
