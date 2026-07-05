@@ -269,6 +269,10 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.17.0
+
+**No required action.** `CausalLogStore` and `ColdArchiveDriver` are now public contracts (#349) — no behavior change, no config change, no migration. If you want to implement a custom persistence backend for the streaming substrate's hot/cold tiering, see the new [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for what's actually pluggable (the read/query seam) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming both stay coupled to the concrete database implementations).
+
 ## Upgrading to v0.16.1
 
 **No required action.** v0.16.1 is a core hardening pass with no migration, no config change, and no breaking API — `swarm:compact` discovery is now a bounded SQL query instead of an unbounded in-memory pluck (#339), `DatabaseAuditOutbox::drain()` batches its retry/dead-letter writes with a per-row fallback (no observable change to `AuditDrainResult`'s shape or the audit trail), and two documentation lines (`AGENTS.md`'s `laravel/ai` version, `CONTRIBUTING.md`'s hook setup step) were corrected.
