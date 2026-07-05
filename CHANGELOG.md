@@ -6,7 +6,7 @@ Phase-0 surface-settle: Pulse extract + contract prune + driver-surface promotio
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **`CausalLogStore` and `ColdArchiveDriver` are now public contracts (#349).** Both have been stable for two minors since their v0.15.0 introduction. They are **read/query-seam extension points only** — a custom implementation is consumed by durable per-node streaming's void-on-resume path, hierarchical stream causal-log resolution, and `TieredStreamEventStore`'s hot/cold read seam. A pre-implementation design gate confirmed, and this release explicitly discloses, two scope limits that a driver author must know before implementing: compaction (graduation to cold, hot reclaim) stays coupled to the concrete `DatabaseCausalLogStore`/`DatabaseColdArchiveDriver` classes, so a custom driver's runs are never compacted; and `#[DurableStreaming]` per-node streaming requires the concrete database implementation and fails loud at dispatch otherwise. `ColdArchiveDriver::readSnapshot()` is contract-ready for a forthcoming snapshot-based resume feature but has no production caller yet. See the new [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for the full driver-author story. Also fixes a stale `docs/public-surface.md` description that incorrectly listed `graduate()`/`reclaim()` as part of the `ColdArchiveDriver` contract — those methods are internal to the compactor and were never part of this interface.
 
 ### Changed
 

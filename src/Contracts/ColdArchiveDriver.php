@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use BuiltByBerry\LaravelSwarm\Compaction\SwarmCompactor;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
+use BuiltByBerry\LaravelSwarm\Persistence\TieredStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 
 /**
@@ -16,13 +19,26 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
  * expressed here — the contract documents the atomicity requirement so any
  * future compactor implementation can be verified against it.
  *
- * Atomic swap requirement: the compactor MUST advance the base pointer with a
- * single-pointer CAS swap (old-or-new, never half). A reader that observes a
- * non-zero base pointer is guaranteed that all events with id < that value are
- * durably available via readEvents(), and that the snapshot (if any) was written
- * before the pointer was advanced.
+ * Atomic swap requirement: the compactor (internal) MUST advance the base
+ * pointer with a single-pointer CAS swap (old-or-new, never half). A reader
+ * that observes a non-zero base pointer is guaranteed that all events with id
+ * < that value are durably available via readEvents(), and that the snapshot
+ * (if any) was written before the pointer was advanced. This obligation binds
+ * the internal compactor, not implementers of this contract.
  *
- * @internal
+ * Public since v0.17.0 (#349), stable for two minors since its v0.15.0
+ * introduction. This is a **read-only extension point** — it has no write
+ * methods (graduate/reclaim are internal to the compactor and are not part of
+ * this interface). A custom implementation is consumed by {@see
+ * TieredStreamEventStore}'s read seam, but NOT by compaction: {@see
+ * SwarmCompactor} depends on the concrete {@see DatabaseColdArchiveDriver}
+ * directly, so a custom implementation's runs are never graduated to cold
+ * storage (no error — hot storage simply grows unbounded for those runs).
+ * `readSnapshot()` is reserved for a forthcoming snapshot-based resume feature
+ * and has no production caller yet. Any custom `readSnapshot()` implementation
+ * must honor the same decrypt-or-throw semantics as
+ * {@see DatabaseColdArchiveDriver::readSnapshotStrict()}.
+ * See `docs/streaming-substrate-driver-guide.md` for the full driver-author story.
  */
 interface ColdArchiveDriver
 {

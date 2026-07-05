@@ -221,17 +221,20 @@ engine behavior for orientation only.
 The append-only causal-log substrate that makes dynamic swarms streamable, with
 background-compacted hot/cold durability and author-owned context bounding.
 
-> **Stability.** The first three contracts/decorators below — `CausalLogStore`,
-> `ColdArchiveDriver`, `TieredStreamEventStore` — are `@internal` and
-> schema-coupled to their database implementations. They are documented here for
-> operators and driver authors, but are **provisional and not yet semver-stable**
-> (on the roadmap to promote out of `@internal`). The attribute, enum, and
-> exception rows are public API.
+> **Stability.** `CausalLogStore` and `ColdArchiveDriver` were promoted to
+> public in v0.17.0 (#349), stable for two minors since their v0.15.0
+> introduction. Both are **read/query-seam extension points only** — see the
+> [Streaming Substrate Driver Guide](streaming-substrate-driver-guide.md) for
+> exactly what a custom implementation is (and is not) consumed by; in
+> particular, compaction stays coupled to the concrete database
+> implementations and is out of scope for a custom driver in this release.
+> `TieredStreamEventStore` remains `@internal` and schema-coupled — it is
+> documented here for orientation only.
 
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
-| `CausalLogStore` | Database-only contract extending `StreamEventStore` — the append-only causal log. Adds `appendVoidEdge()`, `voidNodeAttempt()`, `latestAttemptEpochBelow()`, `isSealed()`, and `sealRollup()`. Voiding a sealed target throws `SealedCausalWindowException`; voiding an unknown target throws `UnknownCausalTargetException`. Implemented by `DatabaseCausalLogStore` (the database `StreamEventStore` binding now resolves this subclass). **`@internal`** — provisional, not yet semver-stable. (v0.15.0+) | [Lifecycle Events](events.md#causal-void-edges-282-289) |
-| `ColdArchiveDriver` | Contract for the cold tier — addressable-by-coordinate cold storage with an atomic base-pointer swap (`graduate()`) and hot reclaim (`reclaim()`), and separate snapshot (resume) + raw-event (audit) retention paths. Default `DatabaseColdArchiveDriver` backs it with the `swarm_cold_archives` table; resume reads use `openStrict` (decrypt-or-throw, the #212 convention). **`@internal`** — provisional, not yet semver-stable. (v0.15.0+) | [Operator Runbook: Streaming Substrate](operator-runbook-streaming-substrate.md) |
+| `CausalLogStore` | Database-only contract extending `StreamEventStore` — the append-only causal log. Adds `appendVoidEdge()`, `voidNodeAttempt()`, `latestAttemptEpochBelow()`, `isSealed()`, and `sealRollup()`. Voiding a sealed target throws `SealedCausalWindowException`; voiding an unknown target throws `UnknownCausalTargetException`. Implemented by `DatabaseCausalLogStore` (the database `StreamEventStore` binding now resolves this subclass). Read/query-seam extension point — not consumed by compaction. (v0.15.0+, public since v0.17.0) | [Streaming Substrate Driver Guide](streaming-substrate-driver-guide.md), [Lifecycle Events](events.md#causal-void-edges-282-289) |
+| `ColdArchiveDriver` | Read-only contract for the cold tier — addressable-by-coordinate cold storage (`basePointer()`, `readEvents()`, `readSnapshot()`, `forget()`), with separate snapshot (resume) + raw-event (audit) retention paths. Graduation (`graduate()`/`reclaim()`, the atomic base-pointer CAS swap) is internal to the compactor and is not part of this interface. Default `DatabaseColdArchiveDriver` backs it with the `swarm_cold_archives` table; resume reads use `openStrict` (decrypt-or-throw, the #212 convention). Read/query-seam extension point — not consumed by compaction. (v0.15.0+, public since v0.17.0) | [Streaming Substrate Driver Guide](streaming-substrate-driver-guide.md), [Operator Runbook: Streaming Substrate](operator-runbook-streaming-substrate.md) |
 | `TieredStreamEventStore` | Transparent `StreamEventStore` decorator that yields cold events below the base pointer then hot events at/above it, with a half-open seam guarantee (no gap, no duplicate). A consumer reading `events()` after compaction sees the complete history. **`@internal`** — provisional, not yet semver-stable. (v0.15.0+) | [Operator Runbook: Streaming Substrate](operator-runbook-streaming-substrate.md) |
 | `GrowthPolicy` | Enum used by `#[ContextGrowthPolicy]` and `swarm.context_growth.policy`. Cumulative severity ladder: `Ignore` → `Warn` → `DegradeToCold` (the default) → `Backpressure` → `Refuse`. Each rung includes the behaviour of every lower one. (v0.15.0+) | [Streaming Substrate Author Guide](streaming-substrate-author-guide.md#context-growth-policy) |
 | `ContextBudgetExceededException` | Thrown by the `Refuse` rung and by the operator hard-cap breach. Extends `SwarmException`; re-dispatchable on durable runs. (v0.15.0+) | [Streaming Substrate Author Guide](streaming-substrate-author-guide.md#context-growth-policy) |
