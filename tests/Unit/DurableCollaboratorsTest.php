@@ -4,20 +4,27 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Attributes\DurableDetails;
 use BuiltByBerry\LaravelSwarm\Attributes\DurableLabels;
+use BuiltByBerry\LaravelSwarm\Attributes\DurableRetry;
 use BuiltByBerry\LaravelSwarm\Attributes\DurableWait;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\ConfiguresDurableRetries;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\RoutesDurableBranches;
+use BuiltByBerry\LaravelSwarm\Contracts\RoutesDurableWaits;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
+use BuiltByBerry\LaravelSwarm\Responses\DurableRetryPolicy;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBoundaryCoordinator;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRetryHandler;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSwarmStarter;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\QueuedHierarchicalDurableCoordinator;
@@ -28,6 +35,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRoutedParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Foundation\Bus\PendingDispatch;
 
@@ -272,4 +280,227 @@ test('queued hierarchical durable coordinator creates coordination run and dispa
     expect($run['status'])->toBe('waiting')
         ->and($run['coordination_profile'])->toBe('queue_hierarchical_parallel')
         ->and($dispatcher->branchDispatches)->toBe(['parallel_node:writer_node']);
+});
+
+// --- ConfiguresDurableRetries seam (#371) -----------------------------------
+//
+// The interface is the programmatic alternative to the #[DurableRetry] attribute.
+// The interface branch in DurableRetryHandler::resolveRetryPolicy() is checked
+// first for both the agent-level and swarm-level policy; these tests lock the
+// full precedence chain: interface-agent > agent-attribute > interface-swarm >
+// swarm-attribute.
+
+#[DurableRetry(maxAttempts: 2, backoffSeconds: [5])]
+class RetryInterfaceAgent {}
+
+#[DurableRetry(maxAttempts: 3)]
+class RetryAttributeOnlyAgent {}
+
+class RetryPlainAgent {}
+
+class ConfiguresDurableRetriesSwarm implements ConfiguresDurableRetries, Swarm
+{
+    public function agents(): array
+    {
+        return [new FakeResearcher];
+    }
+
+    public function durableRetryPolicy(): DurableRetryPolicy
+    {
+        return new DurableRetryPolicy(maxAttempts: 7, backoffSeconds: [1, 2, 3]);
+    }
+
+    public function durableAgentRetryPolicy(string $agentClass): ?DurableRetryPolicy
+    {
+        return $agentClass === RetryInterfaceAgent::class
+            ? new DurableRetryPolicy(maxAttempts: 9)
+            : null;
+    }
+}
+
+#[DurableRetry(maxAttempts: 4)]
+class DurableRetryAttributeSwarm implements Swarm
+{
+    public function agents(): array
+    {
+        return [new FakeResearcher];
+    }
+}
+
+test('resolveRetryPolicy uses the ConfiguresDurableRetries agent policy over the agent DurableRetry attribute', function () {
+    configureDurableCollaboratorRuntime();
+
+    // RetryInterfaceAgent also carries #[DurableRetry(maxAttempts: 2)]; the interface must win.
+    $policy = app(DurableRetryHandler::class)->resolveRetryPolicy(
+        new ConfiguresDurableRetriesSwarm,
+        RetryInterfaceAgent::class,
+    );
+
+    expect($policy)->not->toBeNull()
+        ->and($policy->maxAttempts)->toBe(9);
+});
+
+test('resolveRetryPolicy falls through to the agent DurableRetry attribute when the interface returns null for that agent', function () {
+    configureDurableCollaboratorRuntime();
+
+    $policy = app(DurableRetryHandler::class)->resolveRetryPolicy(
+        new ConfiguresDurableRetriesSwarm,
+        RetryAttributeOnlyAgent::class,
+    );
+
+    expect($policy)->not->toBeNull()
+        ->and($policy->maxAttempts)->toBe(3);
+});
+
+test('resolveRetryPolicy falls through to the swarm ConfiguresDurableRetries policy when no agent policy applies', function () {
+    configureDurableCollaboratorRuntime();
+
+    $policy = app(DurableRetryHandler::class)->resolveRetryPolicy(
+        new ConfiguresDurableRetriesSwarm,
+        RetryPlainAgent::class,
+    );
+
+    expect($policy)->not->toBeNull()
+        ->and($policy->maxAttempts)->toBe(7)
+        ->and($policy->backoffSeconds)->toBe([1, 2, 3]);
+});
+
+test('resolveRetryPolicy uses the swarm ConfiguresDurableRetries policy when no agent class is given', function () {
+    configureDurableCollaboratorRuntime();
+
+    $policy = app(DurableRetryHandler::class)->resolveRetryPolicy(new ConfiguresDurableRetriesSwarm);
+
+    expect($policy?->maxAttempts)->toBe(7);
+});
+
+test('resolveRetryPolicy falls back to the swarm DurableRetry attribute when the swarm does not implement ConfiguresDurableRetries', function () {
+    configureDurableCollaboratorRuntime();
+
+    $policy = app(DurableRetryHandler::class)->resolveRetryPolicy(new DurableRetryAttributeSwarm);
+
+    expect($policy?->maxAttempts)->toBe(4);
+});
+
+// --- RoutesDurableWaits seam (#372) -----------------------------------------
+//
+// The interface branch in DurableBoundaryCoordinator::declaredWaits() returns
+// verbatim and short-circuits before the #[DurableWait] attribute reflection,
+// and it receives the RunContext so declared waits can vary per run.
+
+#[DurableWait('attribute_wait', timeout: 99)]
+class RoutesDurableWaitsSwarm implements RoutesDurableWaits, Swarm
+{
+    public function agents(): array
+    {
+        return [new FakeResearcher];
+    }
+
+    public function durableWaits(RunContext $context): array
+    {
+        $name = is_string($context->metadata['wait_name'] ?? null)
+            ? $context->metadata['wait_name']
+            : 'interface_wait';
+
+        return [[
+            'name' => $name,
+            'timeout' => 30,
+            'reason' => 'declared via RoutesDurableWaits',
+            'metadata' => ['source' => 'interface'],
+        ]];
+    }
+}
+
+test('durable boundary coordinator uses RoutesDurableWaits and bypasses the DurableWait attribute', function () {
+    configureDurableCollaboratorRuntime();
+
+    $context = RunContext::fromTask('interface-wait-task');
+    app(DurableSwarmStarter::class)->start(new RoutesDurableWaitsSwarm, $context, Topology::Sequential, 300, 1);
+    $run = app(DurableRunStore::class)->find($context->runId);
+
+    $entered = app(DurableBoundaryCoordinator::class)->enterDeclaredBoundary($run, new RoutesDurableWaitsSwarm, $context);
+    $waits = app(DurableRunInspector::class)->inspect($context->runId)->waits;
+
+    // The fixture also carries #[DurableWait('attribute_wait')]; the interface path wins.
+    expect($entered)->toBeTrue()
+        ->and($waits)->toHaveCount(1)
+        ->and($waits[0]['name'])->toBe('interface_wait')
+        ->and($waits[0]['status'])->toBe('waiting');
+});
+
+test('RoutesDurableWaits receives the RunContext so declared waits vary by context', function () {
+    configureDurableCollaboratorRuntime();
+
+    $contextAlpha = RunContext::fromTask('wait-alpha-task');
+    $contextAlpha->mergeMetadata(['wait_name' => 'wait_alpha']);
+    app(DurableSwarmStarter::class)->start(new RoutesDurableWaitsSwarm, $contextAlpha, Topology::Sequential, 300, 1);
+    app(DurableBoundaryCoordinator::class)->enterDeclaredBoundary(
+        app(DurableRunStore::class)->find($contextAlpha->runId),
+        new RoutesDurableWaitsSwarm,
+        $contextAlpha,
+    );
+
+    $contextBeta = RunContext::fromTask('wait-beta-task');
+    $contextBeta->mergeMetadata(['wait_name' => 'wait_beta']);
+    app(DurableSwarmStarter::class)->start(new RoutesDurableWaitsSwarm, $contextBeta, Topology::Sequential, 300, 1);
+    app(DurableBoundaryCoordinator::class)->enterDeclaredBoundary(
+        app(DurableRunStore::class)->find($contextBeta->runId),
+        new RoutesDurableWaitsSwarm,
+        $contextBeta,
+    );
+
+    $alphaWaits = app(DurableRunInspector::class)->inspect($contextAlpha->runId)->waits;
+    $betaWaits = app(DurableRunInspector::class)->inspect($contextBeta->runId)->waits;
+
+    expect($alphaWaits[0]['name'])->toBe('wait_alpha')
+        ->and($betaWaits[0]['name'])->toBe('wait_beta');
+});
+
+// --- RoutesDurableBranches seam (#373) --------------------------------------
+//
+// The interface branch in DurableBranchCoordinator::withBranchRouting() stamps
+// the branch's queue_connection / queue_name — the exact fields the branch
+// dispatch reads. It only overrides keys the interface actually returns, so an
+// empty array falls back to the run's routing.
+
+class EmptyRoutedBranchesSwarm implements RoutesDurableBranches, Swarm
+{
+    public function agents(): array
+    {
+        return [new FakeResearcher];
+    }
+
+    public function durableBranchQueue(RunContext $context, array $branch): array
+    {
+        return [];
+    }
+}
+
+test('DurableBranchCoordinator stamps RoutesDurableBranches routing onto the dispatched branch', function () {
+    config()->set('swarm.durable.parallel.queue.connection', null);
+    config()->set('swarm.durable.parallel.queue.name', null);
+
+    $branch = app(DurableBranchCoordinator::class)->withBranchRouting(
+        new FakeRoutedParallelSwarm,
+        RunContext::fromTask('branch-routing-task'),
+        ['branch_id' => 'writer_branch', 'agent_class' => FakeWriter::class],
+        ['queue_connection' => 'run-connection', 'queue_name' => 'run-queue'],
+    );
+
+    expect($branch['queue_connection'])->toBe('branch-connection')
+        ->and($branch['queue_name'])->toBe('branch-queue');
+});
+
+test('DurableBranchCoordinator falls back to run routing when RoutesDurableBranches returns an empty array', function () {
+    config()->set('swarm.durable.parallel.queue.connection', null);
+    config()->set('swarm.durable.parallel.queue.name', null);
+
+    $branch = app(DurableBranchCoordinator::class)->withBranchRouting(
+        new EmptyRoutedBranchesSwarm,
+        RunContext::fromTask('branch-routing-task'),
+        ['branch_id' => 'writer_branch', 'agent_class' => FakeWriter::class],
+        ['queue_connection' => 'run-connection', 'queue_name' => 'run-queue'],
+    );
+
+    expect($branch['queue_connection'])->toBe('run-connection')
+        ->and($branch['queue_name'])->toBe('run-queue');
 });
