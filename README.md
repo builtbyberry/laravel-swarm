@@ -81,7 +81,7 @@ Tagged releases are available on [Packagist](https://packagist.org/packages/buil
 - [`swarm:install:audit`](docs/audit-evidence-contract.md) — bind a `SwarmAuditSink` (and optional `SwarmAuditSigner` / `ActorResolver` / `CapturePolicy`) inside `AppServiceProvider`.
 - [`swarm:install:examples`](docs/examples.md) — copy the runnable starter example pack into `app/Ai/`.
 
-Pulse observability (recorders + dashboard cards) lives in a separate companion package as of v0.17.0 — see [Pulse](docs/pulse.md) for the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) install steps.
+Pulse observability (recorders + dashboard cards) lives in a separate companion package as of v0.17.1 — see [Pulse](docs/pulse.md) for the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) install steps.
 
 For CI and scripted setups, every prompt has a flag override:
 
@@ -322,7 +322,7 @@ Swarm carries `laravel/ai` `ToolCall` / `ToolResult` objects through the stream 
 
 - **Authors:** [Streaming Substrate Author Guide](docs/streaming-substrate-author-guide.md) — dynamic streaming, the causal-log fold, rollup nodes, the context-growth policy.
 - **Operators:** [Streaming Substrate Operator Runbook](docs/operator-runbook-streaming-substrate.md) — hot/cold tiering, scheduling `swarm:compact`, retention, recovery and quarantine.
-- **Driver authors (v0.17.0):** `CausalLogStore` and `ColdArchiveDriver` are now public contracts for a custom persistence backend's read/query seam. See the [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for exactly what's pluggable today (hot/cold read stitching, causal-log resolution) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming).
+- **Driver authors (v0.17.1):** `CausalLogStore` and `ColdArchiveDriver` are now public contracts for a custom persistence backend's read/query seam. See the [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for exactly what's pluggable today (hot/cold read stitching, causal-log resolution) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming).
 
 ## Durable Execution
 
