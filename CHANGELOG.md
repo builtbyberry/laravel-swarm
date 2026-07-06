@@ -6,7 +6,7 @@ Documentation-only patch. Corrects cross-repo cohesion gaps found in a full docu
 
 ### Documentation
 
-_To be filled in during release wrap-up._
+- **README: table of contents + accuracy pass (#364).** Added a grouped table of contents for the ~35KB README, and grouped the Configuration key reference by concern. Folded in fact-fixes: corrected a non-compiling `#[DurableStreaming]` example (`Runnable` is a trait, applied via `implements Swarm { use Runnable; }`, not `implements Runnable`); documented the `swarm:install:memory` sub-installer and its `--with-memory` flag in the Installation section; and expanded the Configuration reference to cover the previously-undocumented `memory`, `context`, `context_growth`, `compaction`, `guardrails`, `retention`, `history`, and topology-plan config sections.
 
 ## v0.17.2 - 2026-07-06
 
