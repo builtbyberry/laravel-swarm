@@ -269,6 +269,10 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.17.3
+
+**No required action — documentation only.** This release restructures the README for scannability (adds a table of contents and groups the configuration-key reference by concern), documents the `swarm:install:memory` sub-installer and its `--with-memory` flag, fixes a non-compiling `#[DurableStreaming]` code example (`Runnable` is a trait, applied via `implements Swarm { use Runnable; }`), and de-stales `AGENTS.md`'s Pulse references after the v0.17.1 companion-package extraction. No code, config, or schema changes. See the [CHANGELOG](CHANGELOG.md#v0173---2026-07-06) for details.
+
 ## Upgrading to v0.17.2
 
 **No required action — documentation only.** `v0.17.0` was tagged at the wrong commit and is identical to `v0.16.1`; it must not be used. The changes below shipped in `v0.17.1`, which remains a correct, valid release — this version only fixes docs that said "v0.17.0" for them and adds this note. See the [CHANGELOG](CHANGELOG.md#v0172---2026-07-06) for what happened.
