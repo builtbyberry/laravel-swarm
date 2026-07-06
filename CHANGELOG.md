@@ -6,6 +6,7 @@ Documentation-only patch. Corrects cross-repo cohesion gaps found in a full docu
 
 ### Documentation
 
+- **README: table of contents + accuracy pass (#364).** Added a grouped table of contents for the ~35KB README, and grouped the Configuration key reference by concern. Folded in fact-fixes: corrected a non-compiling `#[DurableStreaming]` example (`Runnable` is a trait, applied via `implements Swarm { use Runnable; }`, not `implements Runnable`); documented the `swarm:install:memory` sub-installer and its `--with-memory` flag in the Installation section; and expanded the Configuration reference to cover the previously-undocumented `memory`, `context`, `context_growth`, `compaction`, `guardrails`, `retention`, `history`, and topology-plan config sections.
 - **AGENTS.md: de-stale Pulse references after the v0.17.1 extraction (#365).** Removed the `src/Pulse` entry from the package-shape map (that directory moved to the companion package in v0.17.1), rewrote the `## Pulse` section to point at [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) (namespace `BuiltByBerry\LaravelSwarmPulse\*`) and note the shared `swarm.pulse.memory.sample_rate` config seam core retains, and corrected the Tech Stack, Current State, and test-coverage descriptions that still framed Pulse as living in core.
 
 ## v0.17.2 - 2026-07-06

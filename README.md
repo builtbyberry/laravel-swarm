@@ -25,6 +25,13 @@ Define a swarm once, return the Laravel AI agents that participate in it, and ru
 - **Upgrading:** [UPGRADING.md](UPGRADING.md)
 - **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
 
+## Contents
+
+- **Getting started** — [Quick Start](#quick-start) · [Requirements](#requirements) · [Installation](#installation) · [Your First Swarm](#your-first-swarm) · [Running A Swarm](#running-a-swarm)
+- **Execution modes** — [Choosing An Execution Mode](#choosing-an-execution-mode) · [Queueing](#queueing-a-swarm) · [Streaming](#streaming-a-swarm) · [Durable Execution](#durable-execution)
+- **Capabilities** — [Memory](#memory-v090) · [Topologies](#topologies)
+- **Production & reference** — [Testing](#testing) · [Configuration](#configuration) · [Production Checklist](#production-checklist) · [Documentation](#documentation) · [Local Development](#local-development)
+
 ## Quick Start
 
 ```bash
@@ -79,6 +86,7 @@ Tagged releases are available on [Packagist](https://packagist.org/packages/buil
 
 - [`swarm:install:durable`](docs/durable-execution.md) — scheduler entries (`swarm:relay`, `swarm:recover`, `swarm:prune`), persistence/queue checks, copy-paste worker snippets.
 - [`swarm:install:audit`](docs/audit-evidence-contract.md) — bind a `SwarmAuditSink` (and optional `SwarmAuditSigner` / `ActorResolver` / `CapturePolicy`) inside `AppServiceProvider`.
+- [`swarm:install:memory`](docs/memory.md) — verify the memory tables (offering to run migrations if they are missing), then print the effective persistence driver and replay mode for the [Swarm Memory](docs/memory.md) subsystem.
 - [`swarm:install:examples`](docs/examples.md) — copy the runnable starter example pack into `app/Ai/`.
 
 Pulse observability (recorders + dashboard cards) lives in a separate companion package as of v0.17.1 — see [Pulse](docs/pulse.md) for the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) install steps.
@@ -89,7 +97,7 @@ For CI and scripted setups, every prompt has a flag override:
 php artisan swarm:install \
     --no-interaction \
     --persistence=database \
-    --with-durable --with-audit --with-examples
+    --with-durable --with-audit --with-memory --with-examples
 ```
 
 Pass `--without-<name>` to skip a sub-installer in non-interactive mode, `--persistence=cache` for cache-only deployments, `--skip-migrate` to defer migrations, or `--force` to overwrite an existing `config/swarm.php`.
@@ -369,9 +377,16 @@ A durable run can stream **each node's events into the causal log** as it execut
 
 ```php
 use BuiltByBerry\LaravelSwarm\Attributes\DurableStreaming;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 
 #[DurableStreaming]
-final class ClaimsReview implements Runnable { /* … */ }
+final class ClaimsReview implements Swarm
+{
+    use Runnable;
+
+    // agents() …
+}
 ```
 
 It streams on **every durable topology** — sequential, hierarchical, static_hierarchical, and parallel (including fan-out branches) — with each node's attempt voided-and-retried cleanly on crash-resume (the same append-only causal-log fold the live substrate uses). The hierarchical coordinator streams structural events; token-streaming the coordinator is a follow-up. Declaring the attribute on a topology not yet wired for streaming fails loud at dispatch. An operator kill-switch (`SWARM_DURABLE_STREAMING_ENABLED=false`) pauses emission fleet-wide without a redeploy, safely mid-run. See [Durable Execution — per-node streaming](docs/durable-execution.md#durable-per-node-streaming).
@@ -554,19 +569,14 @@ See [Testing](docs/testing.md) and [Testing Swarms](examples/testing-swarms/READ
 
 Laravel Swarm stores defaults in `config/swarm.php`.
 
-Common settings include:
+Settings are grouped by concern:
 
-- `swarm.topology`
-- `swarm.timeout`
-- `swarm.max_agent_steps`
-- `swarm.persistence.driver`
-- `swarm.capture.*`
-- `swarm.queue.*`
-- `swarm.durable.*`
-- `swarm.streaming.replay.*`
-- `swarm.observability.*`
-- `swarm.audit.*`
-- `swarm.limits.*`
+- **Core** — `swarm.topology`, `swarm.timeout`, `swarm.max_agent_steps`
+- **Persistence & history** — `swarm.persistence.*`, `swarm.capture.*`, `swarm.retention.*`, `swarm.history.*`
+- **Execution modes** — `swarm.queue.*`, `swarm.durable.*`, `swarm.streaming.*`
+- **Memory & context** — `swarm.memory.*`, `swarm.context.*`, `swarm.context_growth.*`, `swarm.compaction.*`
+- **Topology plans** — `swarm.hierarchical.*`, `swarm.static_hierarchical.*`
+- **Governance & observability** — `swarm.guardrails.*`, `swarm.audit.*`, `swarm.observability.*`, `swarm.artifacts.*`, `swarm.limits.*`
 
 Capture defaults are conservative. Prompts, outputs, automatic step artifacts, and rich active-context snapshots are not persisted unless you opt in. When the global persistence driver or a per-store override uses `database`, `swarm.persistence.encrypt_at_rest` defaults to true and seals designated sensitive string columns with Laravel's encrypter.
 
