@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.17.0 - unreleased
+## v0.17.0 - 2026-07-06
 
-Phase-0 surface-settle: Pulse extract + contract prune + driver-surface promotions — settle the core public surface before the adoption packages (Filament/MCP/driver-family) bind it.
+Phase-0 surface-settle: extract Pulse (and the shared test harness it needed) into companion packages, and promote the streaming substrate's driver contracts to public — settling the core public surface before the adoption packages (Filament/MCP/driver-family) bind it. An audit of the Contracts namespace for pruning candidates (#350) found the work already done in v0.12.0 and was closed without further changes.
 
 ### Removed
 
@@ -14,7 +14,7 @@ Phase-0 surface-settle: Pulse extract + contract prune + driver-surface promotio
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Shared `swarm:install*` test harness extracted to `builtbyberry/laravel-swarm-installer-testkit` (#355).** `InstallerTestCase`, `InstallerRunResult`, and `DoubleRunResult` moved out of this repo's `tests/Installer/` into a new standalone package (v0.1.0) so companion packages — starting with `laravel-swarm-pulse`, which had duplicated roughly 250 lines of the harness — can share it instead of each carrying their own copy. This repo's own installer tests now extend a thin `SwarmInstallerTestCase` that supplies the swarm-specific service-provider list on top of the shared base class. Dev-only: added to `require-dev`, no public API or runtime behavior change.
 
 ## v0.16.1 - 2026-07-03
 
