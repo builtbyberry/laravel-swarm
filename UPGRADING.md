@@ -282,6 +282,8 @@ stability settings while Laravel AI remains pre-stable.
 
 See [Pulse](docs/pulse.md) for the full install flow.
 
+**Shared `swarm:install*` test harness extracted to `builtbyberry/laravel-swarm-installer-testkit` (#355) — no required action.** Dev-only change to this repo's own test suite (`require-dev`), with no public API or runtime behavior change. Only relevant if you were extending or importing `BuiltByBerry\LaravelSwarm\Tests\Installer\InstallerTestCase` directly from outside this repo (not a supported pattern — `tests/` is `autoload-dev`, never part of the public surface); that base class now lives in the new package under `BuiltByBerry\LaravelSwarmInstallerTestkit\InstallerTestCase`.
+
 ## Upgrading to v0.16.1
 
 **No required action.** v0.16.1 is a core hardening pass with no migration, no config change, and no breaking API — `swarm:compact` discovery is now a bounded SQL query instead of an unbounded in-memory pluck (#339), `DatabaseAuditOutbox::drain()` batches its retry/dead-letter writes with a per-row fallback (no observable change to `AuditDrainResult`'s shape or the audit trail), and two documentation lines (`AGENTS.md`'s `laravel/ai` version, `CONTRIBUTING.md`'s hook setup step) were corrected.
