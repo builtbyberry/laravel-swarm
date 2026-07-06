@@ -1004,7 +1004,7 @@ The card itself does not raise red-state alarms; it surfaces numbers an operator
 - **Snapshot bytes spike with no entries change** — a single agent is appending large tool-call payloads. Inspect the offending run with `php artisan swarm:inspect <run-id>` and consider redacting that tool's input/output via the capture policy.
 - **Recall hit rate near 0%** — agents are reading keys that were never written. Confirm the propagation policy (`MemoryPropagationPolicy`, v0.10.0) carries the expected scopes into the worker context.
 
-For aggregate Pulse internals — period selectors, recorder enable flag, troubleshooting — see [Pulse](pulse.md#swarm-memory-card).
+For aggregate Pulse internals — period selectors, recorder enable flag, troubleshooting — see the [Pulse companion package README](https://github.com/builtbyberry/laravel-swarm-pulse#cards).
 
 ---
 
