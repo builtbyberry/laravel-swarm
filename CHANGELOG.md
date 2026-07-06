@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.17.3 - unreleased
+## v0.17.3 - 2026-07-06
 
 Documentation-only patch. Corrects cross-repo cohesion gaps found in a full documentation review: an editorial refresh plus fact-fixes to the README, and de-staling of `AGENTS.md`'s Pulse references after the v0.17.1 extraction. No code changes. The companion packages `laravel-swarm-pulse` and `laravel-swarm-installer-testkit` received their own doc patches in parallel.
 
