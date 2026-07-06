@@ -16,7 +16,6 @@ use BuiltByBerry\LaravelSwarm\Commands\Install\InstallCommand;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallDurableCommand;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallExamplesCommand;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallMemoryCommand;
-use BuiltByBerry\LaravelSwarm\Commands\Install\InstallPulseCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeMemoryToolCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmAgentCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
@@ -92,10 +91,6 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Persistence\TieredStreamEventStore;
-use BuiltByBerry\LaravelSwarm\Pulse\Livewire\AuditOutbox as AuditOutboxCard;
-use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmMemory as SwarmMemoryCard;
-use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmRuns;
-use BuiltByBerry\LaravelSwarm\Pulse\Livewire\SwarmSteps;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBoundaryCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchAdvancer;
@@ -150,8 +145,6 @@ use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Octane\Contracts\OperationTerminated;
-use Laravel\Pulse\Pulse;
-use Livewire\LivewireManager;
 use Psr\Log\LoggerInterface;
 
 class SwarmServiceProvider extends ServiceProvider
@@ -450,17 +443,6 @@ class SwarmServiceProvider extends ServiceProvider
 
         $this->registerOctaneStateReset();
 
-        if (class_exists(Pulse::class)) {
-            $this->loadViewsFrom(__DIR__.'/../resources/views', 'swarm');
-
-            $this->callAfterResolving('livewire', function (LivewireManager $livewire): void {
-                $livewire->component('swarm.runs', SwarmRuns::class);
-                $livewire->component('swarm.steps', SwarmSteps::class);
-                $livewire->component('swarm.audit-outbox', AuditOutboxCard::class);
-                $livewire->component('swarm.memory', SwarmMemoryCard::class);
-            });
-        }
-
         if ($this->app->runningInConsole()) {
             $this->publishes([
                 __DIR__.'/../config/swarm.php' => config_path('swarm.php'),
@@ -501,7 +483,6 @@ class SwarmServiceProvider extends ServiceProvider
                 InstallCommand::class,
                 InstallExamplesCommand::class,
                 InstallMemoryCommand::class,
-                InstallPulseCommand::class,
                 InstallAuditCommand::class,
                 InstallDurableCommand::class,
             ]);

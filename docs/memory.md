@@ -956,7 +956,10 @@ The write-through does not replace direct `SwarmMemory` reads and writes — it 
 
 ## Pulse observability
 
-When Laravel Pulse is installed, the optional `<livewire:swarm.memory />` card surfaces four signals operators tune retention and capture policy against:
+Since v0.17.0, Pulse observability lives in a companion package —
+[`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse).
+Once installed, the optional `<livewire:swarm.memory />` card surfaces four
+signals operators tune retention and capture policy against:
 
 - **Entries written per scope** — count of `put()` calls grouped by `MemoryScope` (Run / Conversation / Agent / Swarm).
 - **Average bytes per write** — approximate JSON byte size of the persisted `value` + `metadata`, averaged per scope.
@@ -967,7 +970,7 @@ The card is registered automatically by `php artisan swarm:install:pulse` (re-ru
 
 ```php
 // config/pulse.php
-use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmMemoryMetrics;
+use BuiltByBerry\LaravelSwarmPulse\Recorders\SwarmMemoryMetrics;
 
 'recorders' => [
     SwarmMemoryMetrics::class => [

@@ -24,7 +24,7 @@ orchestrator handle the base setup (config publish, env seeding, persistence
 path, queue check) and skip the sub-installers you want to wire by hand:
 
 ```bash
-php artisan swarm:install --without-pulse --without-examples
+php artisan swarm:install --without-examples
 ```
 
 Each `swarm:install:<name>` command is also runnable on its own at any time
@@ -257,49 +257,11 @@ If you are on the database persistence driver, also confirm
 `SWARM_AUDIT_FAILURE_POLICY=queue` persists failed sink writes to the
 outbox for retry through `swarm:relay --type=audit`.
 
-## Wire Pulse (manual equivalent of `swarm:install:pulse`)
+## Wire Pulse
 
-If your application already uses Laravel Pulse, the Swarm package ships
-two recorders and three Livewire cards. Install Pulse first (if you have
-not already):
-
-```bash
-composer require laravel/pulse
-php artisan vendor:publish --provider="Laravel\Pulse\PulseServiceProvider"
-php artisan migrate
-```
-
-Add the recorders to `config/pulse.php`:
-
-```php
-use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmRuns;
-use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmStepDurations;
-
-'recorders' => [
-    // ...
-    SwarmRuns::class => [
-        'enabled' => env('PULSE_SWARM_RUNS_ENABLED', true),
-    ],
-    SwarmStepDurations::class => [
-        'enabled' => env('PULSE_SWARM_STEP_DURATIONS_ENABLED', true),
-    ],
-],
-```
-
-Publish the Pulse dashboard view if you have not already, and add the
-swarm cards to `resources/views/vendor/pulse/dashboard.blade.php`:
-
-```bash
-php artisan vendor:publish --tag=pulse-dashboard
-```
-
-```blade
-<livewire:swarm.runs cols="6" />
-<livewire:swarm.steps cols="6" />
-<livewire:swarm.audit-outbox cols="6" />
-```
-
-See [Pulse](./pulse.md) for what each card surfaces.
+Pulse observability (recorders + dashboard cards) moved to a companion
+package in v0.17.0 — it is no longer part of core setup. See
+[Pulse](./pulse.md) for installation and what each card surfaces.
 
 ## Install the starter examples (manual equivalent of `swarm:install:examples`)
 

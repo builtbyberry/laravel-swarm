@@ -72,10 +72,13 @@ pass:
    - [`swarm:install:memory`](./memory.md) — verifies the memory tables
      (`swarm_memories`, `swarm_memory_snapshots`) and prints the effective
      replay mode. Run standalone at any time to validate your memory config.
-   - [`swarm:install:pulse`](./pulse.md) — registers the Swarm recorders
-     and dashboard cards. Only offered when `laravel/pulse` is installed.
    - [`swarm:install:examples`](./examples.md) — copies the runnable
      starter pack into `app/Ai/`.
+
+   Pulse observability lives in a separate companion package —
+   [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse)
+   — and ships its own `swarm:install:pulse` once installed. See
+   [Pulse](./pulse.md).
 
 ### Non-interactive install
 
@@ -144,9 +147,10 @@ For database persistence, also verify the durable runtime tables:
 php artisan swarm:health --durable
 ```
 
-The audit outbox and Pulse cards have their own focus flags if you wired
-them up: `swarm:health --audit` and (when Pulse is installed) the
-operator-facing `<livewire:swarm.audit-outbox />` card.
+The audit outbox has its own focus flag: `swarm:health --audit`. If you've
+installed the [Pulse companion package](./pulse.md), the operator-facing
+`<livewire:swarm.audit-outbox />` card surfaces the same signal on your
+dashboard.
 
 ## Run your first swarm
 

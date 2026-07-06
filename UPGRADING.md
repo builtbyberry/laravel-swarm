@@ -271,7 +271,16 @@ stability settings while Laravel AI remains pre-stable.
 
 ## Upgrading to v0.17.0
 
-**No required action.** `CausalLogStore` and `ColdArchiveDriver` are now public contracts (#349) — no behavior change, no config change, no migration. If you want to implement a custom persistence backend for the streaming substrate's hot/cold tiering, see the new [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for what's actually pluggable (the read/query seam) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming both stay coupled to the concrete database implementations).
+**`CausalLogStore` and `ColdArchiveDriver` are now public contracts (#349) — no required action.** No behavior change, no config change, no migration. If you want to implement a custom persistence backend for the streaming substrate's hot/cold tiering, see the new [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for what's actually pluggable (the read/query seam) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming both stay coupled to the concrete database implementations).
+
+**BREAKING: Pulse integration extracted to a companion package (#351) — required action only if you use Pulse.** If you never installed `laravel/pulse` alongside Swarm, skip this. If you did:
+
+1. Require the new package: `composer require builtbyberry/laravel-swarm-pulse`.
+2. Update any imports from `BuiltByBerry\LaravelSwarm\Pulse\*` to `BuiltByBerry\LaravelSwarmPulse\*` — the classes are otherwise unchanged (same recorder logic, same card behavior, same `config/pulse.php` keys, same `swarm.pulse.memory.sample_rate` config knob still read from `config/swarm.php`).
+3. If you dispatch `swarm:install` with `--with-pulse` or `--without-pulse` in scripts or CI, remove those flags — the base installer no longer knows about Pulse. Run `php artisan swarm:install:pulse` directly instead (still the same command, now shipped by the companion package).
+4. Re-run `php artisan swarm:install:pulse` (or `--force` if the managed blocks are already present) to confirm the card/recorder registration still resolves correctly from the new package.
+
+See [Pulse](docs/pulse.md) for the full install flow.
 
 ## Upgrading to v0.16.1
 

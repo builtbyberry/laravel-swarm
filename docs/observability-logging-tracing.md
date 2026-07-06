@@ -24,21 +24,12 @@ $this->app->bind(SwarmTelemetrySink::class, function () {
 
 The package ships `NoOpSwarmTelemetrySink` as the default — nothing is emitted until you bind a real sink. See the [Queue And Job Context](#queue-and-job-context) section below for a minimal `AppSwarmTelemetrySink` example, and the [Observability Correlation Contract](observability-correlation-contract.md) for the full category list and payload schema.
 
-**Step 3 — Register Pulse recorders** (if Pulse is installed)
+**Step 3 — Install the Pulse companion** (optional)
 
-Add the recorders to the `recorders` array in `config/pulse.php` so the Swarm cards appear on your Pulse dashboard:
-
-```php
-use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmRuns;
-use BuiltByBerry\LaravelSwarm\Pulse\Recorders\SwarmStepDurations;
-
-'recorders' => [
-    SwarmRuns::class          => ['enabled' => env('PULSE_SWARM_RUNS_ENABLED', true)],
-    SwarmStepDurations::class => ['enabled' => env('PULSE_SWARM_STEP_DURATIONS_ENABLED', true)],
-],
-```
-
-See [Pulse](pulse.md) for card setup and configuration options.
+Pulse observability lives in a separate companion package —
+[`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse).
+See [Pulse](pulse.md) for installation, card setup, and configuration
+options.
 
 **What you get after these three steps:** your `SwarmTelemetrySink` receives a structured record for every swarm lifecycle event and package queue-job boundary; the Pulse dashboard shows run totals, failure rates, topology usage, and step durations; and the correlation fields (`run_id`, `swarm_class`, `topology`, `execution_mode`) are ready to attach to any OpenTelemetry span you open in your sink.
 
