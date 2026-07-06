@@ -6,7 +6,7 @@ Documentation-only patch. Corrects cross-repo cohesion gaps found in a full docu
 
 ### Documentation
 
-_To be filled in during release wrap-up._
+- **AGENTS.md: de-stale Pulse references after the v0.17.1 extraction (#365).** Removed the `src/Pulse` entry from the package-shape map (that directory moved to the companion package in v0.17.1), rewrote the `## Pulse` section to point at [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) (namespace `BuiltByBerry\LaravelSwarmPulse\*`) and note the shared `swarm.pulse.memory.sample_rate` config seam core retains, and corrected the Tech Stack, Current State, and test-coverage descriptions that still framed Pulse as living in core.
 
 ## v0.17.2 - 2026-07-06
 
