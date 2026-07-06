@@ -86,7 +86,7 @@ Tagged releases are available on [Packagist](https://packagist.org/packages/buil
 
 - [`swarm:install:durable`](docs/durable-execution.md) — scheduler entries (`swarm:relay`, `swarm:recover`, `swarm:prune`), persistence/queue checks, copy-paste worker snippets.
 - [`swarm:install:audit`](docs/audit-evidence-contract.md) — bind a `SwarmAuditSink` (and optional `SwarmAuditSigner` / `ActorResolver` / `CapturePolicy`) inside `AppServiceProvider`.
-- [`swarm:install:memory`](docs/memory.md) — verify the memory tables (offering to run migrations if they are missing), then print the effective persistence driver and replay mode for the [Swarm Memory](docs/memory.md) subsystem.
+- [`swarm:install:memory`](docs/memory.md) — verify the memory tables (offering to run migrations if they are missing), then print the effective persistence driver and replay mode for the Swarm Memory subsystem.
 - [`swarm:install:examples`](docs/examples.md) — copy the runnable starter example pack into `app/Ai/`.
 
 Pulse observability (recorders + dashboard cards) lives in a separate companion package as of v0.17.1 — see [Pulse](docs/pulse.md) for the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) install steps.
