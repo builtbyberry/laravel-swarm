@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.17.0 - 2026-07-06
+
+Phase-0 surface-settle: extract Pulse (and the shared test harness it needed) into companion packages, and promote the streaming substrate's driver contracts to public — settling the core public surface before the adoption packages (Filament/MCP/driver-family) bind it. An audit of the Contracts namespace for pruning candidates (#350) found the work already done in v0.12.0 and was closed without further changes.
+
+### Removed
+
+- **BREAKING: Pulse integration extracted to a companion package (#351).** `src/Pulse/*` (the `SwarmRuns` / `SwarmStepDurations` / `SwarmMemoryMetrics` recorders and the `swarm.runs` / `swarm.steps` / `swarm.audit-outbox` / `swarm.memory` Livewire cards), the `swarm:install:pulse` Artisan command, and the `laravel/pulse` dev-dependency are removed from core and now ship as [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse), with a new namespace (`BuiltByBerry\LaravelSwarmPulse\*`). `swarm:install`'s `--with-pulse`/`--without-pulse` flags are also removed — the base installer no longer knows about Pulse. Anyone referencing `BuiltByBerry\LaravelSwarm\Pulse\*` classes or `laravel/pulse` as a dependency of core must install the new package; see [UPGRADING.md](UPGRADING.md) for the migration steps. Establishes the companion-package pattern ahead of the Filament plugin and MCP server.
+
+### Added
+
+- **`CausalLogStore` and `ColdArchiveDriver` are now public contracts (#349).** Both have been stable for two minors since their v0.15.0 introduction. They are **read/query-seam extension points only** — a custom implementation is consumed by durable per-node streaming's void-on-resume path, hierarchical stream causal-log resolution, and `TieredStreamEventStore`'s hot/cold read seam. A pre-implementation design gate confirmed, and this release explicitly discloses, two scope limits that a driver author must know before implementing: compaction (graduation to cold, hot reclaim) stays coupled to the concrete `DatabaseCausalLogStore`/`DatabaseColdArchiveDriver` classes, so a custom driver's runs are never compacted; and `#[DurableStreaming]` per-node streaming requires the concrete database implementation and fails loud at dispatch otherwise. `ColdArchiveDriver::readSnapshot()` is contract-ready for a forthcoming snapshot-based resume feature but has no production caller yet. See the new [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for the full driver-author story. Also fixes a stale `docs/public-surface.md` description that incorrectly listed `graduate()`/`reclaim()` as part of the `ColdArchiveDriver` contract — those methods are internal to the compactor and were never part of this interface.
+
+### Changed
+
+- **Shared `swarm:install*` test harness extracted to `builtbyberry/laravel-swarm-installer-testkit` (#355).** `InstallerTestCase`, `InstallerRunResult`, and `DoubleRunResult` moved out of this repo's `tests/Installer/` into a new standalone package (v0.1.0) so companion packages — starting with `laravel-swarm-pulse`, which had duplicated roughly 250 lines of the harness — can share it instead of each carrying their own copy. This repo's own installer tests now extend a thin `SwarmInstallerTestCase` that supplies the swarm-specific service-provider list on top of the shared base class. Dev-only: added to `require-dev`, no public API or runtime behavior change.
+
 ## v0.16.1 - 2026-07-03
 
 Core hardening pass: tighten the operator-contract surface shipped in v0.16.0 before v0.17.0 Phase-0 (Pulse extract + contract prune + driver-surface promotions) and the adoption packages. Scoped via an `/improve-laravel` audit rather than pre-filed issues.

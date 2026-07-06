@@ -79,8 +79,9 @@ Tagged releases are available on [Packagist](https://packagist.org/packages/buil
 
 - [`swarm:install:durable`](docs/durable-execution.md) — scheduler entries (`swarm:relay`, `swarm:recover`, `swarm:prune`), persistence/queue checks, copy-paste worker snippets.
 - [`swarm:install:audit`](docs/audit-evidence-contract.md) — bind a `SwarmAuditSink` (and optional `SwarmAuditSigner` / `ActorResolver` / `CapturePolicy`) inside `AppServiceProvider`.
-- [`swarm:install:pulse`](docs/pulse.md) — register the Swarm recorders and dashboard cards (only offered when `laravel/pulse` is installed).
 - [`swarm:install:examples`](docs/examples.md) — copy the runnable starter example pack into `app/Ai/`.
+
+Pulse observability (recorders + dashboard cards) lives in a separate companion package as of v0.17.0 — see [Pulse](docs/pulse.md) for the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) install steps.
 
 For CI and scripted setups, every prompt has a flag override:
 
@@ -106,7 +107,7 @@ Read [Getting Started](docs/getting-started.md) for the full new-user walkthroug
 
 ### Advanced setup (manual)
 
-Prefer to wire things by hand? Every step `swarm:install` performs has a stable manual equivalent. See [Advanced Setup](docs/advanced-setup.md) for the full manual flow — config publish, migrations vs. `ignoreMigrations()`, scheduler entries, audit sink binding, Pulse recorder + dashboard registration, and copying the starter examples by hand.
+Prefer to wire things by hand? Every step `swarm:install` performs has a stable manual equivalent. See [Advanced Setup](docs/advanced-setup.md) for the full manual flow — config publish, migrations vs. `ignoreMigrations()`, scheduler entries, audit sink binding, and copying the starter examples by hand.
 
 ## Your First Swarm
 
@@ -321,6 +322,7 @@ Swarm carries `laravel/ai` `ToolCall` / `ToolResult` objects through the stream 
 
 - **Authors:** [Streaming Substrate Author Guide](docs/streaming-substrate-author-guide.md) — dynamic streaming, the causal-log fold, rollup nodes, the context-growth policy.
 - **Operators:** [Streaming Substrate Operator Runbook](docs/operator-runbook-streaming-substrate.md) — hot/cold tiering, scheduling `swarm:compact`, retention, recovery and quarantine.
+- **Driver authors (v0.17.0):** `CausalLogStore` and `ColdArchiveDriver` are now public contracts for a custom persistence backend's read/query seam. See the [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for exactly what's pluggable today (hot/cold read stitching, causal-log resolution) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming).
 
 ## Durable Execution
 

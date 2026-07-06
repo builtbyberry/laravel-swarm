@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use BuiltByBerry\LaravelSwarm\Compaction\SwarmCompactor;
 use BuiltByBerry\LaravelSwarm\Exceptions\SealedCausalWindowException;
 use BuiltByBerry\LaravelSwarm\Exceptions\UnknownCausalTargetException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
@@ -22,10 +23,16 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType;
  * a non-database persistence driver must fail loud (see
  * {@see DatabaseCausalLogStore}).
  *
- * @internal This contract is schema-coupled to {@see DatabaseCausalLogStore} (its
- * sole implementation) and evolves with the substrate; it is not a consumer
- * extension point. Consumers wanting a custom persistence backend implement the
- * public {@see StreamEventStore} instead.
+ * Public since v0.17.0 (#349), stable for two minors since its v0.15.0
+ * introduction. This is a **read/query-seam extension point**: a custom
+ * implementation is consumed by the runtime read paths (durable per-node
+ * streaming's void-on-resume, hierarchical stream causal-log resolution). It is
+ * NOT consumed by compaction — {@see SwarmCompactor}
+ * depends on the concrete {@see DatabaseCausalLogStore} directly, so a custom
+ * implementation's runs are never compacted. `#[DurableStreaming]` per-node
+ * streaming additionally requires the concrete database implementation and
+ * fails loud otherwise (see `DispatchValidator::ensureDurableStreamingInfrastructure`).
+ * See `docs/streaming-substrate-driver-guide.md` for the full driver-author story.
  */
 interface CausalLogStore extends StreamEventStore
 {

@@ -8,9 +8,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
-use BuiltByBerry\LaravelSwarm\Tests\Installer\InstallerTestCase;
+use BuiltByBerry\LaravelSwarm\Tests\Installer\SwarmInstallerTestCase;
 
-uses(InstallerTestCase::class);
+uses(SwarmInstallerTestCase::class);
 
 test('swarm:install:audit scaffolds the readable sink binding in AppServiceProvider', function () {
     $this->runInstaller('swarm:install:audit', ['--sink' => 'readable'])

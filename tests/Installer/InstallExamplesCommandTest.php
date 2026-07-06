@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-use BuiltByBerry\LaravelSwarm\Tests\Installer\InstallerTestCase;
+use BuiltByBerry\LaravelSwarm\Tests\Installer\SwarmInstallerTestCase;
 
-uses(InstallerTestCase::class);
+uses(SwarmInstallerTestCase::class);
 
 /**
  * Tests for `swarm:install:examples` (#90) — the sub-installer that copies the

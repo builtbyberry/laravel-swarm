@@ -88,9 +88,8 @@ vendor/bin/phpstan analyse --memory-limit=2G --no-progress
 
 Static analysis is configured at **level 7** in `phpstan.neon` (Larastan
 extension). A narrow `property.notFound` ignore applies only to database query
-row objects in the large durable/history persistence classes and the Pulse
-`SwarmSteps` Livewire card, where enumerating every dynamic column as a typed
-shape would not be practical.
+row objects in the large durable/history persistence classes, where
+enumerating every dynamic column as a typed shape would not be practical.
 
 `composer lint` is the non-mutating Pint check. Use `composer format` only when
 you intentionally want Pint to rewrite files.
@@ -285,19 +284,10 @@ the right contract once rather than deprecate an early one.
 
 ### Pulse component pattern
 
-Pulse cards and Livewire components live in `src/Pulse/`:
-
-- `src/Pulse/Recorders/` — public surface. Applications enable recorders in
-  `config/pulse.php`, so renaming a recorder class or removing a documented
-  configuration key is a breaking change.
-- `src/Pulse/Livewire/` — `@internal`. The rendered cards are stable user
-  experience, but the Livewire component class names, public properties, and
-  view paths are implementation details and can move between releases.
-- `src/Pulse/Support/` — `@internal` helpers (Pulse keys, formatting).
-
-When adding a new Pulse card, mark the Livewire component `@internal`, document
-the recorder and the user-visible card name in `docs/pulse.md`, and use
-`config/swarm.php` (not `config/pulse.php`) for any swarm-side tuneables.
+Pulse cards and Livewire components moved to the
+[`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse)
+companion package in v0.17.0. Contributions to Pulse recorders or cards belong
+in that repository, not here.
 
 ## Audit Pipeline Contributions
 

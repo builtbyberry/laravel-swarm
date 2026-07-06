@@ -12,9 +12,6 @@ use Illuminate\Contracts\Bus\Dispatcher as DispatcherContract;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Ai\AiServiceProvider;
-use Laravel\Pulse\Pulse;
-use Laravel\Pulse\PulseServiceProvider;
-use Livewire\LivewireServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 abstract class TestCase extends Orchestra
@@ -27,18 +24,11 @@ abstract class TestCase extends Orchestra
      */
     protected function getPackageProviders($app): array
     {
-        $providers = [
+        return [
             BusServiceProvider::class,
             AiServiceProvider::class,
             SwarmServiceProvider::class,
         ];
-
-        if (class_exists(Pulse::class)) {
-            $providers[] = LivewireServiceProvider::class;
-            $providers[] = PulseServiceProvider::class;
-        }
-
-        return $providers;
     }
 
     /**
@@ -52,9 +42,6 @@ abstract class TestCase extends Orchestra
         $app['config']->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
         $app['config']->set('database.default', 'testing');
         $app['config']->set('database.connections.testing', $this->resolveTestingDatabaseConfig());
-        $app['config']->set('pulse.enabled', true);
-        $app['config']->set('pulse.storage.database.connection', 'testing');
-        $app['config']->set('pulse.ingest.driver', 'storage');
         $app['config']->set('swarm.persistence.driver', 'cache');
         $app['config']->set('swarm.persistence.encrypt_at_rest', false);
         $app['config']->set('swarm.capture.inputs', true);
@@ -122,13 +109,5 @@ abstract class TestCase extends Orchestra
     protected function defineDatabaseMigrations(): void
     {
         Artisan::call('migrate', ['--database' => 'testing']);
-
-        if (class_exists(Pulse::class)) {
-            Artisan::call('migrate', [
-                '--database' => 'testing',
-                '--path' => __DIR__.'/../vendor/laravel/pulse/database/migrations',
-                '--realpath' => true,
-            ]);
-        }
     }
 }
