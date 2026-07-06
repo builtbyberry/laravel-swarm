@@ -59,7 +59,7 @@ If a gap is deferred, it must be recorded as a named follow-up with an owner, no
 - `pestphp/pest` ^4.4 + `pest-plugin-laravel` ^4.1
 - `larastan/larastan` ^3.0
 - `laravel/pint` ^1.0
-- Optional `laravel/pulse` integration
+- Optional Pulse observability via the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) companion package (not a core dependency)
 
 ## Dependency And Upgrade Path
 
@@ -75,7 +75,6 @@ Keep the mental model high-level rather than mirroring every file:
 - `src/Events` — lifecycle events for started, step started/completed, completed, failed, paused, resumed, and cancelled.
 - `src/Jobs` — queued and durable execution jobs.
 - `src/Persistence` — cache and database context, artifact, durable run, run history, and stream replay stores; `SwarmPersistenceCipher` seals designated string columns when database persistence uses encrypter-backed at-rest sealing.
-- `src/Pulse` — optional Pulse recorders, cards, and key helpers.
 - `src/Responses` — sync, queued, durable, streamable, artifact, response, and step DTOs.
 - `src/Streaming` — typed swarm stream events aligned with Laravel AI stream events.
 - `src/Routing` — hierarchical route plan objects and validation.
@@ -134,7 +133,7 @@ Schedule `swarm:prune` for database-backed persistence. Schedule `swarm:recover`
 
 ## Pulse
 
-Laravel Swarm has optional Laravel Pulse support. When Pulse is installed, the package can register `swarm.runs` and `swarm.steps` Livewire cards. Applications enable the `SwarmRuns` and `SwarmStepDurations` recorders in `config/pulse.php`.
+Pulse observability lives in the separate companion package [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) (namespace `BuiltByBerry\LaravelSwarmPulse\*`), extracted from core in v0.17.1. Install it to get the `SwarmRuns`, `SwarmStepDurations`, and `SwarmMemoryMetrics` recorders and the `swarm.runs` / `swarm.steps` / `swarm.audit-outbox` / `swarm.memory` dashboard cards, registered by its `swarm:install:pulse` sub-installer. Core is no longer aware of Pulse and no longer depends on `laravel/pulse`; it retains only the shared `swarm.pulse.memory.sample_rate` config knob that the companion's memory-metrics recorder reads. See [docs/pulse.md](docs/pulse.md).
 
 Pulse is aggregate observability. For live per-run operations feeds, listen to Laravel Swarm lifecycle events and broadcast application-owned events.
 
@@ -225,15 +224,15 @@ Releases are session-shaped: a thematic group of work ships as one tagged releas
 
 ## Current State
 
-The package supports sequential, parallel, and hierarchical topologies; synchronous, queued, streamed, and durable execution; cache and database persistence; run history and artifacts; lifecycle events; optional Pulse observability; config, migration, and stub publishing; and a full fake/assertion system.
+The package supports sequential, parallel, and hierarchical topologies; synchronous, queued, streamed, and durable execution; cache and database persistence; run history and artifacts; lifecycle events; optional Pulse observability via a companion package; config, migration, and stub publishing; and a full fake/assertion system.
 
 Streaming covers typed non-text final-agent events (`swarm_text_end`, `swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`, `swarm_tool_result`) with persisted replay support and Laravel AI-style stream-event broadcast helpers.
 
-The test suite includes Feature and Unit coverage across sequential, parallel, hierarchical routing, streaming, queued execution, durable execution, persistence, Pulse integration, commands, fakes, and support objects.
+The test suite includes Feature and Unit coverage across sequential, parallel, hierarchical routing, streaming, queued execution, durable execution, persistence, commands, fakes, and support objects. (Pulse recorder/card tests moved to the companion package with the v0.17.1 extraction.)
 
 ## Known Gaps / Next Work
 
-- Commercial dashboard layer is a separate future repo/product. The package intentionally exposes history, events, artifacts, and Pulse hooks instead of owning a full dashboard API.
+- Commercial dashboard layer is a separate future repo/product. The package intentionally exposes history, events, and artifacts (with Pulse cards available via the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) companion package) instead of owning a full dashboard API.
 
 ## Testing And Quality
 
