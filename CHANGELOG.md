@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.17.3 - 2026-07-06
+
+Documentation-only patch. Corrects cross-repo cohesion gaps found in a full documentation review: an editorial refresh plus fact-fixes to the README, and de-staling of `AGENTS.md`'s Pulse references after the v0.17.1 extraction. No code changes. The companion packages `laravel-swarm-pulse` and `laravel-swarm-installer-testkit` received their own doc patches in parallel.
+
+### Documentation
+
+- **README: table of contents + accuracy pass (#364).** Added a grouped table of contents for the ~35KB README, and grouped the Configuration key reference by concern. Folded in fact-fixes: corrected a non-compiling `#[DurableStreaming]` example (`Runnable` is a trait, applied via `implements Swarm { use Runnable; }`, not `implements Runnable`); documented the `swarm:install:memory` sub-installer and its `--with-memory` flag in the Installation section; and expanded the Configuration reference to cover the previously-undocumented `memory`, `context`, `context_growth`, `compaction`, `guardrails`, `retention`, `history`, and topology-plan config sections.
+- **AGENTS.md: de-stale Pulse references after the v0.17.1 extraction (#365).** Removed the `src/Pulse` entry from the package-shape map (that directory moved to the companion package in v0.17.1), rewrote the `## Pulse` section to point at [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) (namespace `BuiltByBerry\LaravelSwarmPulse\*`) and note the shared `swarm.pulse.memory.sample_rate` config seam core retains, and corrected the Tech Stack, Current State, and test-coverage descriptions that still framed Pulse as living in core.
+
 ## v0.17.2 - 2026-07-06
 
 Documentation-only release. `v0.17.0` was tagged at the wrong commit — a stale local branch reference caused it to be tagged against the v0.16.1 tree (no Phase-0 changes at all) — and it was published to Packagist before the mistake was caught. Packagist's version-immutability guard correctly refused to let the tag's contents change after publication, so `v0.17.0` has been left as-is: it is identical to `v0.16.1` and **must not be used**. The actual Phase-0 work described below shipped in `v0.17.1`, which remains a valid, correct release — this release only corrects documentation that said "v0.17.0" for changes that actually first shipped in `v0.17.1`, and adds this explanation. No code changes.
