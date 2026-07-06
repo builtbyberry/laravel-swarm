@@ -1,6 +1,6 @@
 # Streaming Substrate Driver Guide
 
-`CausalLogStore` and `ColdArchiveDriver` (both public since v0.17.0, #349) are
+`CausalLogStore` and `ColdArchiveDriver` (both public since v0.17.1, #349) are
 the extension points for a custom storage backend behind the streaming
 substrate's hot/cold tiering. This guide is for **driver authors** — package
 maintainers implementing a custom persistence backend — not application

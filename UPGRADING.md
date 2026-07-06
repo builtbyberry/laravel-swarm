@@ -269,7 +269,9 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
-## Upgrading to v0.17.0
+## Upgrading to v0.17.1
+
+**`v0.17.0` was tagged at the wrong commit and is identical to `v0.16.1` — install `v0.17.1` or later to get the changes described below.** See the [CHANGELOG](CHANGELOG.md#v0171---2026-07-06) for what happened.
 
 **`CausalLogStore` and `ColdArchiveDriver` are now public contracts (#349) — no required action.** No behavior change, no config change, no migration. If you want to implement a custom persistence backend for the streaming substrate's hot/cold tiering, see the new [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for what's actually pluggable (the read/query seam) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming both stay coupled to the concrete database implementations).
 

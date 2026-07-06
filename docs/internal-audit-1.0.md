@@ -46,20 +46,20 @@ public. What remains `@internal` is genuinely internal.
 | `Runners\LeaseManager` | **Keep `@internal` — no action** | Durable-leasing internal for the runner orchestrator (queue-lease-seconds policy + coordination-run fail/complete inside a freshly acquired lease). This is a **subtle surface** (distributed leasing) whose contract is entangled with orchestrator flow control; exposing it would freeze leasing mechanics. No interface, concrete singleton, consumed only by `SwarmRunner`. Fails criteria 1, 2 (leasing mechanics still evolve), and 3. |
 | `Audit\SwarmAuditDispatcher` | **Keep `@internal` — document the workaround** | The "dispatcher chain" the issue mentions is customized by *binding the public contracts it composes* (`SwarmAuditSink`, `SinkFailureHandler`, `AuditOutbox`, `SwarmAuditSigner`, `CapturePolicy`), not by replacing the concrete dispatcher. Exposing it would freeze its enrichment/retry internals. Fails criterion 1. |
 
-## Streaming substrate contracts (v0.15.0+) — promoted in v0.17.0
+## Streaming substrate contracts (v0.15.0+) — promoted in v0.17.1
 
 Two contracts in `src/Contracts/` were `@internal` at the time of this survey
 (v0.16.0) and have since been promoted:
 
 | Class | Recommendation | Justification |
 | --- | --- | --- |
-| `Contracts\CausalLogStore` | **Promoted — public since v0.17.0 (#349)** | Stable for two minors since its v0.15.0 introduction, satisfying criterion 2. A design gate ahead of the promotion (#349) confirmed the schema-coupling and sealed-window/void-edge semantics don't block a *read/query-seam* extension point — the gate's finding was that compaction and `#[DurableStreaming]` remain concrete-class-coupled, not that the contract itself is unsafe to expose. Scoped and disclosed accordingly; see the [Streaming Substrate Driver Guide](streaming-substrate-driver-guide.md). |
-| `Contracts\ColdArchiveDriver` | **Promoted — public since v0.17.0 (#349)** | Same footing: stable for two minors, schema-coupled to `DatabaseColdArchiveDriver` (`swarm_cold_archives`). The design gate confirmed the atomic base-pointer-swap obligation binds the internal compactor, not contract implementers (graduate()/reclaim() were never part of this interface), and that `readSnapshot()`'s decrypt-or-throw responsibility already sat correctly with callers. Promoted as a read-only extension point; see the [Streaming Substrate Driver Guide](streaming-substrate-driver-guide.md). |
+| `Contracts\CausalLogStore` | **Promoted — public since v0.17.1 (#349)** | Stable for two minors since its v0.15.0 introduction, satisfying criterion 2. A design gate ahead of the promotion (#349) confirmed the schema-coupling and sealed-window/void-edge semantics don't block a *read/query-seam* extension point — the gate's finding was that compaction and `#[DurableStreaming]` remain concrete-class-coupled, not that the contract itself is unsafe to expose. Scoped and disclosed accordingly; see the [Streaming Substrate Driver Guide](streaming-substrate-driver-guide.md). |
+| `Contracts\ColdArchiveDriver` | **Promoted — public since v0.17.1 (#349)** | Same footing: stable for two minors, schema-coupled to `DatabaseColdArchiveDriver` (`swarm_cold_archives`). The design gate confirmed the atomic base-pointer-swap obligation binds the internal compactor, not contract implementers (graduate()/reclaim() were never part of this interface), and that `readSnapshot()`'s decrypt-or-throw responsibility already sat correctly with callers. Promoted as a read-only extension point; see the [Streaming Substrate Driver Guide](streaming-substrate-driver-guide.md). |
 
 Both promotions are scoped to the read/query seam only — compaction and
 `#[DurableStreaming]` per-node streaming remain coupled to the concrete
 database implementations and are explicitly out of scope for a custom driver
-in v0.17.0. See the driver guide for the full disclosure.
+in v0.17.1. See the driver guide for the full disclosure.
 
 ## Everything else — grouped keep
 
@@ -96,7 +96,7 @@ extension-point shape. Grouped:
 - **Pulse / telemetry internals** — `Pulse/Livewire/*`, `Pulse/Support/*`, and
   the `Telemetry/*` dispatcher/listener/record set (the public seam is
   `SwarmTelemetrySink`). **KEEP.** (`Pulse/*` extracted to the
-  `builtbyberry/laravel-swarm-pulse` companion package in v0.17.0 — this
+  `builtbyberry/laravel-swarm-pulse` companion package in v0.17.1 — this
   audit predates that move and reflects the survey's point-in-time state.)
 - **Streaming internals** — `StreamEventMapper`, `StreamStepAccumulator`,
   `ContextGrowthGovernor`, `SwarmUnknownEvent`, `SwarmCausalSealBarrier` (public

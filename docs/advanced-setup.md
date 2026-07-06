@@ -260,7 +260,7 @@ outbox for retry through `swarm:relay --type=audit`.
 ## Wire Pulse
 
 Pulse observability (recorders + dashboard cards) moved to a companion
-package in v0.17.0 — it is no longer part of core setup. See
+package in v0.17.1 — it is no longer part of core setup. See
 [Pulse](./pulse.md) for installation and what each card surfaces.
 
 ## Install the starter examples (manual equivalent of `swarm:install:examples`)

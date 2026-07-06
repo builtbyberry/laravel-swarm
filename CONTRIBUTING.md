@@ -286,7 +286,7 @@ the right contract once rather than deprecate an early one.
 
 Pulse cards and Livewire components moved to the
 [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse)
-companion package in v0.17.0. Contributions to Pulse recorders or cards belong
+companion package in v0.17.1. Contributions to Pulse recorders or cards belong
 in that repository, not here.
 
 ## Audit Pipeline Contributions

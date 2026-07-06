@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.17.0 - 2026-07-06
+## v0.17.1 - 2026-07-06
+
+**`v0.17.0` was tagged at the wrong commit and must not be used — install `v0.17.1` or later.** A stale local branch reference caused `v0.17.0` to be tagged against the v0.16.1 tree (no Phase-0 changes at all) and it was published to Packagist before the mistake was caught. Packagist's version-immutability guard correctly refused to let the tag's contents change after publication, so `v0.17.0` has been left as-is — it is identical to `v0.16.1` — and this release carries the actual Phase-0 work under a new version number instead.
 
 Phase-0 surface-settle: extract Pulse (and the shared test harness it needed) into companion packages, and promote the streaming substrate's driver contracts to public — settling the core public surface before the adoption packages (Filament/MCP/driver-family) bind it. An audit of the Contracts namespace for pruning candidates (#350) found the work already done in v0.12.0 and was closed without further changes.
 

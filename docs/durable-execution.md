@@ -415,7 +415,7 @@ These entry points are part of the contract: they resolve durable state through
 | `swarm:pause` / `resume` / `cancel` | lifecycle controllers → `DurableRunStore` mutations | Typed status / lease / pause columns |
 | `swarm:health --durable` | store readiness probe | Connection to configured durable tables |
 | `swarm:prune` | category pruning over configured `swarm.tables.*` roles | All durable family tables (bounded batches) |
-| Pulse `SwarmRuns` / `SwarmStepDurations` (companion package, v0.17.0+) | **Event-driven** aggregates on `SwarmCompleted`, `SwarmFailed`, `SwarmStepCompleted` | Laravel Pulse tables only — **no** direct durable SQL |
+| Pulse `SwarmRuns` / `SwarmStepDurations` (companion package, v0.17.1+) | **Event-driven** aggregates on `SwarmCompleted`, `SwarmFailed`, `SwarmStepCompleted` | Laravel Pulse tables only — **no** direct durable SQL |
 
 `swarm:status` and `swarm:history` read **run history** (`RunHistoryStore` /
 `swarm_run_histories`), not durable tables. Treat history as the listing API for

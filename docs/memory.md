@@ -956,7 +956,7 @@ The write-through does not replace direct `SwarmMemory` reads and writes — it 
 
 ## Pulse observability
 
-Since v0.17.0, Pulse observability lives in a companion package —
+Since v0.17.1, Pulse observability lives in a companion package —
 [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse).
 Once installed, the optional `<livewire:swarm.memory />` card surfaces four
 signals operators tune retention and capture policy against:
