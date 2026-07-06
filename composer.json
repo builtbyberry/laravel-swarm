@@ -33,6 +33,7 @@
         "laravel/ai": "^0.8"
     },
     "require-dev": {
+        "builtbyberry/laravel-swarm-installer-testkit": "^0.1.0",
         "larastan/larastan": "^3.10",
         "laravel/pint": "^1.29",
         "orchestra/testbench": "^11.1",

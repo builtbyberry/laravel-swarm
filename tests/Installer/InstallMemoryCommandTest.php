@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-use BuiltByBerry\LaravelSwarm\Tests\Installer\InstallerTestCase;
+use BuiltByBerry\LaravelSwarm\Tests\Installer\SwarmInstallerTestCase;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 
-uses(InstallerTestCase::class);
+uses(SwarmInstallerTestCase::class);
 
 /**
  * Feature tests for `swarm:install:memory`.
