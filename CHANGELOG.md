@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.17.4 - unreleased
+
+Durable contract-seam hardening. Closes test-coverage gaps on three public durable-routing capability seams — `ConfiguresDurableRetries`, `RoutesDurableWaits`, and `RoutesDurableBranches` — before the 1.0 surface freeze. Each is the programmatic (contract) alternative to a PHP attribute, and the interface branch was under-tested. No behavior or public-surface changes; test-only hardening.
+
+### Added
+
+_To be filled in during release wrap-up._
+
 ## v0.17.3 - 2026-07-06
 
 Documentation-only patch. Corrects cross-repo cohesion gaps found in a full documentation review: an editorial refresh plus fact-fixes to the README, and de-staling of `AGENTS.md`'s Pulse references after the v0.17.1 extraction. No code changes. The companion packages `laravel-swarm-pulse` and `laravel-swarm-installer-testkit` received their own doc patches in parallel.
