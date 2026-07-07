@@ -269,6 +269,10 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.17.4
+
+**No required action — test-only.** This release adds behavior coverage for three public durable-routing capability seams — `ConfiguresDurableRetries`, `RoutesDurableWaits`, and `RoutesDurableBranches` — ahead of the 1.0 surface freeze. No code, config, or schema changes; the contracts themselves are unchanged. See the [CHANGELOG](CHANGELOG.md#v0174---2026-07-06) for details.
+
 ## Upgrading to v0.17.3
 
 **No required action — documentation only.** This release restructures the README for scannability (adds a table of contents and groups the configuration-key reference by concern), documents the `swarm:install:memory` sub-installer and its `--with-memory` flag, fixes a non-compiling `#[DurableStreaming]` code example (`Runnable` is a trait, applied via `implements Swarm { use Runnable; }`), and de-stales `AGENTS.md`'s Pulse references after the v0.17.1 companion-package extraction. No code, config, or schema changes. See the [CHANGELOG](CHANGELOG.md#v0173---2026-07-06) for details.
