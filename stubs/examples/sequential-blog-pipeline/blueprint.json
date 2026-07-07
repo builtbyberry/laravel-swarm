@@ -1,0 +1,12 @@
+{
+    "slug": "pipeline",
+    "title": "Sequential pipeline",
+    "topology": "sequential",
+    "summary": "Chain agents in order so each one refines the previous step's output.",
+    "tokens": {
+        "namespaceSegment": "SequentialBlogPipeline",
+        "swarmClass": "BlogPipeline",
+        "commandClass": "SwarmExampleBlogPipelineCommand",
+        "commandSignature": "swarm:example:blog-pipeline"
+    }
+}
