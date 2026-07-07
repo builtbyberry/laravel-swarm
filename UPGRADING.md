@@ -269,6 +269,10 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.18.0
+
+**No required action — additive.** This release adds the `make:swarm:blueprint` generator and four new curated blueprint trees (`triage`, `extraction`, `memory`, `streaming`) to the starter corpus. It is purely additive — a new Artisan command plus new stub files, with no migration, config, schema, or breaking API change. `swarm:install:examples`' behavior and file output are unchanged (it now also skips the package-side `blueprint.json` metadata alongside `README.md`). If you want the new scaffolder, run `php artisan make:swarm:blueprint <Name> --template=<slug>`; otherwise nothing changes. See the [CHANGELOG](CHANGELOG.md#v0180---2026-07-07) and [Generators](docs/generators.md#make-swarm-blueprint) for details.
+
 ## Upgrading to v0.17.4
 
 **No required action — test-only.** This release adds behavior coverage for three public durable-routing capability seams — `ConfiguresDurableRetries`, `RoutesDurableWaits`, and `RoutesDurableBranches` — ahead of the 1.0 surface freeze. No code, config, or schema changes; the contracts themselves are unchanged. See the [CHANGELOG](CHANGELOG.md#v0174---2026-07-06) for details.
