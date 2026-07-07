@@ -106,14 +106,63 @@ php artisan swarm:example:approval-workflow status <run-id>
 Requires the durable runtime (database persistence, queue worker,
 `swarm:recover` scheduled). `swarm:install` provisions all of this.
 
+### 4. `hierarchical-support-triage`
+
+A `RequestClassifier` coordinator reads the incoming request, classifies it,
+and returns a structured route plan (`start_at` + `nodes`) that dispatches to
+exactly one of three handlers — `BillingResponder`, `TechnicalResponder`, or
+`GeneralResponder`. Demonstrates the hierarchical topology, a coordinator-owned
+route plan (no `route()` callback), and structured output from the coordinator.
+In-memory `prompt()` execution.
+
+Runner: `php artisan swarm:example:support-triage "I was double charged"`
+
+### 5. `sequential-contact-extraction`
+
+Two sequential agents turn unstructured text into a validated record:
+`FieldExtractor` pulls the raw fields as JSON, then `RecordNormalizer`
+validates and canonicalises them into a trusted contact. Both implement
+Laravel AI's `HasStructuredOutput` and declare a `schema(JsonSchema)`, so it
+demonstrates producing a validated **structured** result rather than prose.
+In-memory `prompt()` execution.
+
+Runner: `php artisan swarm:example:contact-extraction "Call Jane at jane@acme.io or 555-0100"`
+
+### 6. `sequential-conversation-memory`
+
+Swarm memory across steps: `RequestListener` extracts a subject from a customer
+message and writes it to Run-scoped memory with the real `Remember` tool, then
+`ReplyWriter` reads it back with `Recall` and composes a reply that names it.
+Step one deliberately omits the subject from its own output, so memory is the
+only channel that can carry it to step two. Demonstrates the `remember` /
+`recall` memory-as-tool surface and the default propagation policy. In-memory
+`prompt()` execution.
+
+Runner: `php artisan swarm:example:conversation-memory "My order HD-2291 hasn't shipped"`
+
+### 7. `durable-streaming-digest`
+
+A two-node sequential swarm marked `#[DurableStreaming]` whose workers
+token-stream into the causal log; the runner dispatches durably, drains the
+steps, then replays the persisted per-node deltas back via `CausalLogView`.
+Demonstrates `#[DurableStreaming]`, `dispatchDurable()`, and per-node stream
+reconstruction. Unlike the other starters, its worker (`ScriptedStreamingEditor`)
+implements `Agent` directly — `ScriptedAgent` can't stream (see the note below).
+Requires database persistence and migrations; the tree's own `README.md` spells
+out the setup.
+
+Runner: `php artisan swarm:example:streaming run "Weekly engineering digest"`
+
 ## ScriptedAgent — how the starters avoid API keys
 
-Every starter agent extends `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent`
+Most starter agents extend `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent`
 — a runnable, provider-free agent that returns canned text. The swarm
 runner treats it identically to a real Laravel AI agent: same `prompt()`
 signature, same `AgentResponse` return shape. That is what lets the
 starters execute end-to-end on a fresh install with zero environment
-configuration.
+configuration. (The one exception is `durable-streaming-digest`, whose worker
+must *stream* — `ScriptedAgent` throws on `stream()`, so it ships a small
+provider-free streaming agent that implements `Agent` directly.)
 
 Each agent file has a `TODO` comment pointing to the one-line edit that
 swaps `ScriptedAgent` for a `Promptable` Laravel AI agent. The swarm class,

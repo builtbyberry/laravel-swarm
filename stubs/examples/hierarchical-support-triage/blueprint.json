@@ -1,0 +1,12 @@
+{
+    "slug": "triage",
+    "title": "Hierarchical support triage",
+    "topology": "hierarchical",
+    "summary": "Classify an incoming request, then route it to the matching handler with a coordinator-owned route plan.",
+    "tokens": {
+        "namespaceSegment": "HierarchicalSupportTriage",
+        "swarmClass": "SupportTriageRouter",
+        "commandClass": "SwarmExampleSupportTriageCommand",
+        "commandSignature": "swarm:example:support-triage"
+    }
+}
