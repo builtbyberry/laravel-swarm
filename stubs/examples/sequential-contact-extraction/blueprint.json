@@ -1,0 +1,12 @@
+{
+    "slug": "extraction",
+    "title": "Structured extraction",
+    "topology": "sequential",
+    "summary": "Pull typed, schema-validated data out of unstructured text instead of free-form prose.",
+    "tokens": {
+        "namespaceSegment": "SequentialContactExtraction",
+        "swarmClass": "ContactExtractor",
+        "commandClass": "SwarmExampleContactExtractionCommand",
+        "commandSignature": "swarm:example:contact-extraction"
+    }
+}
