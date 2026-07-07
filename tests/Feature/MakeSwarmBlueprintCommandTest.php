@@ -150,8 +150,18 @@ test('an invalid swarm name is rejected', function () {
 });
 
 test('every discoverable blueprint scaffolds cleanly', function () {
-    // Guards each shipped blueprint end-to-end, not just the research fixture.
-    foreach (['pipeline', 'research', 'approval'] as $slug) {
+    // Guards EVERY shipped blueprint end-to-end, discovered from the corpus so a
+    // newly added tree (triage, extraction, memory, …) is covered automatically
+    // rather than needing this list kept in sync by hand.
+    $slugs = collect(glob(dirname(__DIR__, 2).'/stubs/examples/*/blueprint.json') ?: [])
+        ->map(fn (string $path): mixed => json_decode((string) file_get_contents($path), true, flags: JSON_THROW_ON_ERROR)['slug'] ?? null)
+        ->filter()
+        ->values()
+        ->all();
+
+    expect($slugs)->not->toBeEmpty();
+
+    foreach ($slugs as $slug) {
         $exit = Artisan::call('make:swarm:blueprint', ['name' => 'SupportTriage', '--template' => $slug,
             '--no-interaction' => true,
         ]);
