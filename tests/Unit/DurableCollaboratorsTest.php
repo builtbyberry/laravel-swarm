@@ -451,7 +451,9 @@ test('RoutesDurableWaits receives the RunContext so declared waits vary by conte
     $alphaWaits = app(DurableRunInspector::class)->inspect($contextAlpha->runId)->waits;
     $betaWaits = app(DurableRunInspector::class)->inspect($contextBeta->runId)->waits;
 
-    expect($alphaWaits[0]['name'])->toBe('wait_alpha')
+    expect($alphaWaits)->toHaveCount(1)
+        ->and($betaWaits)->toHaveCount(1)
+        ->and($alphaWaits[0]['name'])->toBe('wait_alpha')
         ->and($betaWaits[0]['name'])->toBe('wait_beta');
 });
 
