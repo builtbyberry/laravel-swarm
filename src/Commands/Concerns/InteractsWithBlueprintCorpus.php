@@ -32,6 +32,8 @@ use RecursiveIteratorIterator;
  * concern is unit-testable in isolation. Resolving the host root namespace —
  * the one step that needs the application instance — lives in the companion
  * {@see ResolvesHostRootNamespace} trait.
+ *
+ * @internal
  */
 trait InteractsWithBlueprintCorpus
 {

@@ -13,6 +13,8 @@ use Illuminate\Filesystem\Filesystem;
  * needs the command's `$this->laravel` application instance to locate the host
  * app root — everything else in the corpus concern is container-independent and
  * unit-testable on its own. Intended for use on an `Illuminate\Console\Command`.
+ *
+ * @internal
  */
 trait ResolvesHostRootNamespace
 {
