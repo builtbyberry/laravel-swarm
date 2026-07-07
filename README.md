@@ -125,7 +125,13 @@ Generate a swarm class:
 php artisan make:swarm:swarm ContentPipeline
 ```
 
-See [Generators](docs/generators.md) for the full generator surface, including `make:swarm:agent` and the `--topology` flag.
+Or scaffold a **complete, runnable** swarm from a curated blueprint — the swarm, its agents, and a console command, renamed as your own:
+
+```bash
+php artisan make:swarm:blueprint SupportTriage --template=triage
+```
+
+See [Generators](docs/generators.md) for the full generator surface, including `make:swarm:blueprint` and its catalog, `make:swarm:agent`, and the `--topology` flag.
 
 Swarms live in `App\Ai\Swarms`, implement `BuiltByBerry\LaravelSwarm\Contracts\Swarm`, use the `Runnable` trait, and return their participating Laravel AI agents from `agents()`:
 
