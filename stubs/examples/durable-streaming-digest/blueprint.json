@@ -1,0 +1,12 @@
+{
+    "slug": "streaming",
+    "title": "Durable streaming digest",
+    "topology": "sequential",
+    "summary": "A durable run whose worker nodes token-stream into the causal log, replayable per node after the fact.",
+    "tokens": {
+        "namespaceSegment": "DurableStreamingDigest",
+        "swarmClass": "StreamingDigestSwarm",
+        "commandClass": "SwarmExampleStreamingCommand",
+        "commandSignature": "swarm:example:streaming"
+    }
+}
