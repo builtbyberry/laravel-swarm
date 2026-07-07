@@ -119,9 +119,16 @@ final class InstallExamplesCommand extends Command
             }
 
             $name = $entry->getFilename();
+
+            // Prefer the tree's blueprint.json summary as the single tooling
+            // source of truth; fall back to the README's first line for any
+            // tree that doesn't (yet) carry a manifest.
+            $manifest = $this->readBlueprintManifest($files, $entry->getPathname());
+            $description = $manifest['summary'] ?? $this->readDescription($files, $entry->getPathname());
+
             $entries[$name] = [
                 'name' => $name,
-                'description' => $this->readDescription($files, $entry->getPathname()),
+                'description' => $description,
                 'runner' => $this->detectRunnerCommandName($files, $entry->getPathname()),
             ];
         }

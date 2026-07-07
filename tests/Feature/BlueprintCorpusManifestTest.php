@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\InteractsWithBlueprintCorpus;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\Str;
 
 /**
  * Exercises the manifest-parsing seam of the shared corpus concern directly, so
@@ -102,6 +103,41 @@ test('a manifest missing a required token returns null', function () {
     ], JSON_THROW_ON_ERROR));
 
     expect(manifestProbe()->read(new Filesystem, $this->tmp))->toBeNull();
+});
+
+test('every shipped blueprint manifest topology matches its swarm attribute', function () {
+    // Guards against drift between the hand-declared manifest `topology` and the
+    // authoritative #[Topology] attribute on the swarm class it describes.
+    $corpus = dirname(__DIR__, 2).'/stubs/examples';
+    $files = new Filesystem;
+
+    $checked = 0;
+    foreach ($files->directories($corpus) as $treeDir) {
+        if (! $files->exists($treeDir.'/blueprint.json')) {
+            continue;
+        }
+
+        $manifest = json_decode((string) $files->get($treeDir.'/blueprint.json'), true, flags: JSON_THROW_ON_ERROR);
+        $tokens = $manifest['tokens'];
+        $swarmFile = $treeDir.'/app/Ai/Swarms/'.$tokens['namespaceSegment'].'/'.$tokens['swarmClass'].'.php';
+
+        expect($files->exists($swarmFile))->toBeTrue("swarm class missing for [{$manifest['slug']}]");
+
+        // A swarm without an explicit #[Topology] attribute relies on the
+        // framework default, which is Sequential.
+        $effective = preg_match('/TopologyEnum::(\w+)/', (string) $files->get($swarmFile), $m) === 1
+            ? $m[1]
+            : 'Sequential';
+
+        expect($effective)->toBe(
+            Str::studly($manifest['topology']),
+            "manifest topology [{$manifest['topology']}] does not match the #[Topology] on [{$tokens['swarmClass']}]"
+        );
+
+        $checked++;
+    }
+
+    expect($checked)->toBeGreaterThan(0);
 });
 
 test('a manifest missing a required top-level field returns null', function () {

@@ -244,7 +244,8 @@ class MakeSwarmBlueprintCommand extends Command
 
         $options = [];
         foreach ($blueprints as $slug => $entry) {
-            $options[$slug] = $entry['manifest']['title'].' — '.$entry['manifest']['summary'];
+            $manifest = $entry['manifest'];
+            $options[$slug] = $manifest['title'].' ('.$manifest['topology'].') — '.$manifest['summary'];
         }
 
         /** @var string $chosen */

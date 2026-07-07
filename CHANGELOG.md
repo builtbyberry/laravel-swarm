@@ -10,7 +10,7 @@ Ecosystem epic #254 Phase 1 — blueprint templates. Adds a name-parameterized `
 
 ### Changed
 
-- **Shared blueprint-corpus machinery extracted from `swarm:install:examples` (#378).** The tree-walking, namespace-placeholder rewriting, and host-root-namespace resolution that `swarm:install:examples` used are now shared with `make:swarm:blueprint` via the `InteractsWithBlueprintCorpus` and `ResolvesHostRootNamespace` concerns, so the two commands stay in lockstep. `swarm:install:examples`' behavior and output are unchanged — it continues to land example trees verbatim and skips the package-side `README.md` and (new) `blueprint.json` metadata.
+- **Shared blueprint-corpus machinery extracted from `swarm:install:examples` (#378).** The tree-walking, namespace-placeholder rewriting, and host-root-namespace resolution that `swarm:install:examples` used are now shared with `make:swarm:blueprint` via the `InteractsWithBlueprintCorpus` and `ResolvesHostRootNamespace` concerns, so the two commands stay in lockstep. `swarm:install:examples`' file output is unchanged — it continues to land example trees verbatim and skips the package-side `README.md` and (new) `blueprint.json` metadata. Its interactive picker now prefers the tree's `blueprint.json` summary as the single source of truth for the one-line description (falling back to the README's first line for any tree without a manifest).
 
 ## v0.17.4 - 2026-07-06
 
