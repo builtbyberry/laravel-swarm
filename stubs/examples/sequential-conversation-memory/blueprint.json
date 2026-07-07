@@ -1,0 +1,12 @@
+{
+    "slug": "memory",
+    "title": "Conversation memory across steps",
+    "topology": "sequential",
+    "summary": "Have one agent remember a fact into scoped memory and a later agent recall it, so an earlier step shapes a later one.",
+    "tokens": {
+        "namespaceSegment": "SequentialConversationMemory",
+        "swarmClass": "ConversationMemory",
+        "commandClass": "SwarmExampleConversationMemoryCommand",
+        "commandSignature": "swarm:example:conversation-memory"
+    }
+}
