@@ -16,6 +16,10 @@ Ecosystem epic #254 Phase 1 — blueprint templates. Adds a name-parameterized `
 
 - **Shared blueprint-corpus machinery extracted from `swarm:install:examples` (#378).** The tree-walking, namespace-placeholder rewriting, and host-root-namespace resolution that `swarm:install:examples` used are now shared with `make:swarm:blueprint` via the `InteractsWithBlueprintCorpus` and `ResolvesHostRootNamespace` concerns, so the two commands stay in lockstep. `swarm:install:examples`' file output is unchanged — it continues to land example trees verbatim and skips the package-side `README.md` and (new) `blueprint.json` metadata. Its interactive picker now prefers the tree's `blueprint.json` summary as the single source of truth for the one-line description (falling back to the README's first line for any tree without a manifest).
 
+### Documentation
+
+- **Blueprint generator + catalog documented (#383).** Added a `make:swarm:blueprint` section to [docs/generators.md](docs/generators.md) — the whole-use-case-vs-empty-shell distinction, the install-verbatim-vs-scaffold-renamed relationship with `swarm:install:examples`, the seven-blueprint catalog table (what each teaches / when to reach for it), the interactive and `--template` flows, options, and the fail-loud behavior. Surfaced the command in the README quick-start and added it to `docs/public-surface.md`.
+
 ## v0.17.4 - 2026-07-06
 
 Durable contract-seam hardening. Closes test-coverage gaps on three public durable-routing capability seams — `ConfiguresDurableRetries`, `RoutesDurableWaits`, and `RoutesDurableBranches` — before the 1.0 surface freeze. Each is the programmatic (contract) alternative to a PHP attribute, and the interface branch (checked first) was previously the untested path. No behavior, config, schema, or public-surface changes.

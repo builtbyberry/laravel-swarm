@@ -16,7 +16,8 @@ ergonomics as `php artisan make:agent` — same Laravel conventions, same
 
 | Command | Output path | Stub | When to use |
 |---|---|---|---|
-| `php artisan make:swarm:swarm <Name>` | `app/Ai/Swarms/<Name>.php` | `swarm.stub` (plus topology variants) | You're building a new swarm. |
+| `php artisan make:swarm:swarm <Name>` | `app/Ai/Swarms/<Name>.php` | `swarm.stub` (plus topology variants) | You're building a new swarm from an empty shell. |
+| `php artisan make:swarm:blueprint <Name>` | `app/Ai/Swarms/<Name>/`, `app/Ai/Agents/<Name>/`, `app/Console/Commands/` | a curated tree from `stubs/examples/` | You want a **complete, runnable** swarm for a use-case (swarm + agents + command), renamed as your own. |
 | `php artisan make:swarm:agent <Name>` | `app/Ai/Agents/<Name>.php` | `swarm.agent.stub` | You're adding a new agent to a swarm. |
 | `php artisan make:memory-tool <Name>` | `app/Ai/Tools/<Name>.php` | `swarm.memory-tool.stub` (plus a `--vector` variant) | You're building a custom `Recall`/`Remember` memory tool. |
 | `php artisan make:swarm <Name>` | `app/Ai/Swarms/<Name>.php` | (delegates to `make:swarm:swarm`) | **Deprecated** — prints a migration hint and delegates to `make:swarm:swarm`. Will be removed in a future major release. |
@@ -53,6 +54,73 @@ a clear error listing the valid options.
 
 See `docs/sequential.md`, `docs/parallel.md`, `docs/hierarchical-routing.md`,
 and `docs/static-hierarchical-topology.md` for the topology details.
+
+## `make:swarm:blueprint`
+
+Where `make:swarm:swarm` gives you an empty swarm shell for a topology,
+`make:swarm:blueprint` scaffolds a whole **working use-case** — the swarm
+class, its agents, and a runnable console command — wired together and ready
+to run, then **renamed as your own**:
+
+```bash
+php artisan make:swarm:blueprint SupportTriage --template=triage
+```
+
+That lands `app/Ai/Swarms/SupportTriage/SupportTriage.php`, its agents under
+`app/Ai/Agents/SupportTriage/`, and a `SupportTriageCommand` you can run with
+`php artisan swarm:run:support-triage` — all namespaced to your app and named
+after `SupportTriage`. The agents keep their descriptive class names (a single
+swarm name can't sensibly rename three distinct agents); only the swarm class,
+its namespace segment, and the console command are renamed.
+
+### Blueprints vs. `swarm:install:examples`
+
+Both draw from the **same** curated corpus under `stubs/examples/`. The
+difference is intent:
+
+- [`swarm:install:examples`](examples.md) lands a tree **verbatim** — the
+  fixed-name reference copies (`ResearchFanout`, `BlogPipeline`, …) you install
+  to *read and learn from*.
+- `make:swarm:blueprint` lands the same tree **renamed** — a starting point you
+  make *your own* and edit.
+
+### The catalog
+
+| `--template` | Teaches | Topology | When to reach for it |
+|---|---|---|---|
+| `pipeline` | Sequential refinement | Sequential | Chain agents so each refines the previous step's output. |
+| `research` | Fan-out / join | Parallel | Dispatch one prompt to many agents at once, then merge the results. |
+| `triage` | Coordinator-owned routing | Hierarchical | Classify an incoming request and route it to the matching handler. |
+| `extraction` | Structured output | Sequential | Pull typed, schema-validated data out of unstructured text (not prose). |
+| `approval` | Durable human-in-the-loop | Sequential (durable) | A run that pauses for human approval, then resumes from a checkpoint. |
+| `memory` | Scoped `SwarmMemory` | Sequential | One agent remembers a fact; a later agent recalls it, so an earlier step shapes a later one. |
+| `streaming` | Durable per-node streaming | Sequential (durable) | Worker nodes token-stream into the causal log, replayable per node after the fact. |
+
+Run `make:swarm:blueprint <Name>` with **no** `--template` in an interactive
+terminal and you're prompted to pick from this list; omit `<Name>` and you're
+prompted for it too.
+
+### Options
+
+| Option | Effect |
+|---|---|
+| `--template=<slug>` | Which blueprint to scaffold. Omit in an interactive terminal to pick from a list; **required** in non-interactive contexts (fails loud with the available slugs otherwise). |
+| `--without-command` | Skip the runnable console command; scaffold only the swarm and its agents. |
+| `--force` | Overwrite files that already exist in the host app. |
+
+### Fail-loud behavior
+
+The generator refuses rather than produce a mess: it will not overwrite
+existing app files without `--force` (it checks the whole plan *before* writing
+anything, so a collision never leaves a half-written scaffold), it rejects a
+name that would generate uncompilable code (a reserved word, or one that
+collides with a core type like `Swarm`), and it requires `--template` when it
+can't prompt.
+
+> **Note:** the `streaming` and `approval` blueprints run **durably**, which
+> requires the database persistence driver and migrations — their READMEs spell
+> out the setup. The other five run end-to-end on the in-memory driver with no
+> configuration.
 
 ## `make:swarm:agent`
 
