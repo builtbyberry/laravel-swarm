@@ -1,12 +1,12 @@
 # Changelog
 
-## v0.17.4 - unreleased
+## v0.17.4 - 2026-07-06
 
-Durable contract-seam hardening. Closes test-coverage gaps on three public durable-routing capability seams — `ConfiguresDurableRetries`, `RoutesDurableWaits`, and `RoutesDurableBranches` — before the 1.0 surface freeze. Each is the programmatic (contract) alternative to a PHP attribute, and the interface branch was under-tested. No behavior or public-surface changes; test-only hardening.
+Durable contract-seam hardening. Closes test-coverage gaps on three public durable-routing capability seams — `ConfiguresDurableRetries`, `RoutesDurableWaits`, and `RoutesDurableBranches` — before the 1.0 surface freeze. Each is the programmatic (contract) alternative to a PHP attribute, and the interface branch (checked first) was previously the untested path. No behavior, config, schema, or public-surface changes.
 
-### Added
+### Tests
 
-_To be filled in during release wrap-up._
+- **Durable-routing contract-seam coverage (#371, #372, #373).** Added opt-in behavior tests for the three durable-routing capability seams. `ConfiguresDurableRetries` — locks the full `DurableRetryHandler::resolveRetryPolicy` precedence chain (interface-agent > agent-attribute > interface-swarm > swarm-attribute), including the null-return fall-through. `RoutesDurableWaits` — interface-declared waits win over the `#[DurableWait]` attribute and receive the `RunContext`, so declared waits vary per run. `RoutesDurableBranches` — `durableBranchQueue()` routing is stamped onto the branch payload the dispatch reads, with an empty-array return falling back to the run's routing.
 
 ## v0.17.3 - 2026-07-06
 
