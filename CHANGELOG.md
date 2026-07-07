@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.18.0 - unreleased
+## v0.18.0 - 2026-07-07
 
 Ecosystem epic #254 Phase 1 — blueprint templates. Adds a name-parameterized `make:swarm:blueprint` generator over a unified, tokenized blueprint catalog, so a developer can scaffold a complete, runnable, use-case-shaped swarm (swarm + agents + console command + README) as their own — renamed and namespaced — rather than only reading the fixed-name reference copies that `swarm:install:examples` lands. One tokenized corpus now serves both: `install:examples` lands it verbatim, `make:swarm:blueprint` lands it renamed.
 
