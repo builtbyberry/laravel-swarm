@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\InteractsWithBlueprintCorpus;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesHostRootNamespace;
 use FilesystemIterator;
 use Illuminate\Console\Command;
 use Illuminate\Filesystem\Filesystem;
-use RecursiveDirectoryIterator;
-use RecursiveIteratorIterator;
 use Symfony\Component\Console\Attribute\AsCommand;
 
 use function Laravel\Prompts\multiselect;
@@ -20,9 +20,9 @@ use function Laravel\Prompts\multiselect;
  * `app/Ai/Swarms/<Name>/`, `app/Ai/Agents/<Name>/`, and
  * `app/Console/Commands/SwarmExample<Name>Command.php` trees, with
  * `{{ rootNamespace }}` placeholders the installer rewrites to the host app's
- * PSR-4 root (usually `App\`). The per-example `README.md` files are
- * deliberately not copied — they exist as reference material in the package's
- * own tree, not as noise inside the user's `app/` directory.
+ * PSR-4 root (usually `App\`). The per-tree `README.md` and `blueprint.json`
+ * files are deliberately not copied — they are package-side reference and
+ * tooling metadata, not something that belongs in the user's `app/` directory.
  *
  * Auto-discovery in Laravel 11+ scans `app/Console/Commands/` on every boot,
  * so the copied runner commands register automatically — the installer does
@@ -31,6 +31,9 @@ use function Laravel\Prompts\multiselect;
 #[AsCommand(name: 'swarm:install:examples')]
 final class InstallExamplesCommand extends Command
 {
+    use InteractsWithBlueprintCorpus;
+    use ResolvesHostRootNamespace;
+
     /** @var string */
     protected $signature = 'swarm:install:examples
         {--example=* : Install one specific example by directory name (repeatable)}
@@ -42,7 +45,7 @@ final class InstallExamplesCommand extends Command
 
     public function handle(Filesystem $files): int
     {
-        $sourceRoot = $this->stubsRoot();
+        $sourceRoot = $this->corpusRoot();
 
         if (! $files->isDirectory($sourceRoot)) {
             $this->components->error("Cannot locate starter examples at [{$sourceRoot}].");
@@ -97,14 +100,6 @@ final class InstallExamplesCommand extends Command
         $this->printPostInstallHints($installed, $skipped, $available);
 
         return self::SUCCESS;
-    }
-
-    /**
-     * Absolute path to the package's bundled starter examples.
-     */
-    private function stubsRoot(): string
-    {
-        return dirname(__DIR__, 3).DIRECTORY_SEPARATOR.'stubs'.DIRECTORY_SEPARATOR.'examples';
     }
 
     /**
@@ -266,46 +261,6 @@ final class InstallExamplesCommand extends Command
     }
 
     /**
-     * Read the host app's PSR-4 root namespace from `composer.json`. Falls
-     * back to `App` if the file is missing, malformed, or uses a layout the
-     * installer cannot interpret unambiguously (the same default Laravel
-     * itself uses).
-     */
-    private function resolveRootNamespace(Filesystem $files): string
-    {
-        $composerPath = $this->laravel->basePath('composer.json');
-
-        if (! $files->exists($composerPath)) {
-            return 'App';
-        }
-
-        try {
-            /** @var array<string, mixed> $composer */
-            $composer = json_decode((string) $files->get($composerPath), true, flags: JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            return 'App';
-        }
-
-        $psr4 = $composer['autoload']['psr-4'] ?? null;
-
-        if (! is_array($psr4) || $psr4 === []) {
-            return 'App';
-        }
-
-        // Prefer a mapping pointed at app/ (the Laravel convention). If none
-        // match, fall back to the first declared mapping, then to App.
-        foreach ($psr4 as $namespace => $path) {
-            if (is_string($path) && rtrim($path, '/\\') === 'app') {
-                return rtrim((string) $namespace, '\\');
-            }
-        }
-
-        $first = array_key_first($psr4);
-
-        return is_string($first) ? rtrim($first, '\\') : 'App';
-    }
-
-    /**
      * Copy one example tree into the host app, rewriting namespace
      * placeholders along the way. Returns:
      *
@@ -327,14 +282,9 @@ final class InstallExamplesCommand extends Command
         string $rootNamespace,
         bool $force,
     ): string {
+        // collectCopyPairs already excludes package-side meta files (README.md,
+        // blueprint.json) — the host app receives only the runnable tree.
         $pairs = $this->collectCopyPairs($exampleSourceRoot);
-
-        // The README is reference material that belongs in the package, not
-        // in the user's app/ tree. Skip it explicitly.
-        $pairs = array_values(array_filter(
-            $pairs,
-            static fn (array $pair): bool => $pair['relative'] !== 'README.md',
-        ));
 
         $existing = [];
         foreach ($pairs as $pair) {
@@ -368,72 +318,6 @@ final class InstallExamplesCommand extends Command
         $this->components->info("Installed example [{$exampleName}].");
 
         return 'installed';
-    }
-
-    /**
-     * Enumerate every file under the example source directory, returning the
-     * absolute source path and the destination path *relative to the host
-     * app's base directory* (i.e. preserving `app/Ai/Swarms/...` shape).
-     *
-     * @return list<array{absolute: string, relative: string}>
-     */
-    private function collectCopyPairs(string $exampleSourceRoot): array
-    {
-        $pairs = [];
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator(
-                $exampleSourceRoot,
-                FilesystemIterator::SKIP_DOTS,
-            ),
-            RecursiveIteratorIterator::LEAVES_ONLY,
-        );
-
-        $prefixLength = strlen($exampleSourceRoot) + 1;
-
-        foreach ($iterator as $info) {
-            /** @var \SplFileInfo $info */
-            if (! $info->isFile()) {
-                continue;
-            }
-
-            $absolute = $info->getPathname();
-            $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($absolute, $prefixLength));
-
-            $pairs[] = [
-                'absolute' => $absolute,
-                'relative' => $relative,
-            ];
-        }
-
-        return $pairs;
-    }
-
-    /**
-     * Rewrite the package's two supported namespace placeholders to the
-     * host app's PSR-4 root.
-     *
-     * Both `{{ rootNamespace }}` (canonical) and `{{ namespace }}` (legacy
-     * alias for compatibility with the AC wording in #90) are accepted, with
-     * arbitrary whitespace inside the braces, so hand-edited or future stubs
-     * stay compatible.
-     */
-    private function rewriteNamespacePlaceholders(string $contents, string $rootNamespace): string
-    {
-        $replacement = $rootNamespace;
-
-        $contents = (string) preg_replace(
-            '/\{\{\s*rootNamespace\s*\}\}/',
-            $replacement,
-            $contents,
-        );
-
-        $contents = (string) preg_replace(
-            '/\{\{\s*namespace\s*\}\}/',
-            $replacement,
-            $contents,
-        );
-
-        return $contents;
     }
 
     /**

@@ -1,0 +1,12 @@
+{
+    "slug": "research",
+    "title": "Parallel research fan-out",
+    "topology": "parallel",
+    "summary": "Dispatch one prompt to multiple agents at once, then merge their results into a single response.",
+    "tokens": {
+        "namespaceSegment": "ParallelResearchFanout",
+        "swarmClass": "ResearchFanout",
+        "commandClass": "SwarmExampleResearchFanoutCommand",
+        "commandSignature": "swarm:example:research-fanout"
+    }
+}

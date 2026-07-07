@@ -6,11 +6,11 @@ Ecosystem epic #254 Phase 1 — blueprint templates. Adds a name-parameterized `
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **`make:swarm:blueprint` — scaffold a complete, runnable swarm from a curated blueprint (#378).** Where `make:swarm:swarm` scaffolds an empty swarm shell for a topology, `make:swarm:blueprint <Name> --template=<slug>` scaffolds a whole working use-case — the swarm class, its agents, and a runnable console command — renamed and namespaced as your own. It draws from the same curated corpus under `stubs/examples/` that `swarm:install:examples` lands, but where the installer copies a tree **verbatim** (fixed-name reference to read), this copies it **renamed** (a starting point to edit). Omit `--template` in an interactive terminal to pick from a list; the swarm name can be prompted too. Ships three blueprints to start — `pipeline` (sequential), `research` (parallel fan-out), and `approval` (durable, human-in-the-loop) — with more to follow. The generator fails loud rather than overwrite existing app files (pass `--force` to overwrite) or generate uncompilable code (reserved names are rejected). Each blueprint declares its canonical class/command names in a per-tree `blueprint.json` manifest; agent class names are preserved on rename by design.
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Shared blueprint-corpus machinery extracted from `swarm:install:examples` (#378).** The tree-walking, namespace-placeholder rewriting, and host-root-namespace resolution that `swarm:install:examples` used are now shared with `make:swarm:blueprint` via the `InteractsWithBlueprintCorpus` and `ResolvesHostRootNamespace` concerns, so the two commands stay in lockstep. `swarm:install:examples`' behavior and output are unchanged — it continues to land example trees verbatim and skips the package-side `README.md` and (new) `blueprint.json` metadata.
 
 ## v0.17.4 - 2026-07-06
 

@@ -1,0 +1,12 @@
+{
+    "slug": "approval",
+    "title": "Durable approval workflow",
+    "topology": "sequential",
+    "summary": "A durable run that pauses for human approval, then resumes from a checkpoint.",
+    "tokens": {
+        "namespaceSegment": "DurableApprovalWorkflow",
+        "swarmClass": "PolicyApprovalSwarm",
+        "commandClass": "SwarmExampleApprovalWorkflowCommand",
+        "commandSignature": "swarm:example:approval-workflow"
+    }
+}

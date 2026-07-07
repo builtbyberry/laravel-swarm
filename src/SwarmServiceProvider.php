@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Commands\Install\InstallExamplesCommand;
 use BuiltByBerry\LaravelSwarm\Commands\Install\InstallMemoryCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeMemoryToolCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmAgentCommand;
+use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmBlueprintCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmSwarmCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmAuditReconcileCommand;
@@ -460,6 +461,7 @@ class SwarmServiceProvider extends ServiceProvider
                 MakeSwarmCommand::class,
                 MakeSwarmSwarmCommand::class,
                 MakeSwarmAgentCommand::class,
+                MakeSwarmBlueprintCommand::class,
                 MakeMemoryToolCommand::class,
                 SwarmHealthCommand::class,
                 SwarmPruneCommand::class,
