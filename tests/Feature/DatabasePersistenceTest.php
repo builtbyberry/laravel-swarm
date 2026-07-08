@@ -20,7 +20,6 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
-use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -1629,7 +1628,7 @@ test('childRunForChild fails loud with SwarmException on an undecryptable contex
         ->toThrow(SwarmException::class, 'verify APP_KEY');
 });
 
-test('inspector branch read honors decrypt_failure_policy on an undecryptable input (#212)', function (string $policy, $assert) {
+test('inspector branch read degrades an undecryptable input per row under every policy (record 632)', function (string $policy) {
     config()->set('swarm.persistence.encrypt_at_rest', true);
     config()->set('swarm.persistence.decrypt_failure_policy', $policy);
     $store = freshDurableRunStore();
@@ -1638,20 +1637,16 @@ test('inspector branch read honors decrypt_failure_policy on an undecryptable in
     insertDurableRunRow($runId);
     insertDurableBranchRow($runId, 'parallel:researcher', undecryptableSealedValue());
 
-    $assert($store, $runId);
-})->with([
-    'null_with_log returns null' => ['null_with_log', function (DatabaseDurableRunStore $store, string $runId) {
-        expect($store->branchesForInspection($runId)[0]['input'])->toBeNull();
-    }],
-    'legacy surfaces ciphertext' => ['legacy', function (DatabaseDurableRunStore $store, string $runId) {
-        expect($store->branchesForInspection($runId)[0]['input'])->toStartWith('sw0:');
-    }],
-    'throw rethrows the raw DecryptException' => ['throw', function (DatabaseDurableRunStore $store, string $runId) {
-        expect(fn () => $store->branchesForInspection($runId))->toThrow(DecryptException::class);
-    }],
-]);
+    // The display read degrades per row whatever the operator policy: it never
+    // throws (unlike open() under `throw`) and never leaks the sw0: ciphertext
+    // (unlike open() under `legacy`) — the field is null + input_available=false.
+    $branch = $store->branchesForInspection($runId)[0];
 
-test('inspector child read honors null_with_log policy on an undecryptable context payload (#212)', function () {
+    expect($branch['input'])->toBeNull()
+        ->and($branch['input_available'])->toBeFalse();
+})->with(['null_with_log', 'legacy', 'throw']);
+
+test('inspector child read degrades an undecryptable context payload per row (record 632)', function () {
     config()->set('swarm.persistence.encrypt_at_rest', true);
     config()->set('swarm.persistence.decrypt_failure_policy', 'null_with_log');
     $store = freshDurableRunStore();
@@ -1661,7 +1656,10 @@ test('inspector child read honors null_with_log policy on an undecryptable conte
     insertDurableRunRow($parentRunId);
     insertDurableChildRunRow($parentRunId, $childRunId, json_encode(['input' => undecryptableSealedValue()]));
 
-    expect($store->childRunsForInspection($parentRunId)[0]['context_payload']['input'])->toBeNull();
+    $child = $store->childRunsForInspection($parentRunId)[0];
+
+    expect($child['context_payload']['input'])->toBeNull()
+        ->and($child['context_available'])->toBeFalse();
 });
 
 test('strict durable reads round-trip a value that legitimately starts with the sealed prefix (#212)', function () {
@@ -1700,11 +1698,15 @@ test('strict and inspection reads on the same store instance do not interfere (#
     insertDurableRunRow($runId);
     insertDurableBranchRow($runId, 'parallel:researcher', undecryptableSealedValue());
 
-    // Strict op throws; the subsequent policy-aware inspection read on the SAME instance
-    // still surfaces ciphertext under the legacy policy — the strict path never mutated
-    // policy resolution (no shared mutable state).
+    // Strict op throws; the subsequent display inspection read on the SAME instance
+    // DEGRADES (null + input_available=false, never the sw0: ciphertext even under
+    // the legacy policy) — the strict path never mutated policy resolution and the
+    // two paths stay divergent (no shared mutable state).
     expect(fn () => $store->findBranch($runId, 'parallel:researcher'))->toThrow(SwarmException::class, 'verify APP_KEY');
-    expect($store->branchesForInspection($runId)[0]['input'])->toStartWith('sw0:');
+
+    $branch = $store->branchesForInspection($runId)[0];
+    expect($branch['input'])->toBeNull()
+        ->and($branch['input_available'])->toBeFalse();
 });
 
 test('contextStore find fails loud with SwarmException on an undecryptable resume input (#212)', function () {

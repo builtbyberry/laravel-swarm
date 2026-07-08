@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ResolvesSwarmCacheStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -21,7 +22,7 @@ use Throwable;
 /**
  * @internal
  */
-class CacheRunHistoryStore implements RunHistoryStore
+class CacheRunHistoryStore implements ReadableRunHistoryStore, RunHistoryStore
 {
     use ResolvesSwarmCacheStore;
 
@@ -131,6 +132,14 @@ class CacheRunHistoryStore implements RunHistoryStore
         $history = $this->store()->get($this->key($runId));
 
         return $history;
+    }
+
+    public function findForDisplay(string $runId): ?array
+    {
+        // The cache driver never seals (encrypt-at-rest is a database-persistence
+        // feature), so every field is already plaintext and available — the
+        // display read is the plain record with no degrade needed.
+        return $this->find($runId);
     }
 
     public function findMatching(string $swarmClass, ?string $status, ?array $contextSubset): iterable

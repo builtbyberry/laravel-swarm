@@ -137,6 +137,44 @@ class SwarmPersistenceCipher
     }
 
     /**
+     * Display-safe decrypt for a read-only inspection/display consumer. Where
+     * {@see open()} can THROW under `decrypt_failure_policy=throw` and surfaces
+     * raw `sw0:` ciphertext under the `legacy` policy, this NEVER throws and NEVER
+     * leaks ciphertext: an undecryptable value degrades to `null` alongside an
+     * explicit availability=false flag. A display consumer that maps many rows
+     * uses this so one poison row can neither abort the batch nor 500 the page,
+     * and never has to re-implement the 3-way policy itself (record 632). The
+     * operational resume path keeps {@see openStrict()} — this is for evidence and
+     * display reads only.
+     *
+     * @return array{0: ?string, 1: bool} [plaintext or null, decrypted-cleanly]
+     */
+    public function openForDisplay(?string $value): array
+    {
+        if ($value === null || $value === '' || ! str_starts_with($value, self::PREFIX)) {
+            return [$value, true];
+        }
+
+        try {
+            $plain = $this->open($value);
+        } catch (DecryptException) {
+            // decrypt_failure_policy=throw — degrade rather than propagate.
+            return [null, false];
+        }
+
+        // A decrypt failure surfaces as null (null_with_log) or the ORIGINAL sealed
+        // value returned verbatim (legacy passes the ciphertext through). Compare
+        // against $value rather than the sw0: prefix so a value that legitimately
+        // decrypts to a `sw0:`-prefixed plaintext (#212) is NOT mistaken for
+        // ciphertext and masked.
+        if ($plain === null || $plain === $value) {
+            return [null, false];
+        }
+
+        return [$plain, true];
+    }
+
+    /**
      * @param  array<string, mixed>  $row
      * @return array<string, mixed>
      */
@@ -164,6 +202,52 @@ class SwarmPersistenceCipher
         }
 
         return $row;
+    }
+
+    /**
+     * Display-safe twin of {@see openContextTopLevelInput()}: opens the sealed
+     * top-level `input` key via {@see openForDisplay()} so an undecryptable input
+     * degrades to null (never throws, never leaks ciphertext) and reports its
+     * availability. A row with no sealed input is available by definition.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array{0: array<string, mixed>, 1: bool} [row, input-decrypted-cleanly]
+     */
+    public function openContextTopLevelInputForDisplay(array $row): array
+    {
+        $rawInput = $row['input'] ?? null;
+
+        if (! is_string($rawInput)) {
+            return [$row, true];
+        }
+
+        [$plain, $available] = $this->openForDisplay($rawInput);
+        $row['input'] = $plain;
+
+        return [$row, $available];
+    }
+
+    /**
+     * Display-safe twin of {@see openStepIo()}: opens the sealed `input`/`output`
+     * step members via {@see openForDisplay()} and stamps an `input_available` /
+     * `output_available` flag alongside each present member, so one undecryptable
+     * step never throws or leaks ciphertext into a run-history display (record 632).
+     * Absent members (a CaptureDecision::Skip omission) get neither value nor flag.
+     *
+     * @param  array<string, mixed>  $step
+     * @return array<string, mixed>
+     */
+    public function openStepIoForDisplay(array $step): array
+    {
+        foreach (['input' => 'input_available', 'output' => 'output_available'] as $key => $flag) {
+            if (isset($step[$key]) && is_string($step[$key])) {
+                [$plain, $available] = $this->openForDisplay($step[$key]);
+                $step[$key] = $plain;
+                $step[$flag] = $available;
+            }
+        }
+
+        return $step;
     }
 
     /**

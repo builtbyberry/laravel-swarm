@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
@@ -28,7 +29,7 @@ use Throwable;
 /**
  * @internal
  */
-class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistoryStore
+class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHistoryStore, RunHistoryStore
 {
     use InteractsWithJsonColumns;
 
@@ -331,6 +332,18 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
         return $this->mapRecord($record);
     }
 
+    public function findForDisplay(string $runId): ?array
+    {
+        /** @var object|null $record */
+        $record = $this->table()->where('run_id', $runId)->first();
+
+        if ($record === null) {
+            return null;
+        }
+
+        return $this->mapRecord($record, forDisplay: true);
+    }
+
     public function findMatching(string $swarmClass, ?string $status, ?array $contextSubset): iterable
     {
         $query = $this->table()
@@ -439,19 +452,33 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     /**
      * @return array<string, mixed>
      */
-    protected function mapRecord(object $record): array
+    protected function mapRecord(object $record, bool $forDisplay = false): array
     {
-        $steps = $this->stepsForRecord($record);
+        $steps = $this->stepsForRecord($record, $forDisplay);
+        $rawContext = $this->decodeJson($record->context, []);
+        $rawOutput = $record->output === null ? null : (string) $record->output;
 
-        return [
+        // The operational path (forDisplay=false) keeps the policy-aware open() —
+        // shared with resume/guardrail consumers that must fail loud under the
+        // `throw` policy. The display path degrades per field: never throws, never
+        // leaks sw0: ciphertext, and stamps *_available flags (record 632).
+        if ($forDisplay) {
+            [$context, $contextAvailable] = $this->cipher->openContextTopLevelInputForDisplay($rawContext);
+            [$output, $outputAvailable] = $this->cipher->openForDisplay($rawOutput);
+        } else {
+            $context = $this->cipher->openContextTopLevelInput($rawContext);
+            $output = $rawOutput !== null ? $this->cipher->open($rawOutput) : null;
+        }
+
+        $mapped = [
             'run_id' => $record->run_id,
             'swarm_class' => $record->swarm_class,
             'topology' => $record->topology,
             'status' => $record->status,
-            'context' => $this->cipher->openContextTopLevelInput($this->decodeJson($record->context, [])),
+            'context' => $context,
             'metadata' => $this->decodeJson($record->metadata, []),
             'steps' => $steps,
-            'output' => $record->output !== null ? $this->cipher->open((string) $record->output) : null,
+            'output' => $output,
             'usage' => $this->decodeJson($record->usage, []),
             'error' => $this->decodeJson($record->error, null),
             'artifacts' => $this->decodeJson($record->artifacts, []),
@@ -461,6 +488,13 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             'leased_until' => $record->leased_until ?? null,
             'updated_at' => $record->updated_at,
         ];
+
+        if ($forDisplay) {
+            $mapped['context_available'] = $contextAvailable;
+            $mapped['output_available'] = $outputAvailable;
+        }
+
+        return $mapped;
     }
 
     /**
@@ -676,7 +710,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     /**
      * @return array<int, array<string, mixed>>
      */
-    protected function normalizedSteps(string $runId): array
+    protected function normalizedSteps(string $runId, bool $forDisplay = false): array
     {
         if (! $this->hasNormalizedStepTable()) {
             return [];
@@ -687,7 +721,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
             ->orderBy('step_index')
             ->orderBy('id')
             ->get()
-            ->map(function (object $record): array {
+            ->map(function (object $record) use ($forDisplay): array {
                 $step = [
                     'step_index' => (int) $record->step_index,
                     'agent_class' => $record->agent_class,
@@ -695,13 +729,23 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
 
                 // A NULL column is a CaptureDecision::Skip omission — keep the
                 // key absent so the reconstructed step shape matches the
-                // persisted-array contract (present only when captured).
+                // persisted-array contract (present only when captured). The
+                // display path degrades per field (never throws / leaks) and
+                // stamps *_available; the operational path keeps open().
                 if ($record->input !== null) {
-                    $step['input'] = $this->cipher->open((string) $record->input);
+                    if ($forDisplay) {
+                        [$step['input'], $step['input_available']] = $this->cipher->openForDisplay((string) $record->input);
+                    } else {
+                        $step['input'] = $this->cipher->open((string) $record->input);
+                    }
                 }
 
                 if ($record->output !== null) {
-                    $step['output'] = $this->cipher->open((string) $record->output);
+                    if ($forDisplay) {
+                        [$step['output'], $step['output_available']] = $this->cipher->openForDisplay((string) $record->output);
+                    } else {
+                        $step['output'] = $this->cipher->open((string) $record->output);
+                    }
                 }
 
                 $step['artifacts'] = $this->decodeJson($record->artifacts, []);
@@ -763,7 +807,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
     /**
      * @return array<int, array<string, mixed>>
      */
-    protected function stepsForRecord(object $record): array
+    protected function stepsForRecord(object $record, bool $forDisplay = false): array
     {
         $steps = [];
 
@@ -772,10 +816,12 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, RunHistorySto
                 continue;
             }
 
-            $steps[$this->stepSortIndex($step, count($steps))] = $this->cipher->openStepIo($step);
+            $steps[$this->stepSortIndex($step, count($steps))] = $forDisplay
+                ? $this->cipher->openStepIoForDisplay($step)
+                : $this->cipher->openStepIo($step);
         }
 
-        foreach ($this->normalizedSteps($record->run_id) as $step) {
+        foreach ($this->normalizedSteps($record->run_id, $forDisplay) as $step) {
             $stepIndex = $step['step_index'];
             unset($step['step_index']);
 

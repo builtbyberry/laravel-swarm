@@ -682,6 +682,46 @@ double dispatch is safe.
 The same result objects back `DurableSwarmResponse::pause()`/`resume()`/`cancel()`
 and `signal()`.
 
+## Read-only inspection
+
+Where `SwarmOperator` is the **control** contract, `InspectsDurableRuns` is its
+**read** counterpart — the supported, container-bound seam for companion
+packages and external readers (a Filament panel, an MCP server, a custom
+dashboard) that need to **display** a durable run's state. Resolve it instead of
+reaching into the `@internal` `DurableSwarmManager` / `DurableRunInspector` or the
+`@internal` `SwarmPersistenceCipher`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\InspectsDurableRuns;
+
+$inspector = app(InspectsDurableRuns::class);
+
+$detail = $inspector->inspect($runId);           // DurableRunDetail (throws if unknown)
+$row    = $inspector->find($runId);              // durable run row, or null
+$byLbls = $inspector->inspectByLabels(['env' => 'prod'], limit: 50);
+```
+
+`inspect()` returns a `DurableRunDetail` — the assembled read model carrying the
+run row, its run history, labels, details, waits, signals, progress, child runs,
+parallel branches, and hierarchical node outputs, plus `toArray()`.
+
+**Display-decrypt contract.** Every sealed field these reads return is opened
+through the evidence path that honors `swarm.persistence.decrypt_failure_policy`
+and **degrades per row**: a value that cannot be decrypted becomes `null` with an
+explicit `*_available: false` flag (e.g. `input_available`, `output_available`,
+`context_available`) rather than throwing or leaking `sw0:` ciphertext — so one
+undecryptable row never aborts the batch and never 500s a display surface. This
+is the opposite of the operational resume reads on `DurableRunStore`, which
+decrypt strictly and fail loud on a rotated `APP_KEY`; the two paths never
+collapse.
+
+Like `SwarmOperator`, this contract is **authorization-agnostic** — gate access
+in your own application. It is backed by the database-durable inspector (durable
+state is database-only). The companion read seams for the other surfaces follow
+the same display-decrypt contract: `ReadableRunHistoryStore` (run + step detail
+and the runs list) and `ReadableAuditOutbox` (non-mutating audit-outbox health).
+See [Public Surface — read-only inspection contracts](public-surface.md#read-only-inspection-contracts-v0190).
+
 ## Durable Operator Surfaces
 
 Durable runs can now carry indexed labels, structured details, latest progress

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\AuditDrainResult;
@@ -29,7 +30,7 @@ use Throwable;
  *
  * @internal
  */
-class DatabaseAuditOutbox implements AuditOutbox
+class DatabaseAuditOutbox implements AuditOutbox, ReadableAuditOutbox
 {
     use SafeReporting;
 
@@ -312,6 +313,138 @@ class DatabaseAuditOutbox implements AuditOutbox
                 .'switch to a different failure policy.'
             );
         }
+    }
+
+    public function pending(int $limit = 100): array
+    {
+        return $this->readRows('pending', $limit);
+    }
+
+    public function deadLettered(int $limit = 100): array
+    {
+        return $this->readRows('dead_letter', $limit);
+    }
+
+    public function record(int $id): ?array
+    {
+        if (! $this->isAvailable()) {
+            return null;
+        }
+
+        /** @var object|null $record */
+        $record = $this->table()->where('id', $id)->first();
+
+        if ($record === null) {
+            return null;
+        }
+
+        // The single-row detail read is the only place the full (potentially
+        // large, most-sensitive) evidence payload is decrypted — the list reads
+        // deliberately omit it (record 632 payload-minimization).
+        [$rawPayload, $payloadAvailable] = $this->cipher->openForDisplay(
+            $record->payload === null ? null : (string) $record->payload,
+        );
+
+        $payload = null;
+
+        if ($payloadAvailable && is_string($rawPayload)) {
+            $decoded = json_decode($rawPayload, true);
+            if (is_array($decoded)) {
+                $payload = $decoded;
+            } else {
+                $payloadAvailable = false;
+            }
+        }
+
+        return $this->mapRowSummary($record) + [
+            'payload' => $payload,
+            'payload_available' => $payloadAvailable,
+        ];
+    }
+
+    public function healthSummary(): array
+    {
+        if (! $this->isAvailable()) {
+            return [
+                'available' => false,
+                'pending' => 0,
+                'dead_letter' => 0,
+                'reserved' => 0,
+                'oldest_pending_at' => null,
+            ];
+        }
+
+        $reservationTimeoutSeconds = (int) $this->config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
+        $freshThreshold = Carbon::now('UTC')->subSeconds($reservationTimeoutSeconds);
+
+        $pending = (int) $this->table()->where('status', 'pending')->count();
+        $deadLetter = (int) $this->table()->where('status', 'dead_letter')->count();
+        $reserved = (int) $this->table()
+            ->where('status', 'pending')
+            ->whereNotNull('reserved_at')
+            ->where('reserved_at', '>=', $freshThreshold)
+            ->count();
+        $oldestPendingAt = $this->table()
+            ->where('status', 'pending')
+            ->min('created_at');
+
+        return [
+            'available' => true,
+            'pending' => $pending,
+            'dead_letter' => $deadLetter,
+            'reserved' => $reserved,
+            'oldest_pending_at' => $oldestPendingAt !== null ? (string) $oldestPendingAt : null,
+        ];
+    }
+
+    /**
+     * Pure-SELECT read of outbox rows by status, newest first, display-decrypted
+     * per row. Never writes `reserved_at` and never deletes, so it coexists with a
+     * concurrent `swarm:relay --type=audit` drainer instead of stealing its rows
+     * (record 632).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    protected function readRows(string $status, int $limit): array
+    {
+        if (! $this->isAvailable()) {
+            return [];
+        }
+
+        return $this->table()
+            ->where('status', $status)
+            ->orderByDesc('id')
+            ->limit(max(1, $limit))
+            ->get()
+            ->map(fn (object $record): array => $this->mapRowSummary($record))
+            ->all();
+    }
+
+    /**
+     * Row metadata + display-decrypted `last_error` — NO payload. The full
+     * evidence payload is decrypted only on demand via {@see record()}.
+     *
+     * @return array<string, mixed>
+     */
+    protected function mapRowSummary(object $record): array
+    {
+        [$lastError, $lastErrorAvailable] = $this->cipher->openForDisplay(
+            $record->last_error === null ? null : (string) $record->last_error,
+        );
+
+        return [
+            'id' => (int) $record->id,
+            'category' => $record->category,
+            'run_id' => $record->run_id,
+            'status' => $record->status,
+            'attempts' => (int) $record->attempts,
+            'last_error' => $lastError,
+            'last_error_available' => $lastErrorAvailable,
+            'reserved_at' => $record->reserved_at ?? null,
+            'last_attempted_at' => $record->last_attempted_at ?? null,
+            'created_at' => $record->created_at,
+            'updated_at' => $record->updated_at,
+        ];
     }
 
     protected function table(): Builder

@@ -28,6 +28,7 @@ adding a new public API.
 | `DurablePauseResult` / `DurableResumeResult` / `DurableCancelResult` | Lifecycle result value objects returned by the `SwarmOperator` control verbs. Each carries the effective status as a typed `DurableLifecycleStatus` enum — `Paused` vs `PauseScheduled`, `Cancelled` vs `CancelScheduled`, `Resumed` vs `Waiting` (with `waitingBoundaryDispatched`) — plus `isImmediate()`/`isWaiting()` convenience methods and `toArray()`. They never hide whether the run actually transitioned. (v0.16.0+) | [Durable Execution](durable-execution.md#operator-control-contract) |
 | `DurableLifecycleStatus` | Backed enum of the effective status a control verb transitioned a run into. Cases: `Paused` (`paused`), `PauseScheduled` (`pause_scheduled`), `Cancelled` (`cancelled`), `CancelScheduled` (`cancel_scheduled`), `Resumed` (`resumed`), `Waiting` (`waiting`). Backs the three lifecycle result objects so the status is a typed public value, not a raw string. (v0.16.0+) | [Durable Execution](durable-execution.md#operator-control-contract) |
 | `DurableSignalResult` | Result of a signal delivery — `accepted`, `duplicate`, recorded `status`, and the stored signal. Returned by `SwarmOperator::signal()` and `DurableSwarmResponse::signal()`. | [Durable Waits And Signals](durable-waits-and-signals.md), [Durable Webhooks](durable-webhooks.md) |
+| `DurableRunDetail` | Display-decrypted read model returned by `InspectsDurableRuns::inspect()` — `run`, `history`, `labels`, `details`, `waits`, `signals`, `progress`, `children`, `branches`, and `hierarchicalNodeOutputs`, plus `toArray()`. Sealed fields carry a companion `*_available` flag; an undecryptable field is `null` rather than throwing or leaking ciphertext. (v0.19.0+) | [Durable Execution](durable-execution.md#read-only-inspection) |
 | `RunContext` | Explicit run input, run ID, data, metadata, artifacts, labels, and details. Implements `ArrayAccess` — `$context['key']` reads and writes directly through to the `SwarmMemory` Run scope (v0.9.0+). `withConversationId()` binds the run to a conversation (read back with `conversationId()`), making `MemoryScope::Conversation` addressable for snapshot gathering and the `Recall`/`Remember` tools; the id threads through every execution path via run metadata (v0.12.0+). | [Structured Input](structured-input.md), [Persistence And History](persistence-and-history.md), [Swarm Memory](memory.md#runcontext-write-through), [Conversation-scoped memory](memory.md#conversation-scoped-memory) |
 | `SwarmHistory` | Query persisted history and replay stored stream events. | [Persistence And History](persistence-and-history.md), [Run Inspector](../examples/run-inspector/README.md) |
 | `AuditDrainResult` | Result of an `AuditOutbox::drain()` invocation — `replayed`, `dead_lettered`, `failed`, `claimed`, `reclaimed`. (v0.5.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
@@ -87,12 +88,45 @@ the consuming application's responsibility. Verbs fail loud (throw
 | `SwarmOperator::signal()` | Deliver a named signal (idempotent per `idempotencyKey`); returns a `DurableSignalResult`. | [Durable Waits And Signals](durable-waits-and-signals.md), [Durable Webhooks](durable-webhooks.md) |
 | `SwarmOperator::recover()` | Redispatch recoverable runs, branches, waits, retries, and child reconciliations; returns the redispatched run ids. Lease-guarded and idempotent. | [Durable Execution](durable-execution.md#operator-control-contract), [Maintenance](maintenance.md#scheduling) |
 
+## Read-Only Inspection Contracts (v0.19.0+)
+
+The public, container-bound read-only seams companion packages and external
+readers (a Filament panel, an MCP server, a custom dashboard) use to DISPLAY
+durable and audit data. They are the read-only counterparts to `SwarmOperator`:
+resolve them with `app(...)`, never bind the `@internal` engine types or the
+`@internal` `SwarmPersistenceCipher`.
+
+Every sealed field these seams return is **display-decrypted**: it honors
+`swarm.persistence.decrypt_failure_policy` and degrades per row — a value that
+cannot be decrypted becomes `null` with an explicit `*_available: false` flag
+rather than throwing or leaking `sw0:` ciphertext. One undecryptable row never
+aborts the batch and never 500s a display surface. This is the opposite of the
+operational resume reads on `DurableRunStore`, which decrypt strictly and fail
+loud on a rotated `APP_KEY`.
+
+| Surface | Purpose | Primary documentation |
+| --- | --- | --- |
+| `InspectsDurableRuns::find()` | The durable run row for a run, or `null`. Never decrypts. | [Durable Execution](durable-execution.md#read-only-inspection) |
+| `InspectsDurableRuns::inspect()` | Assemble the full display-decrypted `DurableRunDetail` — run, history, labels, details, waits, signals, progress, child runs, parallel branches, and hierarchical node outputs. Throws on an unknown run. | [Durable Execution](durable-execution.md#read-only-inspection) |
+| `InspectsDurableRuns::inspectByLabels()` | Inspect every run carrying the given labels. | [Durable Execution](durable-execution.md#read-only-inspection) |
+| `ReadableRunHistoryStore::findForDisplay()` | The per-field-degraded display record for a run — the run + step detail surface. Same shape as `RunHistoryStore::find()` but the context input, run output, and each step's input/output degrade per field with `*_available` flags (never throw, never render ciphertext). The shared `find()` stays on the operational path for resume/guardrail consumers. | [Persistence And History](persistence-and-history.md) |
+| `ReadableRunHistoryStore::query()` | The lean run-list projection (columns + step count, no decryption) for a runs-index surface. | [Persistence And History](persistence-and-history.md) |
+| `ReadableAuditOutbox::pending()` / `deadLettered()` | List outbox rows by status, newest first — metadata + display-decrypted `last_error` only (NOT the full payload). Pure SELECT — never reserves or deletes, so it coexists with a concurrent `swarm:relay --type=audit` drainer. | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `ReadableAuditOutbox::record()` | A single outbox row by id, including its full display-decrypted evidence `payload` (`payload_available` flag). The on-demand detail read the list methods omit the payload from (payload minimization). | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `ReadableAuditOutbox::healthSummary()` | Non-mutating counts by status, reserved-in-flight count, and oldest-pending timestamp. | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `ReadableAuditOutbox::isAvailable()` | Whether the outbox is backed by a working store (false in cache mode / when the table is missing). | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+
+The audit outbox seams cover the retry BUFFER only. The full audit TRAIL is
+served by an application's own `ReadableSwarmAuditSink`; core's default sink
+stores nothing, so a trail surface requires the app to bind a readable sink.
+
 ## Durable Manager Operations
 
 The `DurableSwarmManager` and `DurableRunInspector` are `@internal` engine
-types, not a supported contract. For control use the `SwarmOperator` contract
-above; for reads use `SwarmHistory` / `RunHistoryStore`. The rows below describe
-engine behavior for orientation only.
+types, not a supported contract — consumers bind the public `SwarmOperator`
+(control) and `InspectsDurableRuns` (read) contracts above, which they
+implement. For reads also see `SwarmHistory` / `RunHistoryStore`. The rows below
+describe engine behavior for orientation only.
 
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
@@ -178,6 +212,8 @@ engine behavior for orientation only.
 | `SinkFailureHandler` | Decide how to react when an audit sink throws. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `SinkFailureDecision` | Enum of sink failure outcomes (`Swallow`, `RetryInline`, `Halt`, `Queue`, `DeadLetter`). `Queue` and `DeadLetter` added in v0.5.0 alongside the audit outbox. | [Audit Evidence Contract](audit-evidence-contract.md#sink-failure-handler) |
 | `AuditOutbox` | Persisted retry surface for audit evidence that failed to emit. Drained by `swarm:relay --type=audit`. (v0.5.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `ReadableAuditOutbox` | Non-mutating, display-decrypted read-only view of the audit outbox for health surfaces (`pending()`, `deadLettered()`, `record()`, `healthSummary()`, `isAvailable()`). Pure SELECT — coexists with the drainer, never consumes rows. List reads return metadata + `last_error` only; the full payload is fetched per-row via `record()`. The read counterpart to `AuditOutbox::drain()`. (v0.19.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
+| `ReadableRunHistoryStore` | Non-mutating, per-field-degraded read-only view of run history for display surfaces (`findForDisplay()`, `query()`). The display twin of the shared `RunHistoryStore::find()`, which stays on the operational path. (v0.19.0+) | [Persistence And History](persistence-and-history.md) |
 | `Enums\RelayLane` | Enum naming the outbox lane a `swarm:relay` invocation drains. Cases: `Durable` (`durable`) and `Audit` (`audit`); the `Audit` value is the `swarm:relay --type=audit` keyword. Extensible for future lanes. (v0.16.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
 | `Enums\DurableDispatchType` | Enum of the durable-run dispatch kinds persisted in the `swarm_durable_outbox` `dispatch_type` column and accepted by `swarm:relay --type=…`. Cases: `Step` (`step`), `Branch` (`branch`), `QueuedResume` (`queued_resume`). The string values are a persisted contract and never change. (v0.16.0+) | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |
 | `Enums\OutboxDispatchType` | **Deprecated since v0.16.0** — split into `RelayLane` (the lane) + `DurableDispatchType` (the durable dispatch kind) because its `Audit` case never reached the durable dispatcher. Retained unchanged for backward compatibility; scheduled for removal in a future major release. See [Upgrading to v0.16.0](../UPGRADING.md#upgrading-to-v0160). | [Audit Evidence Contract](audit-evidence-contract.md#audit-outbox) |

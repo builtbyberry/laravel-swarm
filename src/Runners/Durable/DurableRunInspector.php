@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Contracts\InspectsDurableRuns;
 use BuiltByBerry\LaravelSwarm\Events\SwarmProgressRecorded;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
@@ -12,15 +13,18 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use Illuminate\Contracts\Events\Dispatcher;
 
 /**
- * @internal
+ * @internal The class is internal; consumers bind the public {@see InspectsDurableRuns}
+ * contract, which this implements.
  *
  * Depends on the concrete {@see DatabaseDurableRunStore} (not the DurableRunStore
  * contract) because the evidence/display reads it needs — branchesForInspection() /
- * childRunsForInspection(), the policy-aware twins of the now-strict operational
- * branchesFor()/childRuns() — are intentionally NOT on the public contract. The
- * inspector reads the shipped database durable tables, so this coupling is by design.
+ * childRunsForInspection() / hierarchicalNodeOutputsForInspection(), the
+ * per-row-degrading display twins of the now-strict operational
+ * branchesFor()/childRuns()/hierarchicalNodeOutputsFor() — are intentionally NOT on
+ * the public store contract. The inspector reads the shipped database durable tables,
+ * so this coupling is by design.
  */
-class DurableRunInspector
+class DurableRunInspector implements InspectsDurableRuns
 {
     public function __construct(
         protected DatabaseDurableRunStore $durableRuns,
@@ -49,7 +53,7 @@ class DurableRunInspector
         return new DurableRunDetail(
             runId: $runId,
             run: $run,
-            history: $this->historyStore->find($runId),
+            history: $this->historyStore->findForDisplay($runId),
             labels: $this->durableRuns->labels($runId),
             details: $this->durableRuns->details($runId),
             waits: $this->durableRuns->waits($runId),
@@ -57,6 +61,7 @@ class DurableRunInspector
             progress: $this->durableRuns->progress($runId),
             children: $this->durableRuns->childRunsForInspection($runId),
             branches: $this->durableRuns->branchesForInspection($runId),
+            hierarchicalNodeOutputs: $this->durableRuns->hierarchicalNodeOutputsForInspection($runId),
         );
     }
 
