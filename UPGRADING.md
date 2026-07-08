@@ -269,6 +269,10 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.19.0
+
+**No required action — additive.** This release adds three public, read-only display seams for companion packages and external readers — `InspectsDurableRuns` (durable-run inspection), `ReadableRunHistoryStore` (run + step history), and `ReadableAuditOutbox` (audit-outbox health) — plus a `SwarmPersistenceCipher::openForDisplay()` helper. They are new interfaces, container-bound alongside the existing stores; no existing contract is widened, and there is no migration, config, or schema change. Every operational read (durable resume, guardrail, `RunHistoryStore::find()`, `AuditOutbox::drain()`) is untouched and still decrypts strictly / fails loud. If you are building an observability surface, bind these contracts instead of the `@internal` cipher or manager; otherwise nothing changes. See the [CHANGELOG](CHANGELOG.md#v0190---2026-07-08) and [Public Surface](docs/public-surface.md#read-only-inspection-contracts-v0190) for details.
+
 ## Upgrading to v0.18.0
 
 **No required action — additive.** This release adds the `make:swarm:blueprint` generator and four new curated blueprint trees (`triage`, `extraction`, `memory`, `streaming`) to the starter corpus. It is purely additive — a new Artisan command plus new stub files, with no migration, config, schema, or breaking API change. `swarm:install:examples`' behavior and file output are unchanged (it now also skips the package-side `blueprint.json` metadata alongside `README.md`). If you want the new scaffolder, run `php artisan make:swarm:blueprint <Name> --template=<slug>`; otherwise nothing changes. See the [CHANGELOG](CHANGELOG.md#v0180---2026-07-07) and [Generators](docs/generators.md#make-swarm-blueprint) for details.
