@@ -310,3 +310,19 @@ test('run history findForDisplay degrades poison context, output, and steps with
         ->and($steps['Reviewer']['output'])->toBe('normalized output')
         ->and($steps['Reviewer']['output_available'])->toBeTrue();
 });
+
+test('InspectsDurableRuns::inspect assembles hierarchical node outputs into the detail', function () {
+    displaySeamsUseDatabase();
+
+    $runId = 'inspect-hier-1';
+    displaySeamsSeedRun($runId);
+    app(DatabaseDurableRunStore::class)->storeHierarchicalNodeOutput($runId, 'node-x', 'node x output', 3600);
+
+    $detail = app(InspectsDurableRuns::class)->inspect($runId)->toArray();
+
+    $outputs = collect($detail['hierarchical_node_outputs'])->keyBy('node_id');
+
+    expect($detail['hierarchical_node_outputs'])->toHaveCount(1)
+        ->and($outputs['node-x']['output'])->toBe('node x output')
+        ->and($outputs['node-x']['output_available'])->toBeTrue();
+});
