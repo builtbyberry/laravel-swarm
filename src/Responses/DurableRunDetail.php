@@ -16,6 +16,7 @@ class DurableRunDetail
      * @param  array<int, array<string, mixed>>  $progress
      * @param  array<int, array<string, mixed>>  $children
      * @param  array<int, array<string, mixed>>  $branches
+     * @param  array<int, array<string, mixed>>  $hierarchicalNodeOutputs
      */
     public function __construct(
         public readonly string $runId,
@@ -28,6 +29,7 @@ class DurableRunDetail
         public readonly array $progress = [],
         public readonly array $children = [],
         public readonly array $branches = [],
+        public readonly array $hierarchicalNodeOutputs = [],
     ) {}
 
     /**
@@ -46,6 +48,7 @@ class DurableRunDetail
             'progress' => $this->progress,
             'children' => $this->children,
             'branches' => $this->branches,
+            'hierarchical_node_outputs' => $this->hierarchicalNodeOutputs,
         ];
     }
 }

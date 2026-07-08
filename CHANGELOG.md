@@ -6,11 +6,13 @@ Public display-read seams for ecosystem companions. Adds separate, additive, rea
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **`InspectsDurableRuns` — public read-only durable inspection contract.** The supported, container-bound seam for companion packages and external readers to DISPLAY a durable run's assembled state (`find()`, `inspect()`, `inspectByLabels()`), returning a display-decrypted `DurableRunDetail`. It is the read-only counterpart to `SwarmOperator` (control): resolve it with `app(InspectsDurableRuns::class)` instead of binding the `@internal` `DurableSwarmManager`/`DurableRunInspector` or the `@internal` `SwarmPersistenceCipher`. Every sealed field is opened through the evidence path that honors `swarm.persistence.decrypt_failure_policy` and **degrades per row** — an undecryptable value becomes `null` with an explicit `*_available: false` flag rather than throwing or leaking `sw0:` ciphertext, so one poison row never aborts the batch or 500s a display surface. The operational resume reads on `DurableRunStore` are untouched and still decrypt strictly (fail loud on a rotated `APP_KEY`).
+- **`ReadableAuditOutbox` — public read-only audit-outbox health contract.** The non-mutating counterpart to `AuditOutbox::drain()` (which reserves and consumes rows): `pending()`, `deadLettered()`, `healthSummary()`, and `isAvailable()` for outbox-health surfaces. Every read is a pure SELECT that never writes `reserved_at` and never deletes, so it coexists with a concurrent `swarm:relay --type=audit` drainer instead of stealing its rows. Sealed `payload`/`last_error` are display-decrypted with the same per-row degrade. Bound to the database outbox when the persistence driver supports it and a no-op (reporting an empty, unavailable outbox) otherwise.
+- **`DurableRunDetail::hierarchicalNodeOutputs`.** The assembled durable read model now includes hierarchical node outputs (display-decrypted, per-row `output_available` flag), completing cross-topology parity with parallel branches and child runs on the inspection surface.
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **`DurableRunInspector` now implements the public `InspectsDurableRuns` contract** (the class stays `@internal`; consumers bind the contract). Its branch, child-run, and hierarchical-node-output display reads now degrade per row via a new `SwarmPersistenceCipher::openForDisplay()` helper rather than surfacing raw ciphertext under the `legacy` policy or throwing under the `throw` policy.
 
 ## v0.18.0 - 2026-07-07
 

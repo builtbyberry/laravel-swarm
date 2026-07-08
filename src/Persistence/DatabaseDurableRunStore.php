@@ -499,6 +499,40 @@ class DatabaseDurableRunStore implements DurableRunStore
             ->all();
     }
 
+    /**
+     * Evidence/display hierarchical node-output read (concrete-only, used by
+     * DurableRunInspector): returns EVERY node output persisted for a run,
+     * per-row display-decrypted. Where the operational {@see hierarchicalNodeOutputsFor()}
+     * decrypts strictly (throws on a rotated key, because a resume folds the
+     * output into a downstream prompt) and takes an explicit node-id list, this
+     * degrades an undecryptable output to null + `output_available=false` and
+     * lists the whole run, so a display surface never 500s. Intentionally NOT on
+     * the DurableRunStore contract — reached through {@see InspectsDurableRuns}.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function hierarchicalNodeOutputsForInspection(string $runId): array
+    {
+        return $this->nodeOutputTable()
+            ->where('run_id', $runId)
+            ->orderBy('id')
+            ->get()
+            ->map(function (object $record): array {
+                [$output, $available] = $this->cipher->openForDisplay($record->output === null ? null : (string) $record->output);
+
+                return [
+                    'run_id' => $record->run_id,
+                    'node_id' => $record->node_id,
+                    'output' => $output,
+                    'output_available' => $available,
+                    'expires_at' => $record->expires_at ?? null,
+                    'created_at' => $record->created_at ?? null,
+                    'updated_at' => $record->updated_at ?? null,
+                ];
+            })
+            ->all();
+    }
+
     public function storeHierarchicalNodeOutput(string $runId, string $nodeId, string $output, int $ttlSeconds): void
     {
         $timestamp = Carbon::now('UTC');
@@ -635,16 +669,19 @@ class DatabaseDurableRunStore implements DurableRunStore
     }
 
     /**
-     * Evidence/display branch read (concrete-only, used by DurableRunInspector): honors
-     * swarm.persistence.decrypt_failure_policy — the policy-aware twin of the now-strict
-     * operational branchesFor(). Intentionally not on the DurableRunStore contract.
+     * Evidence/display branch read (concrete-only, used by DurableRunInspector): the
+     * per-row-degrading display twin of the now-strict operational branchesFor().
+     * Each branch's input/output decrypt via {@see openForDisplay()} and carry an
+     * `*_available` flag, so an undecryptable row degrades to null rather than
+     * throwing or leaking ciphertext (record 632). Intentionally not on the
+     * DurableRunStore contract — reached through {@see InspectsDurableRuns}.
      *
      * @return array<int, array<string, mixed>>
      */
     public function branchesForInspection(string $runId, ?string $parentNodeId = null): array
     {
         return $this->branchRowsFor($runId, $parentNodeId)
-            ->map(fn (object $record): array => $this->mapBranch($record, strict: false))
+            ->map(fn (object $record): array => $this->mapBranchForDisplay($record))
             ->all();
     }
 
@@ -1917,16 +1954,19 @@ class DatabaseDurableRunStore implements DurableRunStore
     }
 
     /**
-     * Evidence/display child-run read (concrete-only, used by DurableRunInspector): honors
-     * swarm.persistence.decrypt_failure_policy — the policy-aware twin of the now-strict
-     * operational childRuns(). Intentionally not on the DurableRunStore contract.
+     * Evidence/display child-run read (concrete-only, used by DurableRunInspector): the
+     * per-row-degrading display twin of the operational childRuns(). Each child's
+     * context input/output decrypt via the display helpers and carry an `*_available`
+     * flag, so an undecryptable child degrades to null rather than throwing or leaking
+     * ciphertext (record 632). Intentionally not on the DurableRunStore contract —
+     * reached through {@see InspectsDurableRuns}.
      *
      * @return array<int, array<string, mixed>>
      */
     public function childRunsForInspection(string $runId): array
     {
         return $this->childRunRowsFor($runId)
-            ->map(fn (object $record): array => $this->mapChildRun($record, strict: false))
+            ->map(fn (object $record): array => $this->mapChildRunForDisplay($record))
             ->all();
     }
 
@@ -2650,9 +2690,65 @@ class DatabaseDurableRunStore implements DurableRunStore
     }
 
     /**
+     * Display-safe decrypt of a child run's nested context payload: opens the
+     * top-level input key through the policy-aware path, then masks it to null
+     * with availability=false if it threw or came back still-sealed. Never throws.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array{0: array<string, mixed>, 1: bool}
+     */
+    private function openChildContextForDisplay(array $payload): array
+    {
+        try {
+            $opened = $this->cipher->openContextTopLevelInput($payload);
+        } catch (DecryptException) {
+            $payload['input'] = null;
+
+            return [$payload, false];
+        }
+
+        $input = $opened['input'] ?? null;
+
+        if (is_string($input) && str_starts_with($input, SwarmPersistenceCipher::PREFIX)) {
+            $opened['input'] = null;
+
+            return [$opened, false];
+        }
+
+        return [$opened, true];
+    }
+
+    /**
+     * Policy-aware, per-row-degrading display twin of {@see mapBranch()}. Carries
+     * the same non-sealed fields, but `input`/`output` decrypt via
+     * {@see SwarmPersistenceCipher::openForDisplay()} and each gains an
+     * `*_available` flag so a consumer can render "unavailable" for a row that
+     * failed to decrypt without losing the rest of the batch.
+     *
      * @return array<string, mixed>
      */
-    protected function mapBranch(object $record, bool $strict = true): array
+    protected function mapBranchForDisplay(object $record): array
+    {
+        $branch = $this->mapBranchBaseFields($record);
+
+        [$input, $inputAvailable] = $this->cipher->openForDisplay($record->input === null ? null : (string) $record->input);
+        [$output, $outputAvailable] = $this->cipher->openForDisplay($record->output === null ? null : (string) $record->output);
+
+        $branch['input'] = $input;
+        $branch['input_available'] = $inputAvailable;
+        $branch['output'] = $output;
+        $branch['output_available'] = $outputAvailable;
+
+        return $branch;
+    }
+
+    /**
+     * The non-sealed branch fields shared by {@see mapBranch()} and
+     * {@see mapBranchForDisplay()} — everything except `input`/`output`.
+     *
+     * @return array<string, mixed>
+     */
+    private function mapBranchBaseFields(object $record): array
     {
         return [
             'run_id' => $record->run_id,
@@ -2662,19 +2758,6 @@ class DatabaseDurableRunStore implements DurableRunStore
             'agent_class' => $record->agent_class,
             'parent_node_id' => $record->parent_node_id,
             'status' => $record->status,
-            // Branch input + output are operational resume state: the input is the
-            // re-dispatch prompt and the output is folded into the parallel-join
-            // prompt. On the operational ($strict) path they must decrypt-or-throw
-            // so a wrong/rotated APP_KEY fails the resume loudly (#212) rather than
-            // feeding null/ciphertext downstream; the inspection path keeps open().
-            'input' => $strict
-                ? $this->openStrictOrFail((string) $record->input, 'branch input', (string) $record->run_id, "branch [{$record->branch_id}]")
-                : $this->cipher->open((string) $record->input),
-            'output' => $record->output === null
-                ? null
-                : ($strict
-                    ? $this->openStrictOrFail((string) $record->output, 'branch output', (string) $record->run_id, "branch [{$record->branch_id}]")
-                    : $this->cipher->open((string) $record->output)),
             'usage' => $this->decodeJson($record->usage ?? null, []),
             'metadata' => $this->decodeJson($record->metadata ?? null, []),
             'failure' => $this->decodeJson($record->failure ?? null, null),
@@ -2695,6 +2778,30 @@ class DatabaseDurableRunStore implements DurableRunStore
             'created_at' => $record->created_at,
             'updated_at' => $record->updated_at,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function mapBranch(object $record, bool $strict = true): array
+    {
+        $branch = $this->mapBranchBaseFields($record);
+
+        // Branch input + output are operational resume state: the input is the
+        // re-dispatch prompt and the output is folded into the parallel-join
+        // prompt. On the operational ($strict) path they must decrypt-or-throw
+        // so a wrong/rotated APP_KEY fails the resume loudly (#212) rather than
+        // feeding null/ciphertext downstream; the inspection path keeps open().
+        $branch['input'] = $strict
+            ? $this->openStrictOrFail((string) $record->input, 'branch input', (string) $record->run_id, "branch [{$record->branch_id}]")
+            : $this->cipher->open((string) $record->input);
+        $branch['output'] = $record->output === null
+            ? null
+            : ($strict
+                ? $this->openStrictOrFail((string) $record->output, 'branch output', (string) $record->run_id, "branch [{$record->branch_id}]")
+                : $this->cipher->open((string) $record->output));
+
+        return $branch;
     }
 
     /**
@@ -2782,25 +2889,65 @@ class DatabaseDurableRunStore implements DurableRunStore
      */
     protected function mapChildRun(object $record, bool $strict = true): array
     {
+        $child = $this->mapChildRunBaseFields($record);
+
+        // context_payload is operational child-resume input (RunContext::fromPayload
+        // on re-dispatch), so the operational ($strict) path decrypts-or-throws (#212).
+        $child['context_payload'] = $this->openChildContextOrFail(
+            $this->decodeJson($record->context_payload ?? null, []),
+            $strict,
+            (string) $record->child_run_id,
+        );
+        // Child output is read ONLY by the inspector (evidence) — no operational
+        // caller consumes it (the terminal output reaches the parent via the
+        // in-flight event argument, not this DB read). So it stays policy-aware on
+        // every path; making it strict would add a failure mode with no benefit.
+        // This asymmetry with branch output is deliberate — do not "fix" it.
+        $child['output'] = $record->output !== null ? $this->cipher->open((string) $record->output) : null;
+
+        return $child;
+    }
+
+    /**
+     * Policy-aware, per-row-degrading display twin of {@see mapChildRun()}: the
+     * nested context input and the child output decrypt via the display helpers
+     * ({@see openChildContextForDisplay()} / {@see openForDisplay()}) and each
+     * gains an `*_available` flag, so one undecryptable child never aborts the
+     * batch or 500s a display surface (record 632).
+     *
+     * @return array<string, mixed>
+     */
+    protected function mapChildRunForDisplay(object $record): array
+    {
+        $child = $this->mapChildRunBaseFields($record);
+
+        [$context, $contextAvailable] = $this->openChildContextForDisplay(
+            $this->decodeJson($record->context_payload ?? null, []),
+        );
+        [$output, $outputAvailable] = $this->cipher->openForDisplay($record->output === null ? null : (string) $record->output);
+
+        $child['context_payload'] = $context;
+        $child['context_available'] = $contextAvailable;
+        $child['output'] = $output;
+        $child['output_available'] = $outputAvailable;
+
+        return $child;
+    }
+
+    /**
+     * The non-sealed child-run fields shared by {@see mapChildRun()} and
+     * {@see mapChildRunForDisplay()} — everything except `context_payload`/`output`.
+     *
+     * @return array<string, mixed>
+     */
+    private function mapChildRunBaseFields(object $record): array
+    {
         return [
             'parent_run_id' => $record->parent_run_id,
             'child_run_id' => $record->child_run_id,
             'child_swarm_class' => $record->child_swarm_class,
             'wait_name' => $record->wait_name,
-            // context_payload is operational child-resume input (RunContext::fromPayload
-            // on re-dispatch), so the operational ($strict) path decrypts-or-throws (#212).
-            'context_payload' => $this->openChildContextOrFail(
-                $this->decodeJson($record->context_payload ?? null, []),
-                $strict,
-                (string) $record->child_run_id,
-            ),
             'status' => $record->status,
-            // Child output is read ONLY by the inspector (evidence) — no operational
-            // caller consumes it (the terminal output reaches the parent via the
-            // in-flight event argument, not this DB read). So it stays policy-aware on
-            // every path; making it strict would add a failure mode with no benefit.
-            // This asymmetry with branch output (above) is deliberate — do not "fix" it.
-            'output' => $record->output !== null ? $this->cipher->open((string) $record->output) : null,
             'failure' => $this->decodeJson($record->failure ?? null, null),
             'dispatched_at' => $record->dispatched_at ?? null,
             'terminal_event_dispatched_at' => $record->terminal_event_dispatched_at ?? null,
