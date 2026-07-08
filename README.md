@@ -413,6 +413,18 @@ $result->isImmediate();  // false when a mid-step run pauses at its next checkpo
 
 The control verbs return rich result objects (`DurablePauseResult` / `DurableResumeResult` / `DurableCancelResult`, backed by the `DurableLifecycleStatus` enum) that report the **effective** transition — whether the run paused/cancelled immediately or is scheduled to at its next step boundary. The contract is **control-only** (operational reads stay on `SwarmHistory` / `RunHistoryStore`), **authorization-agnostic** (gate the call in your own app), and **fails loud** on an unknown run. The `$response->pause()` / `resume()` / `cancel()` handle methods shown above delegate to it. See [Durable Execution — operator control contract](docs/durable-execution.md#operator-control-contract).
 
+### Read-only inspection contracts (v0.19.0)
+
+The read-only counterpart to `SwarmOperator`, for companion packages and external readers (a Filament panel, an MCP server, a dashboard) that need to **display** run data. Resolve the contract instead of reaching into the `@internal` cipher or manager:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\InspectsDurableRuns;
+
+app(InspectsDurableRuns::class)->inspect($runId); // display-decrypted DurableRunDetail
+```
+
+Three seams ship: **`InspectsDurableRuns`** (durable run, branches, child runs, hierarchical node outputs), **`ReadableRunHistoryStore`** (run + step detail and the runs list), and **`ReadableAuditOutbox`** (non-mutating outbox-health reads). Every sealed field is **display-decrypted per row** — it honors `swarm.persistence.decrypt_failure_policy` and degrades an undecryptable field to `null` with an `*_available: false` flag rather than throwing or leaking ciphertext, so one bad row never 500s a page. The operational reads (`RunHistoryStore::find`, `AuditOutbox::drain`, durable resume) are untouched and still fail loud. See [Public Surface — read-only inspection contracts](docs/public-surface.md#read-only-inspection-contracts-v0190).
+
 ## Memory (v0.9.0+)
 
 Swarm Memory is a first-class, scoped, snapshot-replayable memory subsystem. It gives agents and application code a place to read and write structured values that persist across steps, survive queue boundaries, and can be replayed deterministically from a frozen snapshot on a crash-resume.
