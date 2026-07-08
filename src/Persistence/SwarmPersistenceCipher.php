@@ -162,9 +162,12 @@ class SwarmPersistenceCipher
             return [null, false];
         }
 
-        // null_with_log returns null and legacy returns the raw sw0: ciphertext on
-        // a decrypt failure; a still-sealed value was never actually decrypted.
-        if ($plain === null || str_starts_with($plain, self::PREFIX)) {
+        // A decrypt failure surfaces as null (null_with_log) or the ORIGINAL sealed
+        // value returned verbatim (legacy passes the ciphertext through). Compare
+        // against $value rather than the sw0: prefix so a value that legitimately
+        // decrypts to a `sw0:`-prefixed plaintext (#212) is NOT mistaken for
+        // ciphertext and masked.
+        if ($plain === null || $plain === $value) {
             return [null, false];
         }
 

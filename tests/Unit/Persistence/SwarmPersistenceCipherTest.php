@@ -338,3 +338,13 @@ test('openContextTopLevelInputForDisplay reports available for a row with no sea
     expect($available)->toBeTrue()
         ->and($row)->toBe(['data' => ['y' => 2]]);
 });
+
+test('openForDisplay returns a value that legitimately decrypts to a sw0: prefixed plaintext (#212)', function () {
+    $cipher = makeCipher(true, 'database');
+
+    // Real plaintext that happens to start with the sealed sentinel; sealed on
+    // write, it must decrypt back to itself and NOT be masked as ciphertext.
+    $sealed = $cipher->seal('sw0:hello');
+
+    expect($cipher->openForDisplay($sealed))->toBe(['sw0:hello', true]);
+});
