@@ -51,9 +51,11 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\InspectsDurableRuns;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
@@ -105,6 +107,7 @@ use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurablePayloadCapture;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRecoveryCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunContext;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunInspector;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableRunTerminalHandler;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableSequentialStepAdvancer;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableStepAdvancer;
@@ -202,6 +205,15 @@ class SwarmServiceProvider extends ServiceProvider
             return $driver === 'database'
                 ? $app->make(DatabaseAuditOutbox::class)
                 : $app->make(NoOpAuditOutbox::class);
+        });
+        // Public read-only outbox-health seam for companions/external readers. The
+        // bound AuditOutbox instance (database or no-op) already implements it, so
+        // resolve the same instance rather than a second copy.
+        $this->app->singleton(ReadableAuditOutbox::class, function (Application $app): ReadableAuditOutbox {
+            $outbox = $app->make(AuditOutbox::class);
+            assert($outbox instanceof ReadableAuditOutbox);
+
+            return $outbox;
         });
         $this->app->singleton(SwarmAuditDispatcher::class, function (Application $app): SwarmAuditDispatcher {
             return new SwarmAuditDispatcher(
@@ -303,6 +315,11 @@ class SwarmServiceProvider extends ServiceProvider
         // Public operator control contract (#329). A thin, stateless adapter over
         // the @internal manager; safe as a shared singleton under Octane.
         $this->app->singleton(SwarmOperator::class, DurableSwarmOperator::class);
+        // Public read-only durable-inspection contract for companions/external
+        // readers. Read-only counterpart to SwarmOperator: display-decrypted,
+        // per-row-degrading reads (record 632), never the control verbs. Backed by
+        // the database inspector (durable state is DB-only).
+        $this->app->singleton(InspectsDurableRuns::class, DurableRunInspector::class);
         $this->app->singleton(DurableRunStore::class, DatabaseDurableRunStore::class);
         $this->app->singleton(DurableOutbox::class, DatabaseDurableOutbox::class);
 

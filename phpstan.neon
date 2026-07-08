@@ -15,6 +15,7 @@ parameters:
         -
             identifier: property.notFound
             paths:
+                - src/Persistence/DatabaseAuditOutbox.php
                 - src/Persistence/DatabaseDurableOutbox.php
                 - src/Persistence/DatabaseDurableRunStore.php
                 - src/Persistence/DatabaseRunHistoryStore.php

@@ -137,6 +137,41 @@ class SwarmPersistenceCipher
     }
 
     /**
+     * Display-safe decrypt for a read-only inspection/display consumer. Where
+     * {@see open()} can THROW under `decrypt_failure_policy=throw` and surfaces
+     * raw `sw0:` ciphertext under the `legacy` policy, this NEVER throws and NEVER
+     * leaks ciphertext: an undecryptable value degrades to `null` alongside an
+     * explicit availability=false flag. A display consumer that maps many rows
+     * uses this so one poison row can neither abort the batch nor 500 the page,
+     * and never has to re-implement the 3-way policy itself (record 632). The
+     * operational resume path keeps {@see openStrict()} — this is for evidence and
+     * display reads only.
+     *
+     * @return array{0: ?string, 1: bool} [plaintext or null, decrypted-cleanly]
+     */
+    public function openForDisplay(?string $value): array
+    {
+        if ($value === null || $value === '' || ! str_starts_with($value, self::PREFIX)) {
+            return [$value, true];
+        }
+
+        try {
+            $plain = $this->open($value);
+        } catch (DecryptException) {
+            // decrypt_failure_policy=throw — degrade rather than propagate.
+            return [null, false];
+        }
+
+        // null_with_log returns null and legacy returns the raw sw0: ciphertext on
+        // a decrypt failure; a still-sealed value was never actually decrypted.
+        if ($plain === null || str_starts_with($plain, self::PREFIX)) {
+            return [null, false];
+        }
+
+        return [$plain, true];
+    }
+
+    /**
      * @param  array<string, mixed>  $row
      * @return array<string, mixed>
      */
