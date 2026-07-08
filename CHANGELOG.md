@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.19.0 - unreleased
+## v0.19.0 - 2026-07-08
 
 Public display-read seams for ecosystem companions. Adds separate, additive, read-only contracts so a companion (starting with `laravel-swarm-filament`) can DISPLAY durable-run branch/child/hierarchical-node data and audit-outbox health through supported public seams that honor `swarm.persistence.decrypt_failure_policy` — without binding to the `@internal` cipher or the strict-operational resume reads. Operational strict/consuming methods are untouched; the display and operational paths stay separate by construction.
 
