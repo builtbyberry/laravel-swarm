@@ -291,3 +291,50 @@ test('openForDisplay never throws under the throw policy and degrades instead', 
     // open() under throw would raise DecryptException; openForDisplay swallows it.
     expect($opener->openForDisplay($sealed))->toBe([null, false]);
 });
+
+test('openStepIoForDisplay decrypts a clean member and degrades a poison member under throw', function () {
+    $opener = makeCipher(true, 'database', null, 'throw');
+    $poisonOutput = makeCipher(true, 'database')->seal('the output'); // sealed under a foreign key
+
+    $step = $opener->openStepIoForDisplay([
+        'step_index' => 0,
+        'agent_class' => 'A',
+        'input' => $opener->seal('mine'), // sealed under opener's own key → decrypts
+        'output' => $poisonOutput,        // sealed under a different key → degrades
+    ]);
+
+    expect($step['input_available'])->toBeTrue()
+        ->and($step['input'])->toBe('mine')
+        ->and($step['output_available'])->toBeFalse()
+        ->and($step['output'])->toBeNull();
+});
+
+test('openStepIoForDisplay leaves an absent (Skip-omitted) member absent', function () {
+    $cipher = makeCipher(true, 'database');
+
+    $step = $cipher->openStepIoForDisplay(['step_index' => 1, 'agent_class' => 'B']);
+
+    expect($step)->not->toHaveKey('input')
+        ->and($step)->not->toHaveKey('input_available')
+        ->and($step)->not->toHaveKey('output_available');
+});
+
+test('openContextTopLevelInputForDisplay degrades a poison input without throwing', function () {
+    $sealed = makeCipher(true, 'database')->seal('context prompt');
+    $opener = makeCipher(true, 'database', null, 'throw');
+
+    [$row, $available] = $opener->openContextTopLevelInputForDisplay(['input' => $sealed, 'data' => ['x' => 1]]);
+
+    expect($available)->toBeFalse()
+        ->and($row['input'])->toBeNull()
+        ->and($row['data'])->toBe(['x' => 1]);
+});
+
+test('openContextTopLevelInputForDisplay reports available for a row with no sealed input', function () {
+    $cipher = makeCipher(true, 'database');
+
+    [$row, $available] = $cipher->openContextTopLevelInputForDisplay(['data' => ['y' => 2]]);
+
+    expect($available)->toBeTrue()
+        ->and($row)->toBe(['data' => ['y' => 2]]);
+});

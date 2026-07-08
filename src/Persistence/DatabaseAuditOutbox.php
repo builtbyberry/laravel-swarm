@@ -325,6 +325,43 @@ class DatabaseAuditOutbox implements AuditOutbox, ReadableAuditOutbox
         return $this->readRows('dead_letter', $limit);
     }
 
+    public function record(int $id): ?array
+    {
+        if (! $this->isAvailable()) {
+            return null;
+        }
+
+        /** @var object|null $record */
+        $record = $this->table()->where('id', $id)->first();
+
+        if ($record === null) {
+            return null;
+        }
+
+        // The single-row detail read is the only place the full (potentially
+        // large, most-sensitive) evidence payload is decrypted — the list reads
+        // deliberately omit it (record 632 payload-minimization).
+        [$rawPayload, $payloadAvailable] = $this->cipher->openForDisplay(
+            $record->payload === null ? null : (string) $record->payload,
+        );
+
+        $payload = null;
+
+        if ($payloadAvailable && is_string($rawPayload)) {
+            $decoded = json_decode($rawPayload, true);
+            if (is_array($decoded)) {
+                $payload = $decoded;
+            } else {
+                $payloadAvailable = false;
+            }
+        }
+
+        return $this->mapRowSummary($record) + [
+            'payload' => $payload,
+            'payload_available' => $payloadAvailable,
+        ];
+    }
+
     public function healthSummary(): array
     {
         if (! $this->isAvailable()) {
@@ -379,33 +416,21 @@ class DatabaseAuditOutbox implements AuditOutbox, ReadableAuditOutbox
             ->orderByDesc('id')
             ->limit(max(1, $limit))
             ->get()
-            ->map(fn (object $record): array => $this->mapRow($record))
+            ->map(fn (object $record): array => $this->mapRowSummary($record))
             ->all();
     }
 
     /**
+     * Row metadata + display-decrypted `last_error` — NO payload. The full
+     * evidence payload is decrypted only on demand via {@see record()}.
+     *
      * @return array<string, mixed>
      */
-    protected function mapRow(object $record): array
+    protected function mapRowSummary(object $record): array
     {
         [$lastError, $lastErrorAvailable] = $this->cipher->openForDisplay(
             $record->last_error === null ? null : (string) $record->last_error,
         );
-
-        [$rawPayload, $payloadAvailable] = $this->cipher->openForDisplay(
-            $record->payload === null ? null : (string) $record->payload,
-        );
-
-        $payload = null;
-
-        if ($payloadAvailable && is_string($rawPayload)) {
-            $decoded = json_decode($rawPayload, true);
-            if (is_array($decoded)) {
-                $payload = $decoded;
-            } else {
-                $payloadAvailable = false;
-            }
-        }
 
         return [
             'id' => (int) $record->id,
@@ -415,8 +440,6 @@ class DatabaseAuditOutbox implements AuditOutbox, ReadableAuditOutbox
             'attempts' => (int) $record->attempts,
             'last_error' => $lastError,
             'last_error_available' => $lastErrorAvailable,
-            'payload' => $payload,
-            'payload_available' => $payloadAvailable,
             'reserved_at' => $record->reserved_at ?? null,
             'last_attempted_at' => $record->last_attempted_at ?? null,
             'created_at' => $record->created_at,

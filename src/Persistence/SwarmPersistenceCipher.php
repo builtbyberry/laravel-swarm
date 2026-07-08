@@ -202,6 +202,52 @@ class SwarmPersistenceCipher
     }
 
     /**
+     * Display-safe twin of {@see openContextTopLevelInput()}: opens the sealed
+     * top-level `input` key via {@see openForDisplay()} so an undecryptable input
+     * degrades to null (never throws, never leaks ciphertext) and reports its
+     * availability. A row with no sealed input is available by definition.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array{0: array<string, mixed>, 1: bool} [row, input-decrypted-cleanly]
+     */
+    public function openContextTopLevelInputForDisplay(array $row): array
+    {
+        $rawInput = $row['input'] ?? null;
+
+        if (! is_string($rawInput)) {
+            return [$row, true];
+        }
+
+        [$plain, $available] = $this->openForDisplay($rawInput);
+        $row['input'] = $plain;
+
+        return [$row, $available];
+    }
+
+    /**
+     * Display-safe twin of {@see openStepIo()}: opens the sealed `input`/`output`
+     * step members via {@see openForDisplay()} and stamps an `input_available` /
+     * `output_available` flag alongside each present member, so one undecryptable
+     * step never throws or leaks ciphertext into a run-history display (record 632).
+     * Absent members (a CaptureDecision::Skip omission) get neither value nor flag.
+     *
+     * @param  array<string, mixed>  $step
+     * @return array<string, mixed>
+     */
+    public function openStepIoForDisplay(array $step): array
+    {
+        foreach (['input' => 'input_available', 'output' => 'output_available'] as $key => $flag) {
+            if (isset($step[$key]) && is_string($step[$key])) {
+                [$plain, $available] = $this->openForDisplay($step[$key]);
+                $step[$key] = $plain;
+                $step[$flag] = $available;
+            }
+        }
+
+        return $step;
+    }
+
+    /**
      * Strict twin of {@see openContextTopLevelInput()} for operational
      * child-resume input: the row's `input` is decrypted via {@see openStrict()}
      * (decrypt-or-throw, policy-independent) rather than the display-policy-aware

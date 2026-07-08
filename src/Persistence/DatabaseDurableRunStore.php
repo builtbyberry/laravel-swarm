@@ -2690,31 +2690,6 @@ class DatabaseDurableRunStore implements DurableRunStore
     }
 
     /**
-     * Display-safe decrypt of a child run's nested context payload. The only
-     * sealed member is the top-level `input` key ({@see SwarmPersistenceCipher::sealContextTopLevelInput()});
-     * it is opened through {@see SwarmPersistenceCipher::openForDisplay()} so an
-     * undecryptable input degrades to null + availability=false regardless of
-     * policy — never throwing, never leaking ciphertext. A payload with no sealed
-     * input is available by definition.
-     *
-     * @param  array<string, mixed>  $payload
-     * @return array{0: array<string, mixed>, 1: bool}
-     */
-    private function openChildContextForDisplay(array $payload): array
-    {
-        $rawInput = $payload['input'] ?? null;
-
-        if (! is_string($rawInput)) {
-            return [$payload, true];
-        }
-
-        [$plain, $available] = $this->cipher->openForDisplay($rawInput);
-        $payload['input'] = $plain;
-
-        return [$payload, $available];
-    }
-
-    /**
      * Policy-aware, per-row-degrading display twin of {@see mapBranch()}. Carries
      * the same non-sealed fields, but `input`/`output` decrypt via
      * {@see SwarmPersistenceCipher::openForDisplay()} and each gains an
@@ -2917,7 +2892,7 @@ class DatabaseDurableRunStore implements DurableRunStore
     {
         $child = $this->mapChildRunBaseFields($record);
 
-        [$context, $contextAvailable] = $this->openChildContextForDisplay(
+        [$context, $contextAvailable] = $this->cipher->openContextTopLevelInputForDisplay(
             $this->decodeJson($record->context_payload ?? null, []),
         );
         [$output, $outputAvailable] = $this->cipher->openForDisplay($record->output === null ? null : (string) $record->output);

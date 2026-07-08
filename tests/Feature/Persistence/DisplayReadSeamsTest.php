@@ -6,6 +6,8 @@ use BuiltByBerry\LaravelSwarm\Audit\NoOpAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\InspectsDurableRuns;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
@@ -127,7 +129,7 @@ test('no-op outbox health reports an empty, unavailable outbox', function () {
         ]);
 });
 
-test('outbox health reads display-decrypt rows and never consume them', function () {
+test('outbox list reads return metadata only (no payload) and never consume rows', function () {
     displaySeamsUseDatabase();
 
     /** @var DatabaseAuditOutbox $outbox */
@@ -140,14 +142,13 @@ test('outbox health reads display-decrypt rows and never consume them', function
     $pending = $outbox->pending();
     $deadLettered = $outbox->deadLettered();
 
-    // Newest first; payload display-decrypted back into an array.
+    // Newest first; metadata + last_error only — the full payload is NOT in the list.
     expect($pending)->toHaveCount(2)
         ->and($pending[0]['category'])->toBe('step.completed')
         ->and($pending[0]['run_id'])->toBe('run-2')
         ->and($pending[0]['status'])->toBe('pending')
         ->and($pending[0]['attempts'])->toBe(0)
-        ->and($pending[0]['payload_available'])->toBeTrue()
-        ->and($pending[0]['payload']['detail'])->toBe('second')
+        ->and($pending[0])->not->toHaveKey('payload')
         ->and($deadLettered)->toHaveCount(1)
         ->and($deadLettered[0]['category'])->toBe('run.failed');
 
@@ -164,26 +165,39 @@ test('outbox health reads display-decrypt rows and never consume them', function
         ->and(DB::table('swarm_audit_outbox')->whereNotNull('reserved_at')->count())->toBe(0);
 });
 
-test('outbox health degrades a poison row instead of throwing under the throw policy', function () {
+test('outbox record() detail read display-decrypts the full payload on demand', function () {
+    displaySeamsUseDatabase();
+
+    /** @var DatabaseAuditOutbox $outbox */
+    $outbox = app(ReadableAuditOutbox::class);
+
+    $outbox->enqueue('run.started', ['run_id' => 'run-9', 'detail' => 'the secret detail']);
+    $id = (int) DB::table('swarm_audit_outbox')->where('run_id', 'run-9')->value('id');
+
+    $record = $outbox->record($id);
+
+    expect($record)->not->toBeNull()
+        ->and($record['run_id'])->toBe('run-9')
+        ->and($record['payload_available'])->toBeTrue()
+        ->and($record['payload']['detail'])->toBe('the secret detail')
+        ->and($outbox->record(999999))->toBeNull();
+});
+
+test('outbox record() degrades a poison payload instead of throwing under the throw policy', function () {
     displaySeamsUseDatabase();
     config()->set('swarm.persistence.decrypt_failure_policy', 'throw');
 
     /** @var DatabaseAuditOutbox $outbox */
     $outbox = app(ReadableAuditOutbox::class);
 
-    $outbox->enqueue('run.started', ['run_id' => 'good', 'detail' => 'readable']);
     $outbox->enqueue('run.started', ['run_id' => 'bad', 'detail' => 'unreadable']);
+    $id = (int) DB::table('swarm_audit_outbox')->where('run_id', 'bad')->value('id');
+    DB::table('swarm_audit_outbox')->where('id', $id)->update(['payload' => displaySeamsPoison()]);
 
-    // Corrupt the newest row's sealed payload to a foreign-key blob.
-    $poisonId = DB::table('swarm_audit_outbox')->where('run_id', 'bad')->value('id');
-    DB::table('swarm_audit_outbox')->where('id', $poisonId)->update(['payload' => displaySeamsPoison()]);
+    $record = $outbox->record($id);
 
-    $pending = collect($outbox->pending())->keyBy('run_id');
-
-    expect($pending['good']['payload_available'])->toBeTrue()
-        ->and($pending['good']['payload']['detail'])->toBe('readable')
-        ->and($pending['bad']['payload_available'])->toBeFalse()
-        ->and($pending['bad']['payload'])->toBeNull();
+    expect($record['payload_available'])->toBeFalse()
+        ->and($record['payload'])->toBeNull();
 });
 
 test('hierarchical node output display read degrades a poison node without aborting the batch', function () {
@@ -216,4 +230,83 @@ test('hierarchical node output display read degrades a poison node without abort
         ->and($outputs['node-a']['output_available'])->toBeTrue()
         ->and($outputs['node-b']['output'])->toBeNull()
         ->and($outputs['node-b']['output_available'])->toBeFalse();
+});
+
+test('ReadableRunHistoryStore resolves the same instance as RunHistoryStore', function () {
+    displaySeamsUseDatabase();
+
+    expect(app(ReadableRunHistoryStore::class))->toBe(app(RunHistoryStore::class));
+});
+
+test('run history findForDisplay degrades poison context, output, and steps without throwing', function () {
+    displaySeamsUseDatabase();
+    config()->set('swarm.persistence.decrypt_failure_policy', 'throw');
+    app()->forgetInstance(SwarmPersistenceCipher::class);
+
+    $cipher = app(SwarmPersistenceCipher::class);
+    $runId = 'hist-display-1';
+    $now = now('UTC');
+
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => $runId,
+        'swarm_class' => 'ExampleSwarm',
+        'topology' => 'sequential',
+        'status' => 'completed',
+        'context' => json_encode(['input' => displaySeamsPoison('ctx')]),
+        'metadata' => json_encode([]),
+        // Legacy JSON step: clean input, poison output.
+        'steps' => json_encode([[
+            'step_index' => 0,
+            'agent_class' => 'Writer',
+            'input' => $cipher->seal('legacy step input'),
+            'output' => displaySeamsPoison('legacy step output'),
+        ]]),
+        'output' => displaySeamsPoison('run output'),
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'finished_at' => $now,
+        'expires_at' => $now->copy()->addHour(),
+        'execution_token' => null,
+        'leased_until' => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    // Normalized step row: poison input, clean output.
+    DB::table('swarm_run_steps')->insert([
+        'run_id' => $runId,
+        'step_index' => 1,
+        'agent_class' => 'Reviewer',
+        'input' => displaySeamsPoison('normalized input'),
+        'output' => $cipher->seal('normalized output'),
+        'artifacts' => json_encode([]),
+        'metadata' => json_encode([]),
+        'expires_at' => $now->copy()->addHour(),
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    $detail = app(ReadableRunHistoryStore::class)->findForDisplay($runId);
+
+    // Run-level: poison context input + output degrade, never throw or leak.
+    expect($detail)->not->toBeNull()
+        ->and($detail['context']['input'])->toBeNull()
+        ->and($detail['context_available'])->toBeFalse()
+        ->and($detail['output'])->toBeNull()
+        ->and($detail['output_available'])->toBeFalse();
+
+    $steps = collect($detail['steps'])->keyBy('agent_class');
+
+    // Legacy step (openStepIoForDisplay): clean input, poison output.
+    expect($steps['Writer']['input'])->toBe('legacy step input')
+        ->and($steps['Writer']['input_available'])->toBeTrue()
+        ->and($steps['Writer']['output'])->toBeNull()
+        ->and($steps['Writer']['output_available'])->toBeFalse();
+
+    // Normalized step (swarm_run_steps): poison input, clean output.
+    expect($steps['Reviewer']['input'])->toBeNull()
+        ->and($steps['Reviewer']['input_available'])->toBeFalse()
+        ->and($steps['Reviewer']['output'])->toBe('normalized output')
+        ->and($steps['Reviewer']['output_available'])->toBeTrue();
 });

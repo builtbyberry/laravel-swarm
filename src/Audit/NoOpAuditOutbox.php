@@ -45,6 +45,11 @@ class NoOpAuditOutbox implements AuditOutbox, ReadableAuditOutbox
         return [];
     }
 
+    public function record(int $id): ?array
+    {
+        return null;
+    }
+
     public function healthSummary(): array
     {
         return [

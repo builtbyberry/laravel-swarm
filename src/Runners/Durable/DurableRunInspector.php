@@ -53,7 +53,7 @@ class DurableRunInspector implements InspectsDurableRuns
         return new DurableRunDetail(
             runId: $runId,
             run: $run,
-            history: $this->historyStore->find($runId),
+            history: $this->historyStore->findForDisplay($runId),
             labels: $this->durableRuns->labels($runId),
             details: $this->durableRuns->details($runId),
             waits: $this->durableRuns->waits($runId),
