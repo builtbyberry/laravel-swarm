@@ -24,6 +24,15 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
  * explicit availability flag rather than throwing or leaking `sw0:` ciphertext.
  * One poison row never aborts the batch and never 500s a health surface.
  *
+ * ## Payload minimization
+ *
+ * The list reads ({@see pending()} / {@see deadLettered()}) return row metadata
+ * plus the short `last_error` only — NOT the full evidence envelope, which can be
+ * large and carries the most sensitive data. A consumer fetches the decrypted
+ * payload for a single row on demand via {@see record()}, mirroring how
+ * `swarm:trace` gates full payloads behind `--include-payloads`. This keeps a
+ * list surface from over-fetching decrypted audit evidence.
+ *
  * Consumers MUST bind this contract, never the `@internal` concrete outbox or
  * the `@internal` `SwarmPersistenceCipher`. The default binding resolves the
  * database-backed outbox when the persistence driver supports it, and a no-op
@@ -45,7 +54,8 @@ interface ReadableAuditOutbox
     public function isAvailable(): bool;
 
     /**
-     * Rows still pending re-delivery, newest first, display-decrypted per row.
+     * Rows still pending re-delivery, newest first. Metadata + display-decrypted
+     * `last_error` only — call {@see record()} for a row's full payload.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -53,11 +63,22 @@ interface ReadableAuditOutbox
 
     /**
      * Rows that exhausted `swarm.audit.outbox.max_attempts` and moved to the
-     * dead-letter status, newest first, display-decrypted per row.
+     * dead-letter status, newest first. Metadata + display-decrypted `last_error`
+     * only — call {@see record()} for a row's full payload.
      *
      * @return array<int, array<string, mixed>>
      */
     public function deadLettered(int $limit = 100): array;
+
+    /**
+     * A single outbox row by id, including its full display-decrypted evidence
+     * `payload` (with a `payload_available` flag), or null when unknown. This is
+     * the on-demand detail read the list methods deliberately omit the payload
+     * from.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function record(int $id): ?array;
 
     /**
      * A non-mutating health summary: row counts by status, the number of rows

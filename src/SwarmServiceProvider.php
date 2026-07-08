@@ -56,6 +56,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
@@ -341,6 +342,15 @@ class SwarmServiceProvider extends ServiceProvider
             CacheRunHistoryStore::class,
             DatabaseRunHistoryStore::class,
         ));
+        // Public read-only run-history display seam for companions/external
+        // readers. The bound RunHistoryStore instance (cache or database) already
+        // implements it, so resolve the same instance rather than a second copy.
+        $this->app->singleton(ReadableRunHistoryStore::class, function (Application $app): ReadableRunHistoryStore {
+            $store = $app->make(RunHistoryStore::class);
+            assert($store instanceof ReadableRunHistoryStore);
+
+            return $store;
+        });
         // The database stream-event store IS the causal log (#282). Register it as
         // one shared singleton so the StreamEventStore DB branch and the
         // CausalLogStore contract resolve the same instance — never two.
