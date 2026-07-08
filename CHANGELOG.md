@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.19.0 - unreleased
+
+Public display-read seams for ecosystem companions. Adds separate, additive, read-only contracts so a companion (starting with `laravel-swarm-filament`) can DISPLAY durable-run branch/child/hierarchical-node data and audit-outbox health through supported public seams that honor `swarm.persistence.decrypt_failure_policy` — without binding to the `@internal` cipher or the strict-operational resume reads. Operational strict/consuming methods are untouched; the display and operational paths stay separate by construction.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.18.0 - 2026-07-07
 
 Ecosystem epic #254 Phase 1 — blueprint templates. Adds a name-parameterized `make:swarm:blueprint` generator over a unified, tokenized blueprint catalog, so a developer can scaffold a complete, runnable, use-case-shaped swarm (swarm + agents + console command + README) as their own — renamed and namespaced — rather than only reading the fixed-name reference copies that `swarm:install:examples` lands. One tokenized corpus now serves both: `install:examples` lands it verbatim, `make:swarm:blueprint` lands it renamed.
