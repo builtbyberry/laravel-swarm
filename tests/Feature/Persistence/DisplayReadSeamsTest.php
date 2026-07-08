@@ -23,7 +23,7 @@ use Psr\Log\NullLogger;
  */
 
 /** A sealed sw0: value encrypted under a foreign key — undecryptable here. */
-function poisonCiphertext(string $plaintext = 'unreadable'): string
+function displaySeamsPoison(string $plaintext = 'unreadable'): string
 {
     $foreign = new SwarmPersistenceCipher(
         new Repository(['swarm.persistence.encrypt_at_rest' => true, 'swarm.persistence.driver' => 'database']),
@@ -34,7 +34,7 @@ function poisonCiphertext(string $plaintext = 'unreadable'): string
     return (string) $foreign->seal($plaintext);
 }
 
-function seedDurableRun(string $runId): void
+function displaySeamsSeedRun(string $runId): void
 {
     $now = now('UTC');
 
@@ -81,7 +81,7 @@ function seedDurableRun(string $runId): void
     ]);
 }
 
-function useDatabasePersistence(): void
+function displaySeamsUseDatabase(): void
 {
     config()->set('swarm.persistence.driver', 'database');
     config()->set('swarm.persistence.encrypt_at_rest', true);
@@ -97,7 +97,7 @@ test('ReadableAuditOutbox binds the database outbox in database mode and the no-
 
     expect(app(ReadableAuditOutbox::class))->toBeInstanceOf(NoOpAuditOutbox::class);
 
-    useDatabasePersistence();
+    displaySeamsUseDatabase();
 
     expect(app(ReadableAuditOutbox::class))->toBeInstanceOf(DatabaseAuditOutbox::class)
         // Same instance as the AuditOutbox binding, not a second copy.
@@ -128,7 +128,7 @@ test('no-op outbox health reports an empty, unavailable outbox', function () {
 });
 
 test('outbox health reads display-decrypt rows and never consume them', function () {
-    useDatabasePersistence();
+    displaySeamsUseDatabase();
 
     /** @var DatabaseAuditOutbox $outbox */
     $outbox = app(ReadableAuditOutbox::class);
@@ -165,7 +165,7 @@ test('outbox health reads display-decrypt rows and never consume them', function
 });
 
 test('outbox health degrades a poison row instead of throwing under the throw policy', function () {
-    useDatabasePersistence();
+    displaySeamsUseDatabase();
     config()->set('swarm.persistence.decrypt_failure_policy', 'throw');
 
     /** @var DatabaseAuditOutbox $outbox */
@@ -176,7 +176,7 @@ test('outbox health degrades a poison row instead of throwing under the throw po
 
     // Corrupt the newest row's sealed payload to a foreign-key blob.
     $poisonId = DB::table('swarm_audit_outbox')->where('run_id', 'bad')->value('id');
-    DB::table('swarm_audit_outbox')->where('id', $poisonId)->update(['payload' => poisonCiphertext()]);
+    DB::table('swarm_audit_outbox')->where('id', $poisonId)->update(['payload' => displaySeamsPoison()]);
 
     $pending = collect($outbox->pending())->keyBy('run_id');
 
@@ -187,13 +187,13 @@ test('outbox health degrades a poison row instead of throwing under the throw po
 });
 
 test('hierarchical node output display read degrades a poison node without aborting the batch', function () {
-    useDatabasePersistence();
+    displaySeamsUseDatabase();
     config()->set('swarm.persistence.decrypt_failure_policy', 'throw');
 
     /** @var DatabaseDurableRunStore $store */
     $store = app(DatabaseDurableRunStore::class);
     $runId = 'hier-display-1';
-    seedDurableRun($runId);
+    displaySeamsSeedRun($runId);
 
     // A cleanly sealed node output under the app key.
     $store->storeHierarchicalNodeOutput($runId, 'node-a', 'output A', 3600);
@@ -203,7 +203,7 @@ test('hierarchical node output display read degrades a poison node without abort
     DB::table('swarm_durable_node_outputs')->insert([
         'run_id' => $runId,
         'node_id' => 'node-b',
-        'output' => poisonCiphertext('output B'),
+        'output' => displaySeamsPoison('output B'),
         'expires_at' => $now->copy()->addHour(),
         'created_at' => $now,
         'updated_at' => $now,

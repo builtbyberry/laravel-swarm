@@ -2690,32 +2690,28 @@ class DatabaseDurableRunStore implements DurableRunStore
     }
 
     /**
-     * Display-safe decrypt of a child run's nested context payload: opens the
-     * top-level input key through the policy-aware path, then masks it to null
-     * with availability=false if it threw or came back still-sealed. Never throws.
+     * Display-safe decrypt of a child run's nested context payload. The only
+     * sealed member is the top-level `input` key ({@see SwarmPersistenceCipher::sealContextTopLevelInput()});
+     * it is opened through {@see SwarmPersistenceCipher::openForDisplay()} so an
+     * undecryptable input degrades to null + availability=false regardless of
+     * policy — never throwing, never leaking ciphertext. A payload with no sealed
+     * input is available by definition.
      *
      * @param  array<string, mixed>  $payload
      * @return array{0: array<string, mixed>, 1: bool}
      */
     private function openChildContextForDisplay(array $payload): array
     {
-        try {
-            $opened = $this->cipher->openContextTopLevelInput($payload);
-        } catch (DecryptException) {
-            $payload['input'] = null;
+        $rawInput = $payload['input'] ?? null;
 
-            return [$payload, false];
+        if (! is_string($rawInput)) {
+            return [$payload, true];
         }
 
-        $input = $opened['input'] ?? null;
+        [$plain, $available] = $this->cipher->openForDisplay($rawInput);
+        $payload['input'] = $plain;
 
-        if (is_string($input) && str_starts_with($input, SwarmPersistenceCipher::PREFIX)) {
-            $opened['input'] = null;
-
-            return [$opened, false];
-        }
-
-        return [$opened, true];
+        return [$payload, $available];
     }
 
     /**
