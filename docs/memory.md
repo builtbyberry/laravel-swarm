@@ -870,7 +870,7 @@ The agent re-executes against live memory with no snapshot guard. Use only when 
 ],
 ```
 
-```ini
+```env
 # .env
 SWARM_MEMORY_REPLAY_MODE=frozen_view
 ```

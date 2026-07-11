@@ -84,6 +84,7 @@ The recommended reading path for new users.
 - [Operator Runbook: Streaming Substrate](operator-runbook-streaming-substrate.md) — hot/cold tiering, the compaction worker (`swarm:compact`), retention horizon, recovery and quarantine (v0.15.0+)
 - [Metadata Allowlist Governance](metadata-allowlist-governance.md) — what belongs in metadata, named anti-patterns, and the allowlist review pattern
 - [Pulse](pulse.md) — Laravel Pulse cards for run counts and step latencies
+- [`laravel-swarm-mcp`](https://github.com/builtbyberry/laravel-swarm-mcp) — a read-only MCP server that exposes run history, durable-run state, and audit-outbox health to an AI client (see [Companion Packages](#companion-packages))
 
 ---
 
@@ -93,6 +94,23 @@ The recommended reading path for new users.
 - [Public Surface](public-surface.md)
 - [Maintenance](maintenance.md)
 - [APP_KEY Rotation](app-key-rotation.md) — runbook for rotating the application key alongside sealed swarm rows
+
+---
+
+## Companion Packages
+
+Additive, MIT packages that read and extend the core through its public
+contracts — install only what you need. The full ecosystem map lives on
+[swarm.builtbyberry.com](https://swarm.builtbyberry.com).
+
+- [`laravel-swarm-filament`](https://github.com/builtbyberry/laravel-swarm-filament) — a read-only Filament panel: every run as a topology-aware flow graph with click-through to per-step detail.
+- [`laravel-swarm-mcp`](https://github.com/builtbyberry/laravel-swarm-mcp) — a read-only [Model Context Protocol](https://modelcontextprotocol.io) server: run history, durable-run state, and audit-outbox health as MCP resources for any MCP client.
+- [`laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) — [Laravel Pulse](https://laravel.com/docs/pulse) recorders and cards (see [Pulse](pulse.md)).
+- [`laravel-swarm-memory-vector`](https://github.com/builtbyberry/laravel-swarm-memory-vector) — vector-backed semantic memory recall (see [Swarm Memory](memory.md)).
+
+The Filament panel and the MCP server are two read-only renderings of the same
+public [read-only inspection contracts](public-surface.md#read-only-inspection-contracts-v0190) —
+a panel for your team, an MCP surface for an AI client.
 
 ---
 

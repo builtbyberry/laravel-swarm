@@ -91,8 +91,9 @@ the consuming application's responsibility. Verbs fail loud (throw
 ## Read-Only Inspection Contracts (v0.19.0+)
 
 The public, container-bound read-only seams companion packages and external
-readers (a Filament panel, an MCP server, a custom dashboard) use to DISPLAY
-durable and audit data. They are the read-only counterparts to `SwarmOperator`:
+readers (the [`laravel-swarm-filament`](https://github.com/builtbyberry/laravel-swarm-filament)
+panel, the [`laravel-swarm-mcp`](https://github.com/builtbyberry/laravel-swarm-mcp)
+server, a custom dashboard) use to DISPLAY durable and audit data. They are the read-only counterparts to `SwarmOperator`:
 resolve them with `app(...)`, never bind the `@internal` engine types or the
 `@internal` `SwarmPersistenceCipher`.
 

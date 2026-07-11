@@ -30,7 +30,7 @@ Define a swarm once, return the Laravel AI agents that participate in it, and ru
 - **Getting started** — [Quick Start](#quick-start) · [Requirements](#requirements) · [Installation](#installation) · [Your First Swarm](#your-first-swarm) · [Running A Swarm](#running-a-swarm)
 - **Execution modes** — [Choosing An Execution Mode](#choosing-an-execution-mode) · [Queueing](#queueing-a-swarm) · [Streaming](#streaming-a-swarm) · [Durable Execution](#durable-execution)
 - **Capabilities** — [Memory](#memory-v090) · [Topologies](#topologies)
-- **Production & reference** — [Testing](#testing) · [Configuration](#configuration) · [Production Checklist](#production-checklist) · [Documentation](#documentation) · [Companion packages](#companion-packages) · [Local Development](#local-development)
+- **Production & reference** — [Testing](#testing) · [Configuration](#configuration) · [Production Checklist](#production-checklist) · [Documentation](#documentation) · [Companion Packages](#companion-packages) · [Local Development](#local-development)
 
 ## Quick Start
 
@@ -669,7 +669,7 @@ The same content is mirrored in this repository; start with the [in-repo documen
 - [Public Surface Coverage](docs/public-surface.md)
 - [Examples](examples/README.md)
 
-## Companion packages
+## Companion Packages
 
 Laravel Swarm is a small core with a growing family of companion packages —
 additive, MIT, and installed only when you need them. Each reads and extends the

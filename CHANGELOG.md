@@ -2,20 +2,29 @@
 
 ## v0.19.1 - 2026-07-11
 
-Documentation. Surfaces the shipped companion ecosystem from the core README so
-the two newest companions — the Filament observability panel and the MCP
-observability server — are discoverable alongside Pulse and the vector-memory
-companion, not only on the documentation site. No code changes; no API impact.
+Documentation cohesiveness pass. Surfaces the shipped companion ecosystem — the
+Filament observability panel and the MCP observability server, alongside Pulse
+and the vector-memory companion — from the core docs, and reconciles the
+mirrored `docs/` index and read-seam contract docs that had drifted behind the
+now-shipped companions. No code changes; no API impact.
 
 ### Changed
 
-- **README: new `Companion packages` section.** Consolidates and links the
-  shipped companions — [`laravel-swarm-filament`](https://github.com/builtbyberry/laravel-swarm-filament),
+- **README + docs index: new `Companion Packages` section.** Consolidates and
+  links the shipped companions — [`laravel-swarm-filament`](https://github.com/builtbyberry/laravel-swarm-filament),
   [`laravel-swarm-mcp`](https://github.com/builtbyberry/laravel-swarm-mcp),
   [`laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse),
   and [`laravel-swarm-memory-vector`](https://github.com/builtbyberry/laravel-swarm-memory-vector) —
-  and points to the ecosystem map on swarm.builtbyberry.com. Added to the README
-  table of contents.
+  in both `README.md` and the offline `docs/README.md` index (with a ToC entry),
+  so the two are in lockstep.
+- **Read-seam contract docs now link their shipped consumers.** `docs/public-surface.md`
+  and `docs/durable-execution.md` described the read-only inspection seams'
+  consumers as hypothetical ("a Filament panel, an MCP server"); they now link
+  `laravel-swarm-filament` and `laravel-swarm-mcp` as the reference read-only
+  consumers of those seams.
+- **Observability index** points to `laravel-swarm-mcp` as an AI-client
+  observation surface.
+- Standardized `.env` code-fence language tags to ` ```env ` across the docs.
 
 ## v0.19.0 - 2026-07-08
 

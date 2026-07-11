@@ -686,8 +686,9 @@ and `signal()`.
 
 Where `SwarmOperator` is the **control** contract, `InspectsDurableRuns` is its
 **read** counterpart — the supported, container-bound seam for companion
-packages and external readers (a Filament panel, an MCP server, a custom
-dashboard) that need to **display** a durable run's state. Resolve it instead of
+packages and external readers (such as the [`laravel-swarm-filament`](https://github.com/builtbyberry/laravel-swarm-filament)
+panel and the [`laravel-swarm-mcp`](https://github.com/builtbyberry/laravel-swarm-mcp)
+server) that need to **display** a durable run's state. Resolve it instead of
 reaching into the `@internal` `DurableSwarmManager` / `DurableRunInspector` or the
 `@internal` `SwarmPersistenceCipher`:
 
