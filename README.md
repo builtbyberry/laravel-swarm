@@ -27,8 +27,8 @@ Define a swarm once, return the Laravel AI agents that participate in it, and ru
 
 ## Contents
 
-- **Getting started** — [Quick Start](#quick-start) · [Requirements](#requirements) · [Installation](#installation) · [Your First Swarm](#your-first-swarm) · [Running A Swarm](#running-a-swarm)
-- **Execution modes** — [Choosing An Execution Mode](#choosing-an-execution-mode) · [Queueing](#queueing-a-swarm) · [Streaming](#streaming-a-swarm) · [Durable Execution](#durable-execution)
+- **Getting started** — [Quick Start](#quick-start) · [Requirements](#requirements) · [Installation](#installation) · [Your First Swarm](#your-first-swarm) · [Running a Swarm](#running-a-swarm)
+- **Execution modes** — [Choosing an Execution Mode](#choosing-an-execution-mode) · [Queueing](#queueing-a-swarm) · [Streaming](#streaming-a-swarm) · [Durable Execution](#durable-execution)
 - **Capabilities** — [Memory](#memory-v090) · [Topologies](#topologies)
 - **Production & reference** — [Testing](#testing) · [Configuration](#configuration) · [Production Checklist](#production-checklist) · [Documentation](#documentation) · [Companion Packages](#companion-packages) · [Local Development](#local-development)
 
@@ -48,7 +48,7 @@ $response = ContentPipeline::make()->prompt('Draft a launch post about Laravel q
 echo $response->output;
 ```
 
-For background execution, streaming, and durable workflows, see [Choosing An Execution Mode](#choosing-an-execution-mode).
+For background execution, streaming, and durable workflows, see [Choosing an Execution Mode](#choosing-an-execution-mode).
 
 ## Requirements
 
@@ -166,7 +166,7 @@ class ContentPipeline implements Swarm
 
 In a sequential swarm, the first agent receives the original task. Each later agent receives the previous agent's output.
 
-## Running A Swarm
+## Running a Swarm
 
 Use `prompt()` when the caller can wait for the full workflow result:
 
@@ -202,7 +202,7 @@ return response()->json($response);
 
 `toArray()` intentionally omits the live `RunContext` so an API response does not accidentally re-emit prompt or input data. Read `$response->context` directly when your application needs the in-process context.
 
-## Choosing An Execution Mode
+## Choosing an Execution Mode
 
 | Method | Returns | Use when |
 | --- | --- | --- |
@@ -220,7 +220,7 @@ return response()->json($response);
 
 `stream()` and the broadcast helpers support sequential swarms only. Use lifecycle events and application-owned broadcasts for queued, durable, parallel, or hierarchical operations feeds.
 
-## Queueing A Swarm
+## Queueing a Swarm
 
 Use `queue()` when the workflow should run in the background:
 
@@ -258,7 +258,7 @@ SWARM_CAPTURE_ACTIVE_CONTEXT=true
 
 You may still leave input, output, and artifact capture disabled for redacted history.
 
-## Streaming A Swarm
+## Streaming a Swarm
 
 Use `stream()` when a browser, CLI, or custom consumer needs live typed events from a sequential swarm:
 
@@ -648,26 +648,16 @@ See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full refe
 
 The full documentation site is at **[swarm.builtbyberry.com](https://swarm.builtbyberry.com)** — searchable, versioned, and the recommended starting point.
 
-The same content is mirrored in this repository; start with the [in-repo documentation index](docs/README.md) when working offline.
+The same content is mirrored in this repository; the [in-repo documentation index](docs/README.md) is the complete, categorized map when working offline. A few common entry points:
 
-- [Structured Input](docs/structured-input.md)
-- [Streaming](docs/streaming.md)
-- [Hierarchical Routing](docs/hierarchical-routing.md)
-- [Persistence And History](docs/persistence-and-history.md)
-- [Durable Execution](docs/durable-execution.md)
-- [Durable Runtime Architecture](docs/durable-runtime-architecture.md)
-- [Durable Waits And Signals](docs/durable-waits-and-signals.md)
-- [Durable Retries And Progress](docs/durable-retries-and-progress.md)
-- [Durable Child Swarms](docs/durable-child-swarms.md)
-- [Durable Webhooks](docs/durable-webhooks.md)
-- [Observability: Logging And Tracing](docs/observability-logging-tracing.md)
-- [Observability Correlation Contract](docs/observability-correlation-contract.md)
-- [Audit Evidence Contract](docs/audit-evidence-contract.md)
-- [Testing](docs/testing.md)
-- [Pulse](docs/pulse.md)
-- [Maintenance](docs/maintenance.md)
-- [Public Surface Coverage](docs/public-surface.md)
-- [Examples](examples/README.md)
+- [Choosing an Execution Mode](docs/execution-modes.md) — prompt, queue, stream, or durable
+- [Durable Execution](docs/durable-execution.md) — checkpointing, recovery, and operator controls
+- [Swarm Memory](docs/memory.md) — scoped, snapshot-replayable memory
+- [Configuration](docs/configuration.md) — every config key
+- [Public Surface](docs/public-surface.md) — the supported API, events, and read seams
+- [Audit Evidence Contract](docs/audit-evidence-contract.md) — compliance and auditability
+
+For the full set — topologies, guardrails, the durable subsystems, observability, operator runbooks, and examples — see the [documentation index](docs/README.md).
 
 ## Companion Packages
 

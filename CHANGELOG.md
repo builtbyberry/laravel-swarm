@@ -25,6 +25,9 @@ now-shipped companions. No code changes; no API impact.
 - **Observability index** points to `laravel-swarm-mcp` as an AI-client
   observation surface.
 - Standardized `.env` code-fence language tags to ` ```env ` across the docs.
+- README polish: consistent heading casing, and a trimmed `Documentation`
+  section that points to the comprehensive docs index rather than maintaining a
+  third partial link list (anchors unchanged).
 
 ## v0.19.0 - 2026-07-08
 
