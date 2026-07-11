@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.19.1 - 2026-07-11
+
+Documentation cohesiveness pass. Surfaces the shipped companion ecosystem — the
+Filament observability panel and the MCP observability server, alongside Pulse
+and the vector-memory companion — from the core docs, and reconciles the
+mirrored `docs/` index and read-seam contract docs that had drifted behind the
+now-shipped companions. No code changes; no API impact.
+
+### Changed
+
+- **README + docs index: new `Companion Packages` section.** Consolidates and
+  links the shipped companions — [`laravel-swarm-filament`](https://github.com/builtbyberry/laravel-swarm-filament),
+  [`laravel-swarm-mcp`](https://github.com/builtbyberry/laravel-swarm-mcp),
+  [`laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse),
+  and [`laravel-swarm-memory-vector`](https://github.com/builtbyberry/laravel-swarm-memory-vector) —
+  in both `README.md` and the offline `docs/README.md` index (with a ToC entry),
+  so the two are in lockstep.
+- **Read-seam contract docs now link their shipped consumers.** `docs/public-surface.md`
+  and `docs/durable-execution.md` described the read-only inspection seams'
+  consumers as hypothetical ("a Filament panel, an MCP server"); they now link
+  `laravel-swarm-filament` and `laravel-swarm-mcp` as the reference read-only
+  consumers of those seams.
+- **Observability index** points to `laravel-swarm-mcp` as an AI-client
+  observation surface.
+- Standardized `.env` code-fence language tags to ` ```env ` across the docs.
+- README polish: consistent heading casing, and a trimmed `Documentation`
+  section that points to the comprehensive docs index rather than maintaining a
+  third partial link list (anchors unchanged).
+
 ## v0.19.0 - 2026-07-08
 
 Public display-read seams for ecosystem companions. Adds separate, additive, read-only contracts so a companion (starting with `laravel-swarm-filament`) can DISPLAY durable-run branch/child/hierarchical-node data and audit-outbox health through supported public seams that honor `swarm.persistence.decrypt_failure_policy` — without binding to the `@internal` cipher or the strict-operational resume reads. Operational strict/consuming methods are untouched; the display and operational paths stay separate by construction.

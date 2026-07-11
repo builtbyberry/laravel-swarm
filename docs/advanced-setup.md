@@ -329,7 +329,7 @@ retried after a crash:
 
 Set via `.env`:
 
-```dotenv
+```env
 SWARM_MEMORY_REPLAY_MODE=frozen_view
 ```
 

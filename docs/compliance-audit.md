@@ -478,7 +478,7 @@ final class PhiMinimizingCapturePolicy implements MemoryCapturePolicy
 ],
 ```
 
-```dotenv
+```env
 # Stop scheduled deletion during an investigation or litigation hold.
 # MemoryPurged still fires (prevent_prune=true), so the audit trail is intact.
 SWARM_PREVENT_PRUNE=true
