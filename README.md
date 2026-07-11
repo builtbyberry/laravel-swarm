@@ -30,7 +30,7 @@ Define a swarm once, return the Laravel AI agents that participate in it, and ru
 - **Getting started** — [Quick Start](#quick-start) · [Requirements](#requirements) · [Installation](#installation) · [Your First Swarm](#your-first-swarm) · [Running A Swarm](#running-a-swarm)
 - **Execution modes** — [Choosing An Execution Mode](#choosing-an-execution-mode) · [Queueing](#queueing-a-swarm) · [Streaming](#streaming-a-swarm) · [Durable Execution](#durable-execution)
 - **Capabilities** — [Memory](#memory-v090) · [Topologies](#topologies)
-- **Production & reference** — [Testing](#testing) · [Configuration](#configuration) · [Production Checklist](#production-checklist) · [Documentation](#documentation) · [Local Development](#local-development)
+- **Production & reference** — [Testing](#testing) · [Configuration](#configuration) · [Production Checklist](#production-checklist) · [Documentation](#documentation) · [Companion packages](#companion-packages) · [Local Development](#local-development)
 
 ## Quick Start
 
@@ -668,6 +668,23 @@ The same content is mirrored in this repository; start with the [in-repo documen
 - [Maintenance](docs/maintenance.md)
 - [Public Surface Coverage](docs/public-surface.md)
 - [Examples](examples/README.md)
+
+## Companion packages
+
+Laravel Swarm is a small core with a growing family of companion packages —
+additive, MIT, and installed only when you need them. Each reads and extends the
+core through its public [contracts and events](docs/public-surface.md), never by
+patching internals. The full ecosystem map, with setup for each, lives on
+[swarm.builtbyberry.com](https://swarm.builtbyberry.com).
+
+- **[`laravel-swarm-filament`](https://github.com/builtbyberry/laravel-swarm-filament)** — a read-only Filament panel that turns every run into a topology-aware flow graph, with click-through to per-step inputs, outputs, tokens, timing, and memory.
+- **[`laravel-swarm-mcp`](https://github.com/builtbyberry/laravel-swarm-mcp)** — a read-only [Model Context Protocol](https://modelcontextprotocol.io) server that exposes run history, durable-run state, and audit-outbox health as MCP resources, so any MCP client (Claude, Cursor, …) can observe your swarms.
+- **[`laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse)** — [Laravel Pulse](https://laravel.com/docs/pulse) recorders and dashboard cards for swarm runs, steps, memory, and audit-outbox health (see [Pulse](docs/pulse.md)).
+- **[`laravel-swarm-memory-vector`](https://github.com/builtbyberry/laravel-swarm-memory-vector)** — vector-backed semantic memory recall on top of core [Swarm Memory](docs/memory.md).
+
+The Filament panel and the MCP server are two read-only *renderings* of the same
+public display seams — a panel for your team, an MCP surface for an AI client —
+neither able to mutate a run.
 
 ## Local Development
 

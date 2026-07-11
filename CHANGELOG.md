@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.19.1 - 2026-07-11
+
+Documentation. Surfaces the shipped companion ecosystem from the core README so
+the two newest companions — the Filament observability panel and the MCP
+observability server — are discoverable alongside Pulse and the vector-memory
+companion, not only on the documentation site. No code changes; no API impact.
+
+### Changed
+
+- **README: new `Companion packages` section.** Consolidates and links the
+  shipped companions — [`laravel-swarm-filament`](https://github.com/builtbyberry/laravel-swarm-filament),
+  [`laravel-swarm-mcp`](https://github.com/builtbyberry/laravel-swarm-mcp),
+  [`laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse),
+  and [`laravel-swarm-memory-vector`](https://github.com/builtbyberry/laravel-swarm-memory-vector) —
+  and points to the ecosystem map on swarm.builtbyberry.com. Added to the README
+  table of contents.
+
 ## v0.19.0 - 2026-07-08
 
 Public display-read seams for ecosystem companions. Adds separate, additive, read-only contracts so a companion (starting with `laravel-swarm-filament`) can DISPLAY durable-run branch/child/hierarchical-node data and audit-outbox health through supported public seams that honor `swarm.persistence.decrypt_failure_policy` — without binding to the `@internal` cipher or the strict-operational resume reads. Operational strict/consuming methods are untouched; the display and operational paths stay separate by construction.
