@@ -1,5 +1,7 @@
 # Laravel Swarm — Agent Context
 
+<!-- swarm-channel: laravel-swarm -->
+
 This file is operational context for AI coding agents. Human contributors should
 start with [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md),
 [CHANGELOG.md](CHANGELOG.md), and the user-facing docs in [docs/](docs/).
