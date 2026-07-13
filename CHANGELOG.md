@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.20.0 - 2026-07-13
+
+Upgrades the `laravel/ai` dependency to the v0.9 line. This is the first Swarm
+release to require `laravel/ai ^0.9` (v0.9.0); support for the 0.8 line is
+dropped. No Swarm source changes were required — the bump is verified against
+the full test suite (1919 passing) and PHPStan level 7 — but because Swarm does
+not isolate your application from Laravel AI, treat it as an integration-test
+event. See [UPGRADING.md](UPGRADING.md#upgrading-to-v0200) for the checklist.
+
+### Changed
+
+- **Requires `laravel/ai ^0.9`** (was `^0.8`). laravel/ai v0.9.0 consolidates
+  provider tool-calling onto a shared `TextGenerationLoop` / `StepTextGateway`,
+  switches Anthropic to native structured outputs by default (default text model
+  now Claude Sonnet 5), adds collection generics across response and streaming
+  events, and introduces new capabilities — filesystem tools for agents, a
+  `WithoutBroadcasting` stream-event attribute, native `anyOf` structured-output
+  schemas, and a configurable OpenAI-compatible provider. None of laravel/ai's
+  breaking changes (the removed `TextGateway` contract; the Anthropic
+  default-model change) affect Swarm's integration surface — the removed contract
+  is not referenced by Swarm, and no default model is pinned or asserted.
+
 ## v0.19.1 - 2026-07-11
 
 Documentation cohesiveness pass. Surfaces the shipped companion ecosystem — the
