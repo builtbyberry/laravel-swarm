@@ -241,8 +241,9 @@ changes even when the application-facing swarm API stays the same.
 
 ## Dependency Upgrades
 
-`laravel/ai` is required in the **^0.8** range as of v0.13.0 (support for 0.6 /
-0.7 was dropped) and is **pre-1.0**. Public
+`laravel/ai` is required in the **^0.9** range as of v0.20.0 (support for 0.8
+was dropped; support for 0.6 / 0.7 was dropped earlier, in v0.13.0) and is
+**pre-1.0**. Public
 contracts, streaming behavior, and provider integrations can change between
 releases without the stability guarantees of a stable major line.
 
@@ -258,7 +259,7 @@ You may pin `laravel/ai` to an exact or narrower range in your application’s
 `composer.json` when you need reproducible builds or a slower upgrade cadence:
 
 ```bash
-composer require laravel/ai:0.8.1
+composer require laravel/ai:0.9.0
 ```
 
 That pins your application’s dependency resolution. It does not change the semver
@@ -268,6 +269,16 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 `"prefer-stable": true` so pre-stable dependencies can resolve while Composer
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
+
+## Upgrading to v0.20.0
+
+**Required action only if your application pins `laravel/ai` below 0.9.** This release raises Swarm's `laravel/ai` requirement from `^0.8` to `^0.9` (v0.9.0); support for the 0.8 line is dropped. Swarm's own source is unchanged — the upgrade is verified against the full test suite and PHPStan level 7 — but Composer will now resolve `laravel/ai` to 0.9.x, so treat it as an integration-test event:
+
+1. Run `composer update laravel/ai --with-all-dependencies`.
+2. Run your automated suite plus swarm-heavy smoke paths (queued, streamed, and durable execution).
+3. If you use structured-output agents, note that laravel/ai v0.9 uses native Anthropic structured outputs by default and strips markdown code fences before decoding; verify your structured-routing paths once against a live provider.
+
+None of laravel/ai's own breaking changes affect Swarm's integration surface: the removed `TextGateway` contract is not referenced by Swarm, and the Anthropic default-model change (now Claude Sonnet 5) is not pinned or asserted anywhere in Swarm. See the [CHANGELOG](CHANGELOG.md#v0200---2026-07-13) for details.
 
 ## Upgrading to v0.19.0
 

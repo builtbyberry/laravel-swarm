@@ -1,5 +1,7 @@
 # Laravel Swarm — Agent Context
 
+<!-- swarm-channel: laravel-swarm -->
+
 This file is operational context for AI coding agents. Human contributors should
 start with [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md),
 [CHANGELOG.md](CHANGELOG.md), and the user-facing docs in [docs/](docs/).
@@ -54,7 +56,7 @@ If a gap is deferred, it must be recorded as a named follow-up with an owner, no
 
 - PHP ^8.5
 - Laravel ^13.0
-- `laravel/ai` ^0.8
+- `laravel/ai` ^0.9
 - `orchestra/testbench` ^11
 - `pestphp/pest` ^4.4 + `pest-plugin-laravel` ^4.1
 - `larastan/larastan` ^3.0

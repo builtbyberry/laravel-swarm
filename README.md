@@ -54,9 +54,9 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 
 - PHP **^8.5**
 - Laravel **13** (`illuminate/*` **^13.0**)
-- `laravel/ai` **^0.8**
+- `laravel/ai` **^0.9**
 
-The PHP **^8.5** floor is a deliberate requirement — the package builds on 8.5 language features. As of **v0.13.0** the `laravel/ai` floor is **^0.8**; support for **0.6 / 0.7** was dropped. Consumers pinned below `laravel/ai` 0.8 must upgrade. See the [changelog](CHANGELOG.md#v0130---2026-06-23) for what the 0.8 adoption changes.
+The PHP **^8.5** floor is a deliberate requirement — the package builds on 8.5 language features. As of **v0.20.0** the `laravel/ai` floor is **^0.9**; support for **0.8** was dropped (0.6 / 0.7 were dropped earlier, in v0.13.0). Consumers pinned below `laravel/ai` 0.9 must upgrade. See the [changelog](CHANGELOG.md#v0200---2026-07-13) for what the 0.9 adoption changes.
 
 This package declares `"minimum-stability": "dev"` with `"prefer-stable": true` because `laravel/ai` is still pre-1.0 and ships dev-tagged releases. Composer will not resolve a pre-stable transitive dependency from a stable consuming project, so your application's `composer.json` must also set:
 
