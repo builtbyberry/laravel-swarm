@@ -56,7 +56,7 @@ If a gap is deferred, it must be recorded as a named follow-up with an owner, no
 
 - PHP ^8.5
 - Laravel ^13.0
-- `laravel/ai` ^0.8
+- `laravel/ai` ^0.9
 - `orchestra/testbench` ^11
 - `pestphp/pest` ^4.4 + `pest-plugin-laravel` ^4.1
 - `larastan/larastan` ^3.0
