@@ -43,6 +43,7 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Foundation\Bus\PendingDispatch;
+use Laravel\Ai\Attributes\WithoutBroadcasting;
 use Throwable;
 
 /**
@@ -324,8 +325,17 @@ class SwarmRunner
      */
     public function broadcast(Swarm $swarm, string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
     {
+        // Honor a swarm's #[WithoutBroadcasting(...)] declaration: excluded
+        // stream-event types still flow through the returned stream (so replay
+        // and terminal persistence are unaffected) but are never broadcast.
+        $withoutBroadcasting = WithoutBroadcasting::eventsFor($swarm);
+
         return $this->stream($swarm, $task)
-            ->each(function (SwarmStreamEvent $event) use ($channels, $now): void {
+            ->each(function (SwarmStreamEvent $event) use ($channels, $now, $withoutBroadcasting): void {
+                if (WithoutBroadcasting::excludes($withoutBroadcasting, $event)) {
+                    return;
+                }
+
                 $event->{$now ? 'broadcastNow' : 'broadcast'}($channels);
             });
     }
