@@ -66,6 +66,50 @@ Node definitions use a `type` discriminator:
 - `parallel`
 - `finish`
 
+### Constraining node shape with `anyOf`
+
+`nodes => $schema->object()` is intentionally loose: the model may emit any node
+payload and the [validator](#validation-rules) rejects a malformed plan only
+*after* generation. When your coordinator's plan has a **known node skeleton**
+(fixed node ids), you can type each slot precisely so the model self-constrains
+up front. `RoutePlanSchema` turns each node variant into a JsonSchema type and
+combines them with `laravel/ai` ^0.9's native `anyOf`:
+
+```php
+use BuiltByBerry\LaravelSwarm\Routing\RoutePlanSchema;
+
+public function schema(JsonSchema $schema): array
+{
+    return [
+        'start_at' => $schema->string()->required(),
+        'nodes' => $schema->object([
+            // A handler slot: worker | rollup | parallel | finish.
+            'respond' => RoutePlanSchema::node($schema),
+            // A terminal slot: exactly one of `output` / `output_from`.
+            'done' => RoutePlanSchema::finish($schema),
+        ])->required(),
+    ];
+}
+```
+
+`RoutePlanSchema` exposes `worker()`, `rollup()`, `parallel()`, `finish()` (the
+exactly-one-of `output` / `output_from` union), and `node()` (the full
+discriminated union of all four). Each returns a first-class `Type`, so you can
+compose them anywhere a schema property is expected.
+
+Two boundaries to keep in mind:
+
+- **The planner stays authoritative.** `anyOf` constrains per-node *shape* only.
+  The graph-level [validation rules](#validation-rules) — reachability, DAG
+  acyclicity, named-output ordering, loop bounds — are still enforced by
+  `HierarchicalRoutePlanner` after the plan is assembled. `anyOf` makes a
+  well-formed plan the easy path; it does not replace validation.
+- **`object()` types named properties only.** It cannot type the values of a
+  free-form map, so this pattern fits a fixed node skeleton. For a fully dynamic
+  node map, keep `nodes => $schema->object()` and rely on the planner. `laravel/ai`
+  ^0.9 preserves `anyOf` end-to-end (earlier versions collapsed it), so the union
+  reaches the provider intact.
+
 ## Node Types
 
 ### Worker Nodes

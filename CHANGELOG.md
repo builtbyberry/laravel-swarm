@@ -17,6 +17,14 @@ tightened static analysis across the `laravel/ai` collection boundary.
   Suppression affects broadcast delivery only — the events still flow through the
   returned stream and crash-replay persistence, and suppressed events emit no
   `broadcast.event` telemetry. See [docs/streaming.md](docs/streaming.md#suppressing-event-types-from-broadcast).
+- **`RoutePlanSchema` for richer hierarchical coordinator schemas.** A reusable
+  helper (`BuiltByBerry\LaravelSwarm\Routing\RoutePlanSchema`) that types each
+  route-plan node variant (worker, rollup, parallel, finish) and combines them
+  with `laravel/ai` ^0.9's native `anyOf`, so a coordinator with a known node
+  skeleton can constrain the model to a valid node shape up front instead of
+  relying solely on post-hoc validation. The hierarchical-support-triage example
+  now uses it. `HierarchicalRoutePlanner` remains the authoritative validator.
+  See [docs/hierarchical-routing.md](docs/hierarchical-routing.md#constraining-node-shape-with-anyof).
 
 ### Changed
 
