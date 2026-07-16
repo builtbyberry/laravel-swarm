@@ -27,6 +27,7 @@
         "illuminate/database": "^13.0",
         "illuminate/events": "^13.0",
         "illuminate/filesystem": "^13.0",
+        "illuminate/json-schema": "^13.16",
         "illuminate/queue": "^13.0",
         "illuminate/support": "^13.0",
         "illuminate/view": "^13.0",
