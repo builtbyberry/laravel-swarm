@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 use BuiltByBerry\LaravelSwarm\Concerns\HasSwarmFilesystemTools;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use Laravel\Ai\Contracts\HasTools;
+use Laravel\Ai\Contracts\Tool;
 use Laravel\Ai\Promptable;
 
 /**
@@ -24,7 +25,7 @@ class FilesystemToolAgent implements Agent, HasTools
     }
 
     /**
-     * @return array<int, \Laravel\Ai\Contracts\Tool>
+     * @return array<int, Tool>
      */
     public function tools(): iterable
     {

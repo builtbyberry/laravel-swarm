@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FilesystemToolAgent;
 use Illuminate\Support\Facades\Storage;
+use Laravel\Ai\Contracts\Tool;
 use Laravel\Ai\Tools\Filesystem\CopyFile;
 use Laravel\Ai\Tools\Filesystem\DeleteFile;
 use Laravel\Ai\Tools\Filesystem\ListFiles;
@@ -12,7 +13,7 @@ use Laravel\Ai\Tools\Filesystem\WriteFile;
 use Laravel\Ai\Tools\Request;
 
 /**
- * @return array<int, \Laravel\Ai\Contracts\Tool>
+ * @return array<int, Tool>
  */
 function filesystemTools(): array
 {
