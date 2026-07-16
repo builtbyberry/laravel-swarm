@@ -14,7 +14,11 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- Dropped now-redundant local `@var` overrides in `SnapshotToolCallNormalizer`:
+  `laravel/ai` ^0.9 types `TextResponse::$toolCalls` / `$toolResults` as
+  `Collection<int, ToolCall>` / `Collection<int, ToolResult>`, so the element
+  types now flow across the boundary without hand-maintained casts. Internal
+  only — no behavior change; PHPStan level 7 stays clean.
 
 ## v0.20.0 - 2026-07-13
 
