@@ -476,9 +476,10 @@ return [
     | that disk can reach, an agent wired with the write/delete tools can modify
     | or remove — scope the disk to the blast radius you are willing to accept.
     |
-    | Each tool has its own toggle (default on once 'enabled' is true); leave the
-    | mutating tools (write_file, delete_file, copy_file) off for a read-only
-    | agent.
+    | Each tool has its own toggle, and ALL eight default on once 'enabled' is
+    | true — so enabling the feature to grant read access also grants the mutating
+    | tools (write_file, delete_file, copy_file) unless you set them false. Leave
+    | those three off for a read-only agent.
     |
     */
     'filesystem' => [

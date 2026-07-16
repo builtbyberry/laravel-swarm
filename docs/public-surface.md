@@ -180,6 +180,7 @@ describe engine behavior for orientation only.
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
 | `HasRoutePlan` | Implement on a `StaticHierarchical` swarm to return a fixed route-plan array. | [Static Hierarchical Topology](static-hierarchical-topology.md) |
+| `Routing\RoutePlanSchema` | Reusable JsonSchema builders — `worker()`, `rollup()`, `parallel()`, `finish()`, `node()` — that type each hierarchical route-plan node variant and combine them with `laravel/ai` ^0.9 `anyOf`, so a coordinator with a known node skeleton constrains the model to a valid node shape. `HierarchicalRoutePlanner` stays the authoritative validator. (v0.21.0+) | [Hierarchical Routing](hierarchical-routing.md#constraining-node-shape-with-anyof) |
 | `ConfiguresDurableRetries` | Configure per-swarm and per-agent durable retry policies. | [Durable Retries And Progress](durable-retries-and-progress.md) |
 | `RoutesDurableBranches` | Route durable parallel branches to a specific queue connection and queue name. | [Durable Execution](durable-execution.md) |
 | `RoutesDurableWaits` | Declare durable waits entered after checkpoints; each wait specifies name, optional timeout, and optional metadata. | [Durable Waits And Signals](durable-waits-and-signals.md) |

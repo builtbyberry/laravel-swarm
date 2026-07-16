@@ -21,13 +21,21 @@ function normalizeCoordinatorSchema(JsonSchemaTypeFactory $factory, array $prope
     return SchemaNormalizer::normalize($factory->object($properties)->toArray());
 }
 
-test('the coordinator route-plan schema round-trips through laravel/ai with anyOf preserved', function () {
+/**
+ * The example coordinator's schema, serialized + normalized the way laravel/ai
+ * does before dispatch — the fixture the assertions below all read from.
+ *
+ * @return array<string, mixed>
+ */
+function normalizedRoutePlanSchema(): array
+{
     $factory = new JsonSchemaTypeFactory;
 
-    $normalized = normalizeCoordinatorSchema(
-        $factory,
-        (new AnyOfRoutePlanCoordinator)->schema($factory),
-    );
+    return normalizeCoordinatorSchema($factory, (new AnyOfRoutePlanCoordinator)->schema($factory));
+}
+
+test('the coordinator route-plan schema round-trips through laravel/ai with anyOf preserved', function () {
+    $normalized = normalizedRoutePlanSchema();
 
     $encoded = json_encode($normalized, JSON_THROW_ON_ERROR);
 
@@ -43,12 +51,7 @@ test('the coordinator route-plan schema round-trips through laravel/ai with anyO
 });
 
 test('the finish union expresses exactly-one-of output / output_from', function () {
-    $factory = new JsonSchemaTypeFactory;
-
-    $normalized = normalizeCoordinatorSchema(
-        $factory,
-        (new AnyOfRoutePlanCoordinator)->schema($factory),
-    );
+    $normalized = normalizedRoutePlanSchema();
 
     $done = $normalized['properties']['nodes']['properties']['done'];
 
@@ -67,12 +70,7 @@ test('the finish union expresses exactly-one-of output / output_from', function 
 });
 
 test('the node union locks each variant\'s required shape structurally', function () {
-    $factory = new JsonSchemaTypeFactory;
-
-    $normalized = normalizeCoordinatorSchema(
-        $factory,
-        (new AnyOfRoutePlanCoordinator)->schema($factory),
-    );
+    $normalized = normalizedRoutePlanSchema();
 
     $requiredSets = array_map(
         fn (array $branch): array => $branch['required'] ?? [],

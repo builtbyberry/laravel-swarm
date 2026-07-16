@@ -121,6 +121,19 @@ SWARM_FILESYSTEM_TOOLS_COPY_FILE=false
 - Give agents their **own** disk, rooted in a directory that holds nothing
   sensitive. Reuse of `local`/`public` is the most common over-exposure.
 - Leave `write_file`, `delete_file`, and `copy_file` off for agents that only
-  need to read.
+  need to read. Enabling the feature turns **all eight** tools on by default, so
+  granting read access also grants write/delete/copy unless you switch them off.
+- `get_file_url` returns a URL for a file. On a publicly-served disk that URL is
+  web-reachable, so agent-written paths become public — leave `get_file_url` off
+  for private-only agents (another reason not to point `disk` at `public`).
 - Remember these tools are governed by config, not by run scope — unlike memory,
   there is no per-run isolation. The disk boundary is the isolation.
+- Filesystem operations are recorded like any other agent tool call: their
+  arguments (including model-written file contents) land in the run's snapshot
+  and audit-packet export. Unlike the memory tools, they are **not** passed
+  through `MemoryCapturePolicy`, so no redaction is applied — keep sensitive
+  content off the agent's disk.
+- Mutating tools are **not replay-idempotent**. A crash-resume that re-executes
+  an agent step can re-issue a `write_file`/`delete_file`/`copy_file` (writes are
+  naturally idempotent by path+contents; deletes and copies may not be). Keep the
+  sandbox disk to state the run can safely reproduce.
