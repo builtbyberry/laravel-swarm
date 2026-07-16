@@ -10,7 +10,14 @@ tightened static analysis across the `laravel/ai` collection boundary.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **Filesystem agent tools.** A `HasSwarmFilesystemTools` concern exposes Laravel
+  AI's filesystem tools (`ReadFile`, `WriteFile`, `ListFiles`, `DeleteFile`,
+  `CopyFile`, `FileExists`, `GetFileMetadata`, `GetFileUrl`) to agents, every
+  operation scoped to a single configured Filesystem disk. Governed by the new
+  `swarm.filesystem.tools` config: disabled by default and inert until you name a
+  `disk` (no default), with a per-tool toggle each. Model-supplied paths are
+  disk-relative and cannot traverse outside the disk root. See
+  [docs/filesystem-tools.md](docs/filesystem-tools.md).
 
 ### Changed
 
