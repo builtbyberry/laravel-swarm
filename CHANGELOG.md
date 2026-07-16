@@ -10,7 +10,13 @@ tightened static analysis across the `laravel/ai` collection boundary.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **Broadcast suppression via `#[WithoutBroadcasting]`.** A swarm can now declare
+  `laravel/ai`'s `#[WithoutBroadcasting(SwarmTextDelta::class, ...)]` attribute to
+  keep high-frequency stream-event types out of the broadcast. All three broadcast
+  helpers (`broadcast()`, `broadcastNow()`, `broadcastOnQueue()`) honor it.
+  Suppression affects broadcast delivery only — the events still flow through the
+  returned stream and crash-replay persistence, and suppressed events emit no
+  `broadcast.event` telemetry. See [docs/streaming.md](docs/streaming.md#suppressing-event-types-from-broadcast).
 
 ### Changed
 

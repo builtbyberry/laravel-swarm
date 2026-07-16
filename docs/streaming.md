@@ -124,6 +124,44 @@ helper or queued job still fails, but swarm execution has already completed:
 history remains completed, and persisted replay may include the terminal event.
 Use Laravel's broadcast and queue infrastructure for transport retries.
 
+### Suppressing event types from broadcast
+
+High-frequency events — `swarm_text_delta`, `swarm_reasoning_delta` — can flood a
+broadcast channel while adding little to a UI that only needs step boundaries and
+the final output. Declare `laravel/ai`'s `#[WithoutBroadcasting]` attribute on the
+swarm to keep those event types out of the broadcast, naming the
+`SwarmStreamEvent` classes to skip:
+
+```php
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
+use Laravel\Ai\Attributes\WithoutBroadcasting;
+
+#[WithoutBroadcasting(SwarmTextDelta::class, SwarmReasoningDelta::class)]
+class ArticlePipeline implements Swarm
+{
+    use Runnable;
+
+    // ...
+}
+```
+
+The attribute is honored by all three broadcast helpers — `broadcast()`,
+`broadcastNow()`, and `broadcastOnQueue()`. It is a **static, per-class opt-out**:
+it names event *types* to skip, not a dynamic size threshold.
+
+Suppression affects **broadcast delivery only**. The suppressed events still flow
+through the returned stream and through crash-replay persistence exactly as
+before — so the final output is fully assembled, `stream()` consumers are
+unaffected, and a persisted replay still contains every event. Suppressed events
+also emit no `broadcast.event` telemetry, since nothing was broadcast for them
+(the broadcast sequence index still advances past them, so surviving events keep
+their true stream position). To drop an event type from the stream *and* replay,
+not just the broadcast, use the context-growth governor instead (see
+`swarm.context_growth`).
+
 ## Stream Event Types
 
 Swarm streams emit typed events, including:
