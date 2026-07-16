@@ -12,7 +12,6 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\WithoutBroadcastingSequentialSwarm;
 use Illuminate\Broadcasting\AnonymousEvent;
 use Illuminate\Broadcasting\Channel;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Event;
 
 /**
