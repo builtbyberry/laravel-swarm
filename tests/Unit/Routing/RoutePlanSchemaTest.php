@@ -66,6 +66,30 @@ test('the finish union expresses exactly-one-of output / output_from', function 
     expect($requiredSets)->toContain(['type', 'output_from']);
 });
 
+test('the node union locks each variant\'s required shape structurally', function () {
+    $factory = new JsonSchemaTypeFactory;
+
+    $normalized = normalizeCoordinatorSchema(
+        $factory,
+        (new AnyOfRoutePlanCoordinator)->schema($factory),
+    );
+
+    $requiredSets = array_map(
+        fn (array $branch): array => $branch['required'] ?? [],
+        $normalized['properties']['nodes']['properties']['respond']['anyOf'],
+    );
+
+    // Assert the exact required-set of every branch — not just that the type
+    // discriminators appear in the JSON. A regression dropping a required field
+    // from worker/rollup/parallel (e.g. `branches`, `with_outputs`, `next`)
+    // fails here, where a substring check on the 'type' enum would not.
+    expect($requiredSets)->toContain(['type', 'agent', 'prompt', 'next']);                   // worker
+    expect($requiredSets)->toContain(['type', 'agent', 'prompt', 'with_outputs', 'next']);   // rollup
+    expect($requiredSets)->toContain(['type', 'branches', 'next']);                          // parallel
+    expect($requiredSets)->toContain(['type', 'output']);                                    // finish (literal)
+    expect($requiredSets)->toContain(['type', 'output_from']);                               // finish (from node)
+});
+
 test('RoutePlanSchema node union is composable directly by coordinator authors', function () {
     $factory = new JsonSchemaTypeFactory;
 

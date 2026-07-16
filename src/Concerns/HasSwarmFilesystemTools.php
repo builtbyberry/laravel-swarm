@@ -86,7 +86,10 @@ trait HasSwarmFilesystemTools
 
         foreach (self::swarmFilesystemToolMap() as $key => $class) {
             if ((bool) $config->get("swarm.filesystem.tools.{$key}", true)) {
-                $tools[] = new $class($disk);
+                // Resolve through the container (passing the disk) so an app can
+                // bind a subclass of a tool, mirroring how HasSwarmMemoryTools
+                // resolves Recall/Remember.
+                $tools[] = $container->make($class, ['disk' => $disk]);
             }
         }
 

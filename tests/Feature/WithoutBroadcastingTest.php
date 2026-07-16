@@ -88,11 +88,18 @@ test('queued broadcast suppresses the excluded type from both broadcast and broa
         ->toContain('swarm_stream_start', 'swarm_stream_end');
 
     // The suppressed event still advances the broadcast sequence, so the indices
-    // of the events that DO broadcast stay strictly increasing (gaps allowed).
+    // of the events that DO broadcast stay strictly increasing with a gap where
+    // the suppressed event sat.
     $indices = collect($sink->recordsForCategory('broadcast.event'))
         ->map(fn (array $r): int => (int) ($r['sequence_index'] ?? -1))
         ->all();
 
     expect($indices)->toBe(array_values(collect($indices)->sort()->values()->all()));
     expect(count($indices))->toBe(count(array_unique($indices)));
+
+    // At least one index is skipped: the suppressed event advanced the sequence
+    // without emitting a broadcast.event, so the highest surviving index exceeds
+    // what a gapless 0..N-1 run would produce. If the skip branch stopped
+    // advancing the sequence, the indices would be contiguous and this fails.
+    expect(max($indices))->toBeGreaterThan(count($indices) - 1);
 });

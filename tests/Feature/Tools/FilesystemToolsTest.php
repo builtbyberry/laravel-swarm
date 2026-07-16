@@ -7,10 +7,14 @@ use Illuminate\Support\Facades\Storage;
 use Laravel\Ai\Contracts\Tool;
 use Laravel\Ai\Tools\Filesystem\CopyFile;
 use Laravel\Ai\Tools\Filesystem\DeleteFile;
+use Laravel\Ai\Tools\Filesystem\FileExists;
+use Laravel\Ai\Tools\Filesystem\GetFileMetadata;
+use Laravel\Ai\Tools\Filesystem\GetFileUrl;
 use Laravel\Ai\Tools\Filesystem\ListFiles;
 use Laravel\Ai\Tools\Filesystem\ReadFile;
 use Laravel\Ai\Tools\Filesystem\WriteFile;
 use Laravel\Ai\Tools\Request;
+use League\Flysystem\PathTraversalDetected;
 
 /**
  * @return array<int, Tool>
@@ -35,21 +39,33 @@ test('exposes no tools when disabled, even with a disk set (default posture)', f
     expect(filesystemTools())->toBe([]);
 });
 
-test('exposes no tools when enabled but no disk is configured', function () {
+test('exposes no tools when enabled but the disk is null, empty, or non-string', function (mixed $disk) {
     config()->set('swarm.filesystem.tools.enabled', true);
-    config()->set('swarm.filesystem.tools.disk', null);
+    config()->set('swarm.filesystem.tools.disk', $disk);
 
     expect(filesystemTools())->toBe([]);
-});
+})->with([
+    'null' => [null],
+    'empty string' => [''],
+    'non-string' => [123],
+]);
 
 test('exposes all eight tools when enabled with a disk', function () {
     config()->set('swarm.filesystem.tools.enabled', true);
     config()->set('swarm.filesystem.tools.disk', 'sandbox');
 
-    $classes = filesystemToolClasses();
-
-    expect(filesystemTools())->toHaveCount(8);
-    expect($classes)->toContain(ReadFile::class, WriteFile::class, DeleteFile::class, CopyFile::class, ListFiles::class);
+    // Assert the exact class set — a map typo swapping one tool for a duplicate
+    // would keep the count at 8 but fail this.
+    expect(filesystemToolClasses())->toEqualCanonicalizing([
+        ReadFile::class,
+        WriteFile::class,
+        ListFiles::class,
+        DeleteFile::class,
+        CopyFile::class,
+        FileExists::class,
+        GetFileMetadata::class,
+        GetFileUrl::class,
+    ]);
 });
 
 test('per-tool toggles drop the disabled tools', function () {
@@ -96,13 +112,24 @@ test('a model-supplied traversal path cannot escape the disk root', function () 
     config()->set('swarm.filesystem.tools.enabled', true);
     config()->set('swarm.filesystem.tools.disk', 'sandbox');
 
-    $read = collect(filesystemTools())->firstOrFail(fn (object $tool): bool => $tool instanceof ReadFile);
+    $tools = collect(filesystemTools())->keyBy(fn (object $tool): string => $tool::class);
 
-    // `..` traversal is rejected at the disk boundary — the tool reports the
-    // path as missing rather than reading anything outside the sandbox root.
-    $result = (string) $read->handle(new Request(['path' => '../../../../../../etc/passwd']));
+    // Reads: `..` traversal is rejected at the disk boundary — the tool reports
+    // the path as missing rather than reading anything outside the sandbox root.
+    $result = (string) $tools[ReadFile::class]->handle(new Request(['path' => '../../../../../../etc/passwd']));
 
     expect($result)
         ->toContain('does not exist')
         ->not->toContain('root:');
+
+    // Writes are the higher-consequence vector: a traversal escape must not
+    // create a file anywhere. The disk boundary rejects it outright (Flysystem
+    // raises PathTraversalDetected — a harder stop than ReadFile's graceful
+    // "does not exist"), so nothing is written and the sandbox stays empty.
+    expect(fn () => $tools[WriteFile::class]->handle(new Request([
+        'path' => '../escaped.txt',
+        'contents' => 'should never be written outside the sandbox',
+    ])))->toThrow(PathTraversalDetected::class);
+
+    expect(Storage::disk('sandbox')->allFiles())->toBe([]);
 });
