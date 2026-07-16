@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Routing\RoutePlanSchema;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Illuminate\JsonSchema\Types\Type;
 use Laravel\Ai\Contracts\HasStructuredOutput;
 use Laravel\Ai\Promptable;
 
@@ -27,7 +28,7 @@ class AnyOfRoutePlanCoordinator implements Agent, HasStructuredOutput
     }
 
     /**
-     * @return array<string, \Illuminate\JsonSchema\Types\Type>
+     * @return array<string, Type>
      */
     public function schema(JsonSchema $schema): array
     {

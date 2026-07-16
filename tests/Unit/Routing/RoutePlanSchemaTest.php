@@ -5,6 +5,7 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Routing\RoutePlanSchema;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\AnyOfRoutePlanCoordinator;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
+use Illuminate\JsonSchema\Types\Type;
 use Laravel\Ai\Schema\SchemaNormalizer;
 
 /**
@@ -12,7 +13,7 @@ use Laravel\Ai\Schema\SchemaNormalizer;
  * wrap the property map in an object type, render to a raw JSON Schema array,
  * then run it through laravel/ai's SchemaNormalizer.
  *
- * @param  array<string, \Illuminate\JsonSchema\Types\Type>  $properties
+ * @param  array<string, Type>  $properties
  * @return array<string, mixed>
  */
 function normalizeCoordinatorSchema(JsonSchemaTypeFactory $factory, array $properties): array
