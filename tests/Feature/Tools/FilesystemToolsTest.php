@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FilesystemToolAgent;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Ai\Contracts\Tool;
 use Laravel\Ai\Tools\Filesystem\CopyFile;
@@ -66,6 +67,31 @@ test('exposes all eight tools when enabled with a disk', function () {
         GetFileMetadata::class,
         GetFileUrl::class,
     ]);
+});
+
+test('warns when the tools are bound to a broad default disk', function (string $disk) {
+    config()->set('swarm.filesystem.tools.enabled', true);
+    config()->set('swarm.filesystem.tools.disk', $disk);
+
+    Log::spy();
+
+    // Still returns the tools — the guard nudges, it does not block.
+    expect(filesystemTools())->toHaveCount(8);
+
+    Log::shouldHaveReceived('warning')
+        ->withArgs(fn (string $message): bool => str_contains($message, "[{$disk}]"))
+        ->once();
+})->with(['local', 'public']);
+
+test('does not warn for a dedicated sandbox disk', function () {
+    config()->set('swarm.filesystem.tools.enabled', true);
+    config()->set('swarm.filesystem.tools.disk', 'agent-sandbox');
+
+    Log::spy();
+
+    filesystemTools();
+
+    Log::shouldNotHaveReceived('warning');
 });
 
 test('per-tool toggles drop the disabled tools', function () {

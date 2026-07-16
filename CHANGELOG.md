@@ -23,7 +23,8 @@ tightened static analysis across the `laravel/ai` collection boundary.
   operation scoped to a single configured Filesystem disk. Governed by the new
   `swarm.filesystem.tools` config: disabled by default and inert until you name a
   `disk` (no default), with a per-tool toggle each. Model-supplied paths are
-  disk-relative and cannot traverse outside the disk root. See
+  disk-relative and cannot traverse outside the disk root, and Swarm logs a
+  warning if the configured disk is a broad default (`local`/`public`). See
   [docs/filesystem-tools.md](docs/filesystem-tools.md).
 - **`RoutePlanSchema` for richer hierarchical coordinator schemas.** A reusable
   helper (`BuiltByBerry\LaravelSwarm\Routing\RoutePlanSchema`) that types each

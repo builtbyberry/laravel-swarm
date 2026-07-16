@@ -119,7 +119,9 @@ SWARM_FILESYSTEM_TOOLS_COPY_FILE=false
 
 - Keep `enabled` off unless an agent genuinely needs filesystem access.
 - Give agents their **own** disk, rooted in a directory that holds nothing
-  sensitive. Reuse of `local`/`public` is the most common over-exposure.
+  sensitive. Reuse of `local`/`public` is the most common over-exposure — Swarm
+  logs a warning when the configured `disk` is `local` or `public` (it still
+  works; the warning is a nudge to scope the disk, not a block).
 - Leave `write_file`, `delete_file`, and `copy_file` off for agents that only
   need to read. Enabling the feature turns **all eight** tools on by default, so
   granting read access also grants write/delete/copy unless you switch them off.

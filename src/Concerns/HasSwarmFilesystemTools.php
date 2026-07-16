@@ -15,6 +15,7 @@ use Laravel\Ai\Tools\Filesystem\GetFileUrl;
 use Laravel\Ai\Tools\Filesystem\ListFiles;
 use Laravel\Ai\Tools\Filesystem\ReadFile;
 use Laravel\Ai\Tools\Filesystem\WriteFile;
+use Psr\Log\LoggerInterface;
 
 /**
  * Opt-in trait that adds Laravel AI's filesystem tools to a `laravel/ai` agent,
@@ -82,6 +83,8 @@ trait HasSwarmFilesystemTools
             return [];
         }
 
+        self::warnOnBroadDisk($container, $disk);
+
         $tools = [];
 
         foreach (self::swarmFilesystemToolMap() as $key => $class) {
@@ -94,6 +97,33 @@ trait HasSwarmFilesystemTools
         }
 
         return $tools;
+    }
+
+    /**
+     * Warn — but do not block — when the tools are bound to one of Laravel's
+     * broad default disks. `local` and `public` span the whole application
+     * storage, the most common over-exposure; the docs steer operators to a
+     * dedicated sandbox disk instead. Blocking would be paternalistic (a
+     * bespoke disk can legitimately be named anything), so this only nudges.
+     *
+     * Deliberately stateless — no "warned once" flag — so it stays
+     * Octane/concurrency-safe; the warning recurs each time tools resolve until
+     * the operator points `disk` at a scoped disk.
+     */
+    protected static function warnOnBroadDisk(Container $container, string $disk): void
+    {
+        if (! in_array($disk, ['local', 'public'], true)) {
+            return;
+        }
+
+        if (! $container->bound(LoggerInterface::class)) {
+            return;
+        }
+
+        $container->make(LoggerInterface::class)->warning(
+            "laravel-swarm: filesystem agent tools are bound to the [{$disk}] disk, which spans your whole application storage. Point swarm.filesystem.tools.disk at a dedicated, sandboxed disk instead.",
+            ['disk' => $disk],
+        );
     }
 
     /**
