@@ -451,6 +451,85 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Filesystem Agent Tools
+    |--------------------------------------------------------------------------
+    |
+    | The agent-facing filesystem tools from Laravel AI (ReadFile, WriteFile,
+    | ListFiles, DeleteFile, CopyFile, FileExists, GetFileMetadata, GetFileUrl).
+    | They drop into any agent's tools() array via the HasSwarmFilesystemTools
+    | concern, and every operation is scoped to a single configured Filesystem
+    | disk — the model supplies only disk-relative paths and cannot traverse
+    | outside the disk root.
+    |
+    | **Disabled by default, and inert without a disk.** Granting an LLM
+    | read/write/delete access to a filesystem is a decision with real blast
+    | radius, so BOTH switches must be set deliberately:
+    |
+    |   1. 'enabled' must be true (the HasSwarmFilesystemTools master switch).
+    |   2. 'disk' must name a Filesystem disk. It has NO default — while it is
+    |      null the concern returns no tools even when 'enabled' is true.
+    |
+    | Point 'disk' at a DEDICATED, sandboxed disk you provision for agent use
+    | (a disk rooted in its own directory), never 'local' or 'public'. Whatever
+    | that disk can reach, an agent wired with the write/delete tools can modify
+    | or remove — scope the disk to the blast radius you are willing to accept.
+    |
+    | Each tool has its own toggle, and ALL eight default on once 'enabled' is
+    | true — so enabling the feature to grant read access also grants the mutating
+    | tools (write_file, delete_file, copy_file) unless you set them false. Leave
+    | those three off for a read-only agent.
+    |
+    */
+    'filesystem' => [
+        'tools' => [
+            'enabled' => filter_var(
+                env('SWARM_FILESYSTEM_TOOLS_ENABLED', false),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+
+            /*
+             * The Filesystem disk every tool is bound to. No default: the tools
+             * stay inert until you name a disk you have scoped for agent use.
+             */
+            'disk' => env('SWARM_FILESYSTEM_TOOLS_DISK'),
+
+            'read_file' => filter_var(
+                env('SWARM_FILESYSTEM_TOOLS_READ_FILE', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'write_file' => filter_var(
+                env('SWARM_FILESYSTEM_TOOLS_WRITE_FILE', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'list_files' => filter_var(
+                env('SWARM_FILESYSTEM_TOOLS_LIST_FILES', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'delete_file' => filter_var(
+                env('SWARM_FILESYSTEM_TOOLS_DELETE_FILE', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'copy_file' => filter_var(
+                env('SWARM_FILESYSTEM_TOOLS_COPY_FILE', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'file_exists' => filter_var(
+                env('SWARM_FILESYSTEM_TOOLS_FILE_EXISTS', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'get_file_metadata' => filter_var(
+                env('SWARM_FILESYSTEM_TOOLS_GET_FILE_METADATA', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'get_file_url' => filter_var(
+                env('SWARM_FILESYSTEM_TOOLS_GET_FILE_URL', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+        ],
+    ],
+
     'pulse' => [
         'memory' => [
             /*

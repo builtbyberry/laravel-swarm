@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.21.0 - 2026-07-16
+
+Adopts four capabilities from the `laravel/ai` ^0.9 line that the v0.20.0 upgrade
+made available but left unexploited: broadcast suppression via the
+`#[WithoutBroadcasting]` attribute, filesystem agent tools alongside
+Recall/Remember, richer hierarchical-coordinator schemas via native `anyOf`, and
+tightened static analysis across the `laravel/ai` collection boundary.
+
+### Added
+
+- **Broadcast suppression via `#[WithoutBroadcasting]`.** A swarm can now declare
+  `laravel/ai`'s `#[WithoutBroadcasting(SwarmTextDelta::class, ...)]` attribute to
+  keep high-frequency stream-event types out of the broadcast. All three broadcast
+  helpers (`broadcast()`, `broadcastNow()`, `broadcastOnQueue()`) honor it.
+  Suppression affects broadcast delivery only — the events still flow through the
+  returned stream and crash-replay persistence, and suppressed events emit no
+  `broadcast.event` telemetry. See [docs/streaming.md](docs/streaming.md#suppressing-event-types-from-broadcast).
+- **Filesystem agent tools.** A `HasSwarmFilesystemTools` concern exposes Laravel
+  AI's filesystem tools (`ReadFile`, `WriteFile`, `ListFiles`, `DeleteFile`,
+  `CopyFile`, `FileExists`, `GetFileMetadata`, `GetFileUrl`) to agents, every
+  operation scoped to a single configured Filesystem disk. Governed by the new
+  `swarm.filesystem.tools` config: disabled by default and inert until you name a
+  `disk` (no default), with a per-tool toggle each. Model-supplied paths are
+  disk-relative and cannot traverse outside the disk root, and Swarm logs a
+  warning if the configured disk is a broad default (`local`/`public`). See
+  [docs/filesystem-tools.md](docs/filesystem-tools.md).
+- **`RoutePlanSchema` for richer hierarchical coordinator schemas.** A reusable
+  helper (`BuiltByBerry\LaravelSwarm\Routing\RoutePlanSchema`) that types each
+  route-plan node variant (worker, rollup, parallel, finish) and combines them
+  with `laravel/ai` ^0.9's native `anyOf`, so a coordinator with a known node
+  skeleton can constrain the model to a valid node shape up front instead of
+  relying solely on post-hoc validation. The hierarchical-support-triage example
+  now uses it. `HierarchicalRoutePlanner` remains the authoritative validator.
+  See [docs/hierarchical-routing.md](docs/hierarchical-routing.md#constraining-node-shape-with-anyof).
+
+### Changed
+
+- Dropped now-redundant local `@var` overrides in `SnapshotToolCallNormalizer`:
+  `laravel/ai` ^0.9 types `TextResponse::$toolCalls` / `$toolResults` as
+  `Collection<int, ToolCall>` / `Collection<int, ToolResult>`, so the element
+  types now flow across the boundary without hand-maintained casts. Internal
+  only — no behavior change; PHPStan level 7 stays clean.
+
 ## v0.20.0 - 2026-07-13
 
 Upgrades the `laravel/ai` dependency to the v0.9 line. This is the first Swarm

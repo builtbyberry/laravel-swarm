@@ -53,6 +53,7 @@ The recommended reading path for new users.
 - [Swarm Memory](memory.md) — scoped, snapshot-replayable memory subsystem; read/write, lifecycle events, replay semantics, and the RunContext bridge (v0.9.0+)
 - [Compliance & Audit](compliance-audit.md) — memory capture policy, retention enforcement, and audit-packet export (`swarm:memory:dump`) for DSAR / regulatory handoff (v0.10.0+)
 - [Memory Recipes](memory-recipes.md) — worked, copy-paste patterns for the Recall/Remember tools: per-user and tenant-scoped recall, policy-enforced custom tools, recall + redact, and sub-agent memory continuity (v0.11.0+)
+- [Filesystem Agent Tools](filesystem-tools.md) — disk-scoped read/write/list/delete tools (`HasSwarmFilesystemTools`); config-gated, default-off, bound to a dedicated sandbox disk (v0.21.0+)
 
 ---
 

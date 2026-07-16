@@ -46,12 +46,13 @@ final class SnapshotToolCallNormalizer
             return [];
         }
 
-        /** @var array<int, ToolCall> $toolCalls */
-        $toolCalls = $response->toolCalls->all();
-        /** @var array<int, ToolResult> $toolResults */
-        $toolResults = $response->toolResults->all();
-
-        return self::pair($toolCalls, $toolResults);
+        // laravel/ai ^0.9 types these as Collection<int, ToolCall> /
+        // Collection<int, ToolResult>, so `->all()` is already precisely typed
+        // across the boundary — no local @var override needed.
+        return self::pair(
+            $response->toolCalls->all(),
+            $response->toolResults->all(),
+        );
     }
 
     /**

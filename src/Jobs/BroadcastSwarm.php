@@ -20,6 +20,7 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Laravel\Ai\Attributes\WithoutBroadcasting;
 
 /**
  * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
@@ -68,8 +69,20 @@ class BroadcastSwarm implements ShouldQueue
             $sequenceIndex = 0;
             $channelNames = self::normalizeBroadcastChannelNames($this->channels);
 
+            // A swarm may declare #[WithoutBroadcasting(SwarmTextDelta::class, ...)]
+            // to suppress specific stream-event types from the broadcast. Resolve
+            // the skip set once; excluded events advance the sequence position but
+            // are neither broadcast nor recorded as broadcast telemetry.
+            $withoutBroadcasting = WithoutBroadcasting::eventsFor($swarm);
+
             $runner->stream($swarm, $context)
-                ->each(function (SwarmStreamEvent $event) use ($telemetry, $context, $swarm, &$sequenceIndex, $streamStart, $channelNames, $resolver): void {
+                ->each(function (SwarmStreamEvent $event) use ($telemetry, $context, $swarm, &$sequenceIndex, $streamStart, $channelNames, $resolver, $withoutBroadcasting): void {
+                    if (WithoutBroadcasting::excludes($withoutBroadcasting, $event)) {
+                        $sequenceIndex++;
+
+                        return;
+                    }
+
                     $type = $event->toArray()['type'] ?? 'unknown';
 
                     $telemetry->emit('broadcast.event', [

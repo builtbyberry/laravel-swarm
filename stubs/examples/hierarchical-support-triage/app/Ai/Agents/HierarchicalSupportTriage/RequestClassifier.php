@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace {{ rootNamespace }}\Ai\Agents\HierarchicalSupportTriage;
 
+use BuiltByBerry\LaravelSwarm\Routing\RoutePlanSchema;
 use BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Str;
@@ -38,13 +39,27 @@ class RequestClassifier extends ScriptedAgent implements HasStructuredOutput
      * The route-plan schema the coordinator promises to fill. Laravel Swarm
      * validates the coordinator's output against this shape before executing.
      *
+     * This coordinator's plan is a fixed two-node skeleton — a `respond` handler
+     * followed by a `done` terminal — so each slot is typed precisely with
+     * {@see RoutePlanSchema}: `respond` is the full node union (here the model
+     * always picks a worker, but a parallel fan-out would also validate), and
+     * `done` is a finish node returning exactly one of `output` / `output_from`.
+     * The `anyOf` unions let the model self-constrain to a valid node shape;
+     * {@see \BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner} still
+     * validates the assembled plan as a DAG.
+     *
      * @return array<string, \Illuminate\JsonSchema\Types\Type>
      */
     public function schema(JsonSchema $schema): array
     {
         return [
-            'start_at' => $schema->string()->required(),
-            'nodes' => $schema->object()->required(),
+            'start_at' => $schema->string()
+                ->description('Id of the first node to run.')
+                ->required(),
+            'nodes' => $schema->object([
+                'respond' => RoutePlanSchema::node($schema),
+                'done' => RoutePlanSchema::finish($schema),
+            ])->required(),
         ];
     }
 
