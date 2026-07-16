@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.21.0 - unreleased
+## v0.21.0 - 2026-07-16
 
 Adopts four capabilities from the `laravel/ai` ^0.9 line that the v0.20.0 upgrade
 made available but left unexploited: broadcast suppression via the
