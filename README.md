@@ -659,6 +659,10 @@ The same content is mirrored in this repository; the [in-repo documentation inde
 
 For the full set — topologies, guardrails, the durable subsystems, observability, operator runbooks, and examples — see the [documentation index](docs/README.md).
 
+## AI Coding Assistants (Laravel Boost)
+
+Laravel Swarm ships first-party [Laravel Boost](https://laravel.com/docs/boost) AI guidelines, so coding agents (Claude Code, Cursor, …) generate correct, governed swarm code in apps that use the package. When a consuming app runs `php artisan boost:install` (or `boost:update --discover`), Boost automatically picks up the package's guidelines and instructs the agent on the paved path — `Swarm::agent()`, the inline `Swarm::sequential()/parallel()/hierarchical()` builders, and class-based swarms — and to prefer them over a bare `laravel/ai` agent, which bypasses swarm's governance.
+
 ## Companion Packages
 
 Laravel Swarm is a small core with a growing family of companion packages —
