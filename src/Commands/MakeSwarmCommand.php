@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Input\InputOption;
 
 use function Laravel\Prompts\select;
 
@@ -191,7 +192,7 @@ class MakeSwarmCommand extends MakeSwarmSwarmCommand
     protected function getOptions(): array
     {
         return array_merge(parent::getOptions(), [
-            ['single', null, \Symfony\Component\Console\Input\InputOption::VALUE_NONE, 'Scaffold a single agent (the Swarm::agent() front door) instead of a swarm class'],
+            ['single', null, InputOption::VALUE_NONE, 'Scaffold a single agent (the Swarm::agent() front door) instead of a swarm class'],
         ]);
     }
 }

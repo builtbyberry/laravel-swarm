@@ -2,17 +2,16 @@
 
 declare(strict_types=1);
 
-use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Facades\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\PendingSwarmRun;
+use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksInputWhenMatches;
-use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 
 beforeEach(function () {
@@ -28,8 +27,7 @@ it('returns a fluent PendingSwarmRun from each inline entry point', function () 
 });
 
 it('runs an inline sequential swarm in order, threading outputs, through the governed pipeline', function () {
-    $sink = new RecordingSwarmAuditSink;
-    app()->instance(SwarmAuditSink::class, $sink);
+    $audit = SwarmFake::interceptSwarmAuditSink();
 
     $response = Swarm::sequential([new FakeResearcher, new FakeWriter, new FakeEditor])->prompt('original-task');
 
@@ -43,8 +41,8 @@ it('runs an inline sequential swarm in order, threading outputs, through the gov
     FakeEditor::assertPrompted('writer-out');
 
     // Same governed evidence chain as a class-based swarm.
-    expect($sink->hasCategory('run.started'))->toBeTrue()
-        ->and($sink->hasCategory('run.completed'))->toBeTrue();
+    $audit->assertAuditChain(['run.started', 'run.completed']);
+    $audit->assertStepCount(3);
 });
 
 it('runs an inline parallel swarm with each agent against the original task', function () {

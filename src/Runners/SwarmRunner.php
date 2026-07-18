@@ -113,8 +113,10 @@ class SwarmRunner
      * wraps the lone agent in a one-element {@see \BuiltByBerry\LaravelSwarm\Support\AdHocSwarm}
      * and dispatches it through this same runner, so it inherits audit,
      * guardrails, capture, telemetry and encrypt-at-rest identically to a
-     * multi-agent swarm — and every execution mode. A swarm of one is still a
-     * swarm; there is no second, ungoverned path.
+     * multi-agent swarm — across the in-process execution modes
+     * (prompt/stream/broadcast). A swarm of one is still a swarm; there is no
+     * second, ungoverned path. For queued or durable execution, author a
+     * one-agent Swarm class.
      */
     public function agent(Agent $agent): PendingAgentRun
     {

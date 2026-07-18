@@ -13,7 +13,7 @@ Everything a swarm run does is governed the same way whether it uses one agent o
 use BuiltByBerry\LaravelSwarm\Facades\Swarm;
 
 $response = Swarm::agent($agent)->prompt($task);
-// also ->stream($task), ->queue($task), ->broadcast($task, $channel), ->dispatchDurable($task)
+// also ->run($task), ->stream($task), ->broadcast($task, $channel)  (in-process modes)
 $response->output;
 </code-snippet>
 @endverbatim
@@ -23,7 +23,7 @@ $response->output;
 @verbatim
 <code-snippet name="Inline multi-agent swarms" lang="php">
 Swarm::sequential([$researcher, $writer, $editor])->prompt($task);   // each output feeds the next
-Swarm::parallel([$a, $b, $c])->stream($task);                        // every agent sees the same task
+Swarm::parallel([$a, $b, $c])->prompt($task);                        // every agent sees the same task (parallel can't stream)
 Swarm::hierarchical($coordinator, [$writer, $editor])->prompt($task); // coordinator routes over workers
 </code-snippet>
 @endverbatim
@@ -54,6 +54,7 @@ ContentPipeline::make()->prompt($task);
 
 ### Conventions
 
+- **In-process vs. background.** The class-free builders (`Swarm::agent()`/`sequential()`/`parallel()`/`hierarchical()`) run **in-process** — `prompt()`/`run()`/`stream()`/`broadcast()`. For queued or durable execution, author a `Swarm` class (`make:swarm:swarm --single` for one agent); background runs need a container-bound class to survive job re-resolution. `stream()`/`broadcast()` need a streamable topology (sequential/hierarchical/static-hierarchical, not parallel).
 - **Governed by default.** The app's globally configured guardrails (`config('swarm.guardrails.*')`) always apply; per-call `->guardrails([...])` on the inline builders is additive, not a replacement.
 - **Agents are `laravel/ai` agents.** Any class implementing `Laravel\Ai\Contracts\Agent` (or the swarm marker `BuiltByBerry\LaravelSwarm\Contracts\Agent`) works. Use `php artisan make:swarm:agent`.
 - **Persistence & capture are opt-in.** Prompt/agent payloads are not persisted unless enabled in `config/swarm.php` (`swarm.capture.*`); when database persistence is on, sensitive columns are encrypted at rest.

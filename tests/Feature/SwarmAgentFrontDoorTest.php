@@ -2,15 +2,14 @@
 
 declare(strict_types=1);
 
-use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Facades\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
+use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksInputWhenMatches;
-use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 
 it('returns a fluent PendingAgentRun from Swarm::agent()', function () {
     expect(Swarm::agent(new FakeResearcher))->toBeInstanceOf(PendingAgentRun::class);
@@ -19,8 +18,7 @@ it('returns a fluent PendingAgentRun from Swarm::agent()', function () {
 it('runs a single agent through the full governed pipeline and emits the identical audit chain', function () {
     FakeResearcher::fake(['single-agent-output']);
 
-    $sink = new RecordingSwarmAuditSink;
-    app()->instance(SwarmAuditSink::class, $sink);
+    $audit = SwarmFake::interceptSwarmAuditSink();
 
     $response = Swarm::agent(new FakeResearcher)->prompt('do the thing');
 
@@ -30,10 +28,8 @@ it('runs a single agent through the full governed pipeline and emits the identic
         ->and($response->steps)->toHaveCount(1);
 
     // The SAME evidence chain a multi-agent run emits fired here.
-    expect($sink->hasCategory('run.started'))->toBeTrue()
-        ->and($sink->hasCategory('step.started'))->toBeTrue()
-        ->and($sink->hasCategory('step.completed'))->toBeTrue()
-        ->and($sink->hasCategory('run.completed'))->toBeTrue();
+    $audit->assertAuditChain(['run.started', 'step.started', 'step.completed', 'run.completed']);
+    $audit->assertStepCount(1);
 });
 
 it('applies per-call guardrails passed to ->guardrails()', function () {

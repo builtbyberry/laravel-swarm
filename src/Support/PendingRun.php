@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
-use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
-use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use Illuminate\Broadcasting\Channel;
@@ -18,7 +16,22 @@ use Illuminate\Broadcasting\Channel;
  * Each terminal call materializes a fresh {@see AdHocSwarm} via {@see toSwarm()}
  * and dispatches it through the same {@see \BuiltByBerry\LaravelSwarm\Runners\SwarmRunner}
  * a hand-authored swarm uses, so an inline swarm inherits audit, guardrails,
- * capture, telemetry and encrypt-at-rest identically — and every execution mode.
+ * capture, telemetry and encrypt-at-rest identically.
+ *
+ * The class-free builders expose the **in-process** execution modes only —
+ * `prompt()`/`run()`, `stream()`, and `broadcast()`/`broadcastNow()`. The
+ * background modes (`queue()`, `broadcastOnQueue()`, `dispatchDurable()`) are
+ * intentionally NOT offered here: a queued/durable run is dispatched as a job
+ * and re-resolved from the container by class on a (possibly much later, post-
+ * deploy) worker, which requires a stable, container-bound identity — exactly
+ * what an ad-hoc swarm built from runtime agent instances cannot provide. For
+ * background or recoverable execution, author a one-agent {@see \BuiltByBerry\LaravelSwarm\Contracts\Swarm}
+ * class (`php artisan make:swarm:swarm --single`) and call `queue()` /
+ * `dispatchDurable()` on it.
+ *
+ * (Streamability is still a topology property: `parallel` swarms cannot
+ * `stream()`/`broadcast()` — that constraint is enforced by the runner and
+ * applies to class-based parallel swarms too.)
  *
  * Guardrails passed via {@see guardrails()} are additive: they merge with the
  * app's globally configured guardrails, they do not replace them.
@@ -70,7 +83,8 @@ abstract class PendingRun
     }
 
     /**
-     * Stream the run, yielding typed stream events for SSE.
+     * Stream the run, yielding typed stream events for SSE. Sequential,
+     * hierarchical, and static-hierarchical topologies stream; parallel does not.
      *
      * @param  SwarmTaskInput  $task
      */
@@ -80,17 +94,7 @@ abstract class PendingRun
     }
 
     /**
-     * Queue the run to execute in the background.
-     *
-     * @param  SwarmTaskInput  $task
-     */
-    public function queue(string|array|RunContext $task): QueuedSwarmResponse
-    {
-        return $this->toSwarm()->queue($task);
-    }
-
-    /**
-     * Broadcast typed stream events for the run.
+     * Broadcast typed stream events for the run (in-process, like {@see stream()}).
      *
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
@@ -109,27 +113,6 @@ abstract class PendingRun
     public function broadcastNow(string|array|RunContext $task, Channel|array $channels): StreamableSwarmResponse
     {
         return $this->broadcast($task, $channels, now: true);
-    }
-
-    /**
-     * Queue the run's stream and broadcast each event from the worker.
-     *
-     * @param  SwarmTaskInput  $task
-     * @param  SwarmBroadcastChannels  $channels
-     */
-    public function broadcastOnQueue(string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
-    {
-        return $this->toSwarm()->broadcastOnQueue($task, $channels);
-    }
-
-    /**
-     * Dispatch the run on the durable runtime.
-     *
-     * @param  SwarmTaskInput  $task
-     */
-    public function dispatchDurable(string|array|RunContext $task): DurableSwarmResponse
-    {
-        return $this->toSwarm()->dispatchDurable($task);
     }
 
     /**

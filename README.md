@@ -168,7 +168,7 @@ In a sequential swarm, the first agent receives the original task. Each later ag
 
 ## Running a Swarm
 
-> **No class required.** For one agent — or a quick multi-agent composition — you don't need to author a `Swarm` class at all. `Swarm::agent($agent)->prompt($task)` runs a single agent through the **same** governed pipeline (audit, guardrails, capture, telemetry, encrypt-at-rest), and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical()` do the same for inline multi-agent swarms — every execution mode included. See the [Cookbook](docs/cookbook.md) and [Execution Modes: Single Agent](docs/execution-modes.md#single-agent-swarmagent). Reach for a `Swarm` class when the topology is reused, named, or carries class-level attributes.
+> **No class required.** For one agent — or a quick multi-agent composition — you don't need to author a `Swarm` class at all. `Swarm::agent($agent)->prompt($task)` runs a single agent through the **same** governed pipeline (audit, guardrails, capture, telemetry, encrypt-at-rest), and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical()` do the same for inline multi-agent swarms — across the in-process modes (for queued or durable execution, author a `Swarm` class). See the [Cookbook](docs/cookbook.md) and [Execution Modes: Single Agent](docs/execution-modes.md#single-agent-swarmagent). Reach for a `Swarm` class when the topology is reused, named, or carries class-level attributes.
 
 Use `prompt()` when the caller can wait for the full workflow result:
 

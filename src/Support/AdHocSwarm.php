@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+use BuiltByBerry\LaravelSwarm\Attributes\Topology;
 use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\DefinesGuardrails;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 
 /**
  * A swarm assembled at call time rather than declared as a class.
@@ -18,18 +20,21 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
  * telemetry, encrypt-at-rest — as any hand-authored {@see Swarm} class. A swarm
  * of one is still a swarm; there is no second, ungoverned path.
  *
- * It carries the {@see Runnable} trait so every execution mode (prompt, stream,
- * queue, broadcast, dispatchDurable) is available with no bespoke runner, and
- * implements {@see DefinesGuardrails} so per-call guardrails merge with the
- * app's globally configured ones (the "governed by default" guarantee lives in
+ * It carries the {@see Runnable} trait for the in-process execution modes
+ * (prompt/stream/broadcast) with no bespoke runner, and implements
+ * {@see DefinesGuardrails} so per-call guardrails merge with the app's globally
+ * configured ones (the "governed by default" guarantee lives in
  * {@see \BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner}, which always
  * folds in `config('swarm.guardrails')` regardless of what this returns).
  *
- * Topology is left to the resolver's default (sequential), which is a
- * pass-through for a single agent.
+ * Topology is pinned to sequential via `#[Topology]` — a pass-through for a
+ * single agent — so `Swarm::agent()` is deterministic regardless of the app's
+ * `swarm.topology` config default. The multi-agent inline builders use the
+ * topology-pinned subclasses ({@see AdHocSequentialSwarm}/{@see AdHocParallelSwarm}/{@see AdHocHierarchicalSwarm}).
  *
  * @internal Constructed by SwarmRunner / PendingAgentRun, not by consumers.
  */
+#[Topology(TopologyEnum::Sequential)]
 class AdHocSwarm implements DefinesGuardrails, Swarm
 {
     use Runnable;
