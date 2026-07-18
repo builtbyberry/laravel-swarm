@@ -811,6 +811,19 @@ describe('audit sink check', function (): void {
             ->toContain('Audit sink')
             ->toContain('SwarmHealthRecordingAuditSink');
     });
+
+    test('reports failed and exits 1 when the SwarmAuditSink binding cannot be resolved', function (): void {
+        app()->bind(SwarmAuditSink::class, function (): SwarmAuditSink {
+            throw new RuntimeException('audit sink binding is broken');
+        });
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(1);
+        expect(Artisan::output())
+            ->toContain('Audit sink')
+            ->toContain('could not be resolved');
+    });
 });
 
 describe('capture policy check', function (): void {

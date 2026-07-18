@@ -36,26 +36,32 @@ $response->steps;  // array of SwarmStep
 `Swarm::agent($agent)` wraps the lone agent in a one-element swarm and runs it
 through the exact pipeline a multi-agent swarm uses. A swarm of one is still a
 swarm: the app's globally configured guardrails (`swarm.guardrails.*`) apply
-automatically, the run is recorded in history, and every execution mode is
-available.
+automatically, the run is recorded in history, and the in-process execution
+modes (prompt/stream/broadcast) are available.
 
-### Every execution mode works
+### In-process execution modes
 
-The same verbs you use on a `Swarm` class work here — the mode is chosen at the
-call site, exactly as it is for a class-based swarm:
+The class-free builder exposes the in-process verbs, chosen at the call site:
 
 ```php
-Swarm::agent(new ArticlePlanner)->prompt($task);          // synchronous
-Swarm::agent(new ArticlePlanner)->queue($task);           // background
+Swarm::agent(new ArticlePlanner)->prompt($task);          // synchronous (+ run())
 Swarm::agent(new ArticlePlanner)->stream($task);          // SSE token stream
-Swarm::agent(new ArticlePlanner)->broadcast($task, $ch);  // push to Echo/Reverb
-Swarm::agent(new ArticlePlanner)->dispatchDurable($task); // checkpointed
+Swarm::agent(new ArticlePlanner)->broadcast($task, $ch);  // push to Echo/Reverb (+ broadcastNow())
 ```
 
-A single agent runs under the default sequential topology, which is a
-pass-through for one agent — so `stream()` and the broadcast helpers are
-available here without the topology constraint that applies to multi-agent
-parallel and hierarchical swarms.
+A single agent runs under sequential topology (pinned), a pass-through for one
+agent — so `stream()` and the broadcast helpers are available here (parallel is
+the only topology that cannot stream).
+
+For **queued or durable** execution, author a one-agent `Swarm` class — a
+background run is re-resolved from the container by class on the worker, which an
+ad-hoc swarm built from a runtime agent instance cannot provide:
+
+```php
+// php artisan make:swarm:swarm --single
+ArticlePlannerSwarm::make()->queue($task);
+ArticlePlannerSwarm::make()->dispatchDurable($task);
+```
 
 ### Layer per-call guardrails
 
@@ -82,7 +88,7 @@ You have a multi-agent workflow but it is a one-off — a composition you will
 call from a single place and never reuse. The inline builders let you pin a
 topology and run it without declaring a class. Each builder runs through the
 same `SwarmRunner`, so the inline swarm is governed identically to a class-based
-one and exposes every execution mode.
+one (across the in-process modes; queued/durable need a class).
 
 ### Sequential — each agent feeds the next
 
@@ -129,23 +135,25 @@ $response = Swarm::hierarchical(
 
 ### Guardrails and modes, same as `Swarm::agent()`
 
-`->guardrails([...])` is additive here too, and the execution-mode verbs are
-identical:
+`->guardrails([...])` is additive here too, and the in-process execution-mode
+verbs are identical:
 
 ```php
 use App\Ai\Guardrails\BudgetGuardrail;
 
 Swarm::parallel([new SecurityReviewer, new PerformanceReviewer])
     ->guardrails([BudgetGuardrail::class])
-    ->dispatchDurable($task);
+    ->prompt($task);
 ```
 
-**One constraint to know:** `stream()` and the broadcast helpers require a
-single ordered event stream, so they are limited to sequential swarms. Inline
-`parallel()` and `hierarchical()` swarms support `prompt()`, `queue()`, and
-`dispatchDurable()`, but not streaming — the same rule that applies to
-class-based parallel and hierarchical swarms. See
-[Execution Modes](execution-modes.md#stream) for the reasoning.
+**Two constraints to know.** (1) The class-free builders run **in-process** —
+`prompt()`/`run()`/`stream()`/`broadcast()`/`broadcastNow()`. For queued or
+durable execution, author a `Swarm` class (`make:swarm:swarm --single` for one
+agent) — a background run is re-resolved from the container by class on the
+worker, which an ad-hoc swarm can't provide. (2) `stream()` and the broadcast
+helpers need a streamable topology — sequential, hierarchical, or
+static-hierarchical, **not** parallel (concurrent agents don't map to one ordered
+stream). See [Execution Modes](execution-modes.md#stream) for the reasoning.
 
 ---
 
@@ -193,8 +201,8 @@ governance, which is identical either way.
 Graduating is cheap. An inline `Swarm::sequential([$a, $b, $c])` becomes a class
 by moving the agent array into an `agents()` method and adding a `#[Topology]`
 attribute — the call site changes from `Swarm::sequential([...])->prompt($task)`
-to `ContentPipeline::make()->prompt($task)`, and every execution mode keeps
-working unchanged. See [Getting Started → Scaffold your own swarm](getting-started.md#scaffold-your-own-swarm)
+to `ContentPipeline::make()->prompt($task)` — and the class additionally unlocks
+queued and durable execution (`queue()` / `dispatchDurable()`). See [Getting Started → Scaffold your own swarm](getting-started.md#scaffold-your-own-swarm)
 and [Generators](generators.md) for the scaffolding.
 
 ---

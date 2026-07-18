@@ -16,9 +16,10 @@ use Illuminate\Support\Facades\Facade;
  * The fluent, class-free builders below are surfaced explicitly so IDEs and
  * static analysis autocomplete them straight off the facade (the backing
  * {@see SwarmRunner} is `@internal`). Each returns a fluent pending run whose
- * execution modes — `prompt()`, `run()`, `stream()`, `queue()`, `broadcast()`,
- * `broadcastNow()`, `broadcastOnQueue()`, `dispatchDurable()` — and additive
- * `guardrails()` live on {@see \BuiltByBerry\LaravelSwarm\Support\PendingRun}:
+ * in-process execution modes — `prompt()`, `run()`, `stream()`, `broadcast()`,
+ * `broadcastNow()` — and additive `guardrails()` live on
+ * {@see \BuiltByBerry\LaravelSwarm\Support\PendingRun}. For queued or durable
+ * execution, author a one-agent Swarm class (see {@see \BuiltByBerry\LaravelSwarm\Support\PendingRun}):
  *
  *   Swarm::agent($agent)->prompt($task);
  *   Swarm::agent($agent)->guardrails([BudgetGuardrail::class])->stream($task);

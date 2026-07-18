@@ -24,11 +24,10 @@ $response = Swarm::agent($agent)->prompt($task);
 $response->output;              // string
 $response->steps;               // array<SwarmStep>
 
-// every execution mode is available:
+// in-process modes on the class-free builder:
 Swarm::agent($agent)->stream($task);           // StreamableSwarmResponse (SSE)
-Swarm::agent($agent)->queue($task);            // background
 Swarm::agent($agent)->broadcast($task, $ch);   // push to Echo/Reverb/Pusher
-Swarm::agent($agent)->dispatchDurable($task);  // checkpointed, recoverable
+// queued or durable? author a one-agent Swarm class: make:swarm:swarm --single
 ```
 
 ### 2. Several agents, no class
@@ -43,7 +42,7 @@ Each inline builder pins its own topology and returns a fluent `PendingSwarmRun`
 
 ### 3. A named, reusable swarm class
 
-Author a class when the same topology is reused, needs class-level attributes, or declares guardrails. Generate it with `php artisan make:swarm:swarm ContentPipeline` (use `--single` for a single-agent scaffold; the interactive `make:swarm` guides the choice), and `php artisan make:swarm:agent` for agents.
+Author a class when the same topology is reused, needs class-level attributes or durable/queued execution, or declares guardrails. Generate it with `php artisan make:swarm:swarm ContentPipeline` (use `make:swarm:swarm --single` for a single-agent scaffold), and `php artisan make:swarm:agent` for agents.
 
 ```php
 use BuiltByBerry\LaravelSwarm\Attributes\Topology;
@@ -71,7 +70,7 @@ Class-level attributes worth knowing: `#[Topology]`, `#[Timeout]`, `#[MaxAgentSt
 
 - `prompt()`/`run()` — synchronous, returns `SwarmResponse`. Default.
 - `queue()` — background job; **retries are off by default** (a queued run has no checkpoint, so a retry re-runs from step 0).
-- `stream()` — SSE; sequential topology only.
+- `stream()` — SSE; streamable topologies (sequential/hierarchical/static-hierarchical), not parallel.
 - `broadcast()`/`broadcastNow()`/`broadcastOnQueue()` — push stream events to a broadcast channel.
 - `dispatchDurable()` — checkpointed and recoverable; needs the DB persistence driver and `swarm:relay` scheduled every minute.
 

@@ -1,20 +1,48 @@
 # Changelog
 
-## v0.22.0 - unreleased
+## v0.22.0 - 2026-07-18
 
 Developer-experience release: smooth the paved road so the governed path is the
 easiest path. A single agent — or an inline, class-free swarm — can now run
-through the full audited Swarm pipeline without authoring a `Swarm` class, with
-matching improvements to the generators, testing helpers, IDE/static-analysis
-support, docs, and first-class Laravel Boost AI guidelines and skills.
+through the full audited Swarm pipeline (audit, guardrails, capture, telemetry,
+encrypt-at-rest) without authoring a `Swarm` class, with matching improvements to
+the generators, testing helpers, IDE/static-analysis support, docs, and
+first-class Laravel Boost AI guidelines and skills. Purely additive — no
+migration, config, or dependency changes.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **Class-free entry points.** `Swarm::agent($agent)` runs a single agent through
+  the full governed pipeline without a `Swarm` class, and
+  `Swarm::sequential([...])` / `Swarm::parallel([...])` /
+  `Swarm::hierarchical($coordinator, [$workers])` do the same for inline
+  multi-agent swarms. Governed identically to a class-based swarm; per-call
+  `->guardrails([...])` is additive to the globally configured guardrails. The
+  class-free builders expose the **in-process** modes — `prompt()`/`run()`,
+  `stream()`, `broadcast()`/`broadcastNow()`. For queued or durable execution,
+  author a one-agent Swarm class (`make:swarm:swarm --single`); background
+  execution needs a container-bound class to survive job re-resolution. See
+  [Execution Modes](docs/execution-modes.md#single-agent-swarmagent) and the
+  [Cookbook](docs/cookbook.md).
+- **Testing.** `SwarmFake::interceptSwarmAuditSink()` returns a recording
+  `RecordingSwarmAuditSink` with `assertAuditChain()`, `assertEmittedAudit()`,
+  `assertNotEmittedAudit()`, and `assertStepCount()` to assert the governed audit
+  trail a run emitted. See [Testing](docs/testing.md).
+- **`swarm:health`** gained governed-by-default checks (guardrails resolvable,
+  audit sink reachable, capture policy sane), included in `--json`. See
+  [Maintenance](docs/maintenance.md).
+- **Interactive `make:swarm`** guides single-agent vs. multi-agent and prompts
+  for topology, with a `--single` scaffold; non-interactive / `--no-interaction`
+  usage is unchanged. See [Generators](docs/generators.md).
+- **Laravel Boost.** Ships AI guidelines (`resources/boost/guidelines/core.blade.php`)
+  and a `swarm-development` agent skill, auto-loaded by a consuming app's
+  `php artisan boost:install`.
+- IDE-autocomplete `@method` annotations for the fluent builders on the `Swarm`
+  facade; a repo-wide docs cohesiveness pass and a new DX cookbook.
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- Bumped `extra.branch-alias.dev-main` to `0.22.x-dev`.
 
 ## v0.21.0 - 2026-07-16
 
