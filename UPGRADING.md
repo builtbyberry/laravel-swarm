@@ -270,6 +270,18 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.22.0
+
+**No required action — additive, developer-experience release.** Nothing in your existing code changes behavior; every addition is new public surface you can adopt at your own pace:
+
+- **Class-free entry points.** `Swarm::agent($agent)` runs a single agent through the full governed pipeline, and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical($coordinator, [$workers])` run inline multi-agent swarms — all without authoring a `Swarm` class, all with the same audit, guardrails, capture, telemetry, and encrypt-at-rest as a class-based swarm. See [Execution Modes](docs/execution-modes.md#single-agent-swarmagent) and the [Cookbook](docs/cookbook.md).
+- **Testing.** `SwarmFake::interceptSwarmAuditSink()` returns a recording sink with `assertAuditChain()`, `assertEmittedAudit()`, `assertNotEmittedAudit()`, and `assertStepCount()`. See [Testing](docs/testing.md#use-swarmfake-intercepts-for-the-audit-contracts-v07).
+- **`swarm:health`** gained governed-by-default checks (guardrails resolvable, audit sink reachable, capture policy sane), included in `--json`. See [Maintenance](docs/maintenance.md).
+- **`make:swarm`** is now an interactive front door (single-agent vs. multi-agent, topology prompts) with a `--single` scaffold; non-interactive/`--no-interaction` usage is unchanged. See [Generators](docs/generators.md).
+- **Laravel Boost.** The package ships Boost AI guidelines and a `swarm-development` skill; consuming apps pick them up via `php artisan boost:install`.
+
+No migration, config, or schema change. `Swarm::run()`, `prompt()`, and class-based swarms are untouched. See the [CHANGELOG](CHANGELOG.md) for the full list.
+
 ## Upgrading to v0.20.0
 
 **Required action only if your application pins `laravel/ai` below 0.9.** This release raises Swarm's `laravel/ai` requirement from `^0.8` to `^0.9` (v0.9.0); support for the 0.8 line is dropped. Swarm's own source is unchanged — the upgrade is verified against the full test suite and PHPStan level 7 — but Composer will now resolve `laravel/ai` to 0.9.x, so treat it as an integration-test event:
