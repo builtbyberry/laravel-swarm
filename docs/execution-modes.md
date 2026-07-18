@@ -24,7 +24,32 @@ Swarm::agent($agent)
     ->prompt($task);
 ```
 
-Reach for a full `Swarm` class when you need multiple agents, a non-sequential topology, or class-level configuration; reach for `Swarm::agent()` when one agent is all you need and you still want the audit trail.
+Reach for a full `Swarm` class when you need class-level configuration or want a named, reusable topology; reach for `Swarm::agent()` when one agent is all you need and you still want the audit trail — or for a multi-agent workflow you don't want to name, the inline builders below.
+
+## Inline Swarms (`Swarm::sequential()` / `parallel()` / `hierarchical()`)
+
+The same class-free ergonomics extend to multi-agent swarms. Each builder pins its topology explicitly and runs through the same `SwarmRunner`, so an inline swarm is governed identically to a class-based one and exposes every execution mode:
+
+```php
+// Sequential — each agent's output feeds the next.
+Swarm::sequential([$researcher, $writer, $editor])->prompt($task);
+
+// Parallel — every agent runs against the same task.
+Swarm::parallel([$a, $b, $c])->stream($task);
+
+// Hierarchical — the coordinator (first argument) routes over its workers.
+Swarm::hierarchical($coordinator, [$writer, $editor])->prompt($task);
+```
+
+Guardrails work the same way as on `Swarm::agent()` — globally configured guardrails always apply, and `->guardrails([...])` layers per-call ones on top:
+
+```php
+Swarm::parallel([$a, $b])
+    ->guardrails([BudgetGuardrail::class])
+    ->dispatchDurable($task);
+```
+
+Prefer a full `Swarm` class when the same topology is reused across your app, benefits from a name, or carries class-level attributes (`#[Timeout]`, `#[MaxAgentSteps]`, `#[DurableRetry]`, …); prefer the inline builders for one-off compositions.
 
 ## Comparison Table
 
