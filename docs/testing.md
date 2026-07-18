@@ -178,15 +178,38 @@ intentionally skips that code path for `prompt()` / `run()` / `queue()` /
 `stream()` / `dispatchDurable()`, so the three patterns below cover what
 the fake cannot observe directly.
 
-### Use `SwarmFake` intercepts for the three audit contracts (v0.7+)
+### Use `SwarmFake` intercepts for the audit contracts (v0.7+)
 
-`SwarmFake` ships three intercept helpers for `CapturePolicy`,
-`SinkFailureHandler`, and `SwarmAuditSigner`. Each helper swaps the
-container binding for the corresponding contract to a recording
-decorator and returns a recorder you can assert against. The decorators
-wrap an optional delegate, so existing policy / handler / signer logic
-still drives behavior — the recorder only captures inputs, the routed
-decision, and the resulting payload.
+`SwarmFake` ships intercept helpers for `CapturePolicy`,
+`SinkFailureHandler`, `SwarmAuditSigner`, and — since v0.22 — the
+`SwarmAuditSink` itself. Each helper swaps the container binding for the
+corresponding contract to a recording decorator and returns a recorder you
+can assert against. The decorators wrap an optional delegate, so existing
+policy / handler / signer / sink logic still drives behavior — the recorder
+only captures inputs, the routed decision, and the resulting payload.
+
+`SwarmFake::interceptSwarmAuditSink()` is the ergonomic way to assert the
+**audit trail a run emitted**, replacing a hand-rolled recording sink:
+
+```php
+use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
+
+test('article pipeline emits the full audit chain', function () {
+    $audit = SwarmFake::interceptSwarmAuditSink();
+
+    ArticlePipeline::make()->run('draft a launch post');
+
+    $audit->assertAuditChain(['run.started', 'step.started', 'step.completed', 'run.completed']);
+    $audit->assertEmittedAudit('run.completed');
+    $audit->assertStepCount(3);
+    $audit->assertNotEmittedAudit('run.failed');
+});
+```
+
+`assertAuditChain()` matches its categories as an ordered subsequence, so you
+can assert the backbone without enumerating every step event. It works the
+same for a single agent (`Swarm::agent($a)->prompt(...)`), an inline or
+class-based multi-agent swarm, and queued runs.
 
 Intercepts work during real (non-faked) swarm runs, since the
 recording happens when the real audit dispatcher resolves the contract
@@ -237,10 +260,15 @@ Each recorder exposes:
 - `assertSigned(?string $category = null, ?callable $matcher = null)`,
   `assertNeverSigned(?string $category = null)` on
   `RecordingSwarmAuditSigner`.
+- `assertAuditChain(array $categories)`,
+  `assertEmittedAudit(string $category, ?callable $matcher = null)`,
+  `assertNotEmittedAudit(string $category)`,
+  `assertStepCount(int $expected)` on `RecordingSwarmAuditSink`.
 
-All three recorders also expose `records()` and `recordsFor(string $category)`
+All four recorders also expose `records()` and `recordsFor(string $category)`
 for raw inspection when you need shape assertions richer than what the
-helpers cover.
+helpers cover (`RecordingSwarmAuditSink` adds `categories()` and
+`hasCategory()`).
 
 The intercepts cover the dispatch-time signal: was the contract invoked,
 with what category, and what did it decide. They do not replace the two
@@ -276,37 +304,33 @@ This pattern works for all four contracts. Worked examples live in
 `tests/Unit/Audit/` (`CapturePolicyTest`, `SinkFailureHandlerTest`,
 `SwarmAuditSignerTest`, `DefaultActorResolverTest`).
 
-### Bind a recording sink for end-to-end audit checks
+### Inspect the enriched envelope a sink saw
 
-When you need to verify what an actual run emitted — including the
-signed-and-actor-bound envelope — bind a recording sink in your test
-setup and inspect the emitted payloads:
+When you need to assert on the fully enriched, signed-and-actor-bound
+payload — beyond the category-level helpers above — use the same
+`interceptSwarmAuditSink()` recorder and read the raw records:
 
 ```php
-use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 
-$sink = new class implements SwarmAuditSink {
-    /** @var array<int, array{category: string, payload: array<string, mixed>}> */
-    public array $records = [];
-
-    public function emit(string $category, array $payload): void
-    {
-        $this->records[] = compact('category', 'payload');
-    }
-};
-
-app()->instance(SwarmAuditSink::class, $sink);
+$audit = SwarmFake::interceptSwarmAuditSink();
 
 ArticlePipeline::make()->run(
     RunContext::fromTask('task')->withActor('user:42'),
 );
 
-expect($sink->records[0]['payload']['metadata']['actor']['id'])->toBe('42');
+$audit->assertEmittedAudit(
+    'run.started',
+    fn (array $payload): bool => ($payload['metadata']['actor']['id'] ?? null) === '42',
+);
+
+// Or inspect the raw payloads directly:
+expect($audit->recordsFor('run.started')[0]['metadata']['actor']['id'])->toBe('42');
 ```
 
-The package ships an internal `RecordingSwarmAuditSink` fixture used by
-its own feature tests; copy that shape into your application test
-suite if you want a richer recording sink.
+Pass a delegate to `interceptSwarmAuditSink($realSink)` to keep a real sink
+in the loop behind the recorder.
 
 ### Use `'halt'` failure policy to assert run-level halt behavior
 
