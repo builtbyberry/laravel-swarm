@@ -156,6 +156,33 @@ hierarchical queueing, include the durable runtime tables:
 php artisan swarm:health --durable
 ```
 
+#### Governed-by-default checks
+
+Because the single-agent and inline front doors run governed by default,
+`swarm:health` also verifies (on every bare invocation — no flag required) that
+the governance wiring behind that promise is intact. Each check follows the same
+row shape as the persistence checks (`component`, `driver`, `store`, `status`,
+`details`) and is included in `--json` output:
+
+- **Guardrails** — every globally-configured ref in
+  `swarm.guardrails.input` / `.step` / `.output` resolves from the container,
+  the same resolution path the runner takes at run time. `ok` when they all
+  resolve (or none are configured); `failed` when a ref is neither a
+  container-resolvable class name nor an object instance, since it would
+  otherwise throw mid-run.
+- **Audit sink** — reports which `SwarmAuditSink` is bound. A real sink is `ok`.
+  The default `NoOpSwarmAuditSink` — which discards all evidence — is surfaced
+  as a `note` (not a failure), because discarding evidence is a valid choice for
+  non-regulated apps. Bind a real sink (or run `swarm:install:audit`) to retain
+  audit evidence.
+- **Capture policy** — the bound `CapturePolicy` resolves from the container.
+  `ok` when it resolves; `failed` when the binding is broken, since a run would
+  throw the first time it made a capture decision.
+
+These checks touch only the container (no database), so they are cheap and safe
+to run in every deployment check. They are skipped under `--audit`, which is
+scoped to the audit-outbox checks only.
+
 If you are using durable execution, also schedule the relay and recovery commands:
 
 ```php
