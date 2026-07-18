@@ -661,7 +661,10 @@ For the full set — topologies, guardrails, the durable subsystems, observabili
 
 ## AI Coding Assistants (Laravel Boost)
 
-Laravel Swarm ships first-party [Laravel Boost](https://laravel.com/docs/boost) AI guidelines, so coding agents (Claude Code, Cursor, …) generate correct, governed swarm code in apps that use the package. When a consuming app runs `php artisan boost:install` (or `boost:update --discover`), Boost automatically picks up the package's guidelines and instructs the agent on the paved path — `Swarm::agent()`, the inline `Swarm::sequential()/parallel()/hierarchical()` builders, and class-based swarms — and to prefer them over a bare `laravel/ai` agent, which bypasses swarm's governance.
+Laravel Swarm ships first-party [Laravel Boost](https://laravel.com/docs/boost) AI guidelines **and** an agent skill, so coding agents (Claude Code, Cursor, …) generate correct, governed swarm code in apps that use the package. When a consuming app runs `php artisan boost:install` (or `boost:update --discover`), Boost automatically picks them up:
+
+- **Guidelines** (loaded upfront) instruct the agent on the paved path — `Swarm::agent()`, the inline `Swarm::sequential()/parallel()/hierarchical()` builders, and class-based swarms — and to prefer them over a bare `laravel/ai` agent, which bypasses swarm's governance.
+- The **`swarm-development` skill** (loaded on demand) carries the deeper end-to-end authoring patterns: topology and execution-mode choice, governed-by-default guardrails, and testing the audit trail.
 
 ## Companion Packages
 
