@@ -14,6 +14,7 @@ The recommended reading path for new users.
 - [Advanced Setup](advanced-setup.md) — the manual equivalent of every `swarm:install` step, for environments where the installer cannot run
 - [Introduction](introduction.md) — what Swarm is, the three core concepts, and a decision tree for where to start
 - [Sequential Topology](sequential.md) — the default topology; start here to build your first swarm
+- [Cookbook](cookbook.md) — copy-paste recipes for the class-free entry points (`Swarm::agent()` and the inline `sequential`/`parallel`/`hierarchical` builders), plus when to author a `Swarm` class instead
 - [Generators](generators.md) — `make:swarm:swarm` and `make:swarm:agent` for scaffolding new swarms and agents
 - [Choosing an Execution Mode](execution-modes.md) — prompt, queue, stream, or durable: when to use each
 - [Structured Input](structured-input.md)
