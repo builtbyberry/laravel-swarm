@@ -69,23 +69,26 @@ class MakeSwarmSwarmCommand extends GeneratorCommand
      */
     public function handle(): ?bool
     {
+        if (! $this->resolveTopology()) {
+            return true;
+        }
+
+        return parent::handle();
+    }
+
+    /**
+     * Resolve and validate the swarm topology from the --topology option, an
+     * interactive prompt, or the non-interactive default. Sets
+     * {@see self::$resolvedTopology} and returns true on success; on an invalid
+     * value it reports the error and returns false so the caller can abort.
+     */
+    protected function resolveTopology(): bool
+    {
         $topology = $this->optionalOptionString('topology');
 
         if ($topology === null) {
-            if ($this->input->isInteractive()) {
-                $chosen = select(
-                    label: 'Which topology?',
-                    options: [
-                        'sequential' => 'Sequential — agents in order, each receives prior output',
-                        'parallel' => 'Parallel — agents concurrent, each gets the original task',
-                        'hierarchical' => 'Hierarchical — coordinator returns a DAG route plan at runtime',
-                        'static-hierarchical' => 'Static hierarchical — PHP-defined route plan, no coordinator call',
-                    ],
-                    default: 'sequential',
-                    hint: 'Sequential is the most common starting point.',
-                );
-                $topology = is_string($chosen) ? $chosen : 'sequential';
-            } else {
+            $topology = $this->input->isInteractive()
+                ? $this->promptForTopology()
                 // Non-interactive: skip the prompt and use the safe default.
                 // laravel/prompts has a Symfony QuestionHelper fallback under
                 // non-interactive mode, but that fallback re-enters
@@ -93,8 +96,7 @@ class MakeSwarmSwarmCommand extends GeneratorCommand
                 // that didn't pre-register an expectsChoice/expectsQuestion.
                 // The explicit guard keeps test ergonomics simple and matches
                 // the pattern the other v0.8.0 installers use for prompts.
-                $topology = 'sequential';
-            }
+                : 'sequential';
         }
 
         if (! in_array($topology, self::TOPOLOGIES, true)) {
@@ -102,12 +104,32 @@ class MakeSwarmSwarmCommand extends GeneratorCommand
                 'Invalid topology ['.$topology.']. Valid options are: '.implode(', ', self::TOPOLOGIES).'.'
             );
 
-            return true;
+            return false;
         }
 
         $this->resolvedTopology = $topology;
 
-        return parent::handle();
+        return true;
+    }
+
+    /**
+     * Prompt interactively for the swarm topology.
+     */
+    protected function promptForTopology(): string
+    {
+        $chosen = select(
+            label: 'Which topology?',
+            options: [
+                'sequential' => 'Sequential — agents in order, each receives prior output',
+                'parallel' => 'Parallel — agents concurrent, each gets the original task',
+                'hierarchical' => 'Hierarchical — coordinator returns a DAG route plan at runtime',
+                'static-hierarchical' => 'Static hierarchical — PHP-defined route plan, no coordinator call',
+            ],
+            default: 'sequential',
+            hint: 'Sequential is the most common starting point.',
+        );
+
+        return is_string($chosen) ? $chosen : 'sequential';
     }
 
     /**
