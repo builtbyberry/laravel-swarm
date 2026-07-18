@@ -245,11 +245,20 @@ plugging in a real LLM.
 
 See [Generators](./generators.md) for the full generator surface.
 
+Not every workflow needs a class. For a single agent or a one-off multi-agent
+composition, `Swarm::agent()` and the inline `Swarm::sequential()` /
+`parallel()` / `hierarchical()` builders give you the same governed run without
+a class file — see the [Cookbook](./cookbook.md) for copy-paste recipes and a
+guide on when to author a class instead.
+
 ## Where to next
 
 You now have a working Laravel Swarm install and a running starter swarm.
 From here:
 
+- [Cookbook](./cookbook.md) — copy-paste recipes for the class-free entry
+  points (`Swarm::agent()` and the inline builders), plus when to author a
+  `Swarm` class instead.
 - [Sequential Topology](./sequential.md) — the default; build your first
   production pipeline.
 - [Choosing an Execution Mode](./execution-modes.md) — `prompt()`,
