@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Audit\RunAuditEmitter;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
@@ -34,6 +35,7 @@ use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -98,6 +100,21 @@ class SwarmRunner
     public function memory(): SwarmMemory
     {
         return Container::getInstance()->make(SwarmMemory::class);
+    }
+
+    /**
+     * Begin a governed run for a single agent without authoring a Swarm class.
+     *
+     * Returns a fluent {@see PendingAgentRun}: `Swarm::agent($agent)->prompt($task)`
+     * wraps the lone agent in a one-element {@see \BuiltByBerry\LaravelSwarm\Support\AdHocSwarm}
+     * and dispatches it through this same runner, so it inherits audit,
+     * guardrails, capture, telemetry and encrypt-at-rest identically to a
+     * multi-agent swarm — and every execution mode. A swarm of one is still a
+     * swarm; there is no second, ungoverned path.
+     */
+    public function agent(Agent $agent): PendingAgentRun
+    {
+        return new PendingAgentRun($agent);
     }
 
     /**
