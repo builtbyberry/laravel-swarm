@@ -90,6 +90,14 @@ Use Laravel Swarm when any of the following apply:
 Use a raw `laravel/ai` agent call when you have a single model call with no
 orchestration—one agent, one response, no pipeline.
 
+You do not always need a `Swarm` class, though. For a single agent that should
+still flow through the governed pipeline—audit, guardrails, capture,
+telemetry—reach for `Swarm::agent($agent)`; for a one-off multi-agent
+composition, the inline `Swarm::sequential()` / `parallel()` / `hierarchical()`
+builders pin a topology without a class. The [Cookbook](cookbook.md) collects
+copy-paste recipes for these entry points and a guide on when to author a class
+instead.
+
 ---
 
 ## The Four Topologies at a Glance
