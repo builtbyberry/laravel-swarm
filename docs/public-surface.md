@@ -8,6 +8,7 @@ adding a new public API.
 
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
+| `Swarm::agent()` | Run a single agent through the full governed pipeline without authoring a `Swarm` class; returns a fluent `PendingAgentRun` exposing every execution mode. | [Execution Modes: Single Agent](execution-modes.md#single-agent-swarmagent) |
 | `prompt()` | Run a swarm synchronously and return `SwarmResponse`. | [README: Running A Swarm](../README.md#running-a-swarm), [Sequential Content Pipeline](../examples/sequential-content-pipeline/README.md) |
 | `run()` | Compatibility alias for `prompt()`. | [README: Running A Swarm](../README.md#running-a-swarm) |
 | `queue()` | Dispatch a lightweight background swarm job. | [README: Queueing A Swarm](../README.md#queueing-a-swarm), [Queued Workflow Events](../examples/queued-workflow-events/README.md) |
