@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use Carbon\CarbonInterface;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -62,6 +65,14 @@ class SwarmHealthCommand extends Command
                 $results[] = $this->runOutboxStalenessCheck($config, $connection);
                 $results[] = $this->runQueueRoutingCheck($config, $connection);
             }
+
+            // Governed-by-default checks: the single-agent/inline front door promises
+            // that globally-configured guardrails, the audit sink, and the capture
+            // policy are wired up. These are container-only checks (no database), so
+            // they run on a bare `swarm:health` alongside the persistence checks.
+            $results[] = $this->runGuardrailResolutionCheck($app, $config);
+            $results[] = $this->runAuditSinkCheck($app);
+            $results[] = $this->runCapturePolicyCheck($app);
         }
 
         // Audit outbox checks run by default (the audit lane is on by default in v0.5)
@@ -118,6 +129,142 @@ class SwarmHealthCommand extends Command
             'store' => 'n/a',
             'status' => 'failed',
             'details' => 'Queued and durable swarms require active runtime context persistence so workers can continue or recover the run. Enable [swarm.capture.active_context] (SWARM_CAPTURE_ACTIVE_CONTEXT=true) or use synchronous execution.',
+        ];
+    }
+
+    /**
+     * Every globally-configured guardrail ref (swarm.guardrails.input/step/output)
+     * must resolve from the container — the same resolution path {@see SwarmGuardrailRunner}
+     * takes at run time. A ref that is neither a container-resolvable class name nor an
+     * object instance would throw mid-run, so surfacing it here fails loud up front.
+     *
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runGuardrailResolutionCheck(Application $app, ConfigRepository $config): array
+    {
+        $total = 0;
+        $problems = [];
+
+        foreach (['input', 'step', 'output'] as $phase) {
+            /** @var mixed $configured */
+            $configured = $config->get("swarm.guardrails.{$phase}", []);
+
+            if (! is_array($configured)) {
+                continue;
+            }
+
+            /** @var mixed $ref */
+            foreach ($configured as $ref) {
+                $total++;
+                $label = is_string($ref) ? $ref : get_debug_type($ref);
+
+                try {
+                    if (is_object($ref)) {
+                        continue;
+                    }
+
+                    if (is_string($ref) && class_exists($ref)) {
+                        $app->make($ref);
+
+                        continue;
+                    }
+
+                    $problems[] = "[{$phase}] {$label}";
+                } catch (Throwable $exception) {
+                    $problems[] = "[{$phase}] {$label} ({$exception->getMessage()})";
+                }
+            }
+        }
+
+        if ($problems !== []) {
+            return [
+                'component' => 'Guardrails',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => 'Configured guardrail ref(s) not resolvable: '.implode('; ', $problems).'. Each swarm.guardrails.[input|step|output] entry must be a container-resolvable class name or an object instance.',
+            ];
+        }
+
+        return [
+            'component' => 'Guardrails',
+            'driver' => 'n/a',
+            'store' => 'n/a',
+            'status' => 'ok',
+            'details' => $total === 0
+                ? 'no global guardrails configured (swarm.guardrails.input/step/output empty)'
+                : "{$total} global guardrail ref(s) resolve from the container",
+        ];
+    }
+
+    /**
+     * The audit lane is on by default, but the SwarmAuditSink binding defaults to
+     * NoOpSwarmAuditSink, which discards every evidence record. That is a valid
+     * choice for non-regulated apps, so a NoOp sink is a note (not a failure) — it
+     * tells the operator that no evidence is being retained and how to change that.
+     *
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runAuditSinkCheck(Application $app): array
+    {
+        try {
+            $sink = $app->make(SwarmAuditSink::class);
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Audit sink',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => 'SwarmAuditSink could not be resolved from the container: '.$exception->getMessage(),
+            ];
+        }
+
+        if ($sink instanceof NoOpSwarmAuditSink) {
+            return [
+                'component' => 'Audit sink',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'note',
+                'details' => 'SwarmAuditSink is bound to NoOpSwarmAuditSink — audit evidence is discarded. Bind a real SwarmAuditSink (e.g. LogChannelSwarmAuditSink or your own append-only store) to retain evidence; run [php artisan swarm:install:audit] to scaffold one.',
+            ];
+        }
+
+        return [
+            'component' => 'Audit sink',
+            'driver' => 'n/a',
+            'store' => 'n/a',
+            'status' => 'ok',
+            'details' => 'SwarmAuditSink bound to '.get_debug_type($sink),
+        ];
+    }
+
+    /**
+     * The CapturePolicy governs what each run captures into audit evidence and
+     * history. A broken binding would throw the first time a run tried to make a
+     * capture decision, so verify it resolves up front.
+     *
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runCapturePolicyCheck(Application $app): array
+    {
+        try {
+            $policy = $app->make(CapturePolicy::class);
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Capture policy',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => 'CapturePolicy could not be resolved from the container: '.$exception->getMessage().'. Bind a valid CapturePolicy or restore the default BooleanCapturePolicy binding.',
+            ];
+        }
+
+        return [
+            'component' => 'Capture policy',
+            'driver' => 'n/a',
+            'store' => 'n/a',
+            'status' => 'ok',
+            'details' => 'CapturePolicy resolves ('.get_debug_type($policy).')',
         ];
     }
 
