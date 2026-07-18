@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.22.0 - unreleased
+
+Developer-experience release: smooth the paved road so the governed path is the
+easiest path. A single agent — or an inline, class-free swarm — can now run
+through the full audited Swarm pipeline without authoring a `Swarm` class, with
+matching improvements to the generators, testing helpers, IDE/static-analysis
+support, docs, and first-class Laravel Boost AI guidelines and skills.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.21.0 - 2026-07-16
 
 Adopts four capabilities from the `laravel/ai` ^0.9 line that the v0.20.0 upgrade
