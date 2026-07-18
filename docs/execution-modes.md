@@ -2,6 +2,30 @@
 
 Every swarm class supports six execution modes through the `Runnable` trait: `prompt()` (and its alias `run()`), `queue()`, `stream()`, `broadcast()` / `broadcastNow()`, `broadcastOnQueue()`, and `dispatchDurable()`. The mode you choose determines whether the run is synchronous or background, whether it streams tokens to the caller, and whether it can recover from partial failures mid-run. Most of the modes mirror the Laravel AI agent API deliberately — if you know how to run an agent, the same verbs work on swarms.
 
+## Single Agent (`Swarm::agent()`)
+
+You do not need to author a `Swarm` class to get the governed pipeline for a single agent. `Swarm::agent($agent)` wraps a lone agent in a one-element swarm and runs it through the **same** `SwarmRunner` a multi-agent swarm uses — so it inherits audit, guardrails, capture, telemetry and encrypt-at-rest identically, and exposes **every** execution mode below:
+
+```php
+use BuiltByBerry\LaravelSwarm\Facades\Swarm;
+
+Swarm::agent($agent)->prompt($task);
+Swarm::agent($agent)->stream($task);
+Swarm::agent($agent)->queue($task);
+Swarm::agent($agent)->broadcast($task, $channel);
+Swarm::agent($agent)->dispatchDurable($task);
+```
+
+A swarm of one is still a swarm — there is no second, ungoverned path. Governance is on by default: the app's globally configured guardrails (`swarm.guardrails.*`) apply automatically, and you can layer per-call guardrails on top without replacing them:
+
+```php
+Swarm::agent($agent)
+    ->guardrails([BudgetGuardrail::class])
+    ->prompt($task);
+```
+
+Reach for a full `Swarm` class when you need multiple agents, a non-sequential topology, or class-level configuration; reach for `Swarm::agent()` when one agent is all you need and you still want the audit trail.
+
 ## Comparison Table
 
 | Method | Return Type | Runs in Background | Streaming | Checkpointing | Recovery | Complexity |
