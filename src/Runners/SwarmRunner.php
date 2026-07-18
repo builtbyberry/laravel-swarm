@@ -34,8 +34,12 @@ use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Support\AdHocHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AdHocParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AdHocSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
+use BuiltByBerry\LaravelSwarm\Support\PendingSwarmRun;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -115,6 +119,39 @@ class SwarmRunner
     public function agent(Agent $agent): PendingAgentRun
     {
         return new PendingAgentRun($agent);
+    }
+
+    /**
+     * Begin a governed sequential run for the given agents without authoring a
+     * Swarm class. Each agent's output feeds the next.
+     *
+     * @param  array<int, Agent>  $agents
+     */
+    public function sequential(array $agents): PendingSwarmRun
+    {
+        return new PendingSwarmRun(AdHocSequentialSwarm::class, array_values($agents));
+    }
+
+    /**
+     * Begin a governed parallel run for the given agents without authoring a
+     * Swarm class. Every agent runs against the same task.
+     *
+     * @param  array<int, Agent>  $agents
+     */
+    public function parallel(array $agents): PendingSwarmRun
+    {
+        return new PendingSwarmRun(AdHocParallelSwarm::class, array_values($agents));
+    }
+
+    /**
+     * Begin a governed hierarchical run without authoring a Swarm class: the
+     * coordinator decides the route plan over the given worker agents.
+     *
+     * @param  array<int, Agent>  $workers
+     */
+    public function hierarchical(Agent $coordinator, array $workers = []): PendingSwarmRun
+    {
+        return new PendingSwarmRun(AdHocHierarchicalSwarm::class, [$coordinator, ...array_values($workers)]);
     }
 
     /**
