@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.23.0 - unreleased
+
+Post-v0.22.0 hardening: durable-dispatch correctness, encrypt-at-rest coverage,
+laravel/ai drop-in compatibility, and release-quality gates.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
+### Fixed
+
+_To be filled in during release wrap-up._
+
 ## v0.22.0 - 2026-07-18
 
 Developer-experience release: smooth the paved road so the governed path is the
