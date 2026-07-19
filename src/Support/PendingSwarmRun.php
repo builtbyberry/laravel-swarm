@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 
 /**
  * Fluent entry point for running a multi-agent swarm inline, without authoring
- * a {@see \BuiltByBerry\LaravelSwarm\Contracts\Swarm} class.
+ * a {@see Swarm} class.
  *
- * Returned by {@see \BuiltByBerry\LaravelSwarm\Runners\SwarmRunner}'s
+ * Returned by {@see SwarmRunner}'s
  * `sequential()`, `parallel()` and `hierarchical()` entry points (reachable as
  * `Swarm::sequential()` etc.):
  *

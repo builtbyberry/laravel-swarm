@@ -5,13 +5,14 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Testing\Audit;
 
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use Illuminate\Testing\Assert as PHPUnit;
 
 /**
  * Test double for {@see SwarmAuditSink} that records every emitted evidence
  * payload and exposes assertions over the audit trail a run produced.
  *
- * Install it with {@see \BuiltByBerry\LaravelSwarm\Testing\SwarmFake::interceptSwarmAuditSink()},
+ * Install it with {@see SwarmFake::interceptSwarmAuditSink()},
  * which swaps the container binding and flushes the dispatcher so the next
  * run records into this recorder:
  *

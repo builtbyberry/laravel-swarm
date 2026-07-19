@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Facades\Swarm;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSink;
-use PHPUnit\Framework\AssertionFailedError;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use PHPUnit\Framework\AssertionFailedError;
 
 beforeEach(function () {
     FakeResearcher::fake(['research-out']);

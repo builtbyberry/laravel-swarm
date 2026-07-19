@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Testing;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
@@ -754,7 +755,7 @@ class SwarmFake implements Swarm
      * {@see RecordingSwarmAuditSink::assertStepCount()}.
      *
      * See {@see interceptCapturePolicy()} for the design contract. The default
-     * binding is {@see \BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink};
+     * binding is {@see NoOpSwarmAuditSink};
      * pass a delegate to keep a real sink in the loop behind the recorder.
      */
     public static function interceptSwarmAuditSink(?SwarmAuditSink $delegate = null): RecordingSwarmAuditSink

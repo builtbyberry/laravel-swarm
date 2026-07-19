@@ -5,13 +5,15 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 
 /**
  * Fluent entry point for running a single agent through the full governed
- * Swarm pipeline without authoring a {@see \BuiltByBerry\LaravelSwarm\Contracts\Swarm}
+ * Swarm pipeline without authoring a {@see Swarm}
  * class.
  *
- * Returned by {@see \BuiltByBerry\LaravelSwarm\Runners\SwarmRunner::agent()}
+ * Returned by {@see SwarmRunner::agent()}
  * (reachable as `Swarm::agent($agent)`):
  *
  *   Swarm::agent($agent)->prompt($task);

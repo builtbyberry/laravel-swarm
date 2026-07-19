@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Facades;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
+use BuiltByBerry\LaravelSwarm\Support\PendingRun;
 use BuiltByBerry\LaravelSwarm\Support\PendingSwarmRun;
 use Illuminate\Support\Facades\Facade;
 
@@ -18,8 +19,8 @@ use Illuminate\Support\Facades\Facade;
  * {@see SwarmRunner} is `@internal`). Each returns a fluent pending run whose
  * in-process execution modes — `prompt()`, `run()`, `stream()`, `broadcast()`,
  * `broadcastNow()` — and additive `guardrails()` live on
- * {@see \BuiltByBerry\LaravelSwarm\Support\PendingRun}. For queued or durable
- * execution, author a one-agent Swarm class (see {@see \BuiltByBerry\LaravelSwarm\Support\PendingRun}):
+ * {@see PendingRun}. For queued or durable
+ * execution, author a one-agent Swarm class (see {@see PendingRun}):
  *
  *   Swarm::agent($agent)->prompt($task);
  *   Swarm::agent($agent)->guardrails([BudgetGuardrail::class])->stream($task);

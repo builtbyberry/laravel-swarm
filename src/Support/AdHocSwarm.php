@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\DefinesGuardrails;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 
 /**
  * A swarm assembled at call time rather than declared as a class.
@@ -24,7 +25,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
  * (prompt/stream/broadcast) with no bespoke runner, and implements
  * {@see DefinesGuardrails} so per-call guardrails merge with the app's globally
  * configured ones (the "governed by default" guarantee lives in
- * {@see \BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner}, which always
+ * {@see SwarmGuardrailRunner}, which always
  * folds in `config('swarm.guardrails')` regardless of what this returns).
  *
  * Topology is pinned to sequential via `#[Topology]` — a pass-through for a

@@ -37,6 +37,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Support\AdHocHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Support\AdHocParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
 use BuiltByBerry\LaravelSwarm\Support\PendingSwarmRun;
@@ -110,7 +111,7 @@ class SwarmRunner
      * Begin a governed run for a single agent without authoring a Swarm class.
      *
      * Returns a fluent {@see PendingAgentRun}: `Swarm::agent($agent)->prompt($task)`
-     * wraps the lone agent in a one-element {@see \BuiltByBerry\LaravelSwarm\Support\AdHocSwarm}
+     * wraps the lone agent in a one-element {@see AdHocSwarm}
      * and dispatches it through this same runner, so it inherits audit,
      * guardrails, capture, telemetry and encrypt-at-rest identically to a
      * multi-agent swarm — across the in-process execution modes

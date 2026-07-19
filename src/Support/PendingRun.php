@@ -4,17 +4,19 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use Illuminate\Broadcasting\Channel;
 
 /**
  * Shared fluent surface for the class-free swarm entry points
- * ({@see \BuiltByBerry\LaravelSwarm\Runners\SwarmRunner::agent()},
+ * ({@see SwarmRunner::agent()},
  * `sequential()`, `parallel()`, `hierarchical()`).
  *
  * Each terminal call materializes a fresh {@see AdHocSwarm} via {@see toSwarm()}
- * and dispatches it through the same {@see \BuiltByBerry\LaravelSwarm\Runners\SwarmRunner}
+ * and dispatches it through the same {@see SwarmRunner}
  * a hand-authored swarm uses, so an inline swarm inherits audit, guardrails,
  * capture, telemetry and encrypt-at-rest identically.
  *
@@ -25,7 +27,7 @@ use Illuminate\Broadcasting\Channel;
  * and re-resolved from the container by class on a (possibly much later, post-
  * deploy) worker, which requires a stable, container-bound identity — exactly
  * what an ad-hoc swarm built from runtime agent instances cannot provide. For
- * background or recoverable execution, author a one-agent {@see \BuiltByBerry\LaravelSwarm\Contracts\Swarm}
+ * background or recoverable execution, author a one-agent {@see Swarm}
  * class (`php artisan make:swarm:swarm --single`) and call `queue()` /
  * `dispatchDurable()` on it.
  *

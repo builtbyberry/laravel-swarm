@@ -6,10 +6,11 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Attributes\Topology;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 
 /**
  * A class-free sequential swarm built at call time by
- * {@see \BuiltByBerry\LaravelSwarm\Runners\SwarmRunner::sequential()}.
+ * {@see SwarmRunner::sequential()}.
  *
  * The topology is pinned with the standard `#[Topology]` attribute so it flows
  * through the normal attribute-resolution path — no bespoke runner, and no
