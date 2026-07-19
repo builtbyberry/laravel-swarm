@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
@@ -45,6 +47,14 @@ class SwarmHealthFailingCacheStore extends ArrayStore
     public function put($key, $value, $seconds): bool
     {
         return false;
+    }
+}
+
+class SwarmHealthRecordingAuditSink implements SwarmAuditSink
+{
+    public function emit(string $category, array $payload): void
+    {
+        // no-op: presence of the binding is what the health check verifies.
     }
 }
 
@@ -111,11 +121,17 @@ test('swarm health json output is structured', function (): void {
 
     $payload = json_decode(Artisan::output(), true);
 
+    // 4 persistence checks + 3 governed-by-default checks (Guardrails, Audit sink, Capture policy).
     expect($payload)
         ->toBeArray()
         ->and($payload['ok'])->toBeTrue()
-        ->and($payload['checks'])->toHaveCount(4)
+        ->and($payload['checks'])->toHaveCount(7)
         ->and($payload['checks'][0])->toHaveKeys(['component', 'driver', 'store', 'status', 'details']);
+
+    // Every check — including the new governance checks — carries the same shape.
+    foreach ($payload['checks'] as $check) {
+        expect($check)->toHaveKeys(['component', 'driver', 'store', 'status', 'details']);
+    }
 });
 
 test('swarm health identifies failing cache component', function (): void {
@@ -733,5 +749,128 @@ describe('policy-aware audit outbox scoping (fix #247)', function (): void {
 
         expect($exitCode)->toBe(0)
             ->and($payload['ok'])->toBeTrue();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// v0.22.0 — governed-by-default checks (guardrails / audit sink / capture policy)
+// ---------------------------------------------------------------------------
+
+describe('guardrail resolution check', function (): void {
+    test('reports ok with an empty-config message when no guardrails are configured', function (): void {
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('Guardrails')
+            ->toContain('no global guardrails configured');
+    });
+
+    test('reports ok when a configured guardrail ref resolves from the container', function (): void {
+        config()->set('swarm.guardrails.input', [stdClass::class]);
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('Guardrails')
+            ->toContain('global guardrail ref(s) resolve');
+    });
+
+    test('reports failed and exits 1 when a configured guardrail ref is not resolvable', function (): void {
+        config()->set('swarm.guardrails.step', ['Not\\A\\Real\\GuardrailClass']);
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(1);
+        expect(Artisan::output())
+            ->toContain('Guardrails')
+            ->toContain('failed')
+            ->toContain('not resolvable');
+    });
+});
+
+describe('audit sink check', function (): void {
+    test('reports a note (not a failure) when the sink is the default NoOp', function (): void {
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('Audit sink')
+            ->toContain('NoOpSwarmAuditSink')
+            ->toContain('swarm:install:audit');
+    });
+
+    test('reports ok when a real SwarmAuditSink is bound', function (): void {
+        app()->singleton(SwarmAuditSink::class, SwarmHealthRecordingAuditSink::class);
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('Audit sink')
+            ->toContain('SwarmHealthRecordingAuditSink');
+    });
+
+    test('reports failed and exits 1 when the SwarmAuditSink binding cannot be resolved', function (): void {
+        app()->bind(SwarmAuditSink::class, function (): SwarmAuditSink {
+            throw new RuntimeException('audit sink binding is broken');
+        });
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(1);
+        expect(Artisan::output())
+            ->toContain('Audit sink')
+            ->toContain('could not be resolved');
+    });
+});
+
+describe('capture policy check', function (): void {
+    test('reports ok when the default CapturePolicy resolves', function (): void {
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(0);
+        expect(Artisan::output())
+            ->toContain('Capture policy')
+            ->toContain('CapturePolicy resolves');
+    });
+
+    test('reports failed and exits 1 when the CapturePolicy binding cannot be resolved', function (): void {
+        app()->bind(CapturePolicy::class, function (): CapturePolicy {
+            throw new RuntimeException('capture policy binding is broken');
+        });
+
+        $exitCode = Artisan::call('swarm:health');
+
+        expect($exitCode)->toBe(1);
+        expect(Artisan::output())
+            ->toContain('Capture policy')
+            ->toContain('could not be resolved');
+    });
+});
+
+describe('governance checks in --json output', function (): void {
+    test('the three governance checks appear with the standard shape in --json', function (): void {
+        $exitCode = Artisan::call('swarm:health', ['--json' => true]);
+
+        $payload = json_decode(Artisan::output(), true);
+
+        $components = array_column($payload['checks'], 'component');
+
+        expect($exitCode)->toBe(0)
+            ->and($payload['ok'])->toBeTrue()
+            ->and($components)->toContain('Guardrails')
+            ->and($components)->toContain('Audit sink')
+            ->and($components)->toContain('Capture policy');
+    });
+
+    test('the three governance checks are skipped under --audit (audit-outbox scope only)', function (): void {
+        $output = Artisan::call('swarm:health', ['--audit' => true]);
+
+        expect($output)->toBe(0);
+        expect(Artisan::output())
+            ->not->toContain('Guardrails')
+            ->not->toContain('Capture policy');
     });
 });

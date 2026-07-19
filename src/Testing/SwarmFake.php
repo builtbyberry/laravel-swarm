@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Testing;
 use BuiltByBerry\LaravelSwarm\Attributes\Topology as TopologyAttribute;
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
@@ -15,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
@@ -35,6 +37,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSinkFailureHandler;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSigner;
+use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Testing\Memory\RecordingMemoryCapturePolicy;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
@@ -740,6 +743,26 @@ class SwarmFake implements Swarm
         $recorder = new RecordingSwarmAuditSigner($delegate);
 
         self::bindAuditIntercept(SwarmAuditSigner::class, $recorder);
+
+        return $recorder;
+    }
+
+    /**
+     * Install a {@see RecordingSwarmAuditSink} as the bound
+     * {@see SwarmAuditSink} for the duration of the test, so the audit trail a
+     * run emits can be asserted with {@see RecordingSwarmAuditSink::assertAuditChain()},
+     * {@see RecordingSwarmAuditSink::assertEmittedAudit()}, and
+     * {@see RecordingSwarmAuditSink::assertStepCount()}.
+     *
+     * See {@see interceptCapturePolicy()} for the design contract. The default
+     * binding is {@see NoOpSwarmAuditSink};
+     * pass a delegate to keep a real sink in the loop behind the recorder.
+     */
+    public static function interceptSwarmAuditSink(?SwarmAuditSink $delegate = null): RecordingSwarmAuditSink
+    {
+        $recorder = new RecordingSwarmAuditSink($delegate);
+
+        self::bindAuditIntercept(SwarmAuditSink::class, $recorder);
 
         return $recorder;
     }

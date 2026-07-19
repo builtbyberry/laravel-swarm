@@ -168,6 +168,8 @@ In a sequential swarm, the first agent receives the original task. Each later ag
 
 ## Running a Swarm
 
+> **No class required.** For one agent — or a quick multi-agent composition — you don't need to author a `Swarm` class at all. `Swarm::agent($agent)->prompt($task)` runs a single agent through the **same** governed pipeline (audit, guardrails, capture, telemetry, encrypt-at-rest), and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical()` do the same for inline multi-agent swarms — across the in-process modes (for queued or durable execution, author a `Swarm` class). See the [Cookbook](docs/cookbook.md) and [Execution Modes: Single Agent](docs/execution-modes.md#single-agent-swarmagent). Reach for a `Swarm` class when the topology is reused, named, or carries class-level attributes.
+
 Use `prompt()` when the caller can wait for the full workflow result:
 
 ```php
@@ -658,6 +660,13 @@ The same content is mirrored in this repository; the [in-repo documentation inde
 - [Audit Evidence Contract](docs/audit-evidence-contract.md) — compliance and auditability
 
 For the full set — topologies, guardrails, the durable subsystems, observability, operator runbooks, and examples — see the [documentation index](docs/README.md).
+
+## AI Coding Assistants (Laravel Boost)
+
+Laravel Swarm ships first-party [Laravel Boost](https://laravel.com/docs/boost) AI guidelines **and** an agent skill, so coding agents (Claude Code, Cursor, …) generate correct, governed swarm code in apps that use the package. When a consuming app runs `php artisan boost:install` (or `boost:update --discover`), Boost automatically picks them up:
+
+- **Guidelines** (loaded upfront) instruct the agent on the paved path — `Swarm::agent()`, the inline `Swarm::sequential()/parallel()/hierarchical()` builders, and class-based swarms — and to prefer them over a bare `laravel/ai` agent, which bypasses swarm's governance.
+- The **`swarm-development` skill** (loaded on demand) carries the deeper end-to-end authoring patterns: topology and execution-mode choice, governed-by-default guardrails, and testing the audit trail.
 
 ## Companion Packages
 

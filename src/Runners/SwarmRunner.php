@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Audit\RunAuditEmitter;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
@@ -33,7 +34,13 @@ use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Support\AdHocHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AdHocParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AdHocSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
+use BuiltByBerry\LaravelSwarm\Support\PendingSwarmRun;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -98,6 +105,56 @@ class SwarmRunner
     public function memory(): SwarmMemory
     {
         return Container::getInstance()->make(SwarmMemory::class);
+    }
+
+    /**
+     * Begin a governed run for a single agent without authoring a Swarm class.
+     *
+     * Returns a fluent {@see PendingAgentRun}: `Swarm::agent($agent)->prompt($task)`
+     * wraps the lone agent in a one-element {@see AdHocSwarm}
+     * and dispatches it through this same runner, so it inherits audit,
+     * guardrails, capture, telemetry and encrypt-at-rest identically to a
+     * multi-agent swarm — across the in-process execution modes
+     * (prompt/stream/broadcast). A swarm of one is still a swarm; there is no
+     * second, ungoverned path. For queued or durable execution, author a
+     * one-agent Swarm class.
+     */
+    public function agent(Agent $agent): PendingAgentRun
+    {
+        return new PendingAgentRun($agent);
+    }
+
+    /**
+     * Begin a governed sequential run for the given agents without authoring a
+     * Swarm class. Each agent's output feeds the next.
+     *
+     * @param  array<int, Agent>  $agents
+     */
+    public function sequential(array $agents): PendingSwarmRun
+    {
+        return new PendingSwarmRun(AdHocSequentialSwarm::class, array_values($agents));
+    }
+
+    /**
+     * Begin a governed parallel run for the given agents without authoring a
+     * Swarm class. Every agent runs against the same task.
+     *
+     * @param  array<int, Agent>  $agents
+     */
+    public function parallel(array $agents): PendingSwarmRun
+    {
+        return new PendingSwarmRun(AdHocParallelSwarm::class, array_values($agents));
+    }
+
+    /**
+     * Begin a governed hierarchical run without authoring a Swarm class: the
+     * coordinator decides the route plan over the given worker agents.
+     *
+     * @param  array<int, Agent>  $workers
+     */
+    public function hierarchical(Agent $coordinator, array $workers = []): PendingSwarmRun
+    {
+        return new PendingSwarmRun(AdHocHierarchicalSwarm::class, [$coordinator, ...array_values($workers)]);
     }
 
     /**

@@ -2,6 +2,57 @@
 
 Every swarm class supports six execution modes through the `Runnable` trait: `prompt()` (and its alias `run()`), `queue()`, `stream()`, `broadcast()` / `broadcastNow()`, `broadcastOnQueue()`, and `dispatchDurable()`. The mode you choose determines whether the run is synchronous or background, whether it streams tokens to the caller, and whether it can recover from partial failures mid-run. Most of the modes mirror the Laravel AI agent API deliberately — if you know how to run an agent, the same verbs work on swarms.
 
+## Single Agent (`Swarm::agent()`)
+
+You do not need to author a `Swarm` class to get the governed pipeline for a single agent. `Swarm::agent($agent)` wraps a lone agent in a one-element swarm and runs it through the **same** `SwarmRunner` a multi-agent swarm uses — so it inherits audit, guardrails, capture, telemetry and encrypt-at-rest identically, across the **in-process** execution modes:
+
+```php
+use BuiltByBerry\LaravelSwarm\Facades\Swarm;
+
+Swarm::agent($agent)->prompt($task);            // + run()
+Swarm::agent($agent)->stream($task);            // SSE
+Swarm::agent($agent)->broadcast($task, $channel); // + broadcastNow()
+```
+
+A swarm of one is still a swarm — there is no second, ungoverned path. Governance is on by default: the app's globally configured guardrails (`swarm.guardrails.*`) apply automatically, and you can layer per-call guardrails on top without replacing them:
+
+```php
+Swarm::agent($agent)
+    ->guardrails([BudgetGuardrail::class])
+    ->prompt($task);
+```
+
+**Queued and durable execution need a class.** `queue()`, `broadcastOnQueue()`, and `dispatchDurable()` are *not* on the class-free builders: a background run is dispatched as a job and re-resolved from the container by class on a later (possibly post-deploy) worker, which requires a stable, container-bound identity that an ad-hoc swarm built from runtime agent instances cannot provide. For a queued or durable single agent, author a one-agent `Swarm` class (`php artisan make:swarm:swarm --single`) and call `queue()` / `dispatchDurable()` on it.
+
+Reach for a full `Swarm` class when you need class-level configuration, a named/reusable topology, or **background/durable execution**; reach for `Swarm::agent()` when one agent is all you need in-process and you still want the audit trail — or for a multi-agent workflow you don't want to name, the inline builders below.
+
+## Inline Swarms (`Swarm::sequential()` / `parallel()` / `hierarchical()`)
+
+The same class-free ergonomics extend to multi-agent swarms. Each builder pins its topology explicitly and runs through the same `SwarmRunner`, so an inline swarm is governed identically to a class-based one:
+
+```php
+// Sequential — each agent's output feeds the next.
+Swarm::sequential([$researcher, $writer, $editor])->prompt($task);
+
+// Parallel — every agent runs against the same task. (parallel can't stream — use prompt())
+Swarm::parallel([$a, $b, $c])->prompt($task);
+
+// Hierarchical — the coordinator (first argument) routes over its workers.
+Swarm::hierarchical($coordinator, [$writer, $editor])->stream($task);
+```
+
+Like `Swarm::agent()`, the inline builders expose the **in-process** modes (`prompt`/`run`/`stream`/`broadcast`/`broadcastNow`); `stream()`/`broadcast()` require a streamable topology (sequential, hierarchical, or static-hierarchical — not parallel). For queued or durable execution, author a `Swarm` class.
+
+Guardrails work the same way as on `Swarm::agent()` — globally configured guardrails always apply, and `->guardrails([...])` layers per-call ones on top:
+
+```php
+Swarm::parallel([$a, $b])
+    ->guardrails([BudgetGuardrail::class])
+    ->prompt($task);
+```
+
+Prefer a full `Swarm` class when the same topology is reused across your app, benefits from a name, carries class-level attributes (`#[Timeout]`, `#[MaxAgentSteps]`, `#[DurableRetry]`, …), or needs **background/durable execution**; prefer the inline builders for one-off, in-process compositions.
+
 ## Comparison Table
 
 | Method | Return Type | Runs in Background | Streaming | Checkpointing | Recovery | Complexity |
@@ -144,7 +195,7 @@ return ContentPipelineSwarm::make()->stream([
 - Streaming chat or copilot UIs backed by a single HTTP connection.
 - Any workflow where step lifecycle events (`swarm_step_start`, `swarm_step_end`) provide meaningful UX progress.
 
-**Topology constraint — sequential only.** Parallel and hierarchical swarms involve coordinating multiple concurrent agents, which does not map to a single ordered event stream. If you need streaming output from a multi-agent workflow, use a sequential swarm and compose the agents in order.
+**Topology constraint — not parallel.** Sequential, hierarchical, and static-hierarchical swarms stream (for hierarchical, the coordinator runs synchronously and worker nodes stream). A **parallel** swarm cannot stream — concurrent agents do not map to a single ordered event stream — so use `prompt()` for parallel, or a sequential swarm if you need streamed output.
 
 **When NOT to use:**
 - Parallel or hierarchical topologies.
@@ -197,7 +248,7 @@ ContentPipelineSwarm::make()
 - `broadcastOnQueue()` dispatches a queue job. The HTTP response returns immediately, and a worker handles streaming and broadcasting. This is the right default for production when the client uses WebSockets and you do not want to tie up HTTP workers.
 - `broadcastNow()` is `broadcast()` with forced immediate delivery — it bypasses any configured queue for the broadcast transport itself.
 
-**Topology constraint — sequential only.** Same reason as `stream()`: broadcast helpers emit an ordered event stream and require a single sequential execution path.
+**Topology constraint — not parallel.** Same reason as `stream()`: broadcast helpers emit an ordered event stream, so they support sequential/hierarchical/static-hierarchical but not parallel.
 
 **Gotchas:**
 - Broadcast helpers do not retry or buffer transport delivery. If Laravel broadcasting throws during event delivery, `broadcast()` / `broadcastNow()` rethrow the exception and `broadcastOnQueue()` lets the queued job fail.
