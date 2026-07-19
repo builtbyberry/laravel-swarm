@@ -11,7 +11,14 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- Tightened `minimum-stability` from `dev` to `stable` in `composer.json`. The
+  `dev` floor was inert — `prefer-stable: true` already resolved every dependency
+  to a stable tag, and no package in the tree required a dev version. Narrowing
+  the floor stops the package broadening transitive resolution for consumers.
+  Verified against both the default and `--prefer-lowest` resolutions, and
+  against an explicit dev-branch requirement (Composer adds its own stability
+  flags for those, so dev-branch CI lanes are unaffected). No dependency versions
+  changed.
 
 ### Fixed
 
