@@ -11,6 +11,17 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
+- **Value classes now declare `readonly class` once instead of repeating
+  `readonly` per property.** 39 event and DTO classes across `src/Events`,
+  `src/Responses` and `src/Support` were declaring every constructor-promoted
+  property `readonly` individually; they now carry the modifier on the class, so
+  immutability is stated once and cannot be silently forgotten when a property is
+  added later. No behaviour or constructor signature changed.
+
+  Five classes were deliberately left alone because they hold genuinely mutable
+  state: `SwarmFailed`, `DurableSwarmResponse`, `QueuedSwarmResponse`,
+  `StreamableSwarmResponse` and `ActiveRunRecord`.
+
 - Tightened `minimum-stability` from `dev` to `stable` in `composer.json`. The
   `dev` floor was inert — `prefer-stable: true` already resolved every dependency
   to a stable tag, and no package in the tree required a dev version. Narrowing

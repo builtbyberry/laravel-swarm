@@ -14,14 +14,14 @@ use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
  * definite SCHEDULED transition, not a no-op. The {@see $status} field reports
  * which of the two happened so callers never have to guess.
  */
-class DurableCancelResult
+readonly class DurableCancelResult
 {
     public function __construct(
-        public readonly string $runId,
-        public readonly string $swarmClass,
-        public readonly string $topology,
+        public string $runId,
+        public string $swarmClass,
+        public string $topology,
         /** Either DurableLifecycleStatus::Cancelled (applied now) or ::CancelScheduled (will cancel at the next boundary). */
-        public readonly DurableLifecycleStatus $status,
+        public DurableLifecycleStatus $status,
     ) {}
 
     /**

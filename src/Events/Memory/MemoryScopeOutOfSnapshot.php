@@ -25,14 +25,14 @@ use BuiltByBerry\LaravelSwarm\Memory\ReplaySwarmMemory;
  * No value payload is exposed — same redaction-safety stance as
  * {@see MemoryRead}.
  */
-final class MemoryScopeOutOfSnapshot
+final readonly class MemoryScopeOutOfSnapshot
 {
     public function __construct(
-        public readonly string $runId,
-        public readonly int $stepIndex,
-        public readonly MemoryScope $scope,
-        public readonly string $scopeId,
-        public readonly string $key,
-        public readonly string $operation,
+        public string $runId,
+        public int $stepIndex,
+        public MemoryScope $scope,
+        public string $scopeId,
+        public string $key,
+        public string $operation,
     ) {}
 }

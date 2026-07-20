@@ -42,12 +42,12 @@ use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
  * the dispatch-layer note on {@see DefaultSwarmMemory}
  * for the rationale.
  */
-final class MemoryForgotten
+final readonly class MemoryForgotten
 {
     public function __construct(
-        public readonly MemoryScope $scope,
-        public readonly string $scopeId,
-        public readonly string $key,
-        public readonly bool $existed,
+        public MemoryScope $scope,
+        public string $scopeId,
+        public string $key,
+        public bool $existed,
     ) {}
 }

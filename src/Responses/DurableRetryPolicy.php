@@ -4,16 +4,16 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
-class DurableRetryPolicy
+readonly class DurableRetryPolicy
 {
     /**
      * @param  array<int, int>  $backoffSeconds
      * @param  array<int, string>  $nonRetryable
      */
     public function __construct(
-        public readonly int $maxAttempts = 1,
-        public readonly array $backoffSeconds = [],
-        public readonly array $nonRetryable = [],
+        public int $maxAttempts = 1,
+        public array $backoffSeconds = [],
+        public array $nonRetryable = [],
     ) {}
 
     /**
