@@ -36,8 +36,9 @@ function documentedInvocationSources(): array
     $files = [
         $root.'/README.md',
         $root.'/UPGRADING.md',
-        // Canonical agent guidance per CLAUDE.md, and the same class of file as
-        // resources/boost/guidelines/core.blade.php where the defect lived.
+        // Canonical agent guidance per CLAUDE.md. Contributes no invocations
+        // today (it mentions commands only in prose), so this is forward cover
+        // for the day it does — not present-day coverage.
         $root.'/AGENTS.md',
     ];
 
@@ -53,21 +54,27 @@ function documentedInvocationSources(): array
         }
     }
 
-    // CHANGELOG.md is scanned, but only its UNRELEASED section (see
-    // changelogUnreleasedSection). Released entries are historical record —
+    // CHANGELOG.md is scanned, but only its UNRELEASED section (truncated in
+    // extractPackageInvocations below). Released entries are historical record —
     // v0.22.0's still carries the bad invocation and rewriting shipped history
     // would be an erratum, not a silent edit. The unreleased section is written
     // fresh every release and IS a first-class instruction surface, so leaving
     // it unguarded would let a new entry ship the next bad invocation.
     // UPGRADING.md is scanned whole: it is living guidance, and v0.23.0 already
     // reversed a v0.5.0 note in place.
+    //
+    // That truncation is load-bearing: the v0.22.0 entry still quotes the bad
+    // invocation this component fixed, and the option assertion does not filter
+    // on `anchored`. So if the heading regex ever stops matching, the guard
+    // fails on shipped history the team has decided never to edit — check the
+    // CHANGELOG heading format before believing such a failure.
     $files[] = $root.'/CHANGELOG.md';
 
     return array_values(array_filter($files, static fn (string $p): bool => is_file($p)));
 }
 
 /**
- * @return array<int, array{command: string, options: array<int, string>, file: string, line: int}>
+ * @return array<int, array{command: string, options: array<int, string>, anchored: bool, file: string, line: int}>
  */
 function extractPackageInvocations(string $path): array
 {
@@ -89,52 +96,62 @@ function extractPackageInvocations(string $path): array
     foreach (preg_split('/\R/', $contents) ?: [] as $index => $line) {
         // Package commands only: swarm:*, make:swarm*, make:memory-tool.
         // Capture any --options that follow on the same line.
-        $options = '((?:\s+--[a-z0-9-]+(?:=[^\s`)]+)?)*)';
+        // An optional NAME argument may sit between the command and its flags —
+        // `make:swarm:swarm YourSwarm --single`, `swarm:memory:inspect r-abc
+        // --step=0`. Without this, ~40 documented option usages are invisible,
+        // including the canonical one-agent form this component's own fix
+        // prescribes. (This was added once, then silently dropped by a later
+        // rework of the pattern block — hence the regression test below.)
+        $argument = '(?:\s+(?:"[^"]*"|<[^>]+>|\{[^}]+\}|[A-Za-z0-9][\w.\/-]*))?';
+        $options = $argument.'((?:\s+--[a-z0-9-]+(?:=[^\s`)]+)?)*)';
 
         // `swarm:` is an overloaded namespace — it also prefixes memory keys
         // (`swarm:step.{n}.output`), config values (`swarm:artifacts:`) and
         // Context keys (`swarm:actor`). An earlier version required the word
         // `artisan` before a `swarm:*` match to exclude those, but that left
-        // every bare `swarm:health --flag` in prose unguarded — over half of
-        // this repo's documented option usage. Callers now classify against the
-        // live command registry instead, which excludes the non-command keys
-        // precisely (they are not registered) while still reaching bare forms.
-        $patterns = [
-            '/\bartisan\s+((?:swarm|make):[a-z0-9-]+(?::[a-z0-9-]+)*)(?![:.\w])'.$options.'/i',
-            '/(?<![:a-z0-9])((?:swarm|make):[a-z0-9-]+(?::[a-z0-9-]+)*)(?![:.\w])'.$options.'/i',
-        ];
+        // every bare `swarm:health --flag` in prose unguarded — roughly 40% of
+        // this repo's documented option coverage (54 of 136 option checks).
+        // Callers now classify against the live command registry instead, which
+        // excludes the non-command keys precisely (they are not registered)
+        // while still reaching bare forms.
+        //
+        // Scope is deliberately THIS package's commands. An earlier rework
+        // widened the second alternation to every `make:*`, which silently
+        // pulled in `make:agent` (laravel/ai) plus `make:job` and `make:event`
+        // (framework) — commands this file disclaims owning, and whose upstream
+        // rename would fail our docs test for no fault of ours.
+        //
+        // Known blind spot: matching is line-scoped, so a hard-wrapped
+        // `php artisan` / `swarm:trace <id>` split across two lines is read as
+        // bare rather than anchored (docs/audit-evidence-contract.md wraps that
+        // way). It is still option-checked; only the command-exists assertion
+        // skips it.
+        $pattern = '/(?<![:a-z0-9])((?:swarm:[a-z0-9-]+(?::[a-z0-9-]+)*)|make:(?:swarm(?::[a-z0-9-]+)?|memory-tool))(?![:.\w])'.$options.'/i';
 
-        foreach ($patterns as $anchored => $pattern) {
-            if (! preg_match_all($pattern, $line, $matches, PREG_SET_ORDER)) {
-                continue;
-            }
+        if (! preg_match_all($pattern, $line, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+            continue;
+        }
 
-            foreach ($matches as $match) {
-                preg_match_all('/--([a-z0-9-]+)/i', $match[2] ?? '', $optionMatches);
+        foreach ($matches as $match) {
+            preg_match_all('/--([a-z0-9-]+)/i', $match[2][0] ?? '', $optionMatches);
 
-                $key = $match[1].'@'.($index + 1).'@'.$match[2];
-
-                $found[$key] = [
-                    'command' => $match[1],
-                    'options' => $optionMatches[1] ?? [],
-                    // Anchored means the text literally said `artisan <cmd>`, so
-                    // it is unambiguously an invocation and MUST resolve. An
-                    // unanchored token might be a memory key, so an unknown one
-                    // is ignored rather than reported.
-                    //
-                    // Both patterns match the same anchored text, and the
-                    // unanchored one runs second — so OR the flag rather than
-                    // overwrite it, or every entry collapses to unanchored and
-                    // the command assertion silently checks nothing.
-                    'anchored' => ($found[$key]['anchored'] ?? false) || $anchored === 0,
-                    'file' => str_replace(dirname(__DIR__, 2).'/', '', $path),
-                    'line' => $index + 1,
-                ];
-            }
+            $found[] = [
+                'command' => $match[1][0],
+                'options' => $optionMatches[1] ?? [],
+                // Anchored means the text literally said `artisan <cmd>`, so it
+                // is unambiguously an invocation and MUST resolve. A bare token
+                // might be a memory key, so an unknown one is ignored rather
+                // than reported — its options are still checked when it names a
+                // real command. Detected from the preceding text rather than a
+                // second pattern, so the two cannot drift apart.
+                'anchored' => (bool) preg_match('/\bartisan\s+$/i', substr($line, 0, $match[1][1])),
+                'file' => str_replace(dirname(__DIR__, 2).'/', '', $path),
+                'line' => $index + 1,
+            ];
         }
     }
 
-    return array_values($found);
+    return $found;
 }
 
 /**
@@ -170,6 +187,30 @@ function invocationsNotOwnedByThisPackage(): array
     ];
 }
 
+test('every scanned root still contributes invocations', function () {
+    // A global floor cannot see ONE root disappearing: dropping `resources/`
+    // moves the total by six and both floors still pass — yet that is the
+    // directory the v0.22.0 defect lived in (resources/boost/guidelines).
+    // Assert each root pulls its weight instead, so a rename or a dropped
+    // entry in the source list fails loudly and names the root.
+    $perRoot = [];
+
+    foreach (documentedInvocationSources() as $path) {
+        $relative = str_replace(dirname(__DIR__, 2).'/', '', $path);
+        $root = str_contains($relative, '/') ? explode('/', $relative)[0] : $relative;
+        $perRoot[$root] = ($perRoot[$root] ?? 0) + count(extractPackageInvocations($path));
+    }
+
+    // AGENTS.md is deliberately absent: it contributes nothing today and is
+    // scanned as forward cover (see documentedInvocationSources).
+    foreach (['docs', 'src', 'resources', 'stubs', 'README.md', 'UPGRADING.md'] as $root) {
+        expect($perRoot[$root] ?? 0)->toBeGreaterThan(
+            0,
+            "The scanned root [{$root}] contributed no Artisan invocations. It has been renamed, emptied, or dropped from documentedInvocationSources() — the guard is now blind to it.",
+        );
+    }
+});
+
 test('every documented package Artisan command exists', function () {
     $registered = array_keys(Artisan::all());
     $exempt = invocationsNotOwnedByThisPackage();
@@ -182,11 +223,13 @@ test('every documented package Artisan command exists', function () {
                 continue;
             }
 
-            // Only an `artisan <cmd>` form is unambiguously an invocation. A
-            // bare token might be a memory key or config prefix, so an unknown
-            // one is not an error — its OPTIONS are still checked by the
-            // sibling test when it does resolve to a real command.
-            if (! $use['anchored']) {
+            // A bare `swarm:*` token might be a memory key or config prefix,
+            // so an unknown one is only an error when the text said `artisan`.
+            // `make:*` carries no such ambiguity — nothing else in this repo
+            // uses that prefix — and five of the eight sites carrying the
+            // v0.22.0 defect wrote the bare command in prose, so bare make:*
+            // is always checked.
+            if (! $use['anchored'] && ! str_starts_with($use['command'], 'make:')) {
                 continue;
             }
 
@@ -199,12 +242,17 @@ test('every documented package Artisan command exists', function () {
     }
 
     // A `> 0` floor does not detect coverage COLLAPSE: dropping directories
-    // from the scan left a handful of invocations and still passed. These
-    // floors sit below today's real counts (236 anchored invocations) with
-    // headroom for docs churn, but well above what a broken scan yields.
-    expect($checked)->toBeGreaterThan(180, "Only {$checked} anchored invocations were scanned (expected ~236). The scan has lost coverage — a directory rename or regex change, not a clean tree.");
-
+    // from the scan left a handful of invocations and still passed. This floor
+    // sits well below today's real count — 200 anchored, non-exempt
+    // invocations — because it exists to catch a broken scan (the same
+    // mutation yields 32), not to police docs churn. Deliberately generous:
+    // docs/generators.md alone carries 19, so a couple of pages consolidating
+    // must not trip it. If this fails, check the scan before the number.
+    // Offenders first: a floor trip must not mask genuine bad invocations
+    // present in the same run behind a "lost coverage" message.
     expect($offenders)->toBe([], "Documented commands that do not exist:\n  ".implode("\n  ", $offenders));
+
+    expect($checked)->toBeGreaterThan(140, "Only {$checked} invocations were scanned (~200 expected). Check whether the scan lost coverage — a directory rename, a regex change — before assuming the docs simply shrank.");
 });
 
 test('every option documented against a package Artisan command is declared on it', function () {
@@ -246,7 +294,7 @@ test('every option documented against a package Artisan command is declared on i
         }
     }
 
-    expect($checked)->toBeGreaterThan(100, "Only {$checked} documented options were scanned (expected ~136). The scan has lost coverage rather than the docs having fewer options.");
-
     expect($offenders)->toBe([], "Documented options that do not exist on the named command:\n  ".implode("\n  ", $offenders));
+
+    expect($checked)->toBeGreaterThan(100, "Only {$checked} documented options were scanned (~136 expected). Check whether the scan lost coverage before assuming the docs simply have fewer options.");
 });
