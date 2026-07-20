@@ -25,11 +25,11 @@ use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
  * A {@see CaptureDecision::Full} write fires no
  * such event, so the default no-op policy's event stream is unchanged.
  */
-final class MemoryRedacted
+final readonly class MemoryRedacted
 {
     public function __construct(
-        public readonly MemoryScope $scope,
-        public readonly string $scopeId,
-        public readonly string $key,
+        public MemoryScope $scope,
+        public string $scopeId,
+        public string $key,
     ) {}
 }

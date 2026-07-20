@@ -10,14 +10,14 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use Illuminate\Support\Collection;
 
-class StreamedSwarmResponse extends SwarmResponse
+readonly class StreamedSwarmResponse extends SwarmResponse
 {
     /**
      * @param  Collection<int, SwarmStreamEvent>  $events
      */
     public function __construct(
         SwarmResponse $response,
-        public readonly Collection $events,
+        public Collection $events,
     ) {
         parent::__construct(
             output: $response->output,

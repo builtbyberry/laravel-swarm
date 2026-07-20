@@ -15,16 +15,16 @@ use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
  * the run resumed into, and {@see $waitingBoundaryDispatched} reports whether a
  * waiting boundary was re-dispatched, so callers never have to guess.
  */
-class DurableResumeResult
+readonly class DurableResumeResult
 {
     public function __construct(
-        public readonly string $runId,
-        public readonly string $swarmClass,
-        public readonly string $topology,
+        public string $runId,
+        public string $swarmClass,
+        public string $topology,
         /** Either DurableLifecycleStatus::Resumed (a step was re-dispatched) or ::Waiting (resumed back into a waiting boundary). */
-        public readonly DurableLifecycleStatus $status,
+        public DurableLifecycleStatus $status,
         /** True when resuming re-dispatched a waiting boundary rather than a step. */
-        public readonly bool $waitingBoundaryDispatched = false,
+        public bool $waitingBoundaryDispatched = false,
     ) {}
 
     /**

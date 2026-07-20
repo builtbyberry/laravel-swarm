@@ -4,18 +4,18 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
-class DurableSignalResult
+readonly class DurableSignalResult
 {
     /**
      * @param  array<string, mixed>|null  $signal
      */
     public function __construct(
-        public readonly string $runId,
-        public readonly string $name,
-        public readonly string $status,
-        public readonly bool $accepted,
-        public readonly bool $duplicate = false,
-        public readonly ?array $signal = null,
-        public readonly ?string $swarmClass = null,
+        public string $runId,
+        public string $name,
+        public string $status,
+        public bool $accepted,
+        public bool $duplicate = false,
+        public ?array $signal = null,
+        public ?string $swarmClass = null,
     ) {}
 }

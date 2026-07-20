@@ -4,18 +4,18 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Events;
 
-class SwarmWaiting
+readonly class SwarmWaiting
 {
     /**
      * @param  array<string, mixed>  $metadata
      */
     public function __construct(
-        public readonly string $runId,
-        public readonly string $swarmClass,
-        public readonly string $topology,
-        public readonly string $waitName,
-        public readonly ?string $reason = null,
-        public readonly array $metadata = [],
-        public readonly string $executionMode = 'durable',
+        public string $runId,
+        public string $swarmClass,
+        public string $topology,
+        public string $waitName,
+        public ?string $reason = null,
+        public array $metadata = [],
+        public string $executionMode = 'durable',
     ) {}
 }

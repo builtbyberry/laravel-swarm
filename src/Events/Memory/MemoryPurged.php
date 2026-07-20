@@ -62,7 +62,7 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
  * from their purge implementation to keep the listener contract uniform
  * across drivers.
  */
-final class MemoryPurged
+final readonly class MemoryPurged
 {
     /**
      * @param  array<string, int>  $counts  scope value (and `snapshots`, `checkpoints`) keyed deletion counts
@@ -77,8 +77,8 @@ final class MemoryPurged
      * }  $criteria
      */
     public function __construct(
-        public readonly array $counts,
-        public readonly array $criteria,
+        public array $counts,
+        public array $criteria,
     ) {}
 
     /**

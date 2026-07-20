@@ -4,17 +4,17 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Events;
 
-class SwarmProgressRecorded
+readonly class SwarmProgressRecorded
 {
     /**
      * @param  array<string, mixed>  $progress
      */
     public function __construct(
-        public readonly string $runId,
-        public readonly ?string $branchId,
-        public readonly array $progress,
-        public readonly string $executionMode = 'durable',
-        public readonly ?string $swarmClass = null,
-        public readonly ?string $topology = null,
+        public string $runId,
+        public ?string $branchId,
+        public array $progress,
+        public string $executionMode = 'durable',
+        public ?string $swarmClass = null,
+        public ?string $topology = null,
     ) {}
 }

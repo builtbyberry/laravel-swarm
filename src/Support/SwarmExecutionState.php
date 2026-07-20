@@ -16,27 +16,27 @@ use Illuminate\Contracts\Events\Dispatcher;
 /**
  * @internal
  */
-class SwarmExecutionState
+readonly class SwarmExecutionState
 {
     public function __construct(
-        public readonly Swarm $swarm,
-        public readonly Topology $topology,
-        public readonly ExecutionMode $executionMode,
-        public readonly float $deadlineMonotonic,
-        public readonly int $maxAgentExecutions,
-        public readonly int $ttlSeconds,
-        public readonly ?int $leaseSeconds,
-        public readonly ?string $executionToken,
-        public readonly ?Closure $verifyOwnership,
-        public readonly RunContext $context,
-        public readonly ContextStore $contextStore,
-        public readonly ArtifactRepository $artifactRepository,
-        public readonly RunHistoryStore $historyStore,
-        public readonly Dispatcher $events,
+        public Swarm $swarm,
+        public Topology $topology,
+        public ExecutionMode $executionMode,
+        public float $deadlineMonotonic,
+        public int $maxAgentExecutions,
+        public int $ttlSeconds,
+        public ?int $leaseSeconds,
+        public ?string $executionToken,
+        public ?Closure $verifyOwnership,
+        public RunContext $context,
+        public ContextStore $contextStore,
+        public ArtifactRepository $artifactRepository,
+        public RunHistoryStore $historyStore,
+        public Dispatcher $events,
         /**
          * When set to `multi_worker` for hierarchical `queue()`, parallel route nodes use
          * coordinated branch jobs instead of in-process execution.
          */
-        public readonly ?string $queueHierarchicalParallelCoordination = null,
+        public ?string $queueHierarchicalParallelCoordination = null,
     ) {}
 }

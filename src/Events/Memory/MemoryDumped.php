@@ -36,15 +36,15 @@ use BuiltByBerry\LaravelSwarm\Contracts\ConversationRunResolver;
  * Listeners doing audit-trail capture will typically pair this event with the
  * `command.memory.dump` audit category emitted alongside it.
  */
-final class MemoryDumped
+final readonly class MemoryDumped
 {
     public function __construct(
-        public readonly string $subjectType,
-        public readonly string $subjectId,
-        public readonly string $format,
-        public readonly bool $includeSnapshots,
-        public readonly int $entryCount,
-        public readonly int $snapshotCount,
-        public readonly bool $runsExpanded,
+        public string $subjectType,
+        public string $subjectId,
+        public string $format,
+        public bool $includeSnapshots,
+        public int $entryCount,
+        public int $snapshotCount,
+        public bool $runsExpanded,
     ) {}
 }
