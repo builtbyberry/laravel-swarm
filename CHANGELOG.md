@@ -22,7 +22,16 @@ _To be filled in during release wrap-up._
 
 ### Fixed
 
-_To be filled in during release wrap-up._
+- **Nightly Laravel-dev CI lane now actually runs.** The `nightly` workflow
+  required `laravel/framework:dev-main` plus twelve `illuminate/*:dev-main`
+  aliases, but no such branch is published — every run failed to resolve
+  dependencies, and a job-level `continue-on-error` reported those runs as
+  successful, so the lane installed nothing and executed no tests from the day it
+  was added. It now requires `laravel/framework:13.x-dev` (the framework
+  `replace`s the `illuminate/*` splits, so the individual requires were
+  unnecessary), no longer swallows failures, and fails loudly if the resolved
+  framework is not a dev build. This lane is CI-only and does not affect the
+  published package.
 
 ## v0.22.0 - 2026-07-18
 
