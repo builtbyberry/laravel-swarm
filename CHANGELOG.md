@@ -30,6 +30,24 @@ _To be filled in during release wrap-up._
 
 ### Fixed
 
+- **The documented `--single` flag for `make:swarm:swarm` never existed.** Eight
+  sites — the `PendingRun` docblock, the execution-modes and cookbook docs, the
+  Laravel Boost guidelines and skill, and `UPGRADING.md` — told you to author a
+  one-agent swarm by passing `--single` to that command. It has no such option
+  and errors out. The flag exists only on the deprecated `make:swarm`
+  alias, where it scaffolds an *agent* rather than the swarm class every one of
+  those sites was pointing at. All eight now say what actually works:
+  `php artisan make:swarm:swarm YourSwarm`, returning a single agent from
+  `agents()` — the default sequential scaffold is already the one-agent shape,
+  and no dedicated flag is needed.
+
+  The v0.22.0 CHANGELOG entry below still carries the original wording; released
+  entries are historical record and are not rewritten.
+
+  A new test asserts that every package Artisan command and option this repo
+  documents actually exists, so a documented-but-nonexistent invocation now
+  fails on the pull request that introduces it.
+
 - **Plain `laravel/ai` agents work with Swarm again.** Every public entry point
   and runner gate type-hinted the swarm-owned `Contracts\Agent` marker. Because
   interface inheritance runs one way, a class implementing only

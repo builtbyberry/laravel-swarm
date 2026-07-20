@@ -28,7 +28,7 @@ use Illuminate\Broadcasting\Channel;
  * deploy) worker, which requires a stable, container-bound identity — exactly
  * what an ad-hoc swarm built from runtime agent instances cannot provide. For
  * background or recoverable execution, author a one-agent {@see Swarm}
- * class (`php artisan make:swarm:swarm --single`) and call `queue()` /
+ * class (`php artisan make:swarm:swarm YourSwarm`) and call `queue()` /
  * `dispatchDurable()` on it.
  *
  * (Streamability is still a topology property: `parallel` swarms cannot

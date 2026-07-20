@@ -58,7 +58,8 @@ background run is re-resolved from the container by class on the worker, which a
 ad-hoc swarm built from a runtime agent instance cannot provide:
 
 ```php
-// php artisan make:swarm:swarm --single
+// php artisan make:swarm:swarm ArticlePlannerSwarm
+// (return a single agent from agents() — a one-agent swarm needs no special flag)
 ArticlePlannerSwarm::make()->queue($task);
 ArticlePlannerSwarm::make()->dispatchDurable($task);
 ```
@@ -148,8 +149,9 @@ Swarm::parallel([new SecurityReviewer, new PerformanceReviewer])
 
 **Two constraints to know.** (1) The class-free builders run **in-process** —
 `prompt()`/`run()`/`stream()`/`broadcast()`/`broadcastNow()`. For queued or
-durable execution, author a `Swarm` class (`make:swarm:swarm --single` for one
-agent) — a background run is re-resolved from the container by class on the
+durable execution, author a `Swarm` class — `php artisan make:swarm:swarm
+YourSwarm`, then return a single agent from `agents()`; there is no dedicated
+one-agent flag. A background run is re-resolved from the container by class on the
 worker, which an ad-hoc swarm can't provide. (2) `stream()` and the broadcast
 helpers need a streamable topology — sequential, hierarchical, or
 static-hierarchical, **not** parallel (concurrent agents don't map to one ordered
