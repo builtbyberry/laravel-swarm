@@ -19,6 +19,14 @@ _To be filled in during release wrap-up._
   against an explicit dev-branch requirement (Composer adds its own stability
   flags for those, so dev-branch CI lanes are unaffected). No dependency versions
   changed.
+- **`AGENTS.md` corrected against the codebase.** The contributor/agent guidance
+  had drifted: it pointed at a code-review skill that is not installed, and left
+  the topic-branch convention ambiguous about the `v` prefix (topic branches drop
+  it, the release branch keeps it). Both are now stated correctly. Five sections
+  that duplicated the codebase — pinned dependency versions, an Artisan command
+  list covering 8 of 24 commands, a `src/` directory tree, the checkout path, and
+  a capability summary — were replaced with pointers to the source of truth, so
+  they cannot silently go stale again. No runtime or public-API change.
 
 ### Fixed
 
