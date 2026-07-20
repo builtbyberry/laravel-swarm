@@ -95,6 +95,14 @@ it('runs a vendor-only coordinator and worker through the hierarchical runner', 
     $response = (new VendorOnlyHierarchicalSwarm)->prompt('task');
 
     expect((string) $response)->toBe('vendor-writer-out');
+
+    // Assert the route was actually planned, not just that the writer ran. The
+    // output alone cannot distinguish "the planner parsed the vendor
+    // coordinator's structured plan and routed to writer_node" from "the writer
+    // happened to execute" — and the planner is the vendor-only surface this
+    // test exists to cover (HierarchicalRoutePlanner::assertCoordinatorCanPlan
+    // is where it fails pre-fix).
+    expect($response->metadata['executed_node_ids'])->toBe(['writer_node']);
 });
 
 it('still accepts agents implementing the deprecated swarm marker', function () {
