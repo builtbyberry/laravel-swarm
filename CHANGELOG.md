@@ -30,11 +30,11 @@ _To be filled in during release wrap-up._
 
 ### Fixed
 
-- **`make:swarm:swarm --single` never existed.** Eight sites — the `PendingRun`
-  docblock, the execution-modes and cookbook docs, the Laravel Boost guidelines
-  and skill, and `UPGRADING.md` — told you to author a one-agent swarm with
-  `php artisan make:swarm:swarm --single`. That command has no `--single`
-  option and errors out. The flag exists only on the deprecated `make:swarm`
+- **The documented `--single` flag for `make:swarm:swarm` never existed.** Eight
+  sites — the `PendingRun` docblock, the execution-modes and cookbook docs, the
+  Laravel Boost guidelines and skill, and `UPGRADING.md` — told you to author a
+  one-agent swarm by passing `--single` to that command. It has no such option
+  and errors out. The flag exists only on the deprecated `make:swarm`
   alias, where it scaffolds an *agent* rather than the swarm class every one of
   those sites was pointing at. All eight now say what actually works:
   `php artisan make:swarm:swarm YourSwarm`, returning a single agent from

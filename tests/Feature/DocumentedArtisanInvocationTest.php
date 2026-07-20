@@ -36,6 +36,9 @@ function documentedInvocationSources(): array
     $files = [
         $root.'/README.md',
         $root.'/UPGRADING.md',
+        // Canonical agent guidance per CLAUDE.md, and the same class of file as
+        // resources/boost/guidelines/core.blade.php where the defect lived.
+        $root.'/AGENTS.md',
     ];
 
     foreach (['docs', 'src', 'resources', 'stubs'] as $dir) {
@@ -50,12 +53,16 @@ function documentedInvocationSources(): array
         }
     }
 
-    // CHANGELOG.md is deliberately excluded: released entries are historical
-    // record, not instructions. v0.22.0's entry still carries the bad
-    // invocation and correcting it would be rewriting shipped history — the
-    // house call is to leave it (an erratum, if ever, not a silent edit).
-    // UPGRADING.md IS scanned: it is living guidance, and v0.23.0 already
+    // CHANGELOG.md is scanned, but only its UNRELEASED section (see
+    // changelogUnreleasedSection). Released entries are historical record —
+    // v0.22.0's still carries the bad invocation and rewriting shipped history
+    // would be an erratum, not a silent edit. The unreleased section is written
+    // fresh every release and IS a first-class instruction surface, so leaving
+    // it unguarded would let a new entry ship the next bad invocation.
+    // UPGRADING.md is scanned whole: it is living guidance, and v0.23.0 already
     // reversed a v0.5.0 note in place.
+    $files[] = $root.'/CHANGELOG.md';
+
     return array_values(array_filter($files, static fn (string $p): bool => is_file($p)));
 }
 
@@ -70,6 +77,13 @@ function extractPackageInvocations(string $path): array
         return [];
     }
 
+    // For CHANGELOG.md, keep only the text above the first DATED (released)
+    // heading — everything below it is shipped history, not instruction.
+    if (basename($path) === 'CHANGELOG.md'
+        && preg_match('/^##\s+\S+\s+-\s+\d{4}-\d{2}-\d{2}/m', $contents, $m, PREG_OFFSET_CAPTURE)) {
+        $contents = substr($contents, 0, $m[0][1]);
+    }
+
     $found = [];
 
     foreach (preg_split('/\R/', $contents) ?: [] as $index => $line) {
@@ -77,21 +91,20 @@ function extractPackageInvocations(string $path): array
         // Capture any --options that follow on the same line.
         $options = '((?:\s+--[a-z0-9-]+(?:=[^\s`)]+)?)*)';
 
-        // `swarm:` is an overloaded namespace — it prefixes memory keys
+        // `swarm:` is an overloaded namespace — it also prefixes memory keys
         // (`swarm:step.{n}.output`), config values (`swarm:artifacts:`) and
-        // Context keys (`swarm:actor`) as well as commands. So a `swarm:*`
-        // match only counts when it directly follows `artisan`.
-        //
-        // `make:swarm*` / `make:memory-tool` need no such anchor: nothing else
-        // in this codebase uses that prefix, and requiring `artisan` would have
-        // missed five of the eight sites carrying the v0.22.0 defect, which
-        // wrote the bare command inside prose and code comments.
+        // Context keys (`swarm:actor`). An earlier version required the word
+        // `artisan` before a `swarm:*` match to exclude those, but that left
+        // every bare `swarm:health --flag` in prose unguarded — over half of
+        // this repo's documented option usage. Callers now classify against the
+        // live command registry instead, which excludes the non-command keys
+        // precisely (they are not registered) while still reaching bare forms.
         $patterns = [
-            '/\bartisan\s+(swarm:[a-z0-9-]+(?::[a-z0-9-]+)*)(?![:.\w])'.$options.'/i',
-            '/(?<![:a-z0-9])(make:swarm(?::[a-z0-9-]+)?|make:memory-tool)(?![:.\w])'.$options.'/i',
+            '/\bartisan\s+((?:swarm|make):[a-z0-9-]+(?::[a-z0-9-]+)*)(?![:.\w])'.$options.'/i',
+            '/(?<![:a-z0-9])((?:swarm|make):[a-z0-9-]+(?::[a-z0-9-]+)*)(?![:.\w])'.$options.'/i',
         ];
 
-        foreach ($patterns as $pattern) {
+        foreach ($patterns as $anchored => $pattern) {
             if (! preg_match_all($pattern, $line, $matches, PREG_SET_ORDER)) {
                 continue;
             }
@@ -99,9 +112,21 @@ function extractPackageInvocations(string $path): array
             foreach ($matches as $match) {
                 preg_match_all('/--([a-z0-9-]+)/i', $match[2] ?? '', $optionMatches);
 
-                $found[] = [
+                $key = $match[1].'@'.($index + 1).'@'.$match[2];
+
+                $found[$key] = [
                     'command' => $match[1],
                     'options' => $optionMatches[1] ?? [],
+                    // Anchored means the text literally said `artisan <cmd>`, so
+                    // it is unambiguously an invocation and MUST resolve. An
+                    // unanchored token might be a memory key, so an unknown one
+                    // is ignored rather than reported.
+                    //
+                    // Both patterns match the same anchored text, and the
+                    // unanchored one runs second — so OR the flag rather than
+                    // overwrite it, or every entry collapses to unanchored and
+                    // the command assertion silently checks nothing.
+                    'anchored' => ($found[$key]['anchored'] ?? false) || $anchored === 0,
                     'file' => str_replace(dirname(__DIR__, 2).'/', '', $path),
                     'line' => $index + 1,
                 ];
@@ -109,7 +134,7 @@ function extractPackageInvocations(string $path): array
         }
     }
 
-    return $found;
+    return array_values($found);
 }
 
 /**
@@ -124,11 +149,24 @@ function invocationsNotOwnedByThisPackage(): array
     return [
         // Scaffolded into the CONSUMING app by `swarm:install:examples`, so
         // they only ever exist in an application's registry, never in ours.
-        '/^swarm:example:/',
-        '/^swarm:run:/',
+        // Listed by EXACT name, not by prefix: a prefix pattern would also
+        // exempt a typo like `swarm:example:blog-pipelien`, shipping a
+        // copy-pasteable command that errors for the reader.
+        'swarm:example:blog-pipeline',
+        'swarm:example:research-fanout',
+        'swarm:example:approval-workflow',
+        'swarm:example:support-triage',
+        'swarm:example:contact-extraction',
+        'swarm:example:conversation-memory',
+        'swarm:example:streaming',
+        // Generated into the consuming app by `make:swarm:blueprint`, which
+        // mints a `swarm:run:<name>` runner alongside the blueprint
+        // (MakeSwarmBlueprintCommand::327) — a different owner from the
+        // examples installer above.
+        'swarm:run:support-triage',
         // Ships with the builtbyberry/laravel-swarm-pulse companion package,
         // extracted from core in v0.17.1.
-        '/^swarm:install:pulse$/',
+        'swarm:install:pulse',
     ];
 }
 
@@ -140,10 +178,16 @@ test('every documented package Artisan command exists', function () {
 
     foreach (documentedInvocationSources() as $path) {
         foreach (extractPackageInvocations($path) as $use) {
-            foreach ($exempt as $pattern) {
-                if (preg_match($pattern, $use['command'])) {
-                    continue 2;
-                }
+            if (in_array($use['command'], $exempt, true)) {
+                continue;
+            }
+
+            // Only an `artisan <cmd>` form is unambiguously an invocation. A
+            // bare token might be a memory key or config prefix, so an unknown
+            // one is not an error — its OPTIONS are still checked by the
+            // sibling test when it does resolve to a real command.
+            if (! $use['anchored']) {
+                continue;
             }
 
             $checked++;
@@ -154,7 +198,11 @@ test('every documented package Artisan command exists', function () {
         }
     }
 
-    expect($checked)->toBeGreaterThan(0, 'No package Artisan invocations were found — the scan is broken, not clean.');
+    // A `> 0` floor does not detect coverage COLLAPSE: dropping directories
+    // from the scan left a handful of invocations and still passed. These
+    // floors sit below today's real counts (236 anchored invocations) with
+    // headroom for docs churn, but well above what a broken scan yields.
+    expect($checked)->toBeGreaterThan(180, "Only {$checked} anchored invocations were scanned (expected ~236). The scan has lost coverage — a directory rename or regex change, not a clean tree.");
 
     expect($offenders)->toBe([], "Documented commands that do not exist:\n  ".implode("\n  ", $offenders));
 });
@@ -198,7 +246,7 @@ test('every option documented against a package Artisan command is declared on i
         }
     }
 
-    expect($checked)->toBeGreaterThan(0, 'No documented options were found — the scan is broken, not clean.');
+    expect($checked)->toBeGreaterThan(100, "Only {$checked} documented options were scanned (expected ~136). The scan has lost coverage rather than the docs having fewer options.");
 
     expect($offenders)->toBe([], "Documented options that do not exist on the named command:\n  ".implode("\n  ", $offenders));
 });
