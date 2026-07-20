@@ -2,19 +2,28 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent as SwarmAgent;
+use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
-use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchAdvancer;
+use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\StaticHierarchicalStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\VendorOnlyCoordinator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\VendorOnlyRememberingWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\VendorOnlyResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\VendorOnlyWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\VendorOnlyHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\VendorOnlyParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\VendorOnlySequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use BuiltByBerry\LaravelSwarm\Tests\Support\VendorAgentRecordingPropagationPolicy;
+use Illuminate\Support\Facades\Artisan;
 use Laravel\Ai\Contracts\Agent as LaravelAiAgent;
 
 /**
@@ -28,17 +37,15 @@ use Laravel\Ai\Contracts\Agent as LaravelAiAgent;
  * "drop in unchanged" promise. Nothing asserted the boundary in either
  * direction, which is why it went unnoticed.
  *
- * **Not exhaustive — read this before assuming a surface is covered.** These
- * tests exercise the single-agent entry point, the parallel and hierarchical
- * runners, the marker-still-works path, a mixed marker/vendor swarm, and the
- * memory propagation policy (the one breaking change). They do NOT drive a
- * vendor-only agent through the durable path
- * ({@see DurableBranchAdvancer})
- * or the streaming runners
- * ({@see StaticHierarchicalStreamRunner}),
- * whose gates were widened by the same change but need a real provider or a
- * heavier harness to fake. If you touch those gates, add coverage here rather
- * than trusting this file to have caught it.
+ * Covered here: the single-agent entry point, sequential, parallel and
+ * hierarchical runners, durable execution, streaming, the
+ * {@see RemembersRunContext} trait, the
+ * memory propagation policy (the one breaking change in this release), and the
+ * marker-still-works path.
+ *
+ * Still uncovered: {@see StaticHierarchicalStreamRunner} — the vendor-only
+ * combination of hierarchical *and* streaming. If you touch that gate, add
+ * coverage here rather than trusting this file to have caught it.
  */
 beforeEach(function () {
     VendorOnlyResearcher::fake(['vendor-research-out']);
@@ -131,4 +138,63 @@ it('hands a vendor-only agent to a custom memory propagation policy', function (
     // pre-fix code degraded silently instead of erroring.
     expect(VendorAgentRecordingPropagationPolicy::$seenAgents[0])
         ->toBeInstanceOf(VendorOnlyResearcher::class);
+});
+
+it('streams a vendor-only swarm', function () {
+    $events = iterator_to_array(VendorOnlySequentialSwarm::make()->stream('stream-task'));
+
+    expect($events)->not->toBeEmpty();
+});
+
+it('runs a vendor-only swarm durably', function () {
+    // Durable is the widest gate the widening touched and the worst place for a
+    // regression: it fails on a queue worker, asynchronously, in production.
+    // Durable execution requires database-backed persistence, so configure it
+    // here rather than in beforeEach -- the other tests in this file are
+    // deliberately driver-agnostic.
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('queue.connections.durable-test', ['driver' => 'null']);
+    config()->set('swarm.durable.queue.connection', 'durable-test');
+    config()->set('swarm.durable.queue.name', 'swarm-durable');
+
+    foreach ([ContextStore::class, ArtifactRepository::class, RunHistoryStore::class,
+        DurableRunStore::class, SwarmRunner::class, DurableSwarmManager::class] as $abstract) {
+        app()->forgetInstance($abstract);
+    }
+
+    Artisan::call('migrate:fresh', ['--database' => 'testing']);
+
+    VendorOnlyResearcher::fake(['vendor-research-out']);
+    VendorOnlyWriter::fake(['vendor-writer-out']);
+
+    $runId = VendorOnlySequentialSwarm::make()->dispatchDurable('durable-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+    expect($manager->find($runId)['status'])->toBe('completed');
+});
+
+it('passes a vendor-only agent to the policy through RemembersRunContext', function () {
+    // The ONLY silent failure mode in this change. `RemembersRunContext` decides
+    // what to hand the policy with `$this instanceof Agent ? $this : null` —
+    // pre-fix a vendor-only agent hit the null branch, so per-agent memory
+    // filtering switched itself off with no error at all. The existing trait
+    // tests use RememberingWriter, which implements the swarm marker and so can
+    // never reach this branch.
+    VendorAgentRecordingPropagationPolicy::reset();
+    config()->set('swarm.memory.propagation_policy', VendorAgentRecordingPropagationPolicy::class);
+    app()->forgetInstance(MemoryPropagationPolicy::class);
+
+    VendorOnlyRememberingWriter::fake(['remembering-out']);
+
+    app(SwarmRunner::class)->agent(new VendorOnlyRememberingWriter)->prompt('task');
+
+    expect(VendorAgentRecordingPropagationPolicy::$seenAgents)->not->toBeEmpty()
+        ->and(VendorAgentRecordingPropagationPolicy::$seenAgents)
+        ->not->toContain(null);
+
+    expect(VendorAgentRecordingPropagationPolicy::$seenAgents[0])
+        ->toBeInstanceOf(VendorOnlyRememberingWriter::class);
 });
