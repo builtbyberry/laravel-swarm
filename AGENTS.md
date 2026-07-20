@@ -10,14 +10,6 @@ start with [README.md](README.md), [CONTRIBUTING.md](CONTRIBUTING.md),
 
 `builtbyberry/laravel-swarm` is a Laravel package that adds reusable multi-agent orchestration on top of the official `laravel/ai` package. Laravel AI handles single-agent LLM interactions and low-level workflow primitives. Laravel Swarm turns repeated multi-agent workflows into first-class application objects with sync, queued, streamed, and durable execution modes.
 
-## Package Identity
-
-- **Packagist:** `builtbyberry/laravel-swarm`
-- **Namespace:** `BuiltByBerry\LaravelSwarm`
-- **GitHub:** `https://github.com/builtbyberry/laravel-swarm`
-- **Author:** Daniel Berry (J Street Digital)
-- **Location:** `~/Code/laravel-swarm`
-
 ## Core Design Principle — Laravel Native Feel
 
 Every implementation decision must follow existing Laravel and Laravel AI conventions. A developer who knows Laravel AI should look at a swarm class and understand it immediately. Do not invent new framework patterns when Laravel already has a recognizable convention.
@@ -54,14 +46,10 @@ If a gap is deferred, it must be recorded as a named follow-up with an owner, no
 
 ## Tech Stack
 
-- PHP ^8.5
-- Laravel ^13.0
-- `laravel/ai` ^0.9
-- `orchestra/testbench` ^11
-- `pestphp/pest` ^4.4 + `pest-plugin-laravel` ^4.1
-- `larastan/larastan` ^3.0
-- `laravel/pint` ^1.0
-- Optional Pulse observability via the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) companion package (not a core dependency)
+Read `composer.json` for the authoritative versions. Not in the manifest:
+Pulse observability is optional and lives in the separate
+[`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse)
+companion package — deliberately **not** a core dependency.
 
 ## Dependency And Upgrade Path
 
@@ -69,22 +57,13 @@ Swarm sits directly on **PHP**, **Laravel**, and **`laravel/ai`** with semver ra
 
 ## Package Shape
 
-Keep the mental model high-level rather than mirroring every file:
+`src/` is organized by responsibility and reads directly — list it rather than
+relying on a copy here. Two pointers the layout does not give you:
 
-- `src/Attributes` — swarm attributes for topology, timeout, and max agent steps.
-- `src/Commands` — `make:swarm` plus history, status, prune, pause, resume, cancel, and recover commands.
-- `src/Concerns` / `src/Contracts` — public swarm trait and storage/runtime contracts.
-- `src/Events` — lifecycle events for started, step started/completed, completed, failed, paused, resumed, and cancelled.
-- `src/Jobs` — queued and durable execution jobs.
-- `src/Persistence` — cache and database context, artifact, durable run, run history, and stream replay stores; `SwarmPersistenceCipher` seals designated string columns when database persistence uses encrypter-backed at-rest sealing.
-- `src/Responses` — sync, queued, durable, streamable, artifact, response, and step DTOs.
-- `src/Streaming` — typed swarm stream events aligned with Laravel AI stream events.
-- `src/Routing` — hierarchical route plan objects and validation.
-- `src/Runners` — topology runners, sequential stream runner, `DurableSwarmManager` (facade over `src/Runners/Durable/*` collaborators), SwarmRunner, step recorder; see `docs/durable-runtime-architecture.md`.
-- `src/Support` — `RunContext`, history query helpers, capture helpers, monotonic time, and runtime support objects.
-- `src/Testing` — fakes and assertions.
-- `database/migrations` — package-managed persistence and durable runtime tables.
-- `docs/` and `examples/` — detailed user-facing behavior and integration examples (`docs/streaming.md` for `stream()`).
+- `src/Runners` — `DurableSwarmManager` is a facade over the `src/Runners/Durable/*`
+  collaborators; see [docs/durable-runtime-architecture.md](docs/durable-runtime-architecture.md).
+- `src/Persistence` — `SwarmPersistenceCipher` seals designated string columns when
+  database persistence uses encrypter-backed at-rest sealing (see Persistence below).
 
 ## Execution Modes
 
@@ -120,18 +99,14 @@ Laravel Swarm persists run context, artifacts, and run history through configura
 
 ## Commands And Operations
 
-Public Artisan commands:
+Run `php artisan list swarm` (or read `src/Commands`) for the current command set —
+do not maintain a copy here, it goes stale. Operational notes that are not
+discoverable from `--help`:
 
-- `php artisan make:swarm`
-- `php artisan swarm:status` (includes a **Phase** column: `parallel_join` when a hierarchical coordinated queue run is waiting on parallel branches)
-- `php artisan swarm:history` (same **Phase** column)
-- `php artisan swarm:prune`
-- `php artisan swarm:pause <run-id>`
-- `php artisan swarm:resume <run-id>`
-- `php artisan swarm:cancel <run-id>`
-- `php artisan swarm:recover`
-
-Schedule `swarm:prune` for database-backed persistence. Schedule `swarm:recover` frequently when using durable execution.
+- **Schedule `swarm:prune`** for database-backed persistence, and schedule
+  `swarm:recover` frequently when using durable execution. Neither runs on its own.
+- `swarm:status` and `swarm:history` include a **Phase** column; `parallel_join`
+  means a hierarchical coordinated queue run is waiting on parallel branches.
 
 ## Pulse
 
@@ -154,7 +129,7 @@ Pulse is aggregate observability. For live per-run operations feeds, listen to L
 
 ## Review Method
 
-Use multi-expert review for meaningful changes, especially streaming contracts, persistence/replay, migrations, security surfaces, and public API drift. Invoke the `anthropic-skills:multi-expert-change-review` skill rather than doing lens reviews inline — it runs all eight lenses in parallel and produces the required output format.
+Use multi-expert review for meaningful changes, especially streaming contracts, persistence/replay, migrations, security surfaces, and public API drift. Invoke the `marshall:change-review` skill rather than doing lens reviews inline — it runs the configured lenses against the component diff and records findings in the shared Marshall store. Release-level readiness is `marshall:release-readiness`.
 
 Default review lenses:
 
@@ -197,11 +172,18 @@ Releases are session-shaped: a thematic group of work ships as one tagged releas
 
 **Topic branches**
 
+`<version>` here is the **bare number with no `v` prefix** — `0.23.0`, not `v0.23.0`.
+This differs from the release branch, which *does* carry the `v` (`release/v0.23.0`).
+CI enforces the topic-branch form and rejects the PR otherwise.
+
 - `feat/<version>-<topic>` — features.
 - `fix/<version>-<topic>` — bug fixes that ride a release session.
 - `docs/<version>-<topic>` — docs-only work.
 - `test/<version>-<topic>` — test-only work.
 - `chore/<version>-<topic>` — scoped chores.
+
+Example: `chore/0.23.0-tighten-minimum-stability` into `release/v0.23.0`.
+
 - One topic per PR. PR titles end with the originating issue `(#NN)` when there is one.
 
 **Commits — Conventional Commits with a scope**
@@ -223,14 +205,6 @@ Releases are session-shaped: a thematic group of work ships as one tagged releas
 **Deferrals**
 
 - A deferred finding must be recorded as a GitHub issue with an owner and a target version. Do not drop it into a TODO comment or a plan doc.
-
-## Current State
-
-The package supports sequential, parallel, and hierarchical topologies; synchronous, queued, streamed, and durable execution; cache and database persistence; run history and artifacts; lifecycle events; optional Pulse observability via a companion package; config, migration, and stub publishing; and a full fake/assertion system.
-
-Streaming covers typed non-text final-agent events (`swarm_text_end`, `swarm_reasoning_delta`, `swarm_reasoning_end`, `swarm_tool_call`, `swarm_tool_result`) with persisted replay support and Laravel AI-style stream-event broadcast helpers.
-
-The test suite includes Feature and Unit coverage across sequential, parallel, hierarchical routing, streaming, queued execution, durable execution, persistence, commands, fakes, and support objects. (Pulse recorder/card tests moved to the companion package with the v0.17.1 extraction.)
 
 ## Known Gaps / Next Work
 
