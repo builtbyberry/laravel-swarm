@@ -142,16 +142,31 @@ it('hands a vendor-only agent to a custom memory propagation policy', function (
 
 it('streams a vendor-only swarm', function () {
     $events = iterator_to_array(VendorOnlySequentialSwarm::make()->stream('stream-task'));
+    $types = array_map(static fn ($event): string => $event->type(), $events);
 
-    expect($events)->not->toBeEmpty();
+    // Assert the stream actually ran to completion rather than merely yielding
+    // something. `not->toBeEmpty()` would pass on a stream that emits one event
+    // and dies — so it would not catch the run terminating after the first
+    // agent, the text deltas vanishing, or the terminal event never arriving.
+    expect($types)->toContain('swarm_stream_end')
+        ->and(array_filter($types, static fn (string $t): bool => $t === 'swarm_step_end'))
+        ->toHaveCount(2);
+
+    // And the vendor agent's output genuinely made it through the stream.
+    $text = implode('', array_map(static fn ($event): string => (string) $event, $events));
+
+    expect($text)->toContain('vendor-writer-out');
 });
 
 it('runs a vendor-only swarm durably', function () {
     // Durable is the widest gate the widening touched and the worst place for a
     // regression: it fails on a queue worker, asynchronously, in production.
     // Durable execution requires database-backed persistence, so configure it
-    // here rather than in beforeEach -- the other tests in this file are
-    // deliberately driver-agnostic.
+    // here rather than in beforeEach — the other tests in this file are
+    // deliberately driver-agnostic. Mirrors configureDurableRuntime() in
+    // DurableSwarmTest.php (and the same inlined copy in
+    // SchemaEmitConsistencyTest.php); inlined because Pest test files don't
+    // share file-scoped helpers. Grep that name to find every copy.
     config()->set('swarm.persistence.driver', 'database');
     config()->set('queue.connections.durable-test', ['driver' => 'null']);
     config()->set('swarm.durable.queue.connection', 'durable-test');
@@ -191,10 +206,18 @@ it('passes a vendor-only agent to the policy through RemembersRunContext', funct
 
     app(SwarmRunner::class)->agent(new VendorOnlyRememberingWriter)->prompt('task');
 
-    expect(VendorAgentRecordingPropagationPolicy::$seenAgents)->not->toBeEmpty()
-        ->and(VendorAgentRecordingPropagationPolicy::$seenAgents)
-        ->not->toContain(null);
+    // Two calls reach the policy: one from the runner, one from the trait.
+    // Assert BOTH positionally rather than leaning on absence-of-null — the
+    // runner's call is already covered by the test above, so if only that one
+    // were asserted this test would duplicate it and the trait's contribution
+    // (the silent branch) would go unguarded.
+    expect(VendorAgentRecordingPropagationPolicy::$seenAgents)->toHaveCount(2);
 
-    expect(VendorAgentRecordingPropagationPolicy::$seenAgents[0])
-        ->toBeInstanceOf(VendorOnlyRememberingWriter::class);
+    foreach (VendorAgentRecordingPropagationPolicy::$seenAgents as $index => $seen) {
+        expect($seen)->toBeInstanceOf(
+            VendorOnlyRememberingWriter::class,
+            "Policy call #{$index} received null or the wrong agent — the trait's ".
+            'instanceof check has been narrowed back to the swarm marker.',
+        );
+    }
 });
