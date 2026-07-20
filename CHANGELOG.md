@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.23.0 - unreleased
+## v0.23.0 - 2026-07-20
 
 Compatibility and correctness: `laravel/ai` agents drop in unchanged, plus
 documentation, dependency and CI fixes that close gaps between what this
