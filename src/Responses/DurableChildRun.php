@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
-readonly class DurableChildRun
+class DurableChildRun
 {
     public function __construct(
-        public string $parentRunId,
-        public string $childRunId,
-        public string $childSwarmClass,
-        public string $status,
+        public readonly string $parentRunId,
+        public readonly string $childRunId,
+        public readonly string $childSwarmClass,
+        public readonly string $status,
     ) {}
 }

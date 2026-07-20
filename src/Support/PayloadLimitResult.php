@@ -7,13 +7,13 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 /**
  * @internal
  */
-final readonly class PayloadLimitResult
+final class PayloadLimitResult
 {
     /**
      * @param  array<string, mixed>  $metadata
      */
     public function __construct(
-        public string $value,
-        public array $metadata = [],
+        public readonly string $value,
+        public readonly array $metadata = [],
     ) {}
 }

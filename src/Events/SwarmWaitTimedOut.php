@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Events;
 
-readonly class SwarmWaitTimedOut
+class SwarmWaitTimedOut
 {
     public function __construct(
-        public string $runId,
-        public string $swarmClass,
-        public string $topology,
-        public string $waitName,
-        public string $executionMode = 'durable',
+        public readonly string $runId,
+        public readonly string $swarmClass,
+        public readonly string $topology,
+        public readonly string $waitName,
+        public readonly string $executionMode = 'durable',
     ) {}
 }

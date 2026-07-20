@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
-final readonly class BranchWaitPayload
+final class BranchWaitPayload
 {
     /**
      * @param  array<string, mixed>  $routeCursor  Durable cursor shape: {entries, offset, current_node_id, ...}
@@ -12,14 +12,14 @@ final readonly class BranchWaitPayload
      * @param  array<int, array<string, mixed>>  $branches  Branch definitions to create
      */
     public function __construct(
-        public string $executionToken,
-        public int $nextStepIndex,
-        public string $parentNodeId,
-        public RunContext $context,
-        public int $ttlSeconds,
-        public array $routeCursor = [],
-        public ?array $routePlan = null,
-        public ?int $totalSteps = null,
-        public array $branches = [],
+        public readonly string $executionToken,
+        public readonly int $nextStepIndex,
+        public readonly string $parentNodeId,
+        public readonly RunContext $context,
+        public readonly int $ttlSeconds,
+        public readonly array $routeCursor = [],
+        public readonly ?array $routePlan = null,
+        public readonly ?int $totalSteps = null,
+        public readonly array $branches = [],
     ) {}
 }

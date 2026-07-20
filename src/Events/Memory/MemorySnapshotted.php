@@ -32,13 +32,13 @@ namespace BuiltByBerry\LaravelSwarm\Events\Memory;
  *                  at dispatch time. `null` when the driver does not report
  *                  the entry count.
  */
-final readonly class MemorySnapshotted
+final class MemorySnapshotted
 {
     public function __construct(
-        public string $runId,
-        public int $stepIndex,
-        public string $snapshotId,
-        public ?int $bytes = null,
-        public ?int $entryCount = null,
+        public readonly string $runId,
+        public readonly int $stepIndex,
+        public readonly string $snapshotId,
+        public readonly ?int $bytes = null,
+        public readonly ?int $entryCount = null,
     ) {}
 }

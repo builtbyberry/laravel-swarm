@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
-readonly class DurableWaitOutcome
+class DurableWaitOutcome
 {
     public function __construct(
-        public string $name,
-        public string $status,
-        public mixed $payload = null,
-        public bool $timedOut = false,
+        public readonly string $name,
+        public readonly string $status,
+        public readonly mixed $payload = null,
+        public readonly bool $timedOut = false,
     ) {}
 }

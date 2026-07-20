@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
-final readonly class QueuedRunAcquisition
+final class QueuedRunAcquisition
 {
     private function __construct(
-        public string $outcome,
-        public ?string $executionToken = null,
+        public readonly string $outcome,
+        public readonly ?string $executionToken = null,
     ) {}
 
     public static function fresh(string $executionToken): self

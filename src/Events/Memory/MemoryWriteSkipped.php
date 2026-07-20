@@ -24,11 +24,11 @@ use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
  * leaves any pre-existing entry at the address untouched; it suppresses this
  * write, it does not delete prior state.
  */
-final readonly class MemoryWriteSkipped
+final class MemoryWriteSkipped
 {
     public function __construct(
-        public MemoryScope $scope,
-        public string $scopeId,
-        public string $key,
+        public readonly MemoryScope $scope,
+        public readonly string $scopeId,
+        public readonly string $key,
     ) {}
 }

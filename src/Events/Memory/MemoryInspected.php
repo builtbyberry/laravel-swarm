@@ -33,13 +33,13 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
  * Listeners doing audit-trail capture will typically pair this event with the
  * `command.memory.inspect` audit category emitted alongside it.
  */
-final readonly class MemoryInspected
+final class MemoryInspected
 {
     public function __construct(
-        public string $runId,
-        public ?int $stepIndex,
-        public ?MemoryScope $scopeFilter,
-        public string $format,
-        public int $snapshotCount,
+        public readonly string $runId,
+        public readonly ?int $stepIndex,
+        public readonly ?MemoryScope $scopeFilter,
+        public readonly string $format,
+        public readonly int $snapshotCount,
     ) {}
 }

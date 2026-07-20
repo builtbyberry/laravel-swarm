@@ -29,7 +29,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
  * the dispatch-layer note on {@see DefaultSwarmMemory}
  * for the rationale.
  */
-final readonly class MemoryWritten
+final class MemoryWritten
 {
     /**
      * @param  array<string, mixed>  $metadata
@@ -44,10 +44,10 @@ final readonly class MemoryWritten
      *                           database row footprint.
      */
     public function __construct(
-        public MemoryScope $scope,
-        public string $scopeId,
-        public string $key,
-        public array $metadata = [],
-        public ?int $bytes = null,
+        public readonly MemoryScope $scope,
+        public readonly string $scopeId,
+        public readonly string $key,
+        public readonly array $metadata = [],
+        public readonly ?int $bytes = null,
     ) {}
 }

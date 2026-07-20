@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
-readonly class DurableRunDetail
+class DurableRunDetail
 {
     /**
      * @param  array<string, mixed>|null  $run
@@ -19,17 +19,17 @@ readonly class DurableRunDetail
      * @param  array<int, array<string, mixed>>  $hierarchicalNodeOutputs
      */
     public function __construct(
-        public string $runId,
-        public ?array $run,
-        public ?array $history = null,
-        public array $labels = [],
-        public array $details = [],
-        public array $waits = [],
-        public array $signals = [],
-        public array $progress = [],
-        public array $children = [],
-        public array $branches = [],
-        public array $hierarchicalNodeOutputs = [],
+        public readonly string $runId,
+        public readonly ?array $run,
+        public readonly ?array $history = null,
+        public readonly array $labels = [],
+        public readonly array $details = [],
+        public readonly array $waits = [],
+        public readonly array $signals = [],
+        public readonly array $progress = [],
+        public readonly array $children = [],
+        public readonly array $branches = [],
+        public readonly array $hierarchicalNodeOutputs = [],
     ) {}
 
     /**

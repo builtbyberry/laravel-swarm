@@ -11,7 +11,7 @@ use JsonSerializable;
 /**
  * @implements Arrayable<string, mixed>
  */
-readonly class SwarmResponse implements Arrayable, JsonSerializable
+class SwarmResponse implements Arrayable, JsonSerializable
 {
     /**
      * @param  array<int, SwarmStep>  $steps
@@ -20,12 +20,12 @@ readonly class SwarmResponse implements Arrayable, JsonSerializable
      * @param  array<string, mixed>  $metadata
      */
     public function __construct(
-        public string $output,
-        public array $steps = [],
-        public array $usage = [],
-        public ?RunContext $context = null,
-        public array $artifacts = [],
-        public array $metadata = [],
+        public readonly string $output,
+        public readonly array $steps = [],
+        public readonly array $usage = [],
+        public readonly ?RunContext $context = null,
+        public readonly array $artifacts = [],
+        public readonly array $metadata = [],
     ) {}
 
     /**

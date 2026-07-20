@@ -30,7 +30,7 @@ use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
  * the dispatch-layer note on {@see DefaultSwarmMemory}
  * for the rationale.
  */
-final readonly class MemoryRead
+final class MemoryRead
 {
     /**
      * @param  bool  $hit  `true` when the read returned a stored entry, `false`
@@ -41,9 +41,9 @@ final readonly class MemoryRead
      *                     accidental hit.
      */
     public function __construct(
-        public MemoryScope $scope,
-        public string $scopeId,
-        public string $key,
-        public bool $hit = false,
+        public readonly MemoryScope $scope,
+        public readonly string $scopeId,
+        public readonly string $key,
+        public readonly bool $hit = false,
     ) {}
 }
