@@ -2,23 +2,37 @@
 
 ## v0.23.0 - unreleased
 
-Post-v0.22.0 hardening: durable-dispatch correctness, encrypt-at-rest coverage,
-laravel/ai drop-in compatibility, and release-quality gates.
+Compatibility and correctness: `laravel/ai` agents drop in unchanged, plus
+documentation, dependency and CI fixes that close gaps between what this
+repository says and what it does.
 
 ### Added
 
-_To be filled in during release wrap-up._
+_Nothing._ This release adds no public API, configuration key, or command. Its
+one new test (the documented-Artisan-invocation guard) ships with the fix it
+protects, under **Fixed** below.
 
 ### Changed
 
-- Tightened `minimum-stability` from `dev` to `stable` in `composer.json`. The
-  `dev` floor was inert — `prefer-stable: true` already resolved every dependency
-  to a stable tag, and no package in the tree required a dev version. Narrowing
-  the floor stops the package broadening transitive resolution for consumers.
-  Verified against both the default and `--prefer-lowest` resolutions, and
-  against an explicit dev-branch requirement (Composer adds its own stability
-  flags for those, so dev-branch CI lanes are unaffected). No dependency versions
-  changed.
+- **Tightened `minimum-stability` from `dev` to `stable` in `composer.json`, and
+  stopped telling applications to loosen their own.** The `dev` floor was inert —
+  `prefer-stable: true` already resolved every dependency to a stable tag, and no
+  package in the tree requires a dev version. Composer reads `minimum-stability`
+  from the **root** package only, so this is hygiene for Swarm's own resolution
+  and has no direct effect on a consuming application. The consumer-facing half
+  is documentation: `README.md`, `UPGRADING.md`, `docs/getting-started.md` and
+  `docs/advanced-setup.md` instructed applications to set
+  `"minimum-stability": "dev"` in their own `composer.json` on the premise that
+  `laravel/ai` ships dev-tagged releases. It ships stable tags on the 0.9 line —
+  a strictly-stable root resolves `laravel/ai ^0.9` to `v0.9.1` with no stability
+  flags — so that instruction was needlessly loosening the resolution floor of
+  every consumer's entire dependency tree. All four sites now say no special
+  stability configuration is required. Verified against both the default and
+  `--prefer-lowest` resolutions, and against an explicit dev-branch requirement
+  (Composer adds its own stability flags for those, so dev-branch CI lanes are
+  unaffected). No dependency versions changed.
+- Bumped `extra.branch-alias.dev-main` from `0.22.x-dev` to `0.23.x-dev`, so an
+  application tracking `dev-main` resolves under a `^0.23` constraint.
 - **`AGENTS.md` corrected against the codebase.** The contributor/agent guidance
   had drifted: it pointed at a code-review skill that is not installed, and left
   the topic-branch convention ambiguous about the `v` prefix (topic branches drop

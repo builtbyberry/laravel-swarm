@@ -58,16 +58,9 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 
 The PHP **^8.5** floor is a deliberate requirement — the package builds on 8.5 language features. As of **v0.20.0** the `laravel/ai` floor is **^0.9**; support for **0.8** was dropped (0.6 / 0.7 were dropped earlier, in v0.13.0). Consumers pinned below `laravel/ai` 0.9 must upgrade. See the [changelog](CHANGELOG.md#v0200---2026-07-13) for what the 0.9 adoption changes.
 
-This package declares `"minimum-stability": "dev"` with `"prefer-stable": true` because `laravel/ai` is still pre-1.0 and ships dev-tagged releases. Composer will not resolve a pre-stable transitive dependency from a stable consuming project, so your application's `composer.json` must also set:
+**No special stability configuration is required.** `laravel/ai` ships stable tags on the 0.9 line, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
 
-```json
-{
-    "minimum-stability": "dev",
-    "prefer-stable": true
-}
-```
-
-`prefer-stable` keeps Composer biased toward tagged releases — only dependencies without a stable release (today, `laravel/ai`) resolve to a `dev-` constraint. This requirement will be dropped when `laravel/ai` reaches 1.0; the package will then move to `"minimum-stability": "stable"` and consuming applications will be free to do the same.
+Earlier versions of this document asked you to set `"minimum-stability": "dev"` in your application's `composer.json`. That is no longer necessary, and as of **v0.23.0** it is no longer recommended — it loosens the resolution floor for your *entire* dependency tree, not just for Swarm. If you added those keys solely to install this package, you can remove them.
 
 Laravel Swarm orchestrates the same Laravel AI agents, providers, and streams as your application. Treat Composer updates to Laravel or `laravel/ai` as integration-test events: run your test suite and any queued, streamed, or durable swarm smoke paths after dependency changes. This package's [changelog](CHANGELOG.md) covers Swarm-owned changes; it does not replace verification against upstream Laravel or Laravel AI releases.
 

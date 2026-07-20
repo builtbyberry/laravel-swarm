@@ -166,23 +166,20 @@ nested secrets inside JSON unless your application handles that separately.
 
 ## Composer minimum-stability
 
-The package uses `"minimum-stability": "dev"` with `"prefer-stable": true` in
-[`composer.json`](composer.json) because `laravel/ai` is pre-1.0 and ships
-dev-tagged releases. Composer will not resolve a pre-stable transitive from a
-stable consuming project, so applications **must propagate the same setting**:
+As of **v0.23.0** the package declares `"minimum-stability": "stable"` with
+`"prefer-stable": true` in [`composer.json`](composer.json). `laravel/ai` ships
+stable tags on the 0.9 line, so **applications need no special stability
+settings** to install Swarm.
 
-```json
-{
-    "minimum-stability": "dev",
-    "prefer-stable": true
-}
-```
+Before v0.23.0 this section instructed applications to propagate
+`"minimum-stability": "dev"`. That is no longer necessary. If you added those
+keys solely to install this package, you can remove them — they loosen the
+resolution floor for your entire dependency tree, not just for Swarm.
 
-`prefer-stable` keeps Composer biased toward tagged releases — only
-dependencies without a stable release (today, `laravel/ai`) resolve to a `dev-`
-constraint. This requirement will be dropped when `laravel/ai` reaches 1.0; the
-package will then move to `"minimum-stability": "stable"` and consuming
-applications will be free to do the same.
+Note that `minimum-stability` is read by Composer from the **root** package
+only; a dependency's value is ignored during your application's resolve. So this
+change is hygiene for Swarm's own resolution, and the setting that governs your
+application is always your own.
 
 ## Durable Outbox: Queue Connection Rename Hazard
 
@@ -265,10 +262,10 @@ composer require laravel/ai:0.9.0
 That pins your application’s dependency resolution. It does not change the semver
 range Laravel Swarm declares for Packagist.
 
-This package’s `composer.json` uses `"minimum-stability": "dev"` with
-`"prefer-stable": true` so pre-stable dependencies can resolve while Composer
-still prefers tagged releases. Your application may need compatible Composer
-stability settings while Laravel AI remains pre-stable.
+As of v0.23.0 this package’s `composer.json` uses `"minimum-stability": "stable"`
+with `"prefer-stable": true`. Your application needs no special Composer
+stability settings to install Swarm — see
+[Composer minimum-stability](#composer-minimum-stability).
 
 ## Upgrading to v0.23.0
 
@@ -324,7 +321,7 @@ No other contract changed, and no application-facing behavior changed.
 
 **No required action — additive, developer-experience release.** Every addition is new public surface you can adopt at your own pace. One behavior note before the list: `swarm:health` gains new checks that can exit non-zero (see below) — worth knowing if you gate CI on it.
 
-- **Class-free entry points.** `Swarm::agent($agent)` runs a single agent through the full governed pipeline, and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical($coordinator, [$workers])` run inline multi-agent swarms — all without authoring a `Swarm` class, all with the same audit, guardrails, capture, telemetry, and encrypt-at-rest as a class-based swarm. The class-free builders run **in-process** (`prompt`/`run`/`stream`/`broadcast`/`broadcastNow`); for **queued or durable** execution, author a one-agent `Swarm` class (`make:swarm:swarm YourSwarm`) — a background run is re-resolved from the container by class on the worker, which an ad-hoc swarm can't provide. See [Execution Modes](docs/execution-modes.md#single-agent-swarmagent) and the [Cookbook](docs/cookbook.md).
+- **Class-free entry points.** `Swarm::agent($agent)` runs a single agent through the full governed pipeline, and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical($coordinator, [$workers])` run inline multi-agent swarms — all without authoring a `Swarm` class, all with the same audit, guardrails, capture, telemetry, and encrypt-at-rest as a class-based swarm. The class-free builders run **in-process** (`prompt`/`run`/`stream`/`broadcast`/`broadcastNow`); for **queued or durable** execution, author a one-agent `Swarm` class (`make:swarm:swarm YourSwarm`) *(corrected in v0.23.0 — this line originally named a one-agent flag on that command, which never existed)* — a background run is re-resolved from the container by class on the worker, which an ad-hoc swarm can't provide. See [Execution Modes](docs/execution-modes.md#single-agent-swarmagent) and the [Cookbook](docs/cookbook.md).
 - **Testing.** `SwarmFake::interceptSwarmAuditSink()` returns a recording sink with `assertAuditChain()`, `assertEmittedAudit()`, `assertNotEmittedAudit()`, and `assertStepCount()`. See [Testing](docs/testing.md#use-swarmfake-intercepts-for-the-audit-contracts-v07).
 - **`swarm:health`** gained governed-by-default checks (guardrails resolvable, audit sink reachable, capture policy sane), included in `--json`. **Behavior note:** the guardrail and capture-policy checks report `failed` (command exits non-zero) when a configured `swarm.guardrails.*` ref or the bound `CapturePolicy` cannot be resolved from the container — a *new* failure condition on this command. If you gate CI on `swarm:health` and have a broken binding, it will now surface here (it would have thrown mid-run regardless). The default `NoOpSwarmAuditSink` is reported as a `note`, not a failure. See [Maintenance](docs/maintenance.md).
 - **`make:swarm`** is now an interactive front door (single-agent vs. multi-agent, topology prompts) with a `--single` scaffold; non-interactive/`--no-interaction` usage is unchanged. See [Generators](docs/generators.md).
