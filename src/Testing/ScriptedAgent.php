@@ -31,6 +31,16 @@ use RuntimeException;
  * queued execution mode against a scripted agent — those modes need a real
  * provider, or a `Promptable` agent with `Agent::fake()` set up in the test.
  *
+ * **Deliberately still implements the deprecated
+ * {@see Agent} alias — do not migrate this
+ * to the vendor contract before v1.0.** Everything else in `src/` moved to
+ * `Laravel\Ai\Contracts\Agent` in v0.23.0, so this is the last consumer and
+ * reads like an oversight; it is not. Subclasses live in user applications and
+ * in the shipped example stubs, and some of those type-hint the marker; keeping
+ * it here means those subclasses satisfy both interfaces. Since the marker
+ * extends the vendor contract, a `ScriptedAgent` still passes everywhere Swarm
+ * now type-hints. Drop this with the alias itself in v1.0.
+ *
  * @phpstan-import-type LaravelAiAgentAttachments from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  * @phpstan-import-type LaravelAiAgentProvider from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases

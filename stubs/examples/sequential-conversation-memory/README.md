@@ -60,7 +60,7 @@ Each agent under `app/Ai/Agents/SequentialConversationMemory/` extends
 shape and expose the memory tool so the model can call it:
 
 ```php
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Laravel\Ai\Attributes\Model;
 use Laravel\Ai\Attributes\Provider;

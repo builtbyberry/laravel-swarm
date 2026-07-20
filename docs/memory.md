@@ -132,7 +132,7 @@ When a runner invokes a worker agent, a **propagation policy** decides which mem
 The contract has two methods. `scopes()` declares *what to load* — the runner gathers candidates from exactly those scopes and no others, so a policy never pays to read a scope it ignores. `present()` is the *what to show* filter: drop, reorder, or narrow by key or age within the gathered candidates.
 
 ```php
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
@@ -250,7 +250,7 @@ Add the trait to an agent that also implements `Laravel\Ai\Contracts\Conversatio
 
 ```php
 use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Ai\Promptable;
 

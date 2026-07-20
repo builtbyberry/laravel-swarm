@@ -9,7 +9,6 @@ use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
@@ -42,6 +41,7 @@ use BuiltByBerry\LaravelSwarm\Testing\Memory\RecordingMemoryCapturePolicy;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\FakePendingDispatch;
 
 /**

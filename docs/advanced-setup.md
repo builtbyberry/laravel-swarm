@@ -39,8 +39,8 @@ composer require builtbyberry/laravel-swarm
 ```
 
 This pulls `builtbyberry/laravel-swarm` and its `laravel/ai` dependency into
-your application. See the [Getting Started prerequisites](./getting-started.md#prerequisites)
-for the `minimum-stability` constraint your `composer.json` must allow.
+your application. No special `minimum-stability` configuration is required — see
+the [Getting Started prerequisites](./getting-started.md#prerequisites).
 
 ## Publish the configuration
 

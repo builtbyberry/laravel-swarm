@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
@@ -15,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Container\Container;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * Builds the agent-visible memory view at the snapshot chokepoint.

@@ -30,7 +30,7 @@ class BlogPipeline implements Swarm
     use Runnable;
 
     /**
-     * @return array<int, \BuiltByBerry\LaravelSwarm\Contracts\Agent>
+     * @return array<int, \Laravel\Ai\Contracts\Agent>
      */
     public function agents(): array
     {

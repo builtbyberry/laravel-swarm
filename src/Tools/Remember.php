@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tools;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
@@ -17,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Tool;
 use Laravel\Ai\Tools\Request;
 use Stringable;

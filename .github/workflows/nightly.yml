@@ -3,16 +3,21 @@ name: nightly
 on:
   schedule:
     # 06:17 UTC daily — off the hour to avoid contention with the GitHub-wide
-    # cron stampede at :00. Early signal for breaking changes on laravel/framework main.
+    # cron stampede at :00. Early signal for breaking changes on the
+    # laravel/framework 13.x development branch (the major this package requires).
     - cron: '17 6 * * *'
   workflow_dispatch:
 
 jobs:
   tests:
-    name: PHP 8.5 - Laravel dev-main
+    name: PHP 8.5 - Laravel 13.x-dev
     runs-on: ubuntu-24.04
-    # Non-blocking: surface failures via the badge but never gate PRs on upstream churn.
-    continue-on-error: true
+    # Deliberately NOT continue-on-error. This lane is scheduled-only and is not a
+    # PR check, so it cannot gate anything — but a job-level continue-on-error marks
+    # the run "success" even when it fails, which turns the badge green and hides
+    # exactly the upstream breakage this lane exists to surface. That is what went
+    # wrong before: the requires named branches that do not exist, every run failed
+    # to resolve, and 30/30 runs still reported success. A red nightly IS the signal.
 
     steps:
       - name: Checkout code
@@ -26,25 +31,43 @@ jobs:
           coverage: pcov
           ini-values: memory_limit=1G
 
-      - name: Require Laravel framework dev-main
-        run: |
-          composer require --no-update --dev \
-            "laravel/framework:dev-main" \
-            "illuminate/bus:dev-main as 13.x-dev" \
-            "illuminate/cache:dev-main as 13.x-dev" \
-            "illuminate/concurrency:dev-main as 13.x-dev" \
-            "illuminate/console:dev-main as 13.x-dev" \
-            "illuminate/container:dev-main as 13.x-dev" \
-            "illuminate/contracts:dev-main as 13.x-dev" \
-            "illuminate/database:dev-main as 13.x-dev" \
-            "illuminate/events:dev-main as 13.x-dev" \
-            "illuminate/filesystem:dev-main as 13.x-dev" \
-            "illuminate/queue:dev-main as 13.x-dev" \
-            "illuminate/support:dev-main as 13.x-dev" \
-            "illuminate/view:dev-main as 13.x-dev"
+      # laravel/framework `replace`s every illuminate/* split, so requiring the
+      # framework's dev branch alone pulls the whole illuminate surface from it —
+      # the package's own `illuminate/*: ^13.0` requires are satisfied by that
+      # replace, and no split resolves to a stable tag alongside it. Listing the
+      # splits individually is unnecessary and was the source of the bad
+      # `dev-main as 13.x-dev` aliases.
+      #
+      # The branch is `13.x-dev`, not `dev-main`: neither laravel/framework nor the
+      # illuminate splits publish a `main` branch, and `dev-master` is the NEXT
+      # major, which conflicts with this package's ^13.0 requires.
+      - name: Require laravel/framework 13.x-dev
+        run: composer require --no-update --dev "laravel/framework:13.x-dev"
 
       - name: Install dependencies
         run: composer update --prefer-dist --no-interaction --no-progress
+
+      # Belt and braces for the failure mode this lane shipped with: if the dev
+      # requirement silently stops taking effect, the suite would still run and
+      # pass against a STABLE framework while claiming to test the dev branch.
+      # Fail loudly instead of testing the wrong thing quietly.
+      - name: Verify a dev framework build was actually installed
+        run: |
+          VERSION=$(php -r '
+            $lock = json_decode(file_get_contents("composer.lock"), true);
+            foreach (array_merge($lock["packages"] ?? [], $lock["packages-dev"] ?? []) as $p) {
+              if ($p["name"] === "laravel/framework") { echo $p["version"]; exit; }
+            }
+            echo "MISSING";
+          ')
+          echo "laravel/framework resolved to: $VERSION"
+          case "$VERSION" in
+            dev-*|*-dev)
+              echo "OK — testing against a dev build." ;;
+            *)
+              echo "::error::Expected a dev build of laravel/framework, got '$VERSION'. The dev requirement did not take effect, so this lane would be testing stable code while reporting on dev."
+              exit 1 ;;
+          esac
 
       # testbench-core no longer auto-creates this symlink in some versions; the
       # process-concurrency tests spawn a real artisan subprocess that needs it.

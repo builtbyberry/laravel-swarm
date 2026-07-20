@@ -181,6 +181,8 @@ describe engine behavior for orientation only.
 
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
+| `Laravel\Ai\Contracts\Agent` | The agent contract Swarm type-hints at every entry point and runner gate. Any `laravel/ai` agent drops in unchanged; no Swarm-specific interface is required. (v0.23.0+) | [README: Your First Swarm](../README.md#your-first-swarm), [Upgrading to v0.23.0](../UPGRADING.md#upgrading-to-v0230) |
+| `Contracts\Agent` | **Deprecated since v0.23.0** — a Swarm-owned marker that extends `Laravel\Ai\Contracts\Agent` and adds nothing. Implementing it is no longer necessary; Swarm type-hints the vendor contract throughout. Retained unchanged so agents written against it since v0.5.0 keep working; scheduled for removal in v1.0. See [Upgrading to v0.23.0](../UPGRADING.md#upgrading-to-v0230). | [Upgrading to v0.23.0](../UPGRADING.md#upgrading-to-v0230) |
 | `HasRoutePlan` | Implement on a `StaticHierarchical` swarm to return a fixed route-plan array. | [Static Hierarchical Topology](static-hierarchical-topology.md) |
 | `Routing\RoutePlanSchema` | Reusable JsonSchema builders — `worker()`, `rollup()`, `parallel()`, `finish()`, `node()` — that type each hierarchical route-plan node variant and combine them with `laravel/ai` ^0.9 `anyOf`, so a coordinator with a known node skeleton constrains the model to a valid node shape. `HierarchicalRoutePlanner` stays the authoritative validator. (v0.21.0+) | [Hierarchical Routing](hierarchical-routing.md#constraining-node-shape-with-anyof) |
 | `ConfiguresDurableRetries` | Configure per-swarm and per-agent durable retry policies. | [Durable Retries And Progress](durable-retries-and-progress.md) |

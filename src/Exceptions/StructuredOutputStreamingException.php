@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Exceptions;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\HasStructuredOutput;
 
 /**

@@ -141,7 +141,7 @@ approaches:
 ```php
 namespace App\Memory;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
@@ -358,7 +358,7 @@ Then fill in the `agent()` hook the stub leaves as a `TODO`:
 namespace App\Ai\Tools;
 
 use App\Ai\Agents\ProfileBuilder;
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Tools\Remember;
 

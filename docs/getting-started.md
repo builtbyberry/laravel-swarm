@@ -22,20 +22,15 @@ As of **v0.20.0** the `laravel/ai` floor is **^0.9**; support for **0.8** was
 dropped (0.6 / 0.7 were dropped earlier, in v0.13.0). Applications pinned below
 `laravel/ai` 0.9 must upgrade before taking this release.
 
-Because `laravel/ai` is still pre-1.0 and ships dev-tagged releases, your
-application's `composer.json` must allow dev-stability resolution. Add the
-following keys if they are not already present:
+**No special stability configuration is required.** `laravel/ai` ships stable
+tags on the 0.9 line, so this package declares `"minimum-stability": "stable"`
+and installs cleanly into an application that does the same.
 
-```json
-{
-    "minimum-stability": "dev",
-    "prefer-stable": true
-}
-```
-
-`prefer-stable` keeps Composer biased toward tagged releases — only
-dependencies without a stable release (today, `laravel/ai`) resolve to a
-`dev-` constraint. This requirement disappears when `laravel/ai` reaches 1.0.
+Before **v0.23.0** this page asked you to set `"minimum-stability": "dev"` in
+your application's `composer.json`. That is no longer necessary, and is no
+longer recommended — it loosens the resolution floor for your entire dependency
+tree, not just for Swarm. If you added those keys solely to install this
+package, you can remove them.
 
 ## Install the package
 
@@ -204,7 +199,7 @@ swaps `ScriptedAgent` for a real `Promptable` Laravel AI agent (the swarm
 class, the runner command, and any tests keep working unchanged):
 
 ```php
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Attributes\Model;
 use Laravel\Ai\Attributes\Provider;
 use Laravel\Ai\Enums\Lab;

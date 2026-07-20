@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace {{ rootNamespace }}\Ai\Agents\DurableStreamingDigest;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use Generator;
 use Illuminate\Broadcasting\Channel;
 use Laravel\Ai\Enums\Lab;

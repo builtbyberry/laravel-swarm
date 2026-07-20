@@ -166,23 +166,20 @@ nested secrets inside JSON unless your application handles that separately.
 
 ## Composer minimum-stability
 
-The package uses `"minimum-stability": "dev"` with `"prefer-stable": true` in
-[`composer.json`](composer.json) because `laravel/ai` is pre-1.0 and ships
-dev-tagged releases. Composer will not resolve a pre-stable transitive from a
-stable consuming project, so applications **must propagate the same setting**:
+As of **v0.23.0** the package declares `"minimum-stability": "stable"` with
+`"prefer-stable": true` in [`composer.json`](composer.json). `laravel/ai` ships
+stable tags on the 0.9 line, so **applications need no special stability
+settings** to install Swarm.
 
-```json
-{
-    "minimum-stability": "dev",
-    "prefer-stable": true
-}
-```
+Before v0.23.0 this section instructed applications to propagate
+`"minimum-stability": "dev"`. That is no longer necessary. If you added those
+keys solely to install this package, you can remove them — they loosen the
+resolution floor for your entire dependency tree, not just for Swarm.
 
-`prefer-stable` keeps Composer biased toward tagged releases — only
-dependencies without a stable release (today, `laravel/ai`) resolve to a `dev-`
-constraint. This requirement will be dropped when `laravel/ai` reaches 1.0; the
-package will then move to `"minimum-stability": "stable"` and consuming
-applications will be free to do the same.
+Note that `minimum-stability` is read by Composer from the **root** package
+only; a dependency's value is ignored during your application's resolve. So this
+change is hygiene for Swarm's own resolution, and the setting that governs your
+application is always your own.
 
 ## Durable Outbox: Queue Connection Rename Hazard
 
@@ -265,16 +262,66 @@ composer require laravel/ai:0.9.0
 That pins your application’s dependency resolution. It does not change the semver
 range Laravel Swarm declares for Packagist.
 
-This package’s `composer.json` uses `"minimum-stability": "dev"` with
-`"prefer-stable": true` so pre-stable dependencies can resolve while Composer
-still prefers tagged releases. Your application may need compatible Composer
-stability settings while Laravel AI remains pre-stable.
+As of v0.23.0 this package’s `composer.json` uses `"minimum-stability": "stable"`
+with `"prefer-stable": true`. Your application needs no special Composer
+stability settings to install Swarm — see
+[Composer minimum-stability](#composer-minimum-stability).
+
+## Upgrading to v0.23.0
+
+**Plain `laravel/ai` agents now work with Swarm unchanged.** Swarm type-hints
+`Laravel\Ai\Contracts\Agent` at every public entry point and runner gate. This
+reverses the v0.5.0 marker-contract migration: implementing
+`BuiltByBerry\LaravelSwarm\Contracts\Agent` is no longer necessary.
+
+```php
+// Now accepted everywhere — no swarm-specific interface needed.
+use Laravel\Ai\Contracts\Agent;
+
+class CompetitorResearcher implements Agent
+{
+    use \Laravel\Ai\Promptable;
+
+    public function instructions(): string
+    {
+        return 'Compare competitors.';
+    }
+}
+
+Swarm::agent(new CompetitorResearcher)->prompt('...');
+```
+
+**No action required for existing agents.** `BuiltByBerry\LaravelSwarm\Contracts\Agent`
+remains as a `@deprecated` alias and still extends the vendor contract, so
+classes written against it since v0.5.0 keep working. It is slated for removal
+in v1.0; prefer the vendor contract in new code.
+
+### Breaking: custom `MemoryPropagationPolicy` implementations
+
+If you implement `BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy`,
+change the third parameter's type-hint:
+
+```php
+-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
++use Laravel\Ai\Contracts\Agent;
+
+ public function present(array $candidateEntries, RunContext $context, ?Agent $agent): array
+```
+
+This is required, not optional. PHP allows an implementation to *widen* a
+parameter type but never to *narrow* it, so a policy still type-hinting the
+swarm marker is now narrower than the interface and will raise a fatal error
+when the class loads. The interface had to widen for vendor agents to reach a
+policy at all — leaving it narrow would have thrown a `TypeError` at runtime
+instead.
+
+No other contract changed, and no application-facing behavior changed.
 
 ## Upgrading to v0.22.0
 
 **No required action — additive, developer-experience release.** Every addition is new public surface you can adopt at your own pace. One behavior note before the list: `swarm:health` gains new checks that can exit non-zero (see below) — worth knowing if you gate CI on it.
 
-- **Class-free entry points.** `Swarm::agent($agent)` runs a single agent through the full governed pipeline, and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical($coordinator, [$workers])` run inline multi-agent swarms — all without authoring a `Swarm` class, all with the same audit, guardrails, capture, telemetry, and encrypt-at-rest as a class-based swarm. The class-free builders run **in-process** (`prompt`/`run`/`stream`/`broadcast`/`broadcastNow`); for **queued or durable** execution, author a one-agent `Swarm` class (`make:swarm:swarm --single`) — a background run is re-resolved from the container by class on the worker, which an ad-hoc swarm can't provide. See [Execution Modes](docs/execution-modes.md#single-agent-swarmagent) and the [Cookbook](docs/cookbook.md).
+- **Class-free entry points.** `Swarm::agent($agent)` runs a single agent through the full governed pipeline, and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical($coordinator, [$workers])` run inline multi-agent swarms — all without authoring a `Swarm` class, all with the same audit, guardrails, capture, telemetry, and encrypt-at-rest as a class-based swarm. The class-free builders run **in-process** (`prompt`/`run`/`stream`/`broadcast`/`broadcastNow`); for **queued or durable** execution, author a one-agent `Swarm` class (`make:swarm:swarm YourSwarm`) *(corrected in v0.23.0 — this line originally named a one-agent flag on that command, which never existed)* — a background run is re-resolved from the container by class on the worker, which an ad-hoc swarm can't provide. See [Execution Modes](docs/execution-modes.md#single-agent-swarmagent) and the [Cookbook](docs/cookbook.md).
 - **Testing.** `SwarmFake::interceptSwarmAuditSink()` returns a recording sink with `assertAuditChain()`, `assertEmittedAudit()`, `assertNotEmittedAudit()`, and `assertStepCount()`. See [Testing](docs/testing.md#use-swarmfake-intercepts-for-the-audit-contracts-v07).
 - **`swarm:health`** gained governed-by-default checks (guardrails resolvable, audit sink reachable, capture policy sane), included in `--json`. **Behavior note:** the guardrail and capture-policy checks report `failed` (command exits non-zero) when a configured `swarm.guardrails.*` ref or the bound `CapturePolicy` cannot be resolved from the container — a *new* failure condition on this command. If you gate CI on `swarm:health` and have a broken binding, it will now surface here (it would have thrown mid-run regardless). The default `NoOpSwarmAuditSink` is reported as a `note`, not a failure. See [Maintenance](docs/maintenance.md).
 - **`make:swarm`** is now an interactive front door (single-agent vs. multi-agent, topology prompts) with a `--single` scaffold; non-interactive/`--no-interaction` usage is unchanged. See [Generators](docs/generators.md).
@@ -1307,9 +1354,19 @@ surface (the `Swarm` contract, hierarchical/parallel runners, route planner,
 controls. This shields applications from churn in `laravel/ai`'s pre-1.0
 contracts.
 
-**Migration required for custom agent classes.** Application code that
-defines an agent and feeds it into Swarm must implement the new marker
-interface:
+> **Reversed in v0.23.0 — this migration is no longer required.** Swarm now
+> type-hints the vendor `Laravel\Ai\Contracts\Agent` at every public entry
+> point and runner gate, so plain `laravel/ai` agents work unchanged and the
+> swarm marker is a deprecated alias. The reasoning below (that the marker
+> shields applications from `laravel/ai` churn) did not hold: the marker
+> `extends` the vendor interface, so upstream signature changes propagate
+> through it verbatim. If you migrated your agents in v0.5.0 you do not need to
+> revert them — they keep working — but new agents should implement the vendor
+> contract directly. See [Upgrading to v0.23.0](#upgrading-to-v0230).
+
+**Migration required for custom agent classes** *(superseded — see the note
+above)*. Application code that defines an agent and feeds it into Swarm must
+implement the new marker interface:
 
 ```php
 // v0.4 — vendor contract directly

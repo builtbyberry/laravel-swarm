@@ -1,5 +1,96 @@
 # Changelog
 
+## v0.23.0 - 2026-07-20
+
+Compatibility and correctness: `laravel/ai` agents drop in unchanged, plus
+documentation, dependency and CI fixes that close gaps between what this
+repository says and what it does.
+
+### Added
+
+_Nothing._ This release adds no public API, configuration key, or command. Its
+one new test (the documented-Artisan-invocation guard) ships with the fix it
+protects, under **Fixed** below.
+
+### Changed
+
+- **Tightened `minimum-stability` from `dev` to `stable` in `composer.json`, and
+  stopped telling applications to loosen their own.** The `dev` floor was inert —
+  `prefer-stable: true` already resolved every dependency to a stable tag, and no
+  package in the tree requires a dev version. Composer reads `minimum-stability`
+  from the **root** package only, so this is hygiene for Swarm's own resolution
+  and has no direct effect on a consuming application. The consumer-facing half
+  is documentation: `README.md`, `UPGRADING.md`, `docs/getting-started.md` and
+  `docs/advanced-setup.md` instructed applications to set
+  `"minimum-stability": "dev"` in their own `composer.json` on the premise that
+  `laravel/ai` ships dev-tagged releases. It ships stable tags on the 0.9 line —
+  a strictly-stable root resolves `laravel/ai ^0.9` to `v0.9.1` with no stability
+  flags — so that instruction was needlessly loosening the resolution floor of
+  every consumer's entire dependency tree. All four sites now say no special
+  stability configuration is required. Verified against both the default and
+  `--prefer-lowest` resolutions, and against an explicit dev-branch requirement
+  (Composer adds its own stability flags for those, so dev-branch CI lanes are
+  unaffected). No dependency versions changed.
+- Bumped `extra.branch-alias.dev-main` from `0.22.x-dev` to `0.23.x-dev`, so an
+  application tracking `dev-main` resolves under a `^0.23` constraint.
+- **`AGENTS.md` corrected against the codebase.** The contributor/agent guidance
+  had drifted: it pointed at a code-review skill that is not installed, and left
+  the topic-branch convention ambiguous about the `v` prefix (topic branches drop
+  it, the release branch keeps it). Both are now stated correctly. Five sections
+  that duplicated the codebase — pinned dependency versions, an Artisan command
+  list covering 8 of 24 commands, a `src/` directory tree, the checkout path, and
+  a capability summary — were replaced with pointers to the source of truth, so
+  they cannot silently go stale again. No runtime or public-API change.
+
+### Fixed
+
+- **The documented `--single` flag for `make:swarm:swarm` never existed.** Eight
+  sites — the `PendingRun` docblock, the execution-modes and cookbook docs, the
+  Laravel Boost guidelines and skill, and `UPGRADING.md` — told you to author a
+  one-agent swarm by passing `--single` to that command. It has no such option
+  and errors out. The flag exists only on the deprecated `make:swarm`
+  alias, where it scaffolds an *agent* rather than the swarm class every one of
+  those sites was pointing at. All eight now say what actually works:
+  `php artisan make:swarm:swarm YourSwarm`, returning a single agent from
+  `agents()` — the default sequential scaffold is already the one-agent shape,
+  and no dedicated flag is needed.
+
+  The v0.22.0 CHANGELOG entry below still carries the original wording; released
+  entries are historical record and are not rewritten.
+
+  A new test asserts that every package Artisan command and option this repo
+  documents actually exists, so a documented-but-nonexistent invocation now
+  fails on the pull request that introduces it.
+
+- **Plain `laravel/ai` agents work with Swarm again.** Every public entry point
+  and runner gate type-hinted the swarm-owned `Contracts\Agent` marker. Because
+  interface inheritance runs one way, a class implementing only
+  `Laravel\Ai\Contracts\Agent` was not an instance of that marker, so Swarm
+  rejected it — at `Swarm::agent()`, in the parallel and hierarchical runner
+  gates, in the hierarchical route planner, and inside the memory view. This
+  contradicted the documented "drop in unchanged" behaviour. Swarm now
+  type-hints the vendor contract throughout, so existing Laravel AI agents run
+  through a swarm without modification.
+
+  `BuiltByBerry\LaravelSwarm\Contracts\Agent` remains as a `@deprecated` alias
+  and still extends the vendor contract, so agents written against it since
+  v0.5.0 keep working unchanged; it is slated for removal in v1.0. The v0.5.0
+  upgrade note that required migrating to the marker is reversed. **One
+  breaking change**: custom `MemoryPropagationPolicy` implementations must
+  re-type their `present()` agent parameter to the vendor contract — see
+  [UPGRADING.md](UPGRADING.md#upgrading-to-v0230).
+
+- **Nightly Laravel-dev CI lane now actually runs.** The `nightly` workflow
+  required `laravel/framework:dev-main` plus twelve `illuminate/*:dev-main`
+  aliases, but no such branch is published — every run failed to resolve
+  dependencies, and a job-level `continue-on-error` reported those runs as
+  successful, so the lane installed nothing and executed no tests from the day it
+  was added. It now requires `laravel/framework:13.x-dev` (the framework
+  `replace`s the `illuminate/*` splits, so the individual requires were
+  unnecessary), no longer swallows failures, and fails loudly if the resolved
+  framework is not a dev build. This lane is CI-only and does not affect the
+  published package.
+
 ## v0.22.0 - 2026-07-18
 
 Developer-experience release: smooth the paved road so the governed path is the

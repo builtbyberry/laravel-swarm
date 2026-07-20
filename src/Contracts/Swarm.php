@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Contracts;
 
+use Laravel\Ai\Contracts\Agent;
+
 interface Swarm
 {
     /**

@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * Default {@see MemoryPropagationPolicy}: presents the Run-scoped view only.

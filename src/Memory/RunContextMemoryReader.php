@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Messages\Message;
 use Laravel\Ai\Messages\MessageRole;
 use ReflectionClass;

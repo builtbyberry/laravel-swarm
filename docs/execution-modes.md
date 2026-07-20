@@ -22,7 +22,7 @@ Swarm::agent($agent)
     ->prompt($task);
 ```
 
-**Queued and durable execution need a class.** `queue()`, `broadcastOnQueue()`, and `dispatchDurable()` are *not* on the class-free builders: a background run is dispatched as a job and re-resolved from the container by class on a later (possibly post-deploy) worker, which requires a stable, container-bound identity that an ad-hoc swarm built from runtime agent instances cannot provide. For a queued or durable single agent, author a one-agent `Swarm` class (`php artisan make:swarm:swarm --single`) and call `queue()` / `dispatchDurable()` on it.
+**Queued and durable execution need a class.** `queue()`, `broadcastOnQueue()`, and `dispatchDurable()` are *not* on the class-free builders: a background run is dispatched as a job and re-resolved from the container by class on a later (possibly post-deploy) worker, which requires a stable, container-bound identity that an ad-hoc swarm built from runtime agent instances cannot provide. For a queued or durable single agent, author a one-agent `Swarm` class (`php artisan make:swarm:swarm YourSwarm`) and call `queue()` / `dispatchDurable()` on it.
 
 Reach for a full `Swarm` class when you need class-level configuration, a named/reusable topology, or **background/durable execution**; reach for `Swarm::agent()` when one agent is all you need in-process and you still want the audit trail — or for a multi-agent workflow you don't want to name, the inline builders below.
 

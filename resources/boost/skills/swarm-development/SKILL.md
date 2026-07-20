@@ -27,7 +27,8 @@ $response->steps;               // array<SwarmStep>
 // in-process modes on the class-free builder:
 Swarm::agent($agent)->stream($task);           // StreamableSwarmResponse (SSE)
 Swarm::agent($agent)->broadcast($task, $ch);   // push to Echo/Reverb/Pusher
-// queued or durable? author a one-agent Swarm class: make:swarm:swarm --single
+// queued or durable? scaffold a Swarm class and return one agent from agents():
+// php artisan make:swarm:swarm YourSwarm
 ```
 
 ### 2. Several agents, no class
@@ -42,7 +43,7 @@ Each inline builder pins its own topology and returns a fluent `PendingSwarmRun`
 
 ### 3. A named, reusable swarm class
 
-Author a class when the same topology is reused, needs class-level attributes or durable/queued execution, or declares guardrails. Generate it with `php artisan make:swarm:swarm ContentPipeline` (use `make:swarm:swarm --single` for a single-agent scaffold), and `php artisan make:swarm:agent` for agents.
+Author a class when the same topology is reused, needs class-level attributes or durable/queued execution, or declares guardrails. Generate it with `php artisan make:swarm:swarm ContentPipeline`, and `php artisan make:swarm:agent` for agents. A one-agent swarm needs no special flag — scaffold a swarm and return a single agent from `agents()`.
 
 ```php
 use BuiltByBerry\LaravelSwarm\Attributes\Topology;
