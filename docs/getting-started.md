@@ -204,7 +204,7 @@ swaps `ScriptedAgent` for a real `Promptable` Laravel AI agent (the swarm
 class, the runner command, and any tests keep working unchanged):
 
 ```php
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Attributes\Model;
 use Laravel\Ai\Attributes\Provider;
 use Laravel\Ai\Enums\Lab;

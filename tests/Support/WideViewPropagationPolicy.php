@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\Support;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * Test policy that widens the agent-visible view to every candidate entry,

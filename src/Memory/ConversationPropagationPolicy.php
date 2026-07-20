@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Support\Collection;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * Opt-in {@see MemoryPropagationPolicy} that surfaces the reserved

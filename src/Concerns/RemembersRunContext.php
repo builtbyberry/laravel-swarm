@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Concerns;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Memory\RunContextMemoryReader;
 use Illuminate\Container\Container;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Ai\Messages\Message;
 use Laravel\Ai\Messages\MessageRole;

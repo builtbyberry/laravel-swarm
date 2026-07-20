@@ -6,11 +6,11 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Attributes\Topology;
 use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\DefinesGuardrails;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * A swarm assembled at call time rather than declared as a class.

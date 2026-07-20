@@ -35,7 +35,7 @@ Each agent under `app/Ai/Agents/SequentialBlogPipeline/` extends
 shape:
 
 ```php
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Attributes\Model;
 use Laravel\Ai\Attributes\Provider;
 use Laravel\Ai\Enums\Lab;

@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * Fluent entry point for running a single agent through the full governed

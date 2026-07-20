@@ -47,7 +47,7 @@ live LLM, swap the base for the normal Laravel AI shape while **keeping** the
 `HasStructuredOutput` interface and `schema()` method:
 
 ```php
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Ai\Attributes\Model;
 use Laravel\Ai\Attributes\Provider;

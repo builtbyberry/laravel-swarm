@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * Declarative policy for which memory entries a worker agent sees when it is

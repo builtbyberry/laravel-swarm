@@ -35,7 +35,7 @@ Each scout under `app/Ai/Agents/ParallelResearchFanout/` extends
 `ScriptedAgent`. To use live LLMs, swap to the Laravel AI shape:
 
 ```php
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Promptable;
 
 class MarketScout implements Agent

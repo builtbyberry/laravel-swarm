@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Facades;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
 use BuiltByBerry\LaravelSwarm\Support\PendingRun;
 use BuiltByBerry\LaravelSwarm\Support\PendingSwarmRun;
 use Illuminate\Support\Facades\Facade;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * The public entry point for running swarms.
