@@ -3,6 +3,9 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent as SwarmAgent;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
+use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableBranchAdvancer;
+use BuiltByBerry\LaravelSwarm\Runners\StaticHierarchicalStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\VendorOnlyCoordinator;
@@ -11,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\VendorOnlyWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\VendorOnlyHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\VendorOnlyParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
+use BuiltByBerry\LaravelSwarm\Tests\Support\VendorAgentRecordingPropagationPolicy;
 use Laravel\Ai\Contracts\Agent as LaravelAiAgent;
 
 /**
@@ -23,6 +27,18 @@ use Laravel\Ai\Contracts\Agent as LaravelAiAgent;
  * marker, so Swarm rejected it outright — contradicting the documented
  * "drop in unchanged" promise. Nothing asserted the boundary in either
  * direction, which is why it went unnoticed.
+ *
+ * **Not exhaustive — read this before assuming a surface is covered.** These
+ * tests exercise the single-agent entry point, the parallel and hierarchical
+ * runners, the marker-still-works path, a mixed marker/vendor swarm, and the
+ * memory propagation policy (the one breaking change). They do NOT drive a
+ * vendor-only agent through the durable path
+ * ({@see DurableBranchAdvancer})
+ * or the streaming runners
+ * ({@see StaticHierarchicalStreamRunner}),
+ * whose gates were widened by the same change but need a real provider or a
+ * heavier harness to fake. If you touch those gates, add coverage here rather
+ * than trusting this file to have caught it.
  */
 beforeEach(function () {
     VendorOnlyResearcher::fake(['vendor-research-out']);
@@ -94,4 +110,25 @@ it('mixes vendor-only and marker agents in one swarm', function () {
         ->prompt('task');
 
     expect((string) $response)->toBe('writer-out');
+});
+
+it('hands a vendor-only agent to a custom memory propagation policy', function () {
+    // Regression coverage for the one breaking change in this release. The
+    // policy contract had to widen its agent parameter to the vendor contract,
+    // because a vendor-only agent could not otherwise reach a policy at all.
+    // A policy narrowing it back to the swarm marker breaks vendor agents at
+    // the memory chokepoint — this test fails if that happens, rather than
+    // letting it ship green.
+    VendorAgentRecordingPropagationPolicy::reset();
+    config()->set('swarm.memory.propagation_policy', VendorAgentRecordingPropagationPolicy::class);
+    app()->forgetInstance(MemoryPropagationPolicy::class);
+
+    app(SwarmRunner::class)->agent(new VendorOnlyResearcher)->prompt('task');
+
+    expect(VendorAgentRecordingPropagationPolicy::$seenAgents)->not->toBeEmpty();
+
+    // The concrete agent must arrive — not null. Passing null is how the
+    // pre-fix code degraded silently instead of erroring.
+    expect(VendorAgentRecordingPropagationPolicy::$seenAgents[0])
+        ->toBeInstanceOf(VendorOnlyResearcher::class);
 });
