@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunRecord;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * Resolves the concrete `(scope, scopeId)` address a memory tool should read or

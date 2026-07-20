@@ -30,6 +30,24 @@ _To be filled in during release wrap-up._
 
 ### Fixed
 
+- **Plain `laravel/ai` agents work with Swarm again.** Every public entry point
+  and runner gate type-hinted the swarm-owned `Contracts\Agent` marker. Because
+  interface inheritance runs one way, a class implementing only
+  `Laravel\Ai\Contracts\Agent` was not an instance of that marker, so Swarm
+  rejected it — at `Swarm::agent()`, in the parallel and hierarchical runner
+  gates, in the hierarchical route planner, and inside the memory view. This
+  contradicted the documented "drop in unchanged" behaviour. Swarm now
+  type-hints the vendor contract throughout, so existing Laravel AI agents run
+  through a swarm without modification.
+
+  `BuiltByBerry\LaravelSwarm\Contracts\Agent` remains as a `@deprecated` alias
+  and still extends the vendor contract, so agents written against it since
+  v0.5.0 keep working unchanged; it is slated for removal in v1.0. The v0.5.0
+  upgrade note that required migrating to the marker is reversed. **One
+  breaking change**: custom `MemoryPropagationPolicy` implementations must
+  re-type their `present()` agent parameter to the vendor contract — see
+  [UPGRADING.md](UPGRADING.md#upgrading-to-v0230).
+
 - **Nightly Laravel-dev CI lane now actually runs.** The `nightly` workflow
   required `laravel/framework:dev-main` plus twelve `illuminate/*:dev-main`
   aliases, but no such branch is published — every run failed to resolve

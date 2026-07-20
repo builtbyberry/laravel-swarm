@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\Support;
 
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Laravel\Ai\Contracts\Agent;
 
 /**
  * Test policy that gathers candidates from every scope but presents only the

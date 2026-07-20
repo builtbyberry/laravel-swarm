@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Streaming;
 
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
@@ -20,6 +19,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
 use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;

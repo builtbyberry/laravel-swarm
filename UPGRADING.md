@@ -270,6 +270,56 @@ This package’s `composer.json` uses `"minimum-stability": "dev"` with
 still prefers tagged releases. Your application may need compatible Composer
 stability settings while Laravel AI remains pre-stable.
 
+## Upgrading to v0.23.0
+
+**Plain `laravel/ai` agents now work with Swarm unchanged.** Swarm type-hints
+`Laravel\Ai\Contracts\Agent` at every public entry point and runner gate. This
+reverses the v0.5.0 marker-contract migration: implementing
+`BuiltByBerry\LaravelSwarm\Contracts\Agent` is no longer necessary.
+
+```php
+// Now accepted everywhere — no swarm-specific interface needed.
+use Laravel\Ai\Contracts\Agent;
+
+class CompetitorResearcher implements Agent
+{
+    use \Laravel\Ai\Promptable;
+
+    public function instructions(): string
+    {
+        return 'Compare competitors.';
+    }
+}
+
+Swarm::agent(new CompetitorResearcher)->prompt('...');
+```
+
+**No action required for existing agents.** `BuiltByBerry\LaravelSwarm\Contracts\Agent`
+remains as a `@deprecated` alias and still extends the vendor contract, so
+classes written against it since v0.5.0 keep working. It is slated for removal
+in v1.0; prefer the vendor contract in new code.
+
+### Breaking: custom `MemoryPropagationPolicy` implementations
+
+If you implement `BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy`,
+change the third parameter's type-hint:
+
+```php
+-use BuiltByBerry\LaravelSwarm\Contracts\Agent;
++use Laravel\Ai\Contracts\Agent;
+
+ public function present(array $candidateEntries, RunContext $context, ?Agent $agent): array
+```
+
+This is required, not optional. PHP allows an implementation to *widen* a
+parameter type but never to *narrow* it, so a policy still type-hinting the
+swarm marker is now narrower than the interface and will raise a fatal error
+when the class loads. The interface had to widen for vendor agents to reach a
+policy at all — leaving it narrow would have thrown a `TypeError` at runtime
+instead.
+
+No other contract changed, and no application-facing behavior changed.
+
 ## Upgrading to v0.22.0
 
 **No required action — additive, developer-experience release.** Every addition is new public surface you can adopt at your own pace. One behavior note before the list: `swarm:health` gains new checks that can exit non-zero (see below) — worth knowing if you gate CI on it.
@@ -1307,9 +1357,19 @@ surface (the `Swarm` contract, hierarchical/parallel runners, route planner,
 controls. This shields applications from churn in `laravel/ai`'s pre-1.0
 contracts.
 
-**Migration required for custom agent classes.** Application code that
-defines an agent and feeds it into Swarm must implement the new marker
-interface:
+> **Reversed in v0.23.0 — this migration is no longer required.** Swarm now
+> type-hints the vendor `Laravel\Ai\Contracts\Agent` at every public entry
+> point and runner gate, so plain `laravel/ai` agents work unchanged and the
+> swarm marker is a deprecated alias. The reasoning below (that the marker
+> shields applications from `laravel/ai` churn) did not hold: the marker
+> `extends` the vendor interface, so upstream signature changes propagate
+> through it verbatim. If you migrated your agents in v0.5.0 you do not need to
+> revert them — they keep working — but new agents should implement the vendor
+> contract directly. See [Upgrading to v0.23.0](#upgrading-to-v0230).
+
+**Migration required for custom agent classes** *(superseded — see the note
+above)*. Application code that defines an agent and feeds it into Swarm must
+implement the new marker interface:
 
 ```php
 // v0.4 — vendor contract directly
