@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.24.0 - unreleased
+
+Documentation integrity: make the package's own claims verifiable. Seeded from
+v0.23.0, where five docblock and guidance defects surfaced in a single session —
+four semantic claims that were false when written, and one class of referential
+drift (a dead skill pointer, a command list covering 8 of 24 commands, stale
+pinned versions).
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.23.0 - 2026-07-20
 
 Compatibility and correctness: `laravel/ai` agents drop in unchanged, plus
