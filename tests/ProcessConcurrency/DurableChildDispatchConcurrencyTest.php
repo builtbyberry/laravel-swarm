@@ -12,29 +12,34 @@ use Illuminate\Support\Facades\DB;
  * Process-concurrency coverage for the child-swarm dispatch claim in
  * DurableChildSwarmCoordinator::dispatchChildIntent() (issue #431).
  *
- * The race needs no infrastructure fault. `swarm:recover` has no overlap lock
- * and undispatchedChildRuns() has no grace floor, so a recovery sweep can select
- * a child the parent is inline-dispatching right now — or two sweeps can select
- * the same child. Before the fix both workers saw `find() === null`, both called
+ * The race needs no infrastructure fault. The `withoutOverlapping()` the installer
+ * scaffolds for `swarm:recover` never serialises a sweep against the parent's
+ * INLINE dispatch — it serialises sweep against sweep, and only when the schedule
+ * mutex's cache store is shared and lock-capable; a manual
+ * `php artisan swarm:recover` is outside it entirely. So a recovery sweep can
+ * select a child the parent is inline-dispatching right now — or two sweeps can
+ * select the same child. Before the fix both workers saw `find() === null`, both called
  * dispatchDurable(), and the loser caught the unique-key QueryException and wrote
  * `failed` over the WINNER's live child, releasing the parent's wait with
  * `child_failed` while the child executed normally.
  *
- * The fix makes the CLAIM authoritative rather than the error classifier: only
- * the worker that wins the conditional `dispatched_at IS NULL` update may
- * dispatch. That is what this lane proves, at the only layer where it is
- * provable — two real OS processes contending for one row.
+ * The fix makes the CLAIM authoritative rather than the error classifier: only the
+ * worker that wins the conditional `status IN (pending,running) AND dispatched_at
+ * IS NULL` update may dispatch. That is what this lane proves, at the only layer
+ * where it is provable — two real OS processes contending for one row.
  *
  * Scenario: N workers race markChildRunDispatched() against the same child.
  * The invariants:
  *   - exactly ONE worker wins the claim, so a duplicate start() is unreachable;
  *   - the losers' stamps never overwrite the winner's `dispatched_at`;
  *   - a loser cannot release the winner's claim, because releaseChildRunDispatch()
- *     matches the exact stamped timestamp rather than merely "not null".
+ *     matches the stamped timestamp rather than merely "not null".
  *
- * The last invariant is the one that matters most: without exact-value matching a
- * losing worker's release would free a child that is genuinely executing, and the
- * next sweep would dispatch it a second time.
+ * That last invariant is the second line of defence, not the first: the guarantee
+ * rests on the conditional claim, since only the claim's winner ever calls the
+ * release and it calls it once. The stamp match is second-granular (the column is
+ * `timestamp(0)`), so it distinguishes claims taken in different seconds, not
+ * concurrent claims within one.
  */
 // Tagged `skip-locked-real-db` so the CI lane (`test:process-concurrency:ci`)
 // excludes it under `--fail-on-skipped`: it requires a shared MySQL/Postgres

@@ -259,25 +259,22 @@ interface DurableRunStore
     public function childRunForChild(string $childRunId): ?array;
 
     /**
-     * Claim a child run for dispatch, conditionally on it being unclaimed or stale.
+     * Claim a child run for dispatch, conditionally on it not already being claimed.
      *
-     * This is a LEASE, not a brand. The winner is the only worker that may dispatch,
+     * This is a LEASE, not a brand: the winner is the only worker that may dispatch,
      * and it hands the claim back via {@see self::releaseChildRunDispatch()} on every
      * exit that does not leave a run actually dispatched. Returns true only for the
      * worker that took it.
      *
-     * The lease EXPIRES, because a catch block cannot cover an uncatchable death: a
-     * worker SIGKILLed on deploy, reaped by `queue:work --timeout`, OOM-killed or
-     * evicted between claiming and committing the run leaves a claim nobody will ever
-     * hand back. A claim older than `$claimGraceSeconds` is therefore re-claimable, so
-     * the next sweep can take over instead of the child being stranded forever.
-     *
-     * This expiry is NOT the rejected first-dispatch grace floor: an unclaimed child
-     * stays immediately dispatchable, so a parent that dies before dispatching is
-     * still picked up on the very next sweep with no added latency. Only a claim that
-     * has gone quiet waits.
+     * The claim does NOT expire. A worker killed uncatchably between claiming and
+     * committing the child's run — SIGKILL on deploy, `queue:work --timeout`, OOM,
+     * eviction — therefore leaves a claim nobody hands back, and that child is not
+     * re-dispatched. That is a known, documented limitation: re-dispatching a stranded
+     * child requires an operational input distinct from the capture/evidence view,
+     * because the stored payload is `[redacted]` under `swarm.capture.inputs=false`
+     * and a sweep would otherwise run the child on the sentinel. See UPGRADING.md.
      */
-    public function markChildRunDispatched(string $childRunId, ?DateTimeInterface $dispatchedAt = null, int $claimGraceSeconds = 300): bool;
+    public function markChildRunDispatched(string $childRunId, ?DateTimeInterface $dispatchedAt = null): bool;
 
     /**
      * Hand back a dispatch claim, matching the timestamp the caller stamped.
@@ -305,12 +302,11 @@ interface DurableRunStore
     public function markChildTerminalEventDispatched(string $childRunId): bool;
 
     /**
-     * Child intents awaiting dispatch: unclaimed, or holding a claim that has gone
-     * stale past `$claimGraceSeconds` (see {@see self::markChildRunDispatched()}).
+     * Child intents awaiting dispatch: pending and unclaimed.
      *
      * @return array<int, array<string, mixed>>
      */
-    public function undispatchedChildRuns(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $claimGraceSeconds = 300): array;
+    public function undispatchedChildRuns(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;
 
     /**
      * @return array<int, array<string, mixed>>

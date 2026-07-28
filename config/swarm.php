@@ -633,23 +633,6 @@ return [
         ],
         'recovery' => [
             'grace_seconds' => (int) env('SWARM_DURABLE_RECOVERY_GRACE_SECONDS', 300),
-
-            /*
-             * How long a child-swarm dispatch claim may go quiet before the recovery
-             * sweep may take it over.
-             *
-             * Dispatching a child stamps a claim so exactly one worker dispatches it.
-             * A worker killed uncatchably between claiming and committing the child's
-             * run — SIGKILL on deploy, `queue:work --timeout`, OOM, pod eviction —
-             * never reaches the release, so its claim would otherwise be held forever
-             * and the child stranded with nothing running.
-             *
-             * This is an expiry on a HELD claim, not a floor on first dispatch: an
-             * unclaimed child is always swept immediately. Raise it if a child's
-             * dispatch legitimately takes longer than this (a slow input guardrail,
-             * say); lower it to shorten the window a killed worker's child waits.
-             */
-            'child_claim_grace_seconds' => (int) env('SWARM_DURABLE_CHILD_CLAIM_GRACE_SECONDS', 300),
         ],
         'relay' => [
             /*

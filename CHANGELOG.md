@@ -34,22 +34,24 @@ _To be filled in during release wrap-up._
   unconditionally, so a re-dispatched intent emitted it twice.
 
   `markChildRunDispatched()` now returns whether the caller won the conditional
-  claim, and only that winner dispatches or emits `SwarmChildStarted` — a
+  claim (which is also guarded on status, so a child that already reached a
+  terminal state cannot be claimed and dispatched), and only that winner dispatches or emits `SwarmChildStarted` — a
   duplicate `start()` is unreachable rather than something to recognise from a
   driver-specific SQLSTATE after the fact. Every exit that does not leave a run
   dispatched hands the claim back through the new
   `DurableRunStore::releaseChildRunDispatch()`.
 
-  The claim **expires**, because a `catch` block cannot cover an uncatchable
-  death: a worker SIGKILLed on deploy, reaped by `queue:work --timeout`,
-  OOM-killed or evicted between claiming and committing the child's run never
-  reaches the release. A claim older than the new
-  `swarm.durable.recovery.child_claim_grace_seconds` (default 300, via
-  `SWARM_DURABLE_CHILD_CLAIM_GRACE_SECONDS`) is re-claimable, so the next sweep
-  takes it over instead of the child being stranded with nothing running and no
-  event. This is an expiry on a **held** claim, not a floor on first dispatch — an
-  unclaimed child is still swept immediately, so a parent that died before
-  dispatching is picked up on the very next pass with no added latency.
+  The claim does **not** expire, and one narrow strand is knowingly left open: a
+  worker killed uncatchably between claiming a child and committing its run —
+  SIGKILL on deploy, `queue:work --timeout`, OOM, eviction — leaves a claim
+  nobody hands back, and that child is not re-dispatched. Re-dispatching it would
+  mean a recovery sweep building the child's input from the stored
+  `context_payload`, which is the capture/evidence view and is `[redacted]`
+  whenever `swarm.capture.inputs` is `false` (the default) — so the sweep would
+  run the child on the literal sentinel and return a confident wrong answer
+  instead of failing. Closing the strand therefore waits on separating a child's
+  operational input from its evidence view; `UPGRADING.md` documents the window,
+  how narrow it is, and how to recover a parent stuck behind it.
 
   `updateChildRun()` now returns whether it wrote and accepts an optional
   expected-status set; the failure path uses it so a child that finished under

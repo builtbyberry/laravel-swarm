@@ -142,23 +142,25 @@ class DurableChildSwarmCoordinator
         $contextPayload = is_array($child['context_payload'] ?? null) ? $child['context_payload'] : [];
 
         // The CLAIM is authoritative, not the error classifier. More than one worker can
-        // arrive here for the same child: `swarm:recover` sweeps children the parent may
-        // be inline-dispatching this instant, and the scheduler's withoutOverlapping() is
-        // per-host, so it does not serialise a sweep against an inline dispatch or against
-        // a sweep on another host. Winning this conditional update is what grants the right
-        // to dispatch — exactly one worker wins however many arrive — so a duplicate
-        // start() is unreachable rather than something we must recognise from a
-        // driver-specific SQLSTATE after the fact. Everything below runs for the winner.
+        // arrive here for the same child: `swarm:recover` sweeps children the parent may be
+        // inline-dispatching this instant, and the withoutOverlapping() the installer
+        // scaffolds never serialises a sweep against that inline dispatch — it only
+        // serialises sweep against sweep, and only when the schedule mutex's cache store is
+        // shared and lock-capable. A manual `php artisan swarm:recover` is outside it
+        // entirely. Winning this conditional update is what grants the right to dispatch —
+        // exactly one worker wins however many arrive — so a duplicate start() is
+        // unreachable rather than something we must recognise from a driver-specific
+        // SQLSTATE after the fact. Everything below runs for the winner.
         $dispatchedAt = CarbonImmutable::now('UTC');
 
-        if (! $this->durableRuns->markChildRunDispatched($childRunId, $dispatchedAt, $this->claimGraceSeconds())) {
+        if (! $this->durableRuns->markChildRunDispatched($childRunId, $dispatchedAt)) {
             return;
         }
 
-        // A run row already exists for a child we just claimed: a previous attempt
-        // committed start() and then died holding its claim, which has since gone stale
-        // and been re-claimed here. Do not dispatch it a second time; its execution is
-        // recoverable()'s problem. SwarmChildStarted deliberately does NOT fire here —
+        // A run row already exists for a child we just claimed: an earlier attempt
+        // committed start() and then had its claim handed back without the run being
+        // reaped. Do not dispatch it a second time; its execution is recoverable()'s
+        // problem. SwarmChildStarted deliberately does NOT fire here —
         // start() commits the row inside a transaction but enqueues the job later, at
         // PendingDispatch destruct, so a row alone is not evidence anything is executing.
         // The claim is deliberately KEPT here rather than handed back: the run exists, so
@@ -268,11 +270,6 @@ class DurableChildSwarmCoordinator
             'parent_run_id' => $child['parent_run_id'] ?? null,
             'claimed_at' => $dispatchedAt->toIso8601String(),
         ]);
-    }
-
-    protected function claimGraceSeconds(): int
-    {
-        return (int) $this->config->get('swarm.durable.recovery.child_claim_grace_seconds', 300);
     }
 
     /**

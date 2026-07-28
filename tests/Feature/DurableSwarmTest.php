@@ -2780,7 +2780,8 @@ test('durable child dispatch fires SwarmChildStarted once when the intent is dis
     $child = app(DurableRunStore::class)->childRuns($response->runId)[0];
 
     // A second sweep re-dispatching the same intent — reachable today because
-    // swarm:recover has no overlap lock and undispatchedChildRuns has no grace floor.
+    // reachable because withoutOverlapping() never serialises a sweep against the
+    // parent's inline dispatch, and a manual swarm:recover is outside it entirely.
     app(DurableChildSwarmCoordinator::class)->dispatchChildIntent([
         'parent_run_id' => $response->runId,
         'child_run_id' => $child['child_run_id'],
@@ -2900,36 +2901,6 @@ test('durable child dispatch does not fail a child whose run was already created
     // Left for recoverable() to drive, NOT marked failed.
     expect(app(DurableRunStore::class)->childRunForChild($childRunId)['status'])->toBe('pending')
         ->and(DB::table('swarm_durable_runs')->where('run_id', $childRunId)->count())->toBe(1);
-});
-
-test('a stale durable child dispatch claim is reclaimable by the recovery sweep', function () {
-    FakeResearcher::fake(['parent-step']);
-
-    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
-    (new AdvanceDurableSwarm($response->runId, 0))->handle(app(DurableSwarmManager::class));
-
-    $store = app(DurableRunStore::class);
-    $childRunId = $store->childRuns($response->runId)[0]['child_run_id'];
-
-    // The uncatchable death: a worker SIGKILLed between claiming and committing the
-    // child's run leaves a claim stamped, no run row, and no code path that will ever
-    // hand it back. Simulate exactly that state.
-    DB::table('swarm_durable_runs')->where('run_id', $childRunId)->delete();
-    DB::table('swarm_durable_child_runs')
-        ->where('child_run_id', $childRunId)
-        ->update(['dispatched_at' => CarbonImmutable::now('UTC')->subHour(), 'status' => 'pending']);
-
-    // Fresh claims stay invisible to the sweep, so a live dispatch is never stolen...
-    expect(collect($store->undispatchedChildRuns($response->runId, claimGraceSeconds: 7200))->pluck('child_run_id'))
-        ->not->toContain($childRunId);
-
-    // ...but a claim that has gone quiet past the grace window is reclaimable, which is
-    // the only thing standing between an uncatchably-killed worker and a child that is
-    // stranded pending forever with nothing running.
-    expect(collect($store->undispatchedChildRuns($response->runId, claimGraceSeconds: 60))->pluck('child_run_id'))
-        ->toContain($childRunId);
-
-    expect($store->markChildRunDispatched($childRunId, CarbonImmutable::now('UTC'), 60))->toBeTrue();
 });
 
 test('durable child failure write cannot overwrite a child that already finished', function () {

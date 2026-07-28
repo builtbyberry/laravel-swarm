@@ -169,7 +169,6 @@ class DurableRecoveryCoordinator
             runId: $runId,
             swarmClass: $swarmClass,
             limit: $limit,
-            claimGraceSeconds: (int) $this->config->get('swarm.durable.recovery.child_claim_grace_seconds', 300),
         );
 
         foreach ($undispatchedChildren as $child) {
