@@ -267,6 +267,113 @@ with `"prefer-stable": true`. Your application needs no special Composer
 stability settings to install Swarm — see
 [Composer minimum-stability](#composer-minimum-stability).
 
+## Upgrading to v0.24.0
+
+v0.24.0 has **no migrations**. One change may require attention from maintainers
+who implement `DurableRunStore` themselves, and one new configuration key is
+available to operators running durable child swarms.
+
+### `DurableRunStore` interface: child-dispatch claim signatures changed (#431)
+
+The child-swarm dispatch marker became an expiring **lease**, so three methods
+changed shape and one is new:
+
+```php
+public function markChildRunDispatched(
+    string $childRunId,
+    ?DateTimeInterface $dispatchedAt = null,
+    int $claimGraceSeconds = 300,
+): bool;                                    // was: (string $childRunId): void
+
+public function releaseChildRunDispatch(
+    string $childRunId,
+    DateTimeInterface $dispatchedAt,
+): bool;                                    // new
+
+public function updateChildRun(
+    string $childRunId,
+    string $status,
+    ?string $output = null,
+    ?array $failure = null,
+    array $fromStatuses = [],
+): bool;                                    // was: (...): void
+
+public function undispatchedChildRuns(
+    ?string $runId = null,
+    ?string $swarmClass = null,
+    int $limit = 50,
+    int $claimGraceSeconds = 300,
+): array;                                   // gained $claimGraceSeconds
+```
+
+**Who is affected:** applications that implement `DurableRunStore` directly with
+a custom store class, and anything extending `DatabaseDurableRunStore` and
+overriding these four methods. PHP raises a fatal declaration-compatibility
+error at class load, so this fails immediately and visibly rather than silently.
+
+**Who is not affected:** applications that only *call* the store (via
+`app(DurableRunStore::class)->...`), use the default database driver, or reach
+the store through `DurableSwarmManager`. No application-level call site changes:
+the added parameters are optional and the `void → bool` returns are additive for
+callers that ignored them.
+
+**Action required:** custom stores must adopt the four signatures above. The
+returns are load-bearing, so a stub that always reports success is wrong —
+`markChildRunDispatched()` must return `true` only for the caller that actually
+took the claim, or two workers will dispatch the same child. A minimal correct
+implementation mirrors the shipped one:
+
+```php
+public function markChildRunDispatched(
+    string $childRunId,
+    ?DateTimeInterface $dispatchedAt = null,
+    int $claimGraceSeconds = 300,
+): bool {
+    $timestamp = $dispatchedAt !== null
+        ? Carbon::instance($dispatchedAt)->utc()
+        : Carbon::now('UTC');
+
+    // One conditional UPDATE: unclaimed, or a claim that has gone stale.
+    return $this->childRunTable()
+        ->where('child_run_id', $childRunId)
+        ->where(fn ($query) => $query
+            ->whereNull('dispatched_at')
+            ->orWhere('dispatched_at', '<', Carbon::now('UTC')->subSeconds($claimGraceSeconds)))
+        ->update(['dispatched_at' => $timestamp, 'updated_at' => $timestamp]) === 1;
+}
+
+public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $dispatchedAt): bool
+{
+    return $this->childRunTable()
+        ->where('child_run_id', $childRunId)
+        ->where('dispatched_at', Carbon::instance($dispatchedAt)->utc())
+        ->update(['dispatched_at' => null, 'updated_at' => Carbon::now('UTC')]) === 1;
+}
+```
+
+`updateChildRun()` must apply `whereIn('status', $fromStatuses)` when the array
+is non-empty and return whether a row was written; `undispatchedChildRuns()`
+must select children that are unclaimed **or** whose claim predates
+`$claimGraceSeconds`.
+
+### New: `swarm.durable.recovery.child_claim_grace_seconds`
+
+Dispatching a child stamps a claim so exactly one worker dispatches it. A worker
+killed uncatchably between claiming and committing the child's run — SIGKILL on
+deploy, `queue:work --timeout`, OOM, pod eviction — never hands its claim back,
+so the claim expires and the recovery sweep takes it over.
+
+```env
+SWARM_DURABLE_CHILD_CLAIM_GRACE_SECONDS=300
+```
+
+**Action:** none required; the default matches the existing recovery grace.
+Raise it if a child's dispatch legitimately takes longer than the window (a slow
+input guardrail, for instance); lower it to shorten how long a killed worker's
+child waits before another worker picks it up. This is an expiry on a **held**
+claim, not a delay on first dispatch — unclaimed children are still swept
+immediately.
+
 ## Upgrading to v0.23.0
 
 **Plain `laravel/ai` agents now work with Swarm unchanged.** Swarm type-hints

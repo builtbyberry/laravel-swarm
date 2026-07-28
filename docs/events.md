@@ -420,6 +420,8 @@ Event::listen(SwarmProgressRecorded::class, function (SwarmProgressRecorded $eve
 
 **When it fires:** when a durable parent run dispatches a child swarm. Provides the link between parent and child run identifiers.
 
+**Exactly once per child, and only for a dispatch this process performed.** The event is gated on the dispatch claim, so a recovery sweep that re-selects an already-dispatched child does not re-emit it. It is also suppressed when a worker claims a child whose run row already exists — that means an earlier attempt created the run and died, and recovery owns its execution, so the row alone is not evidence anything started. Treat the event as "this process dispatched this child", not as "every child that ever executes emits one"; a child recovered by `swarm:recover` after its dispatcher died will run without a second `SwarmChildStarted`. Listeners that must be exhaustive should key off the child run's terminal events, or reconcile against `DurableSwarmManager::inspect()`.
+
 | Property | Type | Description |
 |---|---|---|
 | `$parentRunId` | `string` | Run identifier of the parent swarm that spawned the child. |

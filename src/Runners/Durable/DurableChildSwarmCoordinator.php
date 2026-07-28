@@ -19,9 +19,11 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -44,6 +46,8 @@ class DurableChildSwarmCoordinator
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
         protected DurableOutbox $outbox,
+        protected ConfigRepository $config,
+        protected LoggerInterface $logger,
     ) {}
 
     public function afterChildIntentForTesting(?callable $hook): void
@@ -137,24 +141,29 @@ class DurableChildSwarmCoordinator
         // capture/evidence view and is `[redacted]` under swarm.capture.inputs=false.
         $contextPayload = is_array($child['context_payload'] ?? null) ? $child['context_payload'] : [];
 
-        // The CLAIM is authoritative, not the error classifier. `swarm:recover` has no
-        // overlap lock and undispatchedChildRuns has no grace floor, so a sweep can select
-        // a child the parent is inline-dispatching right now. Winning this conditional
-        // update is what grants the right to dispatch, so a duplicate start() is
-        // unreachable rather than something we have to recognise from a driver-specific
-        // SQLSTATE after the fact. Everything below runs for the winner only.
+        // The CLAIM is authoritative, not the error classifier. More than one worker can
+        // arrive here for the same child: `swarm:recover` sweeps children the parent may
+        // be inline-dispatching this instant, and the scheduler's withoutOverlapping() is
+        // per-host, so it does not serialise a sweep against an inline dispatch or against
+        // a sweep on another host. Winning this conditional update is what grants the right
+        // to dispatch — exactly one worker wins however many arrive — so a duplicate
+        // start() is unreachable rather than something we must recognise from a
+        // driver-specific SQLSTATE after the fact. Everything below runs for the winner.
         $dispatchedAt = CarbonImmutable::now('UTC');
 
-        if (! $this->durableRuns->markChildRunDispatched($childRunId, $dispatchedAt)) {
+        if (! $this->durableRuns->markChildRunDispatched($childRunId, $dispatchedAt, $this->claimGraceSeconds())) {
             return;
         }
 
-        // Another worker already created the run row but did not hold the claim — its
-        // previous attempt died between start()'s insert and the claim. The run exists, so
-        // do not dispatch it a second time; its execution is recoverable()'s problem.
-        // SwarmChildStarted deliberately does NOT fire here: start() commits the row inside
-        // a transaction but enqueues the job later, at PendingDispatch destruct, so a row
-        // alone is not evidence that anything is executing.
+        // A run row already exists for a child we just claimed: a previous attempt
+        // committed start() and then died holding its claim, which has since gone stale
+        // and been re-claimed here. Do not dispatch it a second time; its execution is
+        // recoverable()'s problem. SwarmChildStarted deliberately does NOT fire here —
+        // start() commits the row inside a transaction but enqueues the job later, at
+        // PendingDispatch destruct, so a row alone is not evidence anything is executing.
+        // The claim is deliberately KEPT here rather than handed back: the run exists, so
+        // the child genuinely is dispatched, and the claim is what stops the sweep
+        // re-selecting it on every pass.
         if ($this->durableRuns->find($childRunId) !== null) {
             return;
         }
@@ -169,32 +178,7 @@ class DurableChildSwarmCoordinator
             $response = $this->application->make(SwarmRunner::class)->dispatchDurable($swarm, RunContext::fromPayload($contextPayload));
             unset($response);
         } catch (Throwable $exception) {
-            // Terminal first, then release. A dispatch failure stays terminal here: the
-            // retry path is gated on separating the child's operational input from the
-            // capture/evidence view, because a swept retry re-reads a `[redacted]` input
-            // under swarm.capture.inputs=false and would run the child on the literal
-            // sentinel. Until that lands the child fails loudly, as it does today.
-            //
-            // The write is conditional: the child may have completed under another worker
-            // while this dispatch was failing, and a no-op means that worker owns its
-            // terminal state and is already reconciling the parent.
-            $failed = $this->durableRuns->updateChildRun($childRunId, 'failed', null, $this->failurePayload($exception), ['pending']);
-
-            // Hand the claim back regardless, matching the exact timestamp stamped above so
-            // this can only ever release its own claim. A claim held by a worker that
-            // dispatched nothing is invisible to every recovery path there is —
-            // undispatchedChildRuns, recoverable(), the run-level sweeps,
-            // recoverableTimedOutWaits and hasTimedOut() — and would strand the parent
-            // silently and permanently.
-            $this->durableRuns->releaseChildRunDispatch($childRunId, $dispatchedAt);
-
-            if ($failed) {
-                $parent = $this->durableRuns->find((string) $child['parent_run_id']);
-
-                if ($parent !== null) {
-                    $this->reconcileTerminalChildrenForParent($parent);
-                }
-            }
+            $this->failDispatch($childRunId, $dispatchedAt, $child, $exception);
 
             return;
         }
@@ -205,6 +189,90 @@ class DurableChildSwarmCoordinator
             childRunId: $childRunId,
             childSwarmClass: $childSwarmClass,
         ));
+    }
+
+    /**
+     * Resolve the failure of a dispatch this worker holds the claim for.
+     *
+     * @param  array<string, mixed>  $child
+     */
+    protected function failDispatch(string $childRunId, CarbonImmutable $dispatchedAt, array $child, Throwable $exception): void
+    {
+        // start() commits the run row inside a transaction and enqueues the job later, at
+        // PendingDispatch destruct — so an exception raised on the way out lands here with
+        // the row already persisted. Marking that child failed would bury a run that is
+        // genuinely recoverable, which is the same reasoning the run-row gate above
+        // applies. Hand the claim back and let recoverable() own it.
+        if ($this->durableRuns->find($childRunId) !== null) {
+            // Keep the claim: the run exists, so the child is dispatched and recovery owns
+            // driving it. Handing the claim back here would put it straight back into the
+            // sweep, which would re-claim, re-see the run, and release again on every pass.
+            $this->logger->warning('laravel-swarm: durable child dispatch failed after its run was created; leaving it to recovery rather than failing it.', [
+                'child_run_id' => $childRunId,
+                'parent_run_id' => $child['parent_run_id'] ?? null,
+                'exception' => $exception::class,
+            ]);
+
+            return;
+        }
+
+        // A dispatch failure stays terminal: the retry path is gated on separating the
+        // child's operational input from the capture/evidence view, because a swept retry
+        // re-reads a `[redacted]` input under swarm.capture.inputs=false and would run the
+        // child on the literal sentinel. Until that lands the child fails loudly.
+        //
+        // The write is conditional: the child may have completed under another worker while
+        // this dispatch was failing, and a no-op means that worker owns its terminal state
+        // and is already reconciling the parent.
+        $failed = $this->durableRuns->updateChildRun($childRunId, 'failed', null, $this->failurePayload($exception), ['pending']);
+
+        if (! $failed) {
+            $this->logger->info('laravel-swarm: durable child dispatch failed but the child had already reached a terminal status; leaving reconciliation to its owner.', [
+                'child_run_id' => $childRunId,
+                'parent_run_id' => $child['parent_run_id'] ?? null,
+                'exception' => $exception::class,
+            ]);
+        }
+
+        $this->releaseClaim($childRunId, $dispatchedAt, $child);
+
+        if (! $failed) {
+            return;
+        }
+
+        $parent = $this->durableRuns->find((string) $child['parent_run_id']);
+
+        if ($parent !== null) {
+            $this->reconcileTerminalChildrenForParent($parent);
+        }
+    }
+
+    /**
+     * Hand this worker's dispatch claim back.
+     *
+     * A claim held by a worker that dispatched nothing keeps the child out of the
+     * recovery sweep until it goes stale, so failing to release it delays recovery by a
+     * full grace window. That is recoverable but not free — say so rather than
+     * discarding the signal.
+     *
+     * @param  array<string, mixed>  $child
+     */
+    protected function releaseClaim(string $childRunId, CarbonImmutable $dispatchedAt, array $child): void
+    {
+        if ($this->durableRuns->releaseChildRunDispatch($childRunId, $dispatchedAt)) {
+            return;
+        }
+
+        $this->logger->warning('laravel-swarm: could not hand back a durable child dispatch claim; recovery will re-claim it once it goes stale.', [
+            'child_run_id' => $childRunId,
+            'parent_run_id' => $child['parent_run_id'] ?? null,
+            'claimed_at' => $dispatchedAt->toIso8601String(),
+        ]);
+    }
+
+    protected function claimGraceSeconds(): int
+    {
+        return (int) $this->config->get('swarm.durable.recovery.child_claim_grace_seconds', 300);
     }
 
     /**

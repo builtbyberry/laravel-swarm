@@ -259,21 +259,35 @@ interface DurableRunStore
     public function childRunForChild(string $childRunId): ?array;
 
     /**
-     * Claim a child run for dispatch, conditionally on it not already being claimed.
+     * Claim a child run for dispatch, conditionally on it being unclaimed or stale.
      *
-     * This is a LEASE, not a brand: the winner is the only worker that may dispatch,
-     * and it must hand the claim back via {@see self::releaseChildRunDispatch()} on
-     * every exit that does not leave a run actually dispatched. Returns true only for
-     * the worker that took it.
+     * This is a LEASE, not a brand. The winner is the only worker that may dispatch,
+     * and it hands the claim back via {@see self::releaseChildRunDispatch()} on every
+     * exit that does not leave a run actually dispatched. Returns true only for the
+     * worker that took it.
+     *
+     * The lease EXPIRES, because a catch block cannot cover an uncatchable death: a
+     * worker SIGKILLed on deploy, reaped by `queue:work --timeout`, OOM-killed or
+     * evicted between claiming and committing the run leaves a claim nobody will ever
+     * hand back. A claim older than `$claimGraceSeconds` is therefore re-claimable, so
+     * the next sweep can take over instead of the child being stranded forever.
+     *
+     * This expiry is NOT the rejected first-dispatch grace floor: an unclaimed child
+     * stays immediately dispatchable, so a parent that dies before dispatching is
+     * still picked up on the very next sweep with no added latency. Only a claim that
+     * has gone quiet waits.
      */
-    public function markChildRunDispatched(string $childRunId, ?DateTimeInterface $dispatchedAt = null): bool;
+    public function markChildRunDispatched(string $childRunId, ?DateTimeInterface $dispatchedAt = null, int $claimGraceSeconds = 300): bool;
 
     /**
-     * Hand back a dispatch claim, matching the exact timestamp the caller stamped.
+     * Hand back a dispatch claim, matching the timestamp the caller stamped.
      *
      * Matching the stamped value — rather than merely "not null" — is what stops a
-     * worker releasing a claim it does not own, so a late or replayed release can
-     * never free the racing winner's child.
+     * worker releasing a claim it does not own. Note the column is `timestamp(0)`, so
+     * the match is second-granular: it distinguishes claims taken in different
+     * seconds, not concurrent claims within one. That is sufficient here because only
+     * the claim's winner ever calls this, and it calls it once; the guarantee rests on
+     * the conditional claim above, and this match is the second line of defence.
      */
     public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $dispatchedAt): bool;
 
@@ -291,9 +305,12 @@ interface DurableRunStore
     public function markChildTerminalEventDispatched(string $childRunId): bool;
 
     /**
+     * Child intents awaiting dispatch: unclaimed, or holding a claim that has gone
+     * stale past `$claimGraceSeconds` (see {@see self::markChildRunDispatched()}).
+     *
      * @return array<int, array<string, mixed>>
      */
-    public function undispatchedChildRuns(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;
+    public function undispatchedChildRuns(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $claimGraceSeconds = 300): array;
 
     /**
      * @return array<int, array<string, mixed>>

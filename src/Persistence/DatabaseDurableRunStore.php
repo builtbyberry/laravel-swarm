@@ -1850,19 +1850,32 @@ class DatabaseDurableRunStore implements DurableRunStore
         return $record !== null ? $this->mapChildRun($record) : null;
     }
 
-    public function markChildRunDispatched(string $childRunId, ?DateTimeInterface $dispatchedAt = null): bool
+    public function markChildRunDispatched(string $childRunId, ?DateTimeInterface $dispatchedAt = null, int $claimGraceSeconds = 300): bool
     {
         $timestamp = $dispatchedAt !== null ? Carbon::instance($dispatchedAt)->utc() : Carbon::now('UTC');
 
         $claimed = $this->childRunTable()
             ->where('child_run_id', $childRunId)
-            ->whereNull('dispatched_at')
+            ->where(fn (Builder $query): Builder => $this->whereClaimAvailable($query, $claimGraceSeconds))
             ->update([
                 'dispatched_at' => $timestamp,
                 'updated_at' => $timestamp,
             ]);
 
         return $claimed === 1;
+    }
+
+    /**
+     * A dispatch claim is available when it was never taken, or when it went stale —
+     * the worker holding it died uncatchably (SIGKILL, worker timeout, OOM, eviction)
+     * and will never hand it back. Both arms are one conditional UPDATE, so exclusivity
+     * is unchanged: concurrent workers still race a single row and exactly one wins.
+     */
+    protected function whereClaimAvailable(Builder $query, int $claimGraceSeconds): Builder
+    {
+        return $query
+            ->whereNull('dispatched_at')
+            ->orWhere('dispatched_at', '<', Carbon::now('UTC')->subSeconds(max($claimGraceSeconds, 0)));
     }
 
     public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $dispatchedAt): bool
@@ -1910,23 +1923,30 @@ class DatabaseDurableRunStore implements DurableRunStore
         return $updated === 1;
     }
 
-    public function undispatchedChildRuns(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array
+    public function undispatchedChildRuns(?string $runId = null, ?string $swarmClass = null, int $limit = 50, int $claimGraceSeconds = 300): array
     {
         $childTable = (string) $this->config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs');
         $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
+        $staleBefore = Carbon::now('UTC')->subSeconds(max($claimGraceSeconds, 0));
 
         // In practice this is `status = 'pending'`: nothing writes 'running' to a child row
         // (createChildRun stamps 'pending'; updateChildRun only ever moves a child to a
         // terminal status). The value is kept so an out-of-tree store implementing a
         // running state is not silently skipped, not because this codebase produces one.
         //
-        // `dispatched_at IS NULL` is the other half of the dispatch claim — a child whose
-        // claim is held is not selectable, and a claim handed back by a failed dispatch
-        // becomes selectable again.
+        // The dispatched_at predicate is the other half of the dispatch claim. Unclaimed
+        // children are selectable immediately — a parent that died before dispatching is
+        // picked up on the very next sweep. A STALE claim is selectable too: a worker
+        // killed uncatchably between claiming and committing its run can never reach the
+        // release, so without this arm its child would be invisible to this sweep, to
+        // recoverable() (no run row was ever inserted) and to recoverableTimedOutWaits()
+        // (the child wait carries a null timeout) — stranded permanently and silently.
         $query = $this->connection->table($childTable.' as children')
             ->join($durableTable.' as parents', 'children.parent_run_id', '=', 'parents.run_id')
             ->whereIn('children.status', ['pending', 'running'])
-            ->whereNull('children.dispatched_at')
+            ->where(fn (Builder $inner): Builder => $inner
+                ->whereNull('children.dispatched_at')
+                ->orWhere('children.dispatched_at', '<', $staleBefore))
             ->whereNull('parents.finished_at')
             ->orderBy('children.created_at')
             ->limit($limit)

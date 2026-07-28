@@ -2798,28 +2798,138 @@ test('durable child dispatch fires SwarmChildStarted once when the intent is dis
         ->and(DB::table('swarm_durable_runs')->where('run_id', $child['child_run_id'])->count())->toBe(1);
 });
 
-test('durable child dispatch hands the claim back when dispatch fails', function () {
+test('durable child dispatch holds the claim across dispatch and hands it back on failure', function () {
     FakeResearcher::fake(['parent-step']);
 
     $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
     $manager = app(DurableSwarmManager::class);
 
-    // Force dispatchDurable to throw after the claim is taken.
-    config()->set('swarm.limits.max_input_bytes', 1);
-
     (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
 
-    $child = app(DurableRunStore::class)->childRunForChild(
-        app(DurableRunStore::class)->childRuns($response->runId)[0]['child_run_id']
-    );
+    $intent = app(DurableRunStore::class)->childRuns($response->runId)[0];
 
-    // A claim held by a worker that dispatched nothing is invisible to every recovery
-    // path there is, so a failed dispatch must never leave one stamped.
+    // Reset to an undispatched intent so the dispatch is attempted again, this time
+    // against a runner that throws.
+    DB::table('swarm_durable_runs')->where('run_id', $intent['child_run_id'])->delete();
+    DB::table('swarm_durable_child_runs')
+        ->where('child_run_id', $intent['child_run_id'])
+        ->update(['dispatched_at' => null, 'status' => 'pending']);
+
+    // Observe the claim from INSIDE the dispatch. Asserting only the end state would
+    // pass against the pre-fix code too, where dispatched_at was null because no claim
+    // was ever taken — a test that cannot fail for the reason it exists. The claim must
+    // be held while the dispatch runs, and gone once it has failed.
+    $claimDuringDispatch = null;
+
+    // Resolving the child swarm happens inside the try, after the claim is taken — so
+    // this closure runs exactly in the window under test.
+    app()->bind($intent['child_swarm_class'], function () use (&$claimDuringDispatch, $response): never {
+        $claimDuringDispatch = app(DurableRunStore::class)->childRuns($response->runId)[0]['dispatched_at'] ?? null;
+
+        throw new RuntimeException('dispatch exploded');
+    });
+
+    // Through the real sweep, so the coordinator is the one the manager builds.
+    $manager->recover(runId: $response->runId);
+
+    // Restore the fixture: the child swarm class is shared, and leaving it bound to a
+    // thrower breaks anything that resolves it after this point.
+    app()->bind($intent['child_swarm_class'], fn (): object => new ($intent['child_swarm_class']));
+
+    $child = app(DurableRunStore::class)->childRunForChild($intent['child_run_id']);
+
+    // Claimed before the dispatch ran...
+    expect($claimDuringDispatch)->not->toBeNull();
+
+    // ...and handed back after it failed. A claim held by a worker that dispatched
+    // nothing keeps the child out of the recovery sweep until it goes stale.
     expect($child['status'])->toBe('failed')
         ->and($child['dispatched_at'])->toBeNull();
 
     // And the parent was reconciled rather than left waiting on a child that never ran.
     expect($manager->inspect($response->runId)->children[0]['status'])->toBe('failed');
+});
+
+test('durable child dispatch does not fail a child whose run was already created', function () {
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    $intent = app(DurableRunStore::class)->childRuns($response->runId)[0];
+    $childRunId = $intent['child_run_id'];
+
+    // Re-open the intent, keeping NO run row, so the dispatch is genuinely attempted.
+    DB::table('swarm_durable_runs')->where('run_id', $childRunId)->delete();
+    DB::table('swarm_durable_child_runs')
+        ->where('child_run_id', $childRunId)
+        ->update(['dispatched_at' => null, 'status' => 'pending']);
+
+    $runRow = ['run_id' => $childRunId, 'swarm_class' => $intent['child_swarm_class'], 'topology' => 'sequential'];
+
+    // The window start() leaves open: it commits the run row inside a transaction and
+    // enqueues the job later, at PendingDispatch destruct — so an exception on the way
+    // out lands in the catch with the row already persisted. Burying that child as
+    // `failed` would kill a run recovery can still drive.
+    app()->bind($intent['child_swarm_class'], function () use ($runRow): never {
+        DB::table('swarm_durable_runs')->insert($runRow + [
+            'execution_mode' => 'durable',
+            'coordination_profile' => 'step_durable',
+            'status' => 'pending',
+            'next_step_index' => 0,
+            'total_steps' => 1,
+            'completed_node_ids' => json_encode([]),
+            'timeout_at' => CarbonImmutable::now('UTC')->addHour(),
+            'step_timeout_seconds' => 300,
+            'attempts' => 0,
+            'recovery_count' => 0,
+            'retry_attempt' => 0,
+            'created_at' => CarbonImmutable::now('UTC'),
+            'updated_at' => CarbonImmutable::now('UTC'),
+        ]);
+
+        throw new RuntimeException('threw after the run was committed');
+    });
+
+    $manager->recover(runId: $response->runId);
+
+    app()->bind($intent['child_swarm_class'], fn (): object => new ($intent['child_swarm_class']));
+
+    // Left for recoverable() to drive, NOT marked failed.
+    expect(app(DurableRunStore::class)->childRunForChild($childRunId)['status'])->toBe('pending')
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $childRunId)->count())->toBe(1);
+});
+
+test('a stale durable child dispatch claim is reclaimable by the recovery sweep', function () {
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    (new AdvanceDurableSwarm($response->runId, 0))->handle(app(DurableSwarmManager::class));
+
+    $store = app(DurableRunStore::class);
+    $childRunId = $store->childRuns($response->runId)[0]['child_run_id'];
+
+    // The uncatchable death: a worker SIGKILLed between claiming and committing the
+    // child's run leaves a claim stamped, no run row, and no code path that will ever
+    // hand it back. Simulate exactly that state.
+    DB::table('swarm_durable_runs')->where('run_id', $childRunId)->delete();
+    DB::table('swarm_durable_child_runs')
+        ->where('child_run_id', $childRunId)
+        ->update(['dispatched_at' => CarbonImmutable::now('UTC')->subHour(), 'status' => 'pending']);
+
+    // Fresh claims stay invisible to the sweep, so a live dispatch is never stolen...
+    expect(collect($store->undispatchedChildRuns($response->runId, claimGraceSeconds: 7200))->pluck('child_run_id'))
+        ->not->toContain($childRunId);
+
+    // ...but a claim that has gone quiet past the grace window is reclaimable, which is
+    // the only thing standing between an uncatchably-killed worker and a child that is
+    // stranded pending forever with nothing running.
+    expect(collect($store->undispatchedChildRuns($response->runId, claimGraceSeconds: 60))->pluck('child_run_id'))
+        ->toContain($childRunId);
+
+    expect($store->markChildRunDispatched($childRunId, CarbonImmutable::now('UTC'), 60))->toBeTrue();
 });
 
 test('durable child failure write cannot overwrite a child that already finished', function () {

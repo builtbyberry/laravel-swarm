@@ -19,46 +19,59 @@ _To be filled in during release wrap-up._
 
 ### Fixed
 
-- **Race-safe child-swarm dispatch: the dispatch marker is now a lease, and the
-  claim — not the error classifier — decides who dispatches.** A durable child
-  could be dispatched twice, and the loser would bury the winner. `swarm:recover`
-  has no overlap lock and `undispatchedChildRuns()` has no grace floor, so a
-  recovery sweep could select a child the parent was inline-dispatching (or two
-  sweeps could select the same child). Both saw `find() === null`, both called
-  `dispatchDurable()`, and the loser caught the unique-key `QueryException` and
-  wrote `failed` over the **winner's live child**, releasing the parent's wait
-  with `child_failed` while that child executed normally — so under a fail-run
-  policy the parent failed while its child was running. No infrastructure fault
-  was required; two workers overlapping was enough. `SwarmChildStarted` also
-  fired unconditionally, so a re-dispatched intent emitted it twice.
+- **Race-safe child-swarm dispatch: the dispatch marker is now an expiring lease,
+  and the claim — not the error classifier — decides who dispatches.** A durable
+  child could be dispatched twice, and the loser would bury the winner. More than
+  one worker can reach a child's dispatch: `swarm:recover` sweeps children the
+  parent may be inline-dispatching at that instant, and the `withoutOverlapping()`
+  the installer scaffolds is per-host, so it serialises neither a sweep against an
+  inline dispatch nor two sweeps on different hosts. Both saw `find() === null`,
+  both called `dispatchDurable()`, and the loser caught the unique-key
+  `QueryException` and wrote `failed` over the **winner's live child**, releasing
+  the parent's wait with `child_failed` while that child executed normally — so
+  under a fail-run policy the parent failed while its child was running. No
+  infrastructure fault was required. `SwarmChildStarted` also fired
+  unconditionally, so a re-dispatched intent emitted it twice.
+
   `markChildRunDispatched()` now returns whether the caller won the conditional
   claim, and only that winner dispatches or emits `SwarmChildStarted` — a
   duplicate `start()` is unreachable rather than something to recognise from a
   driver-specific SQLSTATE after the fact. Every exit that does not leave a run
   dispatched hands the claim back through the new
-  `DurableRunStore::releaseChildRunDispatch()`, which matches the **exact**
-  timestamp the caller stamped, so a worker can only ever release its own claim
-  and never frees a child a racing winner is dispatching. That release is what
-  keeps a failed dispatch visible: a claim held by a worker that dispatched
-  nothing is invisible to `undispatchedChildRuns()`, `recoverable()`, the
-  run-level sweeps, `recoverableTimedOutWaits()` and `hasTimedOut()` alike, and
-  would strand the parent silently and permanently. `updateChildRun()` now
-  returns whether it wrote and accepts an optional expected-status set; the
-  failure path uses it so a child that finished under another worker is not
-  overwritten with `failed`, and the parent is reconciled only when this worker
-  actually owns the terminal write. Covered by regression tests that fail without
-  the fix, plus a `tests/ProcessConcurrency` lane racing four real OS processes
-  for one child's claim.
+  `DurableRunStore::releaseChildRunDispatch()`.
 
-  Dispatch failures stay **terminal** for now: the retry path is gated on
-  separating a child's operational input from the capture/evidence view, because
-  a swept retry re-reads a `[redacted]` input under `swarm.capture.inputs=false`
-  and would run the child on the literal sentinel.
+  The claim **expires**, because a `catch` block cannot cover an uncatchable
+  death: a worker SIGKILLed on deploy, reaped by `queue:work --timeout`,
+  OOM-killed or evicted between claiming and committing the child's run never
+  reaches the release. A claim older than the new
+  `swarm.durable.recovery.child_claim_grace_seconds` (default 300, via
+  `SWARM_DURABLE_CHILD_CLAIM_GRACE_SECONDS`) is re-claimable, so the next sweep
+  takes it over instead of the child being stranded with nothing running and no
+  event. This is an expiry on a **held** claim, not a floor on first dispatch — an
+  unclaimed child is still swept immediately, so a parent that died before
+  dispatching is picked up on the very next pass with no added latency.
 
-  `DurableRunStore` is an internal contract, but implementors outside this
-  package must update three signatures: `markChildRunDispatched()` gains an
-  optional timestamp and returns `bool`, `updateChildRun()` gains an optional
-  `$fromStatuses` and returns `bool`, and `releaseChildRunDispatch()` is new.
+  `updateChildRun()` now returns whether it wrote and accepts an optional
+  expected-status set; the failure path uses it so a child that finished under
+  another worker is not overwritten with `failed`, and the parent is reconciled
+  only when this worker actually owns the terminal write. A dispatch that fails
+  *after* `start()` committed the child's run — reachable because the queue write
+  happens at `PendingDispatch` destruct — no longer marks that child failed
+  either; it is left to `recoverable()`, which is the same reasoning the run-row
+  gate applies. Both of those, and a claim that cannot be handed back, are now
+  logged rather than silently swallowed.
+
+  Covered by regression tests that fail without the fix, plus a
+  `tests/ProcessConcurrency` lane racing four real OS processes for one child's
+  claim.
+
+  Dispatch failures otherwise stay **terminal** for now: the retry path is gated
+  on separating a child's operational input from the capture/evidence view,
+  because a swept retry re-reads a `[redacted]` input under
+  `swarm.capture.inputs=false` and would run the child on the literal sentinel.
+
+  `DurableRunStore` is an internal contract, but implementors outside this package
+  must update four signatures — see `UPGRADING.md`.
 
 ## v0.23.0 - 2026-07-20
 
