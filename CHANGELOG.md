@@ -2,11 +2,12 @@
 
 ## v0.24.0 - unreleased
 
-Documentation integrity: make the package's own claims verifiable. Seeded from
-v0.23.0, where five docblock and guidance defects surfaced in a single session —
-four semantic claims that were false when written, and one class of referential
-drift (a dead skill pointer, a command list covering 8 of 24 commands, stale
-pinned versions).
+Durable-execution correctness and documentation integrity, carrying the work
+deferred from v0.23.0: the child-swarm dispatch race and the operational-input
+question underneath it, encrypt-at-rest coverage for the JSON payload columns,
+overlap protection for the two commands the package tells you to schedule, a
+`laravel/ai` compatibility policy with a nightly `0.x-dev` lane, CI merge gates,
+and PR-time validation of the package's own documentation references.
 
 ### Added
 
