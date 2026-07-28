@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
 
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use DateTimeInterface;
 
 interface DurableRunStore
 {
@@ -100,7 +101,7 @@ interface DurableRunStore
     /**
      * @param  array<string, mixed>  $policy
      */
-    public function scheduleBranchRetry(string $runId, string $branchId, string $executionToken, array $policy, int $attempt, ?\DateTimeInterface $nextRetryAt): void;
+    public function scheduleBranchRetry(string $runId, string $branchId, string $executionToken, array $policy, int $attempt, ?DateTimeInterface $nextRetryAt): void;
 
     public function cancelBranches(string $runId, ?string $parentNodeId = null): void;
 
@@ -124,7 +125,7 @@ interface DurableRunStore
     /**
      * @param  array<string, mixed>  $policy
      */
-    public function scheduleRetry(string $runId, string $executionToken, array $policy, int $attempt, ?\DateTimeInterface $nextRetryAt): void;
+    public function scheduleRetry(string $runId, string $executionToken, array $policy, int $attempt, ?DateTimeInterface $nextRetryAt): void;
 
     public function markPaused(string $runId, string $executionToken): void;
 
@@ -257,12 +258,35 @@ interface DurableRunStore
      */
     public function childRunForChild(string $childRunId): ?array;
 
-    public function markChildRunDispatched(string $childRunId): void;
+    /**
+     * Claim a child run for dispatch, conditionally on it not already being claimed.
+     *
+     * This is a LEASE, not a brand: the winner is the only worker that may dispatch,
+     * and it must hand the claim back via {@see self::releaseChildRunDispatch()} on
+     * every exit that does not leave a run actually dispatched. Returns true only for
+     * the worker that took it.
+     */
+    public function markChildRunDispatched(string $childRunId, ?DateTimeInterface $dispatchedAt = null): bool;
 
     /**
-     * @param  array<string, mixed>|null  $failure
+     * Hand back a dispatch claim, matching the exact timestamp the caller stamped.
+     *
+     * Matching the stamped value — rather than merely "not null" — is what stops a
+     * worker releasing a claim it does not own, so a late or replayed release can
+     * never free the racing winner's child.
      */
-    public function updateChildRun(string $childRunId, string $status, ?string $output = null, ?array $failure = null): void;
+    public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $dispatchedAt): bool;
+
+    /**
+     * Write a child run's status, optionally only from an expected set of statuses.
+     *
+     * Pass `$fromStatuses` to make the write conditional; it returns false when the
+     * child has moved on, which means another worker owns its terminal state.
+     *
+     * @param  array<string, mixed>|null  $failure
+     * @param  array<int, string>  $fromStatuses
+     */
+    public function updateChildRun(string $childRunId, string $status, ?string $output = null, ?array $failure = null, array $fromStatuses = []): bool;
 
     public function markChildTerminalEventDispatched(string $childRunId): bool;
 

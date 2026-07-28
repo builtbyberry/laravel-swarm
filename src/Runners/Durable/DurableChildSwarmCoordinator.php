@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
+use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
@@ -136,31 +137,69 @@ class DurableChildSwarmCoordinator
         // capture/evidence view and is `[redacted]` under swarm.capture.inputs=false.
         $contextPayload = is_array($child['context_payload'] ?? null) ? $child['context_payload'] : [];
 
-        if ($this->durableRuns->find($childRunId) === null) {
-            try {
-                $swarm = $this->application->make($childSwarmClass);
+        // The CLAIM is authoritative, not the error classifier. `swarm:recover` has no
+        // overlap lock and undispatchedChildRuns has no grace floor, so a sweep can select
+        // a child the parent is inline-dispatching right now. Winning this conditional
+        // update is what grants the right to dispatch, so a duplicate start() is
+        // unreachable rather than something we have to recognise from a driver-specific
+        // SQLSTATE after the fact. Everything below runs for the winner only.
+        $dispatchedAt = CarbonImmutable::now('UTC');
 
-                if (! $swarm instanceof Swarm) {
-                    throw new SwarmException("Unable to resolve child swarm [{$childSwarmClass}] from the container.");
-                }
+        if (! $this->durableRuns->markChildRunDispatched($childRunId, $dispatchedAt)) {
+            return;
+        }
 
-                $response = $this->application->make(SwarmRunner::class)->dispatchDurable($swarm, RunContext::fromPayload($contextPayload));
-                unset($response);
-            } catch (Throwable $exception) {
-                $this->durableRuns->updateChildRun($childRunId, 'failed', null, $this->failurePayload($exception));
+        // Another worker already created the run row but did not hold the claim — its
+        // previous attempt died between start()'s insert and the claim. The run exists, so
+        // do not dispatch it a second time; its execution is recoverable()'s problem.
+        // SwarmChildStarted deliberately does NOT fire here: start() commits the row inside
+        // a transaction but enqueues the job later, at PendingDispatch destruct, so a row
+        // alone is not evidence that anything is executing.
+        if ($this->durableRuns->find($childRunId) !== null) {
+            return;
+        }
 
+        try {
+            $swarm = $this->application->make($childSwarmClass);
+
+            if (! $swarm instanceof Swarm) {
+                throw new SwarmException("Unable to resolve child swarm [{$childSwarmClass}] from the container.");
+            }
+
+            $response = $this->application->make(SwarmRunner::class)->dispatchDurable($swarm, RunContext::fromPayload($contextPayload));
+            unset($response);
+        } catch (Throwable $exception) {
+            // Terminal first, then release. A dispatch failure stays terminal here: the
+            // retry path is gated on separating the child's operational input from the
+            // capture/evidence view, because a swept retry re-reads a `[redacted]` input
+            // under swarm.capture.inputs=false and would run the child on the literal
+            // sentinel. Until that lands the child fails loudly, as it does today.
+            //
+            // The write is conditional: the child may have completed under another worker
+            // while this dispatch was failing, and a no-op means that worker owns its
+            // terminal state and is already reconciling the parent.
+            $failed = $this->durableRuns->updateChildRun($childRunId, 'failed', null, $this->failurePayload($exception), ['pending']);
+
+            // Hand the claim back regardless, matching the exact timestamp stamped above so
+            // this can only ever release its own claim. A claim held by a worker that
+            // dispatched nothing is invisible to every recovery path there is —
+            // undispatchedChildRuns, recoverable(), the run-level sweeps,
+            // recoverableTimedOutWaits and hasTimedOut() — and would strand the parent
+            // silently and permanently.
+            $this->durableRuns->releaseChildRunDispatch($childRunId, $dispatchedAt);
+
+            if ($failed) {
                 $parent = $this->durableRuns->find((string) $child['parent_run_id']);
 
                 if ($parent !== null) {
                     $this->reconcileTerminalChildrenForParent($parent);
                 }
-
-                return;
             }
+
+            return;
         }
 
-        $this->durableRuns->markChildRunDispatched($childRunId);
-
+        // Gated on the claim, so it fires exactly once per child.
         $this->events->dispatch(new SwarmChildStarted(
             parentRunId: (string) $child['parent_run_id'],
             childRunId: $childRunId,
