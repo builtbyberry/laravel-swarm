@@ -267,6 +267,125 @@ with `"prefer-stable": true`. Your application needs no special Composer
 stability settings to install Swarm — see
 [Composer minimum-stability](#composer-minimum-stability).
 
+## Upgrading to v0.24.0
+
+v0.24.0 has **no migrations** and adds no configuration keys. One change may
+require attention from maintainers who implement `DurableRunStore` themselves,
+and one known limitation is worth reading if you use durable child swarms.
+
+### `DurableRunStore` interface: child-dispatch claim signatures changed (#431)
+
+The child-swarm dispatch marker became a **lease** rather than a one-way
+marker, so three methods changed shape and one is new:
+
+```php
+public function markChildRunDispatched(
+    string $childRunId,
+    ?DateTimeInterface $dispatchedAt = null,
+): bool;                                    // was: (string $childRunId): void
+
+public function releaseChildRunDispatch(
+    string $childRunId,
+    DateTimeInterface $dispatchedAt,
+): bool;                                    // new
+
+public function updateChildRun(
+    string $childRunId,
+    string $status,
+    ?string $output = null,
+    ?array $failure = null,
+    array $fromStatuses = [],
+): bool;                                    // was: (...): void
+
+public function undispatchedChildRuns(
+    ?string $runId = null,
+    ?string $swarmClass = null,
+    int $limit = 50,
+): array;                                   // unchanged signature, tighter contract
+```
+
+**Who is affected:** applications that implement `DurableRunStore` directly with
+a custom store class, and anything extending `DatabaseDurableRunStore` and
+overriding these four methods. PHP raises a fatal declaration-compatibility
+error at class load, so this fails immediately and visibly rather than silently.
+
+**Who is not affected:** applications that only *call* the store (via
+`app(DurableRunStore::class)->...`), use the default database driver, or reach
+the store through `DurableSwarmManager`. No application-level call site changes:
+the added parameters are optional and the `void → bool` returns are additive for
+callers that ignored them.
+
+**Action required:** custom stores must adopt the three changed signatures
+above. `undispatchedChildRuns()` keeps its signature but its contract tightens:
+it must select only pending, unclaimed children. The
+returns are load-bearing, so a stub that always reports success is wrong —
+`markChildRunDispatched()` must return `true` only for the caller that actually
+took the claim, or two workers will dispatch the same child. A minimal correct
+implementation mirrors the shipped one:
+
+```php
+public function markChildRunDispatched(
+    string $childRunId,
+    ?DateTimeInterface $dispatchedAt = null,
+): bool {
+    $timestamp = $dispatchedAt !== null
+        ? Carbon::instance($dispatchedAt)->utc()
+        : Carbon::now('UTC');
+
+    // One conditional UPDATE, so concurrent workers race a single row and
+    // exactly one wins. Returning true unconditionally would let two workers
+    // dispatch the same child.
+    return $this->childRunTable()
+        ->where('child_run_id', $childRunId)
+        ->whereIn('status', ['pending', 'running'])
+        ->whereNull('dispatched_at')
+        ->update(['dispatched_at' => $timestamp, 'updated_at' => $timestamp]) === 1;
+}
+
+public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $dispatchedAt): bool
+{
+    return $this->childRunTable()
+        ->where('child_run_id', $childRunId)
+        ->where('dispatched_at', Carbon::instance($dispatchedAt)->utc())
+        ->update(['dispatched_at' => null, 'updated_at' => Carbon::now('UTC')]) === 1;
+}
+```
+
+`updateChildRun()` must apply `whereIn('status', $fromStatuses)` when the array
+is non-empty and return whether a row was written; `undispatchedChildRuns()`
+must select only children that are pending **and** unclaimed. A claim is never
+reclaimed on age — see the limitation below.
+
+### Known limitation: a child stranded by an uncatchable worker death
+
+Dispatching a child stamps a claim on its intent row so exactly one worker
+dispatches it. Every exit that does not leave a run dispatched hands that claim
+back — but a `catch` block cannot cover an uncatchable death. A worker SIGKILLed
+on deploy, reaped by `queue:work --timeout`, OOM-killed or evicted **between
+claiming the child and committing its run** leaves a claim nobody hands back, and
+that child is not re-dispatched: its parent waits on it indefinitely.
+
+**How narrow this is:** the window spans container resolution, input validation
+and input guardrails — ordinarily milliseconds — and closes as soon as the
+child's run row is committed. It requires an uncatchable kill inside that window
+specifically. A worker that throws, times out at the PHP level, or fails
+validation releases its claim normally.
+
+**Why it is not fixed here.** Re-dispatching a stranded child means a recovery
+sweep must dispatch it, and the sweep can only build the child's input from the
+stored `context_payload` — which is the capture/evidence view and is the literal
+string `[redacted]` whenever `swarm.capture.inputs` is `false` (the default). A
+sweep that re-dispatched today would run the child on that sentinel and return a
+confidently wrong answer instead of failing. Fixing the strand therefore requires
+separating a child's operational input from its evidence view, which is tracked
+separately.
+
+**What to do:** nothing is required. If a parent run is waiting on a child that
+never started, `php artisan swarm:inspect <run-id>` shows the child intent as
+`pending` with a stamped dispatch claim and no corresponding run; cancel the
+parent with `php artisan swarm:cancel <run-id>` and re-dispatch it. Keeping
+`swarm.capture.inputs` enabled does not currently change this behaviour.
+
 ## Upgrading to v0.23.0
 
 **Plain `laravel/ai` agents now work with Swarm unchanged.** Swarm type-hints

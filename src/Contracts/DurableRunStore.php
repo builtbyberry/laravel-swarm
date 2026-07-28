@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Contracts;
 
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use DateTimeInterface;
 
 interface DurableRunStore
 {
@@ -100,7 +101,7 @@ interface DurableRunStore
     /**
      * @param  array<string, mixed>  $policy
      */
-    public function scheduleBranchRetry(string $runId, string $branchId, string $executionToken, array $policy, int $attempt, ?\DateTimeInterface $nextRetryAt): void;
+    public function scheduleBranchRetry(string $runId, string $branchId, string $executionToken, array $policy, int $attempt, ?DateTimeInterface $nextRetryAt): void;
 
     public function cancelBranches(string $runId, ?string $parentNodeId = null): void;
 
@@ -124,7 +125,7 @@ interface DurableRunStore
     /**
      * @param  array<string, mixed>  $policy
      */
-    public function scheduleRetry(string $runId, string $executionToken, array $policy, int $attempt, ?\DateTimeInterface $nextRetryAt): void;
+    public function scheduleRetry(string $runId, string $executionToken, array $policy, int $attempt, ?DateTimeInterface $nextRetryAt): void;
 
     public function markPaused(string $runId, string $executionToken): void;
 
@@ -257,16 +258,52 @@ interface DurableRunStore
      */
     public function childRunForChild(string $childRunId): ?array;
 
-    public function markChildRunDispatched(string $childRunId): void;
+    /**
+     * Claim a child run for dispatch, conditionally on it not already being claimed.
+     *
+     * This is a LEASE, not a brand: the winner is the only worker that may dispatch,
+     * and it hands the claim back via {@see self::releaseChildRunDispatch()} on every
+     * exit that does not leave a run actually dispatched. Returns true only for the
+     * worker that took it.
+     *
+     * The claim does NOT expire. A worker killed uncatchably between claiming and
+     * committing the child's run — SIGKILL on deploy, `queue:work --timeout`, OOM,
+     * eviction — therefore leaves a claim nobody hands back, and that child is not
+     * re-dispatched. That is a known, documented limitation: re-dispatching a stranded
+     * child requires an operational input distinct from the capture/evidence view,
+     * because the stored payload is `[redacted]` under `swarm.capture.inputs=false`
+     * and a sweep would otherwise run the child on the sentinel. See UPGRADING.md.
+     */
+    public function markChildRunDispatched(string $childRunId, ?DateTimeInterface $dispatchedAt = null): bool;
 
     /**
-     * @param  array<string, mixed>|null  $failure
+     * Hand back a dispatch claim, matching the timestamp the caller stamped.
+     *
+     * Matching the stamped value — rather than merely "not null" — is what stops a
+     * worker releasing a claim it does not own. Note the column is `timestamp(0)`, so
+     * the match is second-granular: it distinguishes claims taken in different
+     * seconds, not concurrent claims within one. That is sufficient here because only
+     * the claim's winner ever calls this, and it calls it once; the guarantee rests on
+     * the conditional claim above, and this match is the second line of defence.
      */
-    public function updateChildRun(string $childRunId, string $status, ?string $output = null, ?array $failure = null): void;
+    public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $dispatchedAt): bool;
+
+    /**
+     * Write a child run's status, optionally only from an expected set of statuses.
+     *
+     * Pass `$fromStatuses` to make the write conditional; it returns false when the
+     * child has moved on, which means another worker owns its terminal state.
+     *
+     * @param  array<string, mixed>|null  $failure
+     * @param  array<int, string>  $fromStatuses
+     */
+    public function updateChildRun(string $childRunId, string $status, ?string $output = null, ?array $failure = null, array $fromStatuses = []): bool;
 
     public function markChildTerminalEventDispatched(string $childRunId): bool;
 
     /**
+     * Child intents awaiting dispatch: pending and unclaimed.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function undispatchedChildRuns(?string $runId = null, ?string $swarmClass = null, int $limit = 50): array;

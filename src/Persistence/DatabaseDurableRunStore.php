@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use DateTimeInterface;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Connection;
@@ -780,7 +781,7 @@ class DatabaseDurableRunStore implements DurableRunStore
         ]);
     }
 
-    public function scheduleBranchRetry(string $runId, string $branchId, string $executionToken, array $policy, int $attempt, ?\DateTimeInterface $nextRetryAt): void
+    public function scheduleBranchRetry(string $runId, string $branchId, string $executionToken, array $policy, int $attempt, ?DateTimeInterface $nextRetryAt): void
     {
         $this->guardedBranchUpdate($runId, $branchId, $executionToken, [
             'status' => 'pending',
@@ -894,7 +895,7 @@ class DatabaseDurableRunStore implements DurableRunStore
         $this->markTerminal($runId, $executionToken, 'failed', $failure);
     }
 
-    public function scheduleRetry(string $runId, string $executionToken, array $policy, int $attempt, ?\DateTimeInterface $nextRetryAt): void
+    public function scheduleRetry(string $runId, string $executionToken, array $policy, int $attempt, ?DateTimeInterface $nextRetryAt): void
     {
         $this->connection->transaction(function () use ($runId, $executionToken, $policy, $attempt, $nextRetryAt): void {
             $this->guardedUpdate($runId, $executionToken, [
@@ -1849,27 +1850,55 @@ class DatabaseDurableRunStore implements DurableRunStore
         return $record !== null ? $this->mapChildRun($record) : null;
     }
 
-    public function markChildRunDispatched(string $childRunId): void
+    public function markChildRunDispatched(string $childRunId, ?DateTimeInterface $dispatchedAt = null): bool
     {
-        $timestamp = Carbon::now('UTC');
+        $timestamp = $dispatchedAt !== null ? Carbon::instance($dispatchedAt)->utc() : Carbon::now('UTC');
 
-        $this->childRunTable()
+        // One conditional UPDATE against a single row: concurrent workers race it and
+        // exactly one wins, which is what makes a duplicate dispatch unreachable. The
+        // status predicate stops a child that has already reached a terminal state
+        // being claimed and dispatched by a worker holding a stale in-memory selection.
+        $claimed = $this->childRunTable()
             ->where('child_run_id', $childRunId)
+            ->whereIn('status', ['pending', 'running'])
             ->whereNull('dispatched_at')
             ->update([
                 'dispatched_at' => $timestamp,
                 'updated_at' => $timestamp,
             ]);
+
+        return $claimed === 1;
     }
 
-    public function updateChildRun(string $childRunId, string $status, ?string $output = null, ?array $failure = null): void
+    public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $dispatchedAt): bool
     {
-        $this->childRunTable()->where('child_run_id', $childRunId)->update([
+        $released = $this->childRunTable()
+            ->where('child_run_id', $childRunId)
+            ->where('dispatched_at', Carbon::instance($dispatchedAt)->utc())
+            ->update([
+                'dispatched_at' => null,
+                'updated_at' => Carbon::now('UTC'),
+            ]);
+
+        return $released === 1;
+    }
+
+    public function updateChildRun(string $childRunId, string $status, ?string $output = null, ?array $failure = null, array $fromStatuses = []): bool
+    {
+        $query = $this->childRunTable()->where('child_run_id', $childRunId);
+
+        if ($fromStatuses !== []) {
+            $query->whereIn('status', $fromStatuses);
+        }
+
+        $updated = $query->update([
             'status' => $status,
             'output' => $output !== null ? $this->cipher->seal($output) : null,
             'failure' => $failure !== null ? $this->encodeJson($failure) : null,
             'updated_at' => Carbon::now('UTC'),
         ]);
+
+        return $updated === 1;
     }
 
     public function markChildTerminalEventDispatched(string $childRunId): bool
@@ -1891,6 +1920,16 @@ class DatabaseDurableRunStore implements DurableRunStore
         $childTable = (string) $this->config->get('swarm.tables.durable_child_runs', 'swarm_durable_child_runs');
         $durableTable = (string) $this->config->get('swarm.tables.durable', 'swarm_durable_runs');
 
+        // In practice this is `status = 'pending'`: nothing writes 'running' to a child row
+        // (createChildRun stamps 'pending'; updateChildRun only ever moves a child to a
+        // terminal status). The value is kept so an out-of-tree store implementing a
+        // running state is not silently skipped, not because this codebase produces one.
+        //
+        // `dispatched_at IS NULL` is the other half of the dispatch claim: a child whose
+        // claim is held is not selectable, and a claim handed back by a failed dispatch
+        // becomes selectable again. A claim is never reclaimed on age — see
+        // markChildRunDispatched() for why a stranded claim is a documented limitation
+        // rather than something this sweep may take over.
         $query = $this->connection->table($childTable.' as children')
             ->join($durableTable.' as parents', 'children.parent_run_id', '=', 'parents.run_id')
             ->whereIn('children.status', ['pending', 'running'])
