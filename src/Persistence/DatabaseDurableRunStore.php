@@ -672,7 +672,7 @@ class DatabaseDurableRunStore implements DurableRunStore
     /**
      * Evidence/display branch read (concrete-only, used by DurableRunInspector): the
      * per-row-degrading display twin of the now-strict operational branchesFor().
-     * Each branch's input/output decrypt via {@see openForDisplay()} and carry an
+     * Each branch's input/output decrypt via {@see SwarmPersistenceCipher::openForDisplay()} and carry an
      * `*_available` flag, so an undecryptable row degrades to null rather than
      * throwing or leaking ciphertext (record 632). Intentionally not on the
      * DurableRunStore contract — reached through {@see InspectsDurableRuns}.
@@ -2921,7 +2921,8 @@ class DatabaseDurableRunStore implements DurableRunStore
     /**
      * Policy-aware, per-row-degrading display twin of {@see mapChildRun()}: the
      * nested context input and the child output decrypt via the display helpers
-     * ({@see openChildContextForDisplay()} / {@see openForDisplay()}) and each
+     * ({@see SwarmPersistenceCipher::openContextTopLevelInputForDisplay()} /
+     * {@see SwarmPersistenceCipher::openForDisplay()}) and each
      * gains an `*_available` flag, so one undecryptable child never aborts the
      * batch or 500s a display surface (record 632).
      *
