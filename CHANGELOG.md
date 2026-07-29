@@ -3,11 +3,10 @@
 ## v0.24.0 - unreleased
 
 Durable-execution correctness and documentation integrity, carrying the work
-deferred from v0.23.0: the child-swarm dispatch race and the operational-input
-question underneath it, encrypt-at-rest coverage for the JSON payload columns,
-overlap protection for the two commands the package tells you to schedule, a
-`laravel/ai` compatibility policy with a nightly `0.x-dev` lane, CI merge gates,
-and PR-time validation of the package's own documentation references.
+deferred from v0.23.0: the child-swarm dispatch race, overlap protection for the
+two commands the package tells you to schedule, a `laravel/ai` compatibility
+policy with a nightly `0.x-dev` lane, CI merge gates, and PR-time validation of
+the package's own documentation references.
 
 ### Added
 
