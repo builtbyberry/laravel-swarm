@@ -10,11 +10,52 @@ the package's own documentation references.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **The package's documentation references are now validated on every pull
+  request.** Nothing checked them before: `src/` carries ~600 `{@see}`
+  references plus file paths, Artisan command names and stated requirements
+  quoted in prose, and PHPStan has no phpdoc reference rules. v0.23.0 showed the
+  cost — `AGENTS.md` pointed every agent at a review skill that is not
+  installed, listed 8 of the package's 29 Artisan commands, and carried stale
+  dependency pins. All mechanically checkable; none checked.
+
+  `tests/Unit/DocumentationReferenceTest.php` asserts four things: every
+  `{@see}` in `src/` resolves to a real type, member, constant or function;
+  every repository path named in a source comment or a relative markdown link
+  exists; every documented `php artisan` command in this package's own
+  namespaces is registered by it; and the README's stated requirements agree
+  with `composer.json`. Failures name each offender with its file and line — a
+  corpus-total assertion is insufficient, as a `>= 11` floor in this repo once
+  demonstrated by passing while every generator stub beneath it was broken.
+
+  **Scope is referential only, by design.** These checks answer "does the thing
+  this sentence points at exist" and nothing more. They cannot catch a semantic
+  claim that was false when written, which was the other half of the v0.23.0
+  defects. A green run means the references resolve, not that the documentation
+  is true — the test says so in its own docblock, so the next reader does not
+  assume broader coverage.
+
+  Each check is narrow on purpose, because an over-eager reference check
+  produces false positives, gets suppressed, and then reports green while
+  testing nothing. Facade members, global functions, unimported package types
+  and uninstalled optional dependencies all resolve rather than failing;
+  `config/*.php` paths are excluded because every one named in prose except
+  `config/swarm.php` belongs to the consuming application; and the requirements
+  check reads only the README's `## Requirements` block, so prose that
+  legitimately cites an older version — "the MCP tools added in `laravel/ai`
+  0.8" — is not mistaken for a stale pin. Each check was verified to fail
+  against a deliberately broken reference of its own kind.
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Five dead `{@see}` references in `src/` corrected**, all found by the new
+  check on its first run. `DatabaseDurableRunStore` pointed at
+  `openForDisplay()` twice as though it owned the method (it is on
+  `SwarmPersistenceCipher`) and at `openChildContextForDisplay()`, which exists
+  nowhere — the real helper is `openContextTopLevelInputForDisplay()`.
+  `StreamStepAccumulator` pointed at `SequentialRunner::mapStreamEvent()`, a
+  method that no longer exists; the mapping lives in `StreamEventMapper::map()`.
+  `PhpStanTypeAliases` used `{@see}` for `@phpstan-import-type`, which is an
+  annotation rather than a symbol. No behaviour changes.
 
 ### Fixed
 

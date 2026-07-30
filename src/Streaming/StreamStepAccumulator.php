@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Streaming;
 
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
-use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 
 /**
@@ -17,7 +16,7 @@ use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
  * event: it accumulates the agent's output text, pairs tool calls with their
  * results into the frozen snapshot, records the final step usage, and notes any
  * unrecognized event class for the breadcrumb. This object holds exactly that
- * state so the mapping lives in one place ({@see SequentialRunner::mapStreamEvent()})
+ * state so the mapping lives in one place ({@see StreamEventMapper::map()})
  * and both the live `stream()` loop and the durable per-node `streamSingleStep()`
  * fold a step's events identically — no second copy of the mapping to drift.
  *

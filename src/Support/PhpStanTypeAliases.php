@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Support;
 
 /**
- * PHPStan-only type aliases imported elsewhere via {@see \phpstan-import-type}.
+ * PHPStan-only type aliases imported elsewhere via `@phpstan-import-type`.
  * This class is not used at runtime.
  *
  * @phpstan-type SwarmTaskInput string|array<string, mixed>|RunContext
