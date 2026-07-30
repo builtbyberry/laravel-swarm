@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetectsInteractiveConsole;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use Illuminate\Console\GeneratorCommand;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -24,6 +25,7 @@ use function Laravel\Prompts\select;
 #[AsCommand(name: 'make:swarm:swarm')]
 class MakeSwarmSwarmCommand extends GeneratorCommand
 {
+    use DetectsInteractiveConsole;
     use ResolvesStringConsoleInput;
 
     /**
@@ -87,15 +89,14 @@ class MakeSwarmSwarmCommand extends GeneratorCommand
         $topology = $this->optionalOptionString('topology');
 
         if ($topology === null) {
-            $topology = $this->input->isInteractive()
+            $topology = $this->consoleCanPrompt()
                 ? $this->promptForTopology()
-                // Non-interactive: skip the prompt and use the safe default.
-                // laravel/prompts has a Symfony QuestionHelper fallback under
-                // non-interactive mode, but that fallback re-enters
-                // `OutputStyle::askQuestion()` — which fails loudly in tests
-                // that didn't pre-register an expectsChoice/expectsQuestion.
-                // The explicit guard keeps test ergonomics simple and matches
-                // the pattern the other v0.8.0 installers use for prompts.
+                // Cannot prompt: use the safe default. The guard checks stdin is
+                // a real terminal, not just that Symfony marked the input
+                // interactive — see DetectsInteractiveConsole. Trusting the
+                // input alone let `Artisan::call()` reach the Prompts fallback,
+                // which blocks forever on a stdin that never becomes readable
+                // rather than failing loudly (#449).
                 : 'sequential';
         }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetectsInteractiveConsole;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Input\InputOption;
 
@@ -39,6 +40,8 @@ use function Laravel\Prompts\select;
 #[AsCommand(name: 'make:swarm')]
 class MakeSwarmCommand extends MakeSwarmSwarmCommand
 {
+    use DetectsInteractiveConsole;
+
     /**
      * The console command name.
      *
@@ -181,7 +184,7 @@ class MakeSwarmCommand extends MakeSwarmSwarmCommand
      */
     protected function wantsInteraction(): bool
     {
-        return $this->input->isInteractive() && $this->option('no-interaction') !== true;
+        return $this->consoleCanPrompt() && $this->option('no-interaction') !== true;
     }
 
     /**

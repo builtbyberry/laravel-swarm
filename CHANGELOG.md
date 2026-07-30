@@ -59,6 +59,38 @@ the package's own documentation references.
 
 ### Fixed
 
+- **Console commands can no longer hang forever waiting on a stdin that cannot
+  answer.** Every prompting command guarded on `$input->isInteractive()` alone,
+  which is not sufficient: Symfony's `ArrayInput` is interactive by default, so
+  `Artisan::call()` can leave it true while STDIN is not a terminal. Laravel
+  Prompts then correctly detects the missing TTY and takes its fallback path —
+  but that fallback is Symfony's `QuestionHelper`, which ends in
+  `TerminalInputHelper::waitForInput()` and busy-waits on a stream that will
+  never become readable. The command does not fail; it blocks indefinitely,
+  which in CI or a test lane reads as a stuck runner rather than a failure.
+
+  Diagnosed by catching a hung process and sampling it: 2266 of 2313 samples sat
+  in `stream_select()`, and a probe on the blocking loop produced the full stack
+  — `MakeSwarmSwarmCommand::resolveTopology()` → `Laravel\Prompts\select()` →
+  the Prompts fallback → `QuestionHelper` → that loop, with
+  `stream_isatty(STDIN)` false throughout. It reproduced roughly one run in
+  eight, because the outcome depends on the stdin the process happened to
+  inherit — which is why a single-signal guard looked correct for months.
+
+  The audit found the same guard at **15 sites across 9 commands**, not just the
+  swarm generator: `make:swarm`, `make:swarm:swarm`, `make:swarm:blueprint`,
+  `swarm:audit:reconcile`, and all five `swarm:install:*` sub-installers. All of
+  them now use a shared `DetectsInteractiveConsole` guard that requires both an
+  interactive input and a stdin that is a real terminal, falling back to each
+  command's documented non-interactive default otherwise.
+
+  The guard also permits prompting when the question path is mocked, which is
+  how Laravel's `expectsQuestion()` / `expectsChoice()` /
+  `expectsConfirmation()` answer without touching stdin — guarding on the
+  terminal alone made four existing interactive tests fail. No behaviour change
+  for an operator at a real terminal, and no change for a command already run
+  with `--no-interaction`.
+
 - **Race-safe child-swarm dispatch: the dispatch marker is now an expiring lease,
   and the claim — not the error classifier — decides who dispatches.** A durable
   child could be dispatched twice, and the loser would bury the winner. More than
