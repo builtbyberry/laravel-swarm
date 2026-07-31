@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use Composer\InstalledVersions;
@@ -35,6 +36,7 @@ use Symfony\Component\Console\Input\InputOption;
 #[AsCommand(name: 'make:memory-tool')]
 class MakeMemoryToolCommand extends GeneratorCommand
 {
+    use DetachesUnanswerableStdin;
     use ResolvesStringConsoleInput;
 
     /**

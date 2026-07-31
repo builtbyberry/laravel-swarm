@@ -59,37 +59,45 @@ the package's own documentation references.
 
 ### Fixed
 
-- **Console commands can no longer hang forever waiting on a stdin that cannot
-  answer.** Every prompting command guarded on `$input->isInteractive()` alone,
-  which is not sufficient: Symfony's `ArrayInput` is interactive by default, so
-  `Artisan::call()` can leave it true while STDIN is not a terminal. Laravel
-  Prompts then correctly detects the missing TTY and takes its fallback path —
-  but that fallback is Symfony's `QuestionHelper`, which ends in
-  `TerminalInputHelper::waitForInput()` and busy-waits on a stream that will
-  never become readable. The command does not fail; it blocks indefinitely,
-  which in CI or a test lane reads as a stuck runner rather than a failure.
+- **Console commands no longer hang forever on a stdin that cannot answer.** A
+  command that prompts with no terminal behind it did not fail — it blocked
+  indefinitely, which in CI or a test lane reads as a stuck runner rather than a
+  failure. Diagnosed by sampling a hung process: 2266 of 2313 samples sat inside
+  `stream_select()`, in Symfony's `TerminalInputHelper::waitForInput()`.
 
-  Diagnosed by catching a hung process and sampling it: 2266 of 2313 samples sat
-  in `stream_select()`, and a probe on the blocking loop produced the full stack
-  — `MakeSwarmSwarmCommand::resolveTopology()` → `Laravel\Prompts\select()` →
-  the Prompts fallback → `QuestionHelper` → that loop, with
-  `stream_isatty(STDIN)` false throughout. It reproduced roughly one run in
-  eight, because the outcome depends on the stdin the process happened to
-  inherit — which is why a single-signal guard looked correct for months.
+  What blocks is narrower than "stdin is not a terminal". The busy-wait is keyed
+  on the *identity of the stream*: `QuestionHelper` reads
+  `$input->getStream() ?? \STDIN`, and `TerminalInputHelper` only spins when
+  that stream's uri is `php://stdin`. So every prompting command now detaches an
+  unanswerable stdin in `initialize()` — if the input has no stream of its own
+  and this process has no terminal, it is given an empty in-memory stream. The
+  busy-wait becomes unreachable, the question reads EOF, and the prompt returns
+  its own declared default, or aborts loudly where an argument is required.
 
-  The audit found the same guard at **15 sites across 9 commands**, not just the
-  swarm generator: `make:swarm`, `make:swarm:swarm`, `make:swarm:blueprint`,
-  `swarm:audit:reconcile`, and all five `swarm:install:*` sub-installers. All of
-  them now use a shared `DetectsInteractiveConsole` guard that requires both an
-  interactive input and a stdin that is a real terminal, falling back to each
-  command's documented non-interactive default otherwise.
+  This changes only what a prompt READS FROM, never whether it is asked, so
+  behaviour on a non-terminal run is unchanged: `laravel/prompts` already
+  returned its declared default there, and every command still reaches the same
+  branch it reached before. An operator at a real terminal is unaffected —
+  the hook does not fire when stdin is a TTY.
 
-  The guard also permits prompting when the question path is mocked, which is
-  how Laravel's `expectsQuestion()` / `expectsChoice()` /
-  `expectsConfirmation()` answer without touching stdin — guarding on the
-  terminal alone made four existing interactive tests fail. No behaviour change
-  for an operator at a real terminal, and no change for a command already run
-  with `--no-interaction`.
+  Covers all four generators (`make:swarm`, `make:swarm:swarm`,
+  `make:swarm:agent`, `make:memory-tool`) including the framework's inherited
+  prompt for a missing argument, which fires before `handle()` runs, plus
+  `make:swarm:blueprint`, `swarm:audit:reconcile` and the five
+  `swarm:install:*` sub-installers.
+
+  Note the condition arming the blocking fallback is
+  `windows_os() || $app->runningUnitTests()`, and `runningUnitTests()` is
+  `$app['env'] === 'testing'` — a shipped configuration value, not "PHPUnit is
+  running". An application deployed with `APP_ENV=testing` arms it in
+  production, so this was never a test-only concern.
+
+  **One behaviour change, and it is a regression:** a piped answer is no longer
+  read. `echo yes | php artisan swarm:audit:reconcile --dismiss=42` previously
+  confirmed and now declines. Nothing can distinguish a pipe that will deliver a
+  line from one that never will — the read blocks either way — so the choice is
+  between losing piped answers and hanging indefinitely. See `UPGRADING.md`;
+  `--force` is the replacement.
 
 - **Race-safe child-swarm dispatch: the dispatch marker is now an expiring lease,
   and the claim — not the error classifier — decides who dispatches.** A durable

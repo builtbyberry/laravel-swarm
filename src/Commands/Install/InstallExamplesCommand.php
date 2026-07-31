@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
-use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetectsInteractiveConsole;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\InteractsWithBlueprintCorpus;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesHostRootNamespace;
 use FilesystemIterator;
@@ -32,7 +32,7 @@ use function Laravel\Prompts\multiselect;
 #[AsCommand(name: 'swarm:install:examples')]
 final class InstallExamplesCommand extends Command
 {
-    use DetectsInteractiveConsole;
+    use DetachesUnanswerableStdin;
     use InteractsWithBlueprintCorpus;
     use ResolvesHostRootNamespace;
 
@@ -245,7 +245,7 @@ final class InstallExamplesCommand extends Command
             return array_values(array_unique($requested));
         }
 
-        if (! $this->consoleCanPrompt() || $this->option('no-interaction') === true) {
+        if (! $this->input->isInteractive() || $this->option('no-interaction') === true) {
             $this->components->error(
                 'In non-interactive mode you must pass --all or one or more --example=<name> flags. '
                 .'Available: '.implode(', ', array_keys($available)).'.'

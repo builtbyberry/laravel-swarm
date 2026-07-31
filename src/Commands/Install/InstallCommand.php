@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
-use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetectsInteractiveConsole;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\LaravelSwarm;
 use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use Illuminate\Console\Command;
@@ -48,7 +48,7 @@ use function Laravel\Prompts\select;
 #[AsCommand(name: 'swarm:install')]
 class InstallCommand extends Command
 {
-    use DetectsInteractiveConsole;
+    use DetachesUnanswerableStdin;
 
     /** @var string */
     protected $signature = 'swarm:install
@@ -302,7 +302,7 @@ class InstallCommand extends Command
             return $flag;
         }
 
-        if (! $this->consoleCanPrompt()) {
+        if (! $this->input->isInteractive()) {
             // CI default: database. Mirrors the canonical "production" path.
             // Cache-only is a niche opt-in; require an explicit flag for it.
             return 'database';
@@ -477,7 +477,7 @@ class InstallCommand extends Command
         }
 
         $shouldMigrate = (bool) $this->option('migrate') === true
-            || (! $this->consoleCanPrompt())
+            || (! $this->input->isInteractive())
             || confirm(
                 label: 'Run `php artisan migrate` now to create the swarm tables?',
                 default: true,
@@ -659,7 +659,7 @@ class InstallCommand extends Command
         // not error on its "pass --all or --example" precondition.
         if ($this->shouldDispatch('examples', defaultYes: true)) {
             $args = $this->forwardingArgs();
-            if (! $this->consoleCanPrompt()) {
+            if (! $this->input->isInteractive()) {
                 $args['--all'] = true;
             }
             $exit = $this->call('swarm:install:examples', $args);
@@ -705,7 +705,7 @@ class InstallCommand extends Command
             return false;
         }
 
-        if (! $this->consoleCanPrompt()) {
+        if (! $this->input->isInteractive()) {
             return $defaultYes;
         }
 
@@ -730,7 +730,7 @@ class InstallCommand extends Command
     {
         $args = [];
 
-        if (! $this->consoleCanPrompt()) {
+        if (! $this->input->isInteractive()) {
             $args['--no-interaction'] = true;
         }
 

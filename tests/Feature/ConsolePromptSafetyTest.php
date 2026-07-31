@@ -2,199 +2,238 @@
 
 declare(strict_types=1);
 
-use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetectsInteractiveConsole;
-use BuiltByBerry\LaravelSwarm\Commands\MakeSwarmSwarmCommand;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use Illuminate\Console\Command;
-use Illuminate\Console\OutputStyle;
-use Illuminate\Filesystem\Filesystem;
-use Illuminate\Support\Facades\File;
 use Symfony\Component\Console\Input\ArrayInput;
-use Symfony\Component\Console\Output\BufferedOutput;
+use Symfony\Component\Console\Input\StreamableInputInterface;
 
 /**
- * Guards every prompting command against blocking forever on a stdin that
- * cannot answer.
+ * Pins the fix for #449: a console command must not block forever on a stdin
+ * that will never answer.
  *
- * `$input->isInteractive()` is not sufficient on its own. Symfony's `ArrayInput`
- * is interactive by default, so `Artisan::call()` can leave it true while STDIN
- * is not a terminal. Laravel Prompts then takes its fallback path — Symfony's
- * `QuestionHelper` — which ends in `TerminalInputHelper::waitForInput()` and
- * busy-waits on a stream that will never become readable. The command does not
- * fail; it hangs, which reads as a stuck runner rather than a failure (#449, a
- * generator test that hung past ten minutes).
+ * WHY A SUBPROCESS. The hang cannot be observed in-process. It happens inside
+ * Symfony's `TerminalInputHelper::waitForInput()`, which busy-waits on the
+ * `php://stdin` resource of the *running process* — so a test that asserts on a
+ * guard, or that constructs a command directly, proves nothing about it. The
+ * first attempt at this fix shipped exactly that kind of test, and it passed
+ * identically with and without the fix.
  *
- * WHAT EACH TEST HERE IS WORTH, stated plainly so the next reader does not
- * assume more:
+ * WHY A HELD-OPEN PIPE, NOT /dev/null. `/dev/null` reads EOF immediately, so
+ * every command completes in under a second whether or not it is fixed — a pin
+ * bound to it passes vacuously. The condition that actually hangs is a pipe held
+ * open by a writer that never writes: readable never becomes true and the
+ * busy-wait spins forever. That is what these tests create.
  *
- * - The static scan at the bottom is the REGRESSION PIN. Reintroduce
- *   `$this->input->isInteractive()` in any command and it fails, naming the
- *   file and line. Verified by reverting a command and watching it fail.
- * - The two guard tests assert the new signal directly. They are bounded and
- *   deterministic, but they test the fix rather than the defect: the trait is
- *   the fix, so they cannot fail "without" it.
- * - The command-level tests assert `make:swarm:swarm` completes for every
- *   topology including the prompting path. They do NOT reproduce the hang, and
- *   they were verified to pass with the guard removed. Constructing the command
- *   directly bypasses `ConfiguresPrompts`, which is what installs the blocking
- *   Prompts fallback in the first place. They are completion coverage, not
- *   proof of the fix — do not read a green run here as "the hang is tested".
+ * WHY `--env=testing`. `ConfiguresPrompts` arms the blocking Prompts fallback
+ * when `windows_os() || $app->runningUnitTests()`, and `runningUnitTests()` is
+ * `$app['env'] === 'testing'` — a shipped configuration value, not "PHPUnit is
+ * running". An application deployed with `APP_ENV=testing` arms it in
+ * production, which is why this is not a test-only concern.
  *
- * The end-to-end hang is environment-dependent: it reproduces only when the
- * runner's stdin leaves the input marked interactive, which happened roughly
- * once in eight runs. It was diagnosed by catching a hung process and sampling
- * it, not by a test, and the fix is a structural guard rather than a patch to
- * one code path.
+ * Verified against the pre-fix tree: `make:swarm:swarm` with no name blocked to
+ * the 20s ceiling and exits in ~0.3s with the fix.
+ *
+ * @return array{timedOut: bool, seconds: float, output: string, spawned: bool}
  */
-test('the console prompt guard refuses to prompt when stdin is not a terminal', function () {
-    $command = new class extends Command
-    {
-        use DetectsInteractiveConsole;
+function promptSafetyRunWithDeadStdin(string $command, int $timeoutSeconds = 20): array
+{
+    $root = dirname(__DIR__, 2);
 
-        protected $signature = 'swarm-test:prompt-guard';
+    $process = proc_open(
+        'php vendor/bin/testbench '.$command,
+        [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+        $pipes,
+        $root
+    );
 
-        public function probe(ArrayInput $input): bool
-        {
-            $this->input = $input;
+    if (! is_resource($process)) {
+        return ['timedOut' => false, 'seconds' => 0.0, 'output' => '', 'spawned' => false];
+    }
 
-            return $this->consoleCanPrompt();
+    // $pipes[0] is deliberately left open and never written to. Closing it would
+    // deliver EOF and defeat the entire point of the test.
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+
+    $output = '';
+    $startedAt = microtime(true);
+    $timedOut = false;
+
+    while (true) {
+        $status = proc_get_status($process);
+        $output .= (string) stream_get_contents($pipes[1]);
+        $output .= (string) stream_get_contents($pipes[2]);
+
+        if (! $status['running']) {
+            break;
         }
-    };
 
-    // The exact condition that hangs: the input claims to be interactive while
-    // the process has no terminal to answer with. Under a test runner stdin is
-    // never a TTY, so the guard must refuse regardless of what the input says.
-    $interactive = new ArrayInput([]);
-    $interactive->setInteractive(true);
+        if (microtime(true) - $startedAt > $timeoutSeconds) {
+            $timedOut = true;
+            proc_terminate($process, 9);
 
-    expect($command->probe($interactive))->toBeFalse();
-
-    $nonInteractive = new ArrayInput([]);
-    $nonInteractive->setInteractive(false);
-
-    expect($command->probe($nonInteractive))->toBeFalse();
-});
-
-test('the console prompt guard still prompts when the question path is mocked', function () {
-    $command = new class extends Command
-    {
-        use DetectsInteractiveConsole;
-
-        protected $signature = 'swarm-test:mocked-questions';
-
-        public function probe(ArrayInput $input, ?object $output): bool
-        {
-            $this->input = $input;
-
-            if ($output !== null) {
-                $this->output = $output;
-            }
-
-            return $this->consoleCanPrompt();
+            break;
         }
-    };
 
-    $input = new ArrayInput([]);
-    $input->setInteractive(true);
+        usleep(100_000);
+    }
 
-    // Laravel's expectsQuestion/expectsChoice bind a mocked OutputStyle that
-    // answers from a queue without reading stdin, so a prompt cannot block.
-    // Refusing here would make every interactive path in this package
-    // untestable — guarding on the terminal alone broke four existing tests.
-    $mockedOutput = Mockery::mock(OutputStyle::class);
+    $output .= (string) stream_get_contents($pipes[1]);
 
-    expect($command->probe($input, $mockedOutput))->toBeTrue();
-});
-
-test('the console prompt guard reports whether stdin is a terminal', function () {
-    $command = new class extends Command
-    {
-        use DetectsInteractiveConsole;
-
-        protected $signature = 'swarm-test:stdin-probe';
-
-        public function probe(): bool
-        {
-            return $this->consoleStdinIsTerminal();
+    foreach ($pipes as $pipe) {
+        if (is_resource($pipe)) {
+            fclose($pipe);
         }
-    };
+    }
 
-    // Under any test runner stdin is a pipe or /dev/null, never a terminal.
-    // If this ever reports true the guard has stopped measuring what it thinks
-    // it measures, and every prompting command is one flake from hanging again.
-    expect($command->probe())->toBeFalse();
-});
+    proc_close($process);
 
-test('make:swarm:swarm completes for every topology, including the path that would prompt', function (string $topology, string $class, string $expected) {
-    $path = app_path("Ai/Swarms/{$class}.php");
-    File::ensureDirectoryExists(dirname($path));
+    return [
+        'timedOut' => $timedOut,
+        'seconds' => (float) (microtime(true) - $startedAt),
+        'output' => $output,
+        'spawned' => true,
+    ];
+}
 
-    // Force the input interactive — the state that preceded the #449 hang.
-    // NOTE this does not reproduce the hang: constructing the command directly
-    // skips ConfiguresPrompts, so the blocking Prompts fallback is never
-    // installed. This asserts completion per topology, nothing stronger.
-    $input = new ArrayInput(array_filter([
-        'name' => $class,
-        '--topology' => $topology !== '' ? $topology : null,
-    ]));
-    $input->setInteractive(true);
+test('a prompting command exits on an unanswerable stdin instead of hanging', function (string $command) {
+    $result = promptSafetyRunWithDeadStdin($command.' --env=testing');
 
-    $command = new MakeSwarmSwarmCommand(app(Filesystem::class));
-    $command->setLaravel(app());
+    expect($result['spawned'])->toBeTrue('Could not spawn the testbench subprocess.');
 
-    $status = $command->run($input, new BufferedOutput);
+    // Without the package's service provider registered, testbench exits fast
+    // with "no commands defined" — and this pin would pass having exercised
+    // nothing at all. Fail loudly on that rather than banking a vacuous green.
+    expect($result['output'])
+        ->not->toContain('There are no commands defined')
+        ->not->toContain('is not defined');
 
-    expect($status)->toBe(0)
-        ->and(File::exists($path))->toBeTrue()
-        ->and(File::get($path))->toContain($expected);
+    expect($result['timedOut'])->toBeFalse(sprintf(
+        "`%s` blocked on an unanswerable stdin for %.1fs instead of exiting.\nOutput:\n%s",
+        $command,
+        $result['seconds'],
+        $result['output'] === '' ? '(none — it blocked before writing anything)' : $result['output']
+    ));
 })->with([
-    'no topology (the prompting path)' => ['', 'PromptGuardDefaultSwarm', 'TopologyEnum::Sequential'],
-    'sequential' => ['sequential', 'PromptGuardSequentialSwarm', 'TopologyEnum::Sequential'],
-    'parallel' => ['parallel', 'PromptGuardParallelSwarm', 'TopologyEnum::Parallel'],
-    'hierarchical' => ['hierarchical', 'PromptGuardHierarchicalSwarm', 'TopologyEnum::Hierarchical'],
-    'static-hierarchical' => ['static-hierarchical', 'PromptGuardStaticHierSwarm', 'TopologyEnum::StaticHierarchical'],
-]);
+    // The exact #449 shape: a required argument omitted, so the framework's
+    // inherited prompt-for-missing-input fires before handle() ever runs. This
+    // is the row that hangs against the pre-fix tree.
+    'make:swarm:swarm, missing required argument' => ['make:swarm:swarm'],
+    'make:swarm:swarm' => ['make:swarm:swarm PromptSafetyProbeSwarm'],
+    'make:swarm:agent' => ['make:swarm:agent PromptSafetyProbeAgent'],
+    'make:memory-tool' => ['make:memory-tool PromptSafetyProbeTool'],
+])->group('subprocess');
 
-test('every command that prompts uses the shared guard rather than the input alone', function () {
+test('every command that can prompt detaches an unanswerable stdin', function () {
     $root = dirname(__DIR__, 2).'/src/Commands';
     $offenders = [];
     $scanned = 0;
+
+    /** @var array<string, string> $sources */
+    $sources = [];
 
     $iterator = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
     );
 
     foreach ($iterator as $file) {
-        if (! $file->isFile() || $file->getExtension() !== 'php') {
+        if ($file->isFile() && $file->getExtension() === 'php') {
+            $sources[$file->getPathname()] = (string) file_get_contents($file->getPathname());
+        }
+    }
+
+    foreach ($sources as $path => $contents) {
+        if (str_contains($contents, 'trait DetachesUnanswerableStdin')) {
             continue;
         }
 
-        $contents = (string) file_get_contents($file->getPathname());
+        // Anything that can reach a question: a laravel/prompts helper, one of
+        // Laravel's own InteractsWithIO prompts, or the prompt-for-missing-input
+        // behaviour inherited from GeneratorCommand.
+        $canPrompt = str_contains($contents, 'use function Laravel\Prompts\\')
+            || preg_match('/\$this->(confirm|ask|askWithCompletion|choice|secret|anticipate)\(/', $contents) === 1
+            || str_contains($contents, 'extends GeneratorCommand');
 
-        // The guard itself is the one place allowed to read the raw signal.
-        if (str_contains($contents, 'trait DetectsInteractiveConsole')) {
+        if (! $canPrompt) {
             continue;
         }
 
         $scanned++;
 
-        foreach (explode("\n", $contents) as $index => $line) {
-            if (str_contains($line, '$this->input->isInteractive()')) {
-                $offenders[] = sprintf(
-                    '%s:%d — reads the input flag directly; use consoleCanPrompt() so a non-terminal stdin cannot hang the command',
-                    'src/Commands/'.str_replace($root.'/', '', $file->getPathname()),
-                    $index + 1
-                );
+        if (str_contains($contents, 'use DetachesUnanswerableStdin;')) {
+            continue;
+        }
+
+        // A subclass inherits the hook from its parent; resolve one level, which
+        // is as deep as this package's command hierarchy goes.
+        if (preg_match('/class \w+ extends (\w+)/', $contents, $m) === 1) {
+            $inherited = false;
+
+            foreach ($sources as $candidate => $candidateContents) {
+                if (str_ends_with($candidate, '/'.$m[1].'.php')
+                    && str_contains($candidateContents, 'use DetachesUnanswerableStdin;')) {
+                    $inherited = true;
+
+                    break;
+                }
+            }
+
+            if ($inherited) {
+                continue;
             }
         }
+
+        $offenders[] = sprintf(
+            '%s — can prompt but neither applies DetachesUnanswerableStdin nor inherits it',
+            'src/Commands/'.str_replace($root.'/', '', $path)
+        );
     }
 
-    expect($scanned)->toBeGreaterThan(20, 'The command scan found almost nothing — the check is probably broken.');
+    // The `extends GeneratorCommand` clause is what the previous attempt lacked.
+    // Its scan banned a single literal string, so a command inheriting its
+    // prompt from a framework trait was invisible — which is how make:swarm:agent
+    // and make:memory-tool shipped still hanging while the pin stayed green.
+    expect($scanned)->toBeGreaterThan(5, 'The prompting-command scan found almost nothing — the check is probably broken.');
 
-    expect($offenders)->toBe([], "Commands reading isInteractive() directly:\n".implode("\n", $offenders));
+    expect($offenders)->toBe([], "Commands that can prompt but do not detach stdin:\n".implode("\n", $offenders));
+});
+
+test('the concern leaves a caller-supplied input stream alone', function () {
+    $command = new class extends Command
+    {
+        use DetachesUnanswerableStdin;
+
+        protected $signature = 'swarm-test:stream-probe';
+
+        public function probe(StreamableInputInterface $input): bool
+        {
+            return $this->stdinCannotAnswer($input);
+        }
+    };
+
+    // A caller that set its own stream — CommandTester::setInputs(), a harness,
+    // an application driving the command — provided it precisely so it would be
+    // read, and it is not php://stdin, so it can never reach the busy-wait.
+    $withStream = new ArrayInput([]);
+    $withStream->setStream(fopen('php://memory', 'r+'));
+
+    expect($command->probe($withStream))->toBeFalse();
+
+    // No stream of its own: detach exactly when this process has no terminal.
+    // Asserted against the live value rather than a hard-coded expectation, so
+    // this passes under a pty as well as a pipe — the previous attempt's tests
+    // hard-asserted "not a terminal" and failed on a maintainer's machine.
+    $withoutStream = new ArrayInput([]);
+
+    expect($command->probe($withoutStream))->toBe(! @stream_isatty(STDIN));
 });
 
 afterEach(function () {
-    foreach (glob(app_path('Ai/Swarms/PromptGuard*.php')) ?: [] as $file) {
-        File::delete($file);
+    $app = dirname(__DIR__, 2).'/vendor/orchestra/testbench-core/laravel/app';
+
+    foreach (['Ai/Swarms', 'Ai/Agents', 'Ai/Tools'] as $dir) {
+        foreach (glob($app.'/'.$dir.'/PromptSafetyProbe*.php') ?: [] as $file) {
+            @unlink($file);
+        }
     }
 });

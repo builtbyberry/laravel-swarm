@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
-use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetectsInteractiveConsole;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\InteractsWithBlueprintCorpus;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesHostRootNamespace;
 use Illuminate\Console\Command;
@@ -44,7 +44,7 @@ use function Laravel\Prompts\text;
 #[AsCommand(name: 'make:swarm:blueprint')]
 class MakeSwarmBlueprintCommand extends Command
 {
-    use DetectsInteractiveConsole;
+    use DetachesUnanswerableStdin;
     use InteractsWithBlueprintCorpus;
     use ResolvesHostRootNamespace;
 
@@ -336,7 +336,7 @@ class MakeSwarmBlueprintCommand extends Command
      */
     private function wantsInteraction(): bool
     {
-        return $this->consoleCanPrompt() && $this->option('no-interaction') !== true;
+        return $this->input->isInteractive() && $this->option('no-interaction') !== true;
     }
 
     /**

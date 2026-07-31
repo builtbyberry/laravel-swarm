@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
-use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetectsInteractiveConsole;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
@@ -51,7 +51,7 @@ use function Laravel\Prompts\select;
 #[AsCommand(name: 'swarm:install:audit')]
 class InstallAuditCommand extends Command
 {
-    use DetectsInteractiveConsole;
+    use DetachesUnanswerableStdin;
 
     /**
      * @var string
@@ -157,7 +157,7 @@ class InstallAuditCommand extends Command
             return $option;
         }
 
-        if (! $this->consoleCanPrompt()) {
+        if (! $this->input->isInteractive()) {
             // Non-interactive default: scaffold the marker for a custom sink so
             // the operator is forced to think about what they want to bind
             // before evidence starts flowing. `readable` would silently route
@@ -186,7 +186,7 @@ class InstallAuditCommand extends Command
             return true;
         }
 
-        if (! $this->consoleCanPrompt()) {
+        if (! $this->input->isInteractive()) {
             return false;
         }
 
@@ -301,7 +301,7 @@ class InstallAuditCommand extends Command
             "Audit outbox table [{$table}] is missing. Sink failures cannot be queued for retry until you run migrations.",
         );
 
-        $shouldMigrate = $this->consoleCanPrompt()
+        $shouldMigrate = $this->input->isInteractive()
             && confirm(label: 'Run `php artisan migrate` now?', default: true);
 
         if ($shouldMigrate) {
