@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
@@ -31,6 +32,8 @@ use function Laravel\Prompts\confirm;
 #[AsCommand(name: 'swarm:install:durable')]
 class InstallDurableCommand extends Command
 {
+    use DetachesUnanswerableStdin;
+
     protected $signature = 'swarm:install:durable
                             {--queue= : Queue name for durable jobs (default: swarm-durable)}
                             {--migrate : Run any pending package migrations without prompting}

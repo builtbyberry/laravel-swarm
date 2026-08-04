@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\LaravelSwarm;
 use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use Illuminate\Console\Command;
@@ -47,6 +48,8 @@ use function Laravel\Prompts\select;
 #[AsCommand(name: 'swarm:install')]
 class InstallCommand extends Command
 {
+    use DetachesUnanswerableStdin;
+
     /** @var string */
     protected $signature = 'swarm:install
         {--force : Overwrite existing config/swarm.php when re-publishing}

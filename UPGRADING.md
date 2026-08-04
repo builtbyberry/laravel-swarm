@@ -269,9 +269,11 @@ stability settings to install Swarm — see
 
 ## Upgrading to v0.24.0
 
-v0.24.0 has **no migrations** and adds no configuration keys. One change may
-require attention from maintainers who implement `DurableRunStore` themselves,
-and one known limitation is worth reading if you use durable child swarms.
+v0.24.0 has **no migrations** and adds no configuration keys. Two changes may
+require attention: an interface change for maintainers who implement
+`DurableRunStore` themselves, and a console-prompt behaviour change for anyone
+piping answers into Artisan commands. One known limitation is also worth reading
+if you use durable child swarms.
 
 ### `DurableRunStore` interface: child-dispatch claim signatures changed (#431)
 
@@ -355,6 +357,34 @@ public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $d
 is non-empty and return whether a row was written; `undispatchedChildRuns()`
 must select only children that are pending **and** unclaimed. A claim is never
 reclaimed on age — see the limitation below.
+
+### Piped answers to console prompts are no longer read
+
+Commands that prompt now detach stdin when this process has no terminal, so a
+prompt cannot block forever on a stream that will never become readable (#449).
+
+The side effect is that a piped answer is no longer consumed:
+
+```bash
+# Previously confirmed the action. Now declines and exits non-zero.
+echo yes | php artisan swarm:audit:reconcile --dismiss=42 --reason="stale"
+```
+
+**Action:** pass the command's own non-interactive flag instead. For
+`swarm:audit:reconcile` that is `--force`:
+
+```bash
+php artisan swarm:audit:reconcile --dismiss=42 --reason="stale" --force
+```
+
+**Why it cannot be avoided.** Nothing can distinguish a pipe that will deliver a
+line from one that never will — the read blocks either way, and a command that
+blocks forever is worse than one that declines. An operator at a real terminal
+is unaffected; the detach only happens when stdin is not a TTY.
+
+**Not affected:** interactive terminal use, `--no-interaction` (which
+short-circuits before any stream is read), and anything already passing explicit
+flags.
 
 ### Known limitation: a child stranded by an uncatchable worker death
 

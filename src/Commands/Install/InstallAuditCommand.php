@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSigner;
@@ -50,6 +51,8 @@ use function Laravel\Prompts\select;
 #[AsCommand(name: 'swarm:install:audit')]
 class InstallAuditCommand extends Command
 {
+    use DetachesUnanswerableStdin;
+
     /**
      * @var string
      */

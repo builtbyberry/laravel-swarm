@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultPropagationPolicy;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -38,6 +39,8 @@ use function Laravel\Prompts\confirm;
 #[AsCommand(name: 'swarm:install:memory')]
 class InstallMemoryCommand extends Command
 {
+    use DetachesUnanswerableStdin;
+
     /**
      * @var string
      */

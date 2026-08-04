@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\InteractsWithBlueprintCorpus;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesHostRootNamespace;
 use FilesystemIterator;
@@ -31,6 +32,7 @@ use function Laravel\Prompts\multiselect;
 #[AsCommand(name: 'swarm:install:examples')]
 final class InstallExamplesCommand extends Command
 {
+    use DetachesUnanswerableStdin;
     use InteractsWithBlueprintCorpus;
     use ResolvesHostRootNamespace;
 
