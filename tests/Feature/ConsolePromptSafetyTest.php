@@ -96,17 +96,10 @@ function promptSafetyRunWithDeadStdin(string $command, int $timeoutSeconds = 20)
     ];
 }
 
-test('a prompting command exits on an unanswerable stdin instead of hanging', function (string $command) {
+test('a prompting command exits on an unanswerable stdin instead of hanging', function (string $command, string $expected) {
     $result = promptSafetyRunWithDeadStdin($command.' --env=testing');
 
     expect($result['spawned'])->toBeTrue('Could not spawn the testbench subprocess.');
-
-    // Without the package's service provider registered, testbench exits fast
-    // with "no commands defined" — and this pin would pass having exercised
-    // nothing at all. Fail loudly on that rather than banking a vacuous green.
-    expect($result['output'])
-        ->not->toContain('There are no commands defined')
-        ->not->toContain('is not defined');
 
     expect($result['timedOut'])->toBeFalse(sprintf(
         "`%s` blocked on an unanswerable stdin for %.1fs instead of exiting.\nOutput:\n%s",
@@ -114,14 +107,26 @@ test('a prompting command exits on an unanswerable stdin instead of hanging', fu
         $result['seconds'],
         $result['output'] === '' ? '(none — it blocked before writing anything)' : $result['output']
     ));
+
+    // A POSITIVE requirement, deliberately, because "it did not hang" is not the
+    // same claim as "it ran". Anything that makes the subprocess die early also
+    // makes it finish fast, and this pin would bank the green: an unregistered
+    // service provider, a moved binary, a renamed command. An earlier version
+    // banned two known-bad output strings instead and still passed vacuously
+    // when `vendor/bin/testbench` could not be opened at all — PHP prints
+    // "Could not open input file", exits at once, and matches neither ban.
+    // Asserting what a completed run actually prints closes the whole class
+    // rather than the two members of it someone thought of.
+    expect($result['output'])->toContain($expected);
 })->with([
     // The exact #449 shape: a required argument omitted, so the framework's
     // inherited prompt-for-missing-input fires before handle() ever runs. This
-    // is the row that hangs against the pre-fix tree.
-    'make:swarm:swarm, missing required argument' => ['make:swarm:swarm'],
-    'make:swarm:swarm' => ['make:swarm:swarm PromptSafetyProbeSwarm'],
-    'make:swarm:agent' => ['make:swarm:agent PromptSafetyProbeAgent'],
-    'make:memory-tool' => ['make:memory-tool PromptSafetyProbeTool'],
+    // is the row that hangs against the pre-fix tree; it aborts rather than
+    // generating, because the name it needed could never be answered.
+    'make:swarm:swarm, missing required argument' => ['make:swarm:swarm', 'Aborted.'],
+    'make:swarm:swarm' => ['make:swarm:swarm PromptSafetyProbeSwarm', 'Swarm [app/Ai/Swarms/PromptSafetyProbeSwarm.php] created successfully.'],
+    'make:swarm:agent' => ['make:swarm:agent PromptSafetyProbeAgent', 'Agent [app/Ai/Agents/PromptSafetyProbeAgent.php] created successfully.'],
+    'make:memory-tool' => ['make:memory-tool PromptSafetyProbeTool', 'Tool [app/Ai/Tools/PromptSafetyProbeTool.php] created successfully.'],
 ])->group('subprocess');
 
 test('every command that can prompt detaches an unanswerable stdin', function () {
@@ -147,11 +152,21 @@ test('every command that can prompt detaches an unanswerable stdin', function ()
             continue;
         }
 
-        // Anything that can reach a question: a laravel/prompts helper, one of
-        // Laravel's own InteractsWithIO prompts, or the prompt-for-missing-input
-        // behaviour inherited from GeneratorCommand.
+        // Anything that can reach a question: a laravel/prompts helper imported
+        // or called fully-qualified, one of Laravel's own InteractsWithIO
+        // prompts (directly or via the components layer), or the
+        // prompt-for-missing-input behaviour inherited from GeneratorCommand.
+        //
+        // This is a literal match against how prompts are written today, and
+        // that is a real limit: a helper reached through an alias, a variable
+        // callable, or a base class outside src/Commands would be invisible
+        // here. It errs toward flagging — a docblock mentioning a prompt is
+        // enough to require the trait — because a false positive costs one line
+        // and a false negative ships another hang.
         $canPrompt = str_contains($contents, 'use function Laravel\Prompts\\')
+            || str_contains($contents, '\\Laravel\\Prompts\\')
             || preg_match('/\$this->(confirm|ask|askWithCompletion|choice|secret|anticipate)\(/', $contents) === 1
+            || preg_match('/\$this->components->(confirm|ask|askWithCompletion|choice|secret|anticipate)\(/', $contents) === 1
             || str_contains($contents, 'extends GeneratorCommand');
 
         if (! $canPrompt) {
@@ -159,6 +174,21 @@ test('every command that can prompt detaches an unanswerable stdin', function ()
         }
 
         $scanned++;
+
+        // Applying the trait is necessary but not sufficient. A class-declared
+        // method beats a trait's, so a command that grows its own initialize()
+        // silently stops running the hook while every other check here stays
+        // green — the trait is still imported, the scan still passes, and the
+        // command hangs again. Chaining to parent is what keeps it wired.
+        if (str_contains($contents, 'function initialize(')
+            && ! str_contains($contents, 'parent::initialize(')) {
+            $offenders[] = sprintf(
+                '%s — declares initialize() without calling parent::initialize(), which silently disables the stdin hook',
+                'src/Commands/'.str_replace($root.'/', '', $path)
+            );
+
+            continue;
+        }
 
         if (str_contains($contents, 'use DetachesUnanswerableStdin;')) {
             continue;
@@ -228,7 +258,11 @@ test('the concern leaves a caller-supplied input stream alone', function () {
     expect($command->probe($withoutStream))->toBe(! @stream_isatty(STDIN));
 });
 
-afterEach(function () {
+/**
+ * Remove any probe classes a previous run generated into the testbench app.
+ */
+function promptSafetyClearProbeClasses(): void
+{
     $app = dirname(__DIR__, 2).'/vendor/orchestra/testbench-core/laravel/app';
 
     foreach (['Ai/Swarms', 'Ai/Agents', 'Ai/Tools'] as $dir) {
@@ -236,4 +270,18 @@ afterEach(function () {
             @unlink($file);
         }
     }
+}
+
+// BEFORE as well as after. The success assertions expect "created successfully",
+// and a generator whose target already exists reports "already exists" instead —
+// so a run killed between generating and cleaning up would leave this suite
+// failing on state rather than on behaviour, and the obvious reading of that
+// failure ("the hang is back") would be wrong. Cleaning up front makes each run
+// independent of how the last one ended.
+beforeEach(function () {
+    promptSafetyClearProbeClasses();
+});
+
+afterEach(function () {
+    promptSafetyClearProbeClasses();
 });
