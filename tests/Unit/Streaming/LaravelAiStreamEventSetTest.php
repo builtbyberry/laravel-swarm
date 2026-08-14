@@ -41,11 +41,23 @@ const HANDLED_AI_STREAM_EVENTS = [
 ];
 
 /**
- * Event types the runners deliberately do NOT map: provider lifecycle and
- * non-content-bearing markers that carry nothing the snapshot needs. They flow
- * through the breadcrumb `else` today without loss of durable content. Listed
- * here so the set is triaged, not ignored — promote one to HANDLED if a future
- * release starts capturing it.
+ * Event types the runners deliberately do NOT map; they flow through the
+ * breadcrumb `else` today. Two kinds live here:
+ *
+ *  - Provider lifecycle and non-content-bearing markers (Citation,
+ *    ProviderToolEvent, ReasoningStart, StreamStart, TextStart) that carry
+ *    nothing the durable snapshot needs.
+ *  - ToolApprovalRequest — laravel/ai 0.10's human-in-the-loop control event.
+ *    Unlike the markers above it DOES carry state (pending approvals plus raw
+ *    provider replay blocks), but Swarm does not adopt HITL in this release, so
+ *    it neither acts on nor snapshots the approval pause. The breadcrumb records
+ *    only the class name, never the payload, so nothing escapes SwarmCapture
+ *    redaction. When Swarm adopts human-in-the-loop, move it to HANDLED and map
+ *    it in SequentialRunner + StaticHierarchicalStreamRunner with redaction of
+ *    the approval and provider-content state.
+ *
+ * Listed here so the set is triaged, not ignored — promote one to HANDLED if a
+ * future release starts capturing it.
  *
  * @var array<int, string>
  */
@@ -55,6 +67,7 @@ const IGNORED_AI_STREAM_EVENTS = [
     'ReasoningStart',
     'StreamStart',
     'TextStart',
+    'ToolApprovalRequest',
 ];
 
 test('laravel/ai stream event set stays in lock-step with the runners triage', function (): void {
