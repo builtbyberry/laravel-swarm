@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.24.0 - unreleased
+## v0.24.0 - 2026-08-14
 
 Compatibility-only upgrade of `laravel/ai` from `^0.9` to `^0.10.3`. The bump
 widens the `Contracts\Agent` prompt-family signatures to laravel/ai's new
