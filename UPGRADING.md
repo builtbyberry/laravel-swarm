@@ -284,6 +284,13 @@ behaves exactly as before; the `Decisions` case is only reached on the approval
 continuation path, which Swarm does not itself model in this release. Agents that
 subclass `ScriptedAgent` and override only `reply(string): string` need no change.
 
+**Human-in-the-loop is not supported inside swarms yet.** Because Swarm does not
+model laravel/ai's approval-resume path in this release, a swarm built from an
+agent whose tools are *approval-gated* cannot complete: the agent pauses on a
+`ToolApprovalRequest` that Swarm has no way to approve or resume. Until swarm-level
+human-in-the-loop is adopted, keep approval-gated agents out of swarms (invoke them
+directly through laravel/ai instead).
+
 ## Upgrading to v0.23.0
 
 **Plain `laravel/ai` agents now work with Swarm unchanged.** Swarm type-hints
