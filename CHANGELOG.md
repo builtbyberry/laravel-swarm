@@ -11,7 +11,7 @@ scope.
 
 ### Changed
 
-- **Requires `laravel/ai` `^0.10.3`** (previously `^0.9`). laravel/ai 0.10 widens the
+- **BREAKING: Requires `laravel/ai` `^0.10.3`** (previously `^0.9`). laravel/ai 0.10 widens the
   `Agent` contract's prompt-family methods — `prompt()`, `stream()`, `queue()`,
   `broadcast()`, `broadcastNow()`, `broadcastOnQueue()` — so their first parameter is
   now `Laravel\Ai\Approvals\Decisions|string` (the human-in-the-loop approval-resume
@@ -23,7 +23,12 @@ scope.
 
 ### Fixed
 
-_To be filled in during release wrap-up._
+- **Triaged laravel/ai 0.10's new `ToolApprovalRequest` streaming event.** The upstream
+  event set that the streaming runners' triage is pinned against grew, so the
+  `LaravelAiStreamEventSetTest` guard failed until the new class was classified. It is
+  triaged as *ignored*: Swarm does not adopt human-in-the-loop in this release, so the
+  event flows through the runners' existing log-once breadcrumb (class name only, no
+  payload) and needs no runner change.
 
 ## v0.23.0 - 2026-07-20
 
