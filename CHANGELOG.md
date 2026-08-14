@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.23.1 - unreleased
+
+Compatibility-only upgrade of `laravel/ai` from `^0.9` to `^0.10.3`. The bump
+widens the `Contracts\Agent` prompt-family signatures to laravel/ai's new
+`Approvals\Decisions|string` first parameter (the human-in-the-loop resume path)
+and triages the new `ToolApprovalRequest` streaming event; adopting 0.10's
+additive features and its human-in-the-loop approval flow is deliberately out of
+scope.
+
+### Changed
+
+_To be filled in during release wrap-up._
+
+### Fixed
+
+_To be filled in during release wrap-up._
+
 ## v0.23.0 - 2026-07-20
 
 Compatibility and correctness: `laravel/ai` agents drop in unchanged, plus
