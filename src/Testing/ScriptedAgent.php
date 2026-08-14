@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Testing;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Support\Str;
+use Laravel\Ai\Approvals\Decisions;
 use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
@@ -72,12 +73,20 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function prompt(
-        string $prompt,
+        Decisions|string $prompt,
         array $attachments = [],
         Lab|array|string|null $provider = null,
         ?string $model = null,
         ?int $timeout = null,
     ): AgentResponse {
+        if (! is_string($prompt)) {
+            // An approval continuation (Decisions) has no scripted reply.
+            // ScriptedAgent does not model human-in-the-loop, so fail loud like
+            // the other unsupported modes rather than silently replying to an
+            // empty prompt.
+            throw new RuntimeException(static::class.': ScriptedAgent does not support human-in-the-loop; prompt() requires a string, not an approval continuation (Decisions).');
+        }
+
         return new AgentResponse(
             invocationId: 'scripted-'.Str::random(8),
             text: $this->reply($prompt),
@@ -91,7 +100,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function stream(
-        string $prompt,
+        Decisions|string $prompt,
         array $attachments = [],
         Lab|array|string|null $provider = null,
         ?string $model = null,
@@ -105,7 +114,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function queue(
-        string $prompt,
+        Decisions|string $prompt,
         array $attachments = [],
         Lab|array|string|null $provider = null,
         ?string $model = null,
@@ -119,7 +128,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function broadcast(
-        string $prompt,
+        Decisions|string $prompt,
         Channel|array $channels,
         array $attachments = [],
         bool $now = false,
@@ -135,7 +144,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function broadcastNow(
-        string $prompt,
+        Decisions|string $prompt,
         Channel|array $channels,
         array $attachments = [],
         Lab|array|string|null $provider = null,
@@ -150,7 +159,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function broadcastOnQueue(
-        string $prompt,
+        Decisions|string $prompt,
         Channel|array $channels,
         array $attachments = [],
         Lab|array|string|null $provider = null,

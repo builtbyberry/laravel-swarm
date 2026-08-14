@@ -238,8 +238,8 @@ changes even when the application-facing swarm API stays the same.
 
 ## Dependency Upgrades
 
-`laravel/ai` is required in the **^0.9** range as of v0.20.0 (support for 0.8
-was dropped; support for 0.6 / 0.7 was dropped earlier, in v0.13.0) and is
+`laravel/ai` is required in the **^0.10** range as of v0.24.0 (support for 0.9
+was dropped; 0.8 was dropped in v0.20.0; 0.6 / 0.7 earlier, in v0.13.0) and is
 **pre-1.0**. Public
 contracts, streaming behavior, and provider integrations can change between
 releases without the stability guarantees of a stable major line.
@@ -266,6 +266,30 @@ As of v0.23.0 this package’s `composer.json` uses `"minimum-stability": "stabl
 with `"prefer-stable": true`. Your application needs no special Composer
 stability settings to install Swarm — see
 [Composer minimum-stability](#composer-minimum-stability).
+
+## Upgrading to v0.24.0
+
+**`laravel/ai` moves to `^0.10.3`.** laravel/ai 0.10 widens the `Agent` contract's
+prompt-family methods so their first parameter accepts an approval continuation as
+well as a prompt string: `prompt()`, `stream()`, `queue()`, `broadcast()`,
+`broadcastNow()`, and `broadcastOnQueue()` now take
+`Laravel\Ai\Approvals\Decisions|string` as their first argument (the
+human-in-the-loop approval-resume path).
+
+Swarm's `BuiltByBerry\LaravelSwarm\Contracts\Agent` extends the vendor contract, so
+the change flows through. **If your application implements the `Agent` contract
+directly, or overrides any of those six methods on a `ScriptedAgent` subclass,
+widen the first parameter to `Decisions|string` to match.** A plain string prompt
+behaves exactly as before; the `Decisions` case is only reached on the approval
+continuation path, which Swarm does not itself model in this release. Agents that
+subclass `ScriptedAgent` and override only `reply(string): string` need no change.
+
+**Human-in-the-loop is not supported inside swarms yet.** Because Swarm does not
+model laravel/ai's approval-resume path in this release, a swarm built from an
+agent whose tools are *approval-gated* cannot complete: the agent pauses on a
+`ToolApprovalRequest` that Swarm has no way to approve or resume. Until swarm-level
+human-in-the-loop is adopted, keep approval-gated agents out of swarms (invoke them
+directly through laravel/ai instead).
 
 ## Upgrading to v0.23.0
 

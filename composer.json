@@ -31,7 +31,7 @@
         "illuminate/queue": "^13.0",
         "illuminate/support": "^13.0",
         "illuminate/view": "^13.0",
-        "laravel/ai": "^0.9"
+        "laravel/ai": "^0.10.3"
     },
     "require-dev": {
         "builtbyberry/laravel-swarm-installer-testkit": "^0.1.0",
