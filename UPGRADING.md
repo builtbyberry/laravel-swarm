@@ -238,7 +238,7 @@ changes even when the application-facing swarm API stays the same.
 
 ## Dependency Upgrades
 
-`laravel/ai` is required in the **^0.10** range as of v0.23.1 (support for 0.9
+`laravel/ai` is required in the **^0.10** range as of v0.24.0 (support for 0.9
 was dropped; 0.8 was dropped in v0.20.0; 0.6 / 0.7 earlier, in v0.13.0) and is
 **pre-1.0**. Public
 contracts, streaming behavior, and provider integrations can change between
@@ -267,7 +267,7 @@ with `"prefer-stable": true`. Your application needs no special Composer
 stability settings to install Swarm — see
 [Composer minimum-stability](#composer-minimum-stability).
 
-## Upgrading to v0.23.1
+## Upgrading to v0.24.0
 
 **`laravel/ai` moves to `^0.10.3`.** laravel/ai 0.10 widens the `Agent` contract's
 prompt-family methods so their first parameter accepts an approval continuation as
