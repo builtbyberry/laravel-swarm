@@ -267,9 +267,9 @@ with `"prefer-stable": true`. Your application needs no special Composer
 stability settings to install Swarm — see
 [Composer minimum-stability](#composer-minimum-stability).
 
-## Upgrading to v0.24.0
+## Upgrading to v0.25.0
 
-v0.24.0 has **no migrations** and adds no configuration keys. Two changes may
+v0.25.0 has **no migrations** and adds no configuration keys. Two changes may
 require attention: an interface change for maintainers who implement
 `DurableRunStore` themselves, and a console-prompt behaviour change for anyone
 piping answers into Artisan commands. One known limitation is also worth reading
