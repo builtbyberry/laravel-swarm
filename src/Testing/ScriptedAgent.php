@@ -79,12 +79,17 @@ abstract class ScriptedAgent implements Agent
         ?string $model = null,
         ?int $timeout = null,
     ): AgentResponse {
+        if (! is_string($prompt)) {
+            // An approval continuation (Decisions) has no scripted reply.
+            // ScriptedAgent does not model human-in-the-loop, so fail loud like
+            // the other unsupported modes rather than silently replying to an
+            // empty prompt.
+            throw new RuntimeException(static::class.': ScriptedAgent does not support human-in-the-loop; prompt() requires a string, not an approval continuation (Decisions).');
+        }
+
         return new AgentResponse(
             invocationId: 'scripted-'.Str::random(8),
-            // A Decisions object is an approval-continuation, not fresh text; mirror
-            // laravel/ai's own narrowing (Promptable::extractPromptInput) and treat it
-            // as an empty prompt. ScriptedAgent does not model human-in-the-loop.
-            text: $this->reply(is_string($prompt) ? $prompt : ''),
+            text: $this->reply($prompt),
             usage: new Usage,
             meta: new Meta('scripted-agent', static::class),
         );
