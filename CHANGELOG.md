@@ -11,7 +11,15 @@ scope.
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Requires `laravel/ai` `^0.10.3`** (previously `^0.9`). laravel/ai 0.10 widens the
+  `Agent` contract's prompt-family methods — `prompt()`, `stream()`, `queue()`,
+  `broadcast()`, `broadcastNow()`, `broadcastOnQueue()` — so their first parameter is
+  now `Laravel\Ai\Approvals\Decisions|string` (the human-in-the-loop approval-resume
+  path). Because `BuiltByBerry\LaravelSwarm\Contracts\Agent` extends the vendor
+  contract, any agent implementing it directly — or overriding those methods on a
+  `ScriptedAgent` subclass — must widen its own first parameter to match. Agents that
+  subclass `ScriptedAgent` and override only `reply(string)` are unaffected. See
+  `UPGRADING.md` for details.
 
 ### Fixed
 
