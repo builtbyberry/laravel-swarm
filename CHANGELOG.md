@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.24.1 - unreleased
+## v0.24.1 - 2026-08-24
 
 Documentation-only correction. No code, configuration, or dependency changes —
 v0.24.1 is byte-identical to v0.24.0 outside `README.md`.
