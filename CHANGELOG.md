@@ -154,6 +154,35 @@ the package's own documentation references.
 
   `DurableRunStore` is an internal contract, but implementors outside this package
   must update four signatures — see `UPGRADING.md`.
+## v0.24.0 - 2026-08-14
+
+Compatibility-only upgrade of `laravel/ai` from `^0.9` to `^0.10.3`. The bump
+widens the `Contracts\Agent` prompt-family signatures to laravel/ai's new
+`Approvals\Decisions|string` first parameter (the human-in-the-loop resume path)
+and triages the new `ToolApprovalRequest` streaming event; adopting 0.10's
+additive features and its human-in-the-loop approval flow is deliberately out of
+scope.
+
+### Changed
+
+- **BREAKING: Requires `laravel/ai` `^0.10.3`** (previously `^0.9`). laravel/ai 0.10 widens the
+  `Agent` contract's prompt-family methods — `prompt()`, `stream()`, `queue()`,
+  `broadcast()`, `broadcastNow()`, `broadcastOnQueue()` — so their first parameter is
+  now `Laravel\Ai\Approvals\Decisions|string` (the human-in-the-loop approval-resume
+  path). Because `BuiltByBerry\LaravelSwarm\Contracts\Agent` extends the vendor
+  contract, any agent implementing it directly — or overriding those methods on a
+  `ScriptedAgent` subclass — must widen its own first parameter to match. Agents that
+  subclass `ScriptedAgent` and override only `reply(string)` are unaffected. See
+  `UPGRADING.md` for details.
+
+### Fixed
+
+- **Triaged laravel/ai 0.10's new `ToolApprovalRequest` streaming event.** The upstream
+  event set that the streaming runners' triage is pinned against grew, so the
+  `LaravelAiStreamEventSetTest` guard failed until the new class was classified. It is
+  triaged as *ignored*: Swarm does not adopt human-in-the-loop in this release, so the
+  event flows through the runners' existing log-once breadcrumb (class name only, no
+  payload) and needs no runner change.
 
 ## v0.23.0 - 2026-07-20
 
