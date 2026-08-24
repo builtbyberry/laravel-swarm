@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.24.1 - unreleased
+
+Documentation-only correction. No code, configuration, or dependency changes —
+v0.24.1 is byte-identical to v0.24.0 outside `README.md`.
+
+### Fixed
+
+- **README stated the wrong `laravel/ai` floor.** v0.24.0 raised the requirement
+  to `^0.10.3` but the `## Requirements` block still read `^0.9`, so the page
+  rendered on GitHub and Packagist understated a hard constraint and pointed
+  readers at the v0.20.0 changelog entry for adoption notes that now live under
+  v0.24.0. The surrounding prose about which `laravel/ai` lines are supported,
+  and about stability configuration, is corrected to the 0.10 line alongside it.
+
+  The check that catches this class of drift — `DocumentationReferenceTest`,
+  added for the next release — is not on `main` yet, which is why v0.24.0 could
+  ship with the mismatch in the first place.
+
 ## v0.24.0 - 2026-08-14
 
 Compatibility-only upgrade of `laravel/ai` from `^0.9` to `^0.10.3`. The bump
