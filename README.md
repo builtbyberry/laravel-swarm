@@ -54,11 +54,11 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 
 - PHP **^8.5**
 - Laravel **13** (`illuminate/*` **^13.0**)
-- `laravel/ai` **^0.9**
+- `laravel/ai` **^0.10.3**
 
-The PHP **^8.5** floor is a deliberate requirement — the package builds on 8.5 language features. As of **v0.20.0** the `laravel/ai` floor is **^0.9**; support for **0.8** was dropped (0.6 / 0.7 were dropped earlier, in v0.13.0). Consumers pinned below `laravel/ai` 0.9 must upgrade. See the [changelog](CHANGELOG.md#v0200---2026-07-13) for what the 0.9 adoption changes.
+The PHP **^8.5** floor is a deliberate requirement — the package builds on 8.5 language features. As of **v0.24.0** the `laravel/ai` floor is **^0.10.3**; support for **0.9** was dropped then (0.8 was dropped in v0.20.0, and 0.6 / 0.7 earlier still, in v0.13.0). Consumers pinned below `laravel/ai` 0.10.3 must upgrade — and because 0.10 widens the `Agent` contract's prompt-family signatures, agents implementing that contract directly need a one-line change. See the [changelog](CHANGELOG.md#v0240---2026-08-14) and [UPGRADING.md](UPGRADING.md#upgrading-to-v0240) for what the 0.10 adoption changes.
 
-**No special stability configuration is required.** `laravel/ai` ships stable tags on the 0.9 line, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
+**No special stability configuration is required.** `laravel/ai` ships stable tags on the 0.10 line, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
 
 Earlier versions of this document asked you to set `"minimum-stability": "dev"` in your application's `composer.json`. That is no longer necessary, and as of **v0.23.0** it is no longer recommended — it loosens the resolution floor for your *entire* dependency tree, not just for Swarm. If you added those keys solely to install this package, you can remove them.
 

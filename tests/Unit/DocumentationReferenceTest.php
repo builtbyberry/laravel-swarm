@@ -617,7 +617,14 @@ test('the stated requirements match composer.json', function () {
             continue;
         }
 
-        if (preg_match('/`?(php|laravel\/ai|illuminate\/[a-z*-]+)`?[^`]*\*\*\^?([0-9]+\.[0-9]+)\*\*/i', $line, $m) !== 1) {
+        // The patch segment is optional but must be captured when present. An
+        // earlier two-segment-only pattern silently skipped `**^0.10.3**` —
+        // the line did not match, so it was never scanned and never compared,
+        // and the drift it was meant to catch passed straight through. Only the
+        // $scanned floor below caught it. A line this check cannot parse is a
+        // line it cannot police, so widen the pattern rather than round the
+        // stated floor down to something the regex happens to like.
+        if (preg_match('/`?(php|laravel\/ai|illuminate\/[a-z*-]+)`?[^`]*\*\*\^?([0-9]+\.[0-9]+(?:\.[0-9]+)?)\*\*/i', $line, $m) !== 1) {
             continue;
         }
 
