@@ -34,7 +34,9 @@ class SwarmRelayCommand extends Command
         corresponding queue jobs. It must be scheduled to run regularly so that
         durable runs can advance:
 
-          Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);
+          Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(
+              max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60))
+          );
 
         Without the relay, durable runs will stall permanently after writing to
         the outbox. Use --drain-until-empty to clear backlogs in a single invocation.
@@ -44,10 +46,11 @@ class SwarmRelayCommand extends Command
 
         EXIT CODES
           0 (success)  All claimed entries were dispatched or permanently removed.
-          1 (failure)  One or more entries could not be dispatched due to a transient
-                       error (queue driver unavailable, etc.). The entries remain in the
-                       outbox and will be re-claimed after the reservation timeout. Check
-                       your error tracker and queue driver health.
+          1 (failure)  Another invocation holds the command overlap lease, or one or more
+                       entries could not be dispatched due to a transient error. On
+                       contention, identify the competing process or resize the finite
+                       lease. On dispatch failure, entries remain reclaimable; check your
+                       error tracker and queue driver health.
 
         --drain-until-empty
           Loops until the outbox is empty. Stops when a batch produces no dispatched or

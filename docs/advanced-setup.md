@@ -175,8 +175,8 @@ Add the following to `routes/console.php` (Laravel 11+) or
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);        // drains the outbox
-Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60); // safety net
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));        // drains the outbox
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60))); // safety net
 Schedule::command('swarm:prune')->daily();              // retention: removes expired persistence rows
 Schedule::command('swarm:memory:purge --pause=100')->dailyAt('03:00'); // memory retention: off-peak, throttled between batches
 ```

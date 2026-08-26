@@ -18,7 +18,7 @@ function commandOverlapRaceWorker(string $cachePath, string $barrierPath, bool $
             'path' => $cachePath,
         ]);
         config()->set('swarm.commands.overlap.store', 'command-overlap-process');
-        config()->set('swarm.commands.overlap.lease_seconds', 5);
+        config()->set('swarm.commands.overlap.lease_seconds', 30);
 
         if (! app()->providerIsLoaded(SwarmServiceProvider::class)) {
             app()->register(SwarmServiceProvider::class);
@@ -84,7 +84,7 @@ function commandOverlapCrashWorker(string $cachePath): Closure
             'path' => $cachePath,
         ]);
         config()->set('swarm.commands.overlap.store', 'command-overlap-process');
-        config()->set('swarm.commands.overlap.lease_seconds', 1);
+        config()->set('swarm.commands.overlap.lease_seconds', 3);
 
         if (! app()->providerIsLoaded(SwarmServiceProvider::class)) {
             app()->register(SwarmServiceProvider::class);
@@ -97,7 +97,7 @@ function commandOverlapCrashWorker(string $cachePath): Closure
 
         return $cache->store('command-overlap-process')
             ->getStore()
-            ->lock(CommandOverlapGuard::RELAY_KEY, 1)
+            ->lock(CommandOverlapGuard::RELAY_KEY, 3)
             ->get();
     };
 }
@@ -139,12 +139,14 @@ test('a hard-crashed process stops blocking after the finite lease expires', fun
         'path' => $this->commandOverlapRoot.'/cache',
     ]);
     config()->set('swarm.commands.overlap.store', 'command-overlap-process');
-    config()->set('swarm.commands.overlap.lease_seconds', 1);
+    config()->set('swarm.commands.overlap.lease_seconds', 3);
     app(CacheManager::class)->forgetDriver('command-overlap-process');
 
     /** @var CommandOverlapGuard $guard */
     $guard = app(CommandOverlapGuard::class);
-    $deadline = microtime(true) + 3.0;
+    expect($guard->run(CommandOverlapGuard::RELAY_KEY, static fn (): int => 33))->toBeNull();
+
+    $deadline = microtime(true) + 5.0;
     $result = null;
 
     while ($result === null && microtime(true) < $deadline) {

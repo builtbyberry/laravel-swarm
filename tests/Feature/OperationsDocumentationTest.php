@@ -5,7 +5,7 @@ use Illuminate\Support\Str;
 test('durable documentation includes production recovery and worker guidance', function () {
     $contents = file_get_contents(__DIR__.'/../../docs/durable-execution.md');
 
-    expect($contents)->toContain("Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);")
+    expect($contents)->toContain("Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));")
         ->and($contents)->toContain("Schedule::command('swarm:prune')->daily();")
         ->and($contents)->toContain('dedicated queue')
         ->and($contents)->toContain('retry_after')
@@ -23,30 +23,38 @@ test('durable documentation includes production recovery and worker guidance', f
 test('every shipped relay and recovery schedule example carries an explicit finite mutex', function () {
     $paths = [
         __DIR__.'/../../README.md',
+        __DIR__.'/../../UPGRADING.md',
         __DIR__.'/../../config/swarm.php',
         __DIR__.'/../../src/Commands/SwarmHealthCommand.php',
         __DIR__.'/../../src/Commands/SwarmRecoverCommand.php',
         __DIR__.'/../../src/Commands/SwarmRelayCommand.php',
         ...(glob(__DIR__.'/../../docs/*.md') ?: []),
+        ...(glob(__DIR__.'/../../examples/*/*.md') ?: []),
     ];
     $unprotected = [];
     $minuteRecovery = [];
     $seen = 0;
 
     foreach ($paths as $path) {
-        foreach (file($path) ?: [] as $index => $line) {
-            if (! preg_match("/Schedule::command\\(['\"]swarm:(relay|recover)['\"]\\)/", $line)) {
-                continue;
-            }
+        $contents = file_get_contents($path) ?: '';
+        preg_match_all(
+            "/Schedule::command\\(['\"]swarm:(relay|recover)['\"]\\)(.*?);/s",
+            $contents,
+            $statements,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE,
+        );
 
+        foreach ($statements as $statement) {
             $seen++;
-            $location = str_replace(dirname(__DIR__, 2).'/', '', $path).':'.($index + 1);
+            $line = substr_count(substr($contents, 0, $statement[0][1]), "\n") + 1;
+            $location = str_replace(dirname(__DIR__, 2).'/', '', $path).':'.$line;
+            $schedule = $statement[0][0];
 
-            if (! str_contains($line, 'withoutOverlapping(')) {
+            if (! str_contains($schedule, 'withoutOverlapping(')) {
                 $unprotected[] = $location;
             }
 
-            if (str_contains($line, 'swarm:recover') && str_contains($line, 'everyMinute()')) {
+            if ($statement[1][0] === 'recover' && str_contains($schedule, 'everyMinute()')) {
                 $minuteRecovery[] = $location;
             }
         }

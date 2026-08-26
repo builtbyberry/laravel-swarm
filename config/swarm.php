@@ -662,7 +662,7 @@ return [
              * dispatches the corresponding queue jobs. It must be scheduled to run
              * regularly (e.g. every minute) for durable execution to advance:
              *
-             *   Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);
+             *   Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
              *
              * Without the relay, durable runs will stall permanently after the
              * first step completes.

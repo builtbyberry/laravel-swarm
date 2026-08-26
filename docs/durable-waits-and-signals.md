@@ -40,7 +40,7 @@ SWARM_CAPTURE_ACTIVE_CONTEXT=true
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 The scheduler mutex is defense in depth; the command-owned finite lease also
@@ -247,7 +247,7 @@ Wait timeouts are observed by recovery. Schedule `swarm:recover` frequently
 enough for your operational expectations:
 
 ```php
-Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 When recovery observes that a wait timeout elapsed, it releases the wait with a

@@ -189,21 +189,22 @@ If you are using durable execution, also schedule the relay and recovery command
 use Illuminate\Support\Facades\Schedule;
 
 // Required: drain the durable outbox so steps/branches are dispatched after each checkpoint.
-Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 
 // Safety net: redispatch runs that were checkpointed but never received a queue job.
-Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 ### Command overlap leases
 
 The scheduler mutex is defense in depth: it covers only scheduler-launched
 copies, uses Laravel's scheduler cache store, and skips the event before the
-command can emit `command.recover` or `command.relay` audit evidence. The explicit
-`60`-minute expiry matches the package's default one-hour command lease and avoids
-Laravel's 24-hour scheduler default after a hard crash. If you increase the
-command lease, round its seconds up to minutes here so the scheduler mutex is
-never shorter.
+command can emit `command.recover` or `command.relay` audit evidence. Every
+shipped example derives the scheduler expiry from the command lease, rounding up
+to Laravel's whole-minute scheduler unit. This keeps shortened and lengthened
+leases aligned and avoids Laravel's 24-hour scheduler default after a hard crash.
+Scheduled execution becomes eligible when that rounded-up scheduler mutex
+expires; direct command invocation is eligible at the exact command-lease expiry.
 
 Each command also acquires its own finite atomic lease from
 `swarm.commands.overlap.store` (`SWARM_COMMAND_OVERLAP_STORE`; `null` uses the
@@ -308,7 +309,7 @@ On database persistence, run `php artisan migrate` to create the
 `swarm_audit_outbox` table. The existing relay schedule covers both lanes:
 
 ```php
-Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 To drain a single lane during focused recovery:

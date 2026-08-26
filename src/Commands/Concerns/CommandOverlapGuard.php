@@ -35,6 +35,69 @@ class CommandOverlapGuard
      */
     public function run(string $key, Closure $callback): ?int
     {
+        $resolved = $this->resolve();
+        $callbackFailure = new class
+        {
+            public ?Throwable $exception = null;
+        };
+
+        try {
+            $result = $resolved['store']
+                ->lock($key, $resolved['lease_seconds'])
+                ->get(static function () use ($callback, $callbackFailure): int {
+                    try {
+                        return $callback();
+                    } catch (Throwable $exception) {
+                        $callbackFailure->exception = $exception;
+
+                        throw $exception;
+                    }
+                });
+        } catch (Throwable $exception) {
+            if ($callbackFailure->exception === $exception) {
+                throw $exception;
+            }
+
+            throw new SwarmException(
+                "Laravel Swarm could not acquire or release command overlap lease [{$key}] "
+                ."using store [{$resolved['store_name']}] for [{$resolved['lease_seconds']}] seconds: "
+                .$exception->getMessage(),
+                previous: $exception,
+            );
+        }
+
+        if ($result === false) {
+            return null;
+        }
+
+        if (! is_int($result)) {
+            throw new SwarmException("Laravel Swarm command overlap callback [{$key}] returned an invalid result.");
+        }
+
+        return $result;
+    }
+
+    /**
+     * Validate and describe the configured lease without acquiring it.
+     *
+     * @return array{store: string, driver: string, lease_seconds: int}
+     */
+    public function inspect(): array
+    {
+        $resolved = $this->resolve();
+
+        return [
+            'store' => $resolved['store_name'],
+            'driver' => $resolved['driver'],
+            'lease_seconds' => $resolved['lease_seconds'],
+        ];
+    }
+
+    /**
+     * @return array{store_name: string, driver: string, lease_seconds: int, store: LockProvider}
+     */
+    private function resolve(): array
+    {
         $leaseSeconds = (int) $this->config->get('swarm.commands.overlap.lease_seconds', 3600);
 
         if ($leaseSeconds <= 0) {
@@ -82,17 +145,12 @@ class CommandOverlapGuard
             );
         }
 
-        $result = $store->lock($key, $leaseSeconds)->get($callback);
-
-        if ($result === false) {
-            return null;
-        }
-
-        if (! is_int($result)) {
-            throw new SwarmException("Laravel Swarm command overlap callback [{$key}] returned an invalid result.");
-        }
-
-        return $result;
+        return [
+            'store_name' => $storeName,
+            'driver' => is_string($driver) ? $driver : $store::class,
+            'lease_seconds' => $leaseSeconds,
+            'store' => $store,
+        ];
     }
 
     private function storeName(): string

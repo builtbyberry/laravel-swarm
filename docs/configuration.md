@@ -29,6 +29,19 @@ Top-level settings that apply to every swarm run regardless of topology or execu
 
 ---
 
+## Scheduled Commands
+
+Controls the command-owned finite leases used by `swarm:relay` and
+`swarm:recover`. Scheduler examples derive their whole-minute mutex expiry from
+the same lease duration.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.commands.overlap.store` | string\|null | `null` | `SWARM_COMMAND_OVERLAP_STORE` | Atomic cache-lock store for `swarm:relay` and `swarm:recover`; `null` uses `cache.default`. Array, null, failover, and non-lock-capable stores fail loud. File covers one host only; multi-host deployments require a shared store. |
+| `swarm.commands.overlap.lease_seconds` | int | `3600` | `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` | Finite command lease. Must be positive and longer than the worst-case invocation. Direct invocation becomes startable at exact expiry; recommended scheduler mutexes round the duration up to whole minutes. A command that outlives the lease is no longer protected. |
+
+---
+
 ## Persistence
 
 Controls the primary persistence driver and at-rest encryption behavior. Changing the driver requires migrating existing data manually.
@@ -39,9 +52,6 @@ Controls the primary persistence driver and at-rest encryption behavior. Changin
 | `swarm.persistence.encrypt_at_rest` | bool | `false` (cache) / `true` (database) | `SWARM_ENCRYPT_AT_REST` | When any database persistence driver is active, designated sensitive string columns (prompts, agent outputs, branch I/O, etc.) are sealed with Laravel's encrypter (`APP_KEY`). Defaults to `true` when `SWARM_PERSISTENCE_DRIVER` or any sub-driver is `database`. Set to `false` only when relying on database-level or volume-level encryption instead. |
 | `swarm.persistence.decrypt_failure_policy` | string | `null_with_log` | `SWARM_PERSISTENCE_DECRYPT_FAILURE_POLICY` | What happens when decrypting a `sw0:`-prefixed column fails (wrong or rotated `APP_KEY`, corrupt rows). `null_with_log` — log a warning and return `null` for that field. `legacy` — return stored bytes unchanged (surfaces ciphertext strings). `throw` — rethrow the decryption exception. Unrecognized values are treated as `null_with_log`. |
 | `swarm.persistence.warn_on_invalid_decrypt_failure_policy` | bool | `true` | `SWARM_WARN_ON_INVALID_DECRYPT_FAILURE_POLICY` | When `true`, logs once per worker if `decrypt_failure_policy` is set to an unrecognized value. Disable to avoid extra log lines in strict environments. |
-| `swarm.commands.overlap.store` | string\|null | `null` | `SWARM_COMMAND_OVERLAP_STORE` | Atomic cache-lock store for `swarm:relay` and `swarm:recover`; `null` uses `cache.default`. Array, null, failover, and non-lock-capable stores fail loud. File covers one host only; multi-host deployments require a shared store. |
-| `swarm.commands.overlap.lease_seconds` | int | `3600` | `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` | Finite command lease. Must be positive and longer than the worst-case invocation. A hard-crashed process becomes startable at expiry; a command that outlives the lease is no longer protected. |
-
 > **Note:** JSON columns (context data, metadata, artifacts) remain structured JSON in the database; `encrypt_at_rest` seals designated string columns only. Do not store secrets inside JSON payloads unless your application encrypts them separately.
 
 > **Key rotation:** Rotating `APP_KEY` without re-encrypting existing rows leaves them undecipherable. Plan key rotation with your operational model. See [APP_KEY Rotation](app-key-rotation.md) for the runbook.
@@ -243,7 +253,7 @@ The transactional outbox relay (`swarm:relay`) drains `swarm_durable_outbox` row
 
 ```php
 // routes/console.php
-Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 Without the relay, durable runs stall permanently after the first step completes.
@@ -433,8 +443,8 @@ SWARM_WEBHOOK_TOLERANCE_SECONDS=300
 Schedule in `routes/console.php`:
 
 ```php
-Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);
-Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 Schedule::command('swarm:prune')->daily();
 ```
 

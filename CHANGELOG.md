@@ -86,9 +86,10 @@ the package's own documentation references.
   outlives its lease is no longer protected.
 
   The installer and every shipped scheduling example now use relay every minute,
-  recovery every five minutes, and `withoutOverlapping(60)` as defense in depth.
-  This explicit finite scheduler expiry matches the default command lease instead
-  of Laravel's 24-hour default. Deterministic process-concurrency coverage proves
+  recovery every five minutes, and derive `withoutOverlapping()` minutes from the
+  configured command lease as defense in depth. This finite scheduler expiry stays
+  aligned when the lease changes instead of inheriting Laravel's 24-hour default.
+  Deterministic process-concurrency coverage proves
   a second OS process cannot enter during the lease and that a hard-crashed holder
   stops blocking after expiry; command integration tests pin both keys, evidence,
   exit codes, unsafe-store failure, and owner-safe exception release.

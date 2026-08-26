@@ -28,7 +28,7 @@ class SwarmRecoverCommand extends Command
         Redispatch recoverable durable swarm work. Schedule this safety-net command
         every five minutes with an explicit finite scheduler mutex:
 
-          Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);
+          Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 
         The command also owns a finite atomic lease, which covers manual and
         supervisor invocation. Configure swarm.commands.overlap.store with an
