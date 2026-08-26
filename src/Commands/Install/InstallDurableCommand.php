@@ -298,12 +298,12 @@ class InstallDurableCommand extends Command
             // so a re-run check by sha256 is straightforward.
             $lines[] = 'use Illuminate\\Support\\Facades\\Schedule as SwarmDurableSchedule;';
             $lines[] = '';
-            $lines[] = "SwarmDurableSchedule::command('swarm:relay')->everyMinute()->withoutOverlapping()->runInBackground();";
-            $lines[] = "SwarmDurableSchedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping()->runInBackground();";
+            $lines[] = "SwarmDurableSchedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60)->runInBackground();";
+            $lines[] = "SwarmDurableSchedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60)->runInBackground();";
             $lines[] = "SwarmDurableSchedule::command('swarm:prune')->daily()->runInBackground();";
         } else {
-            $lines[] = "Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping()->runInBackground();";
-            $lines[] = "Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping()->runInBackground();";
+            $lines[] = "Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60)->runInBackground();";
+            $lines[] = "Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60)->runInBackground();";
             $lines[] = "Schedule::command('swarm:prune')->daily()->runInBackground();";
         }
 

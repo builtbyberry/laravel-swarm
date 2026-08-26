@@ -365,10 +365,16 @@ Schedule the relay, recovery, and pruning for durable execution:
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:relay')->everyMinute();   // required: drains the outbox after each checkpoint
-Schedule::command('swarm:recover')->everyMinute(); // safety net: redispatches stranded runs
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);        // required: drains the outbox
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60); // safety net: redispatches stranded runs
 Schedule::command('swarm:prune')->daily();         // retention: removes expired persistence rows
 ```
+
+Both operational commands also own a finite atomic lease, so manual and
+supervisor invocations are protected too. The default one-hour lease must exceed
+your worst-case command duration. File-cache locks cover one host only; multi-host
+deployments must set `SWARM_COMMAND_OVERLAP_STORE` to a shared atomic store. See
+[Command overlap leases](docs/maintenance.md#command-overlap-leases).
 
 Start with [Durable Execution](docs/durable-execution.md), then use the topic guides for [waits and signals](docs/durable-waits-and-signals.md), [retries and progress](docs/durable-retries-and-progress.md), [child swarms](docs/durable-child-swarms.md), and [webhooks](docs/durable-webhooks.md).
 

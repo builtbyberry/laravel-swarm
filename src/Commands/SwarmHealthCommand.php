@@ -60,7 +60,7 @@ class SwarmHealthCommand extends Command
                     'driver' => 'n/a',
                     'store' => 'n/a',
                     'status' => 'note',
-                    'details' => "swarm:relay must run every minute for durable execution to advance — Schedule::command('swarm:relay')->everyMinute()",
+                    'details' => "swarm:relay must run every minute for durable execution to advance — Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60)",
                 ];
                 $results[] = $this->runOutboxStalenessCheck($config, $connection);
                 $results[] = $this->runQueueRoutingCheck($config, $connection);

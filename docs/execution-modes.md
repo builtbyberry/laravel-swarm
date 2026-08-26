@@ -401,9 +401,12 @@ Make sure the following is in place before switching to durable execution:
 ],
 
 // routes/console.php
-Schedule::command('swarm:recover')->everyMinute();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);
 Schedule::command('swarm:prune')->daily();
 ```
+
+The explicit scheduler mutex is defense in depth; the command-owned finite
+lease also covers manual invocation. See [Command overlap leases](maintenance.md#command-overlap-leases).
 
 ## Production Mode Selection
 

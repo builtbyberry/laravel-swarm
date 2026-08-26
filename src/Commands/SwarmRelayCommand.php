@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
@@ -33,10 +34,13 @@ class SwarmRelayCommand extends Command
         corresponding queue jobs. It must be scheduled to run regularly so that
         durable runs can advance:
 
-          Schedule::command('swarm:relay')->everyMinute();
+          Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);
 
         Without the relay, durable runs will stall permanently after writing to
         the outbox. Use --drain-until-empty to clear backlogs in a single invocation.
+
+        The command also owns a finite atomic lease. Configure its store and duration
+        with swarm.commands.overlap; the lease must exceed the worst-case drain time.
 
         EXIT CODES
           0 (success)  All claimed entries were dispatched or permanently removed.
@@ -70,7 +74,7 @@ class SwarmRelayCommand extends Command
           php artisan swarm:relay --drain-until-empty --max-attempts=10
         HELP;
 
-    public function handle(DurableOutbox $outbox, AuditOutbox $auditOutbox, SwarmAuditDispatcher $audit, ConfigRepository $config): int
+    public function handle(DurableOutbox $outbox, AuditOutbox $auditOutbox, SwarmAuditDispatcher $audit, ConfigRepository $config, CommandOverlapGuard $overlap): int
     {
         $selection = $this->resolveTypes();
 
@@ -106,43 +110,69 @@ class SwarmRelayCommand extends Command
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
         try {
-            do {
-                $attempts++;
-                $lastDurableProgress = 0;
-                $lastDurableTransient = 0;
-                $lastAuditProgress = 0;
-                $lastAuditTransient = 0;
+            $result = $overlap->run(
+                CommandOverlapGuard::RELAY_KEY,
+                function () use (
+                    $outbox,
+                    $auditOutbox,
+                    $durableTypes,
+                    $limit,
+                    $drainUntilEmpty,
+                    $maxAttempts,
+                    $shouldDrainDurable,
+                    $shouldDrainAudit,
+                    &$totalDispatched,
+                    &$totalSkipped,
+                    &$totalFailed,
+                    &$totalClaimed,
+                    &$totalReclaimed,
+                    &$totalAuditReplayed,
+                    &$totalAuditDeadLettered,
+                    &$attempts,
+                    &$durableResult,
+                    &$auditResult,
+                ): int {
+                    do {
+                        $attempts++;
+                        $lastDurableProgress = 0;
+                        $lastDurableTransient = 0;
+                        $lastAuditProgress = 0;
+                        $lastAuditTransient = 0;
 
-                if ($shouldDrainDurable) {
-                    $durableResult = $outbox->drain($durableTypes, $limit);
-                    $totalDispatched += $durableResult->dispatched;
-                    $totalSkipped += $durableResult->skipped;
-                    $totalFailed += $durableResult->failed;
-                    $totalClaimed += $durableResult->claimed;
-                    $totalReclaimed += $durableResult->reclaimed;
-                    $lastDurableProgress = $durableResult->total();
-                    $lastDurableTransient = $durableResult->failed;
-                }
+                        if ($shouldDrainDurable) {
+                            $durableResult = $outbox->drain($durableTypes, $limit);
+                            $totalDispatched += $durableResult->dispatched;
+                            $totalSkipped += $durableResult->skipped;
+                            $totalFailed += $durableResult->failed;
+                            $totalClaimed += $durableResult->claimed;
+                            $totalReclaimed += $durableResult->reclaimed;
+                            $lastDurableProgress = $durableResult->total();
+                            $lastDurableTransient = $durableResult->failed;
+                        }
 
-                if ($shouldDrainAudit) {
-                    $auditResult = $auditOutbox->drain($limit);
-                    $totalAuditReplayed += $auditResult->replayed;
-                    $totalAuditDeadLettered += $auditResult->deadLettered;
-                    $totalFailed += $auditResult->failed;
-                    $totalClaimed += $auditResult->claimed;
-                    $totalReclaimed += $auditResult->reclaimed;
-                    $lastAuditProgress = $auditResult->total();
-                    $lastAuditTransient = $auditResult->failed;
-                }
+                        if ($shouldDrainAudit) {
+                            $auditResult = $auditOutbox->drain($limit);
+                            $totalAuditReplayed += $auditResult->replayed;
+                            $totalAuditDeadLettered += $auditResult->deadLettered;
+                            $totalFailed += $auditResult->failed;
+                            $totalClaimed += $auditResult->claimed;
+                            $totalReclaimed += $auditResult->reclaimed;
+                            $lastAuditProgress = $auditResult->total();
+                            $lastAuditTransient = $auditResult->failed;
+                        }
 
-                $madeProgress = ($lastDurableProgress + $lastAuditProgress) > 0;
-                $hasTransient = ($lastDurableTransient + $lastAuditTransient) > 0;
+                        $madeProgress = ($lastDurableProgress + $lastAuditProgress) > 0;
+                        $hasTransient = ($lastDurableTransient + $lastAuditTransient) > 0;
 
-                // Only retry transient failures when --max-attempts gives a finite budget.
-                // Without it the loop would spin forever during a sustained queue outage.
-                $shouldRetryTransient = $hasTransient && $maxAttempts !== null && $attempts < $maxAttempts;
+                        // Only retry transient failures when --max-attempts gives a finite budget.
+                        // Without it the loop would spin forever during a sustained queue outage.
+                        $shouldRetryTransient = $hasTransient && $maxAttempts !== null && $attempts < $maxAttempts;
 
-            } while ($drainUntilEmpty && ($madeProgress || $shouldRetryTransient));
+                    } while ($drainUntilEmpty && ($madeProgress || $shouldRetryTransient));
+
+                    return self::SUCCESS;
+                },
+            );
 
         } catch (Throwable $exception) {
             $audit->emit('command.relay', [
@@ -164,6 +194,29 @@ class SwarmRelayCommand extends Command
             ]);
 
             throw $exception;
+        }
+
+        if ($result === null) {
+            $audit->emit('command.relay', [
+                'types' => $selectedTypeValues,
+                'limit' => $limit,
+                'drain_until_empty' => $drainUntilEmpty,
+                'max_attempts' => $maxAttempts,
+                'attempts' => 0,
+                'dispatched_count' => 0,
+                'skipped_count' => 0,
+                'failed_count' => 0,
+                'claimed_count' => 0,
+                'reclaimed_count' => 0,
+                'audit_replayed_count' => 0,
+                'audit_dead_lettered_count' => 0,
+                'status' => 'skipped_overlap',
+                ...$audit->metadata($actorMetadata),
+            ]);
+
+            $this->components->warn('Another swarm:relay invocation holds the command overlap lease; this drain was skipped.');
+
+            return self::FAILURE;
         }
 
         $lastDurableFailed = $durableResult->failed;

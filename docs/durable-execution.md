@@ -84,7 +84,7 @@ step.
 
 ```php
 // routes/console.php
-Schedule::command('swarm:relay')->everyMinute();
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);
 ```
 
 This is required — not optional. A durable run stalls permanently if the relay
@@ -98,8 +98,12 @@ before dispatching the next job — a narrow but real crash window. Schedule it
 frequently so a stranded run is caught within minutes, not hours.
 
 ```php
-Schedule::command('swarm:recover')->everyFiveMinutes();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);
 ```
+
+Both commands also own finite atomic leases, covering manual and supervisor
+invocation. Size the lease above the worst-case command duration and use a
+shared store on multiple hosts; see [Command overlap leases](maintenance.md#command-overlap-leases).
 
 See [Pause, Resume, Cancel, And Recover](#pause-resume-cancel-and-recover) for
 what recovery covers and how it handles durable parallel branches.
@@ -612,7 +616,7 @@ frequently:
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:recover')->everyFiveMinutes();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);
 ```
 
 Treat recovery like workflow supervision, not like pruning. A stranded durable
@@ -797,7 +801,7 @@ checkpoint commits:
 use Illuminate\Support\Facades\Schedule;
 
 // Required: drains the durable outbox so each checkpoint dispatches its next job.
-Schedule::command('swarm:relay')->everyMinute();
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);
 ```
 
 **Exit codes:** `swarm:relay` exits 0 only when the outbox is genuinely clean —
@@ -830,7 +834,7 @@ dispatched are rediscovered and retried:
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:recover')->everyFiveMinutes();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);
 ```
 
 Also schedule pruning so expired database persistence rows are removed:

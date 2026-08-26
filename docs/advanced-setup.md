@@ -175,11 +175,15 @@ Add the following to `routes/console.php` (Laravel 11+) or
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:relay')->everyMinute();        // drains the outbox after each checkpoint
-Schedule::command('swarm:recover')->everyFiveMinutes(); // safety net: redispatches stranded runs
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(60);        // drains the outbox
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60); // safety net
 Schedule::command('swarm:prune')->daily();              // retention: removes expired persistence rows
 Schedule::command('swarm:memory:purge --pause=100')->dailyAt('03:00'); // memory retention: off-peak, throttled between batches
 ```
+
+The explicit scheduler mutexes are defense in depth. Relay and recovery also
+own finite atomic leases for manual and supervisor invocation; see
+[Command overlap leases](maintenance.md#command-overlap-leases).
 
 On large `swarm_memories` tables, run the purge **off-peak** and **throttled** (as
 above) so a flat-out sweep does not pressure the database or a read replica —

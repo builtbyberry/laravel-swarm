@@ -5,7 +5,7 @@ use Illuminate\Support\Str;
 test('durable documentation includes production recovery and worker guidance', function () {
     $contents = file_get_contents(__DIR__.'/../../docs/durable-execution.md');
 
-    expect($contents)->toContain("Schedule::command('swarm:recover')->everyFiveMinutes();")
+    expect($contents)->toContain("Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(60);")
         ->and($contents)->toContain("Schedule::command('swarm:prune')->daily();")
         ->and($contents)->toContain('dedicated queue')
         ->and($contents)->toContain('retry_after')
@@ -18,6 +18,43 @@ test('durable documentation includes production recovery and worker guidance', f
         ->and($contents)->toContain('durable runtime record')
         ->and($contents)->toContain('inspection-safe projection')
         ->and($contents)->toContain('durable node-output rows');
+});
+
+test('every shipped relay and recovery schedule example carries an explicit finite mutex', function () {
+    $paths = [
+        __DIR__.'/../../README.md',
+        __DIR__.'/../../config/swarm.php',
+        __DIR__.'/../../src/Commands/SwarmHealthCommand.php',
+        __DIR__.'/../../src/Commands/SwarmRecoverCommand.php',
+        __DIR__.'/../../src/Commands/SwarmRelayCommand.php',
+        ...(glob(__DIR__.'/../../docs/*.md') ?: []),
+    ];
+    $unprotected = [];
+    $minuteRecovery = [];
+    $seen = 0;
+
+    foreach ($paths as $path) {
+        foreach (file($path) ?: [] as $index => $line) {
+            if (! preg_match("/Schedule::command\\(['\"]swarm:(relay|recover)['\"]\\)/", $line)) {
+                continue;
+            }
+
+            $seen++;
+            $location = str_replace(dirname(__DIR__, 2).'/', '', $path).':'.($index + 1);
+
+            if (! str_contains($line, 'withoutOverlapping(')) {
+                $unprotected[] = $location;
+            }
+
+            if (str_contains($line, 'swarm:recover') && str_contains($line, 'everyMinute()')) {
+                $minuteRecovery[] = $location;
+            }
+        }
+    }
+
+    expect($seen)->toBeGreaterThan(0)
+        ->and($unprotected)->toBe([], 'Bare schedule examples: '.implode(', ', $unprotected))
+        ->and($minuteRecovery)->toBe([], 'Non-canonical one-minute recovery examples: '.implode(', ', $minuteRecovery));
 });
 
 test('persistence documentation names durable runtime inspection access', function () {
