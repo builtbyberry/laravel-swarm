@@ -37,6 +37,28 @@ return [
         'prevent_prune' => filter_var(env('SWARM_PREVENT_PRUNE', false), FILTER_VALIDATE_BOOLEAN),
     ],
 
+    'commands' => [
+        'overlap' => [
+            /*
+             * Cache store used by the command-owned swarm:relay and swarm:recover
+             * leases. null uses cache.default. The store must support atomic locks;
+             * array, null, and failover stores are rejected because they cannot make
+             * the package's cross-process guarantee. File locks cover one host only;
+             * multi-host deployments must name a shared store such as Redis,
+             * Memcached, DynamoDB, or database cache.
+             */
+            'store' => env('SWARM_COMMAND_OVERLAP_STORE'),
+
+            /*
+             * Finite lease held by one command invocation. Size this above the
+             * application's worst-case relay/recovery duration. A hard-crashed
+             * process becomes startable after this window; an invocation that runs
+             * longer than the lease is no longer protected from overlap.
+             */
+            'lease_seconds' => (int) env('SWARM_COMMAND_OVERLAP_LEASE_SECONDS', 3600),
+        ],
+    ],
+
     'persistence' => [
         'driver' => $swarmPersistenceDriver,
         /*
@@ -640,7 +662,7 @@ return [
              * dispatches the corresponding queue jobs. It must be scheduled to run
              * regularly (e.g. every minute) for durable execution to advance:
              *
-             *   Schedule::command('swarm:relay')->everyMinute();
+             *   Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
              *
              * Without the relay, durable runs will stall permanently after the
              * first step completes.

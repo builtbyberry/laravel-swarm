@@ -34,8 +34,11 @@ Schedule recovery so due retries are dispatched:
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:recover')->everyMinute();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
+
+The scheduler mutex is defense in depth; the command-owned finite lease also
+covers manual invocation. See [Command overlap leases](maintenance.md#command-overlap-leases).
 
 ## Declaring Retry Policy With An Attribute
 

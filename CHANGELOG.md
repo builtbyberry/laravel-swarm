@@ -68,6 +68,32 @@ the package's own documentation references.
 
 ### Fixed
 
+- **`swarm:recover` and `swarm:relay` now own finite overlap protection (#454).**
+  Scheduler scaffolding already used `withoutOverlapping()`, but that mutex was
+  editable application code, applied only to scheduler-launched copies, used the
+  scheduler's cache store, and previously inherited Laravel's 24-hour crash
+  expiry. Manual, supervisor, and job-driven invocations had no command-owned
+  protection at all.
+
+  Both commands now acquire distinct finite atomic cache leases before entering
+  their sweep. Contention emits `status: skipped_overlap`, warns, exits non-zero,
+  and never calls the recovery manager or either outbox. Array, null, failover,
+  and non-lock-capable stores fail before work rather than simulating safety.
+  `SWARM_COMMAND_OVERLAP_STORE` selects the store; file locks cover one host,
+  while multi-host deployments require a shared atomic store. The one-hour
+  `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` default must exceed the application's
+  worst-case invocation: hard crashes unblock at expiry, and an invocation that
+  outlives its lease is no longer protected.
+
+  The installer and every shipped scheduling example now use relay every minute,
+  recovery every five minutes, and derive `withoutOverlapping()` minutes from the
+  configured command lease as defense in depth. This finite scheduler expiry stays
+  aligned when the lease changes instead of inheriting Laravel's 24-hour default.
+  Deterministic process-concurrency coverage proves
+  a second OS process cannot enter during the lease and that a hard-crashed holder
+  stops blocking after expiry; command integration tests pin both keys, evidence,
+  exit codes, unsafe-store failure, and owner-safe exception release.
+
 - **Console commands no longer hang forever on a stdin that cannot answer.** A
   command that prompts with no terminal behind it did not fail — it blocked
   indefinitely, which in CI or a test lane reads as a stuck runner rather than a
@@ -112,9 +138,9 @@ the package's own documentation references.
   and the claim — not the error classifier — decides who dispatches.** A durable
   child could be dispatched twice, and the loser would bury the winner. More than
   one worker can reach a child's dispatch: `swarm:recover` sweeps children the
-  parent may be inline-dispatching at that instant, and the `withoutOverlapping()`
-  the installer scaffolds is per-host, so it serialises neither a sweep against an
-  inline dispatch nor two sweeps on different hosts. Both saw `find() === null`,
+  parent may be inline-dispatching at that instant, and the scheduler-level
+  `withoutOverlapping()` the installer scaffolds serialises neither a sweep against
+  an inline dispatch nor two hosts unless its cache store is shared. Both saw `find() === null`,
   both called `dispatchDurable()`, and the loser caught the unique-key
   `QueryException` and wrote `failed` over the **winner's live child**, releasing
   the parent's wait with `child_failed` while that child executed normally — so

@@ -390,14 +390,12 @@ Recovery is safe to run repeatedly — it is idempotent. It does not replay comp
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:recover')->everyFiveMinutes();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
-For production durable workflows, a one-minute schedule is recommended:
-
-```php
-Schedule::command('swarm:recover')->everyMinute();
-```
+The five-minute interval is the canonical recovery schedule. Keep the explicit
+scheduler mutex as defense in depth and configure the command-owned finite lease
+for manual and supervisor invocations; see [Command overlap leases](maintenance.md#command-overlap-leases).
 
 Manual recovery is also available:
 

@@ -269,11 +269,51 @@ stability settings to install Swarm — see
 
 ## Upgrading to v0.25.0
 
-v0.25.0 has **no migrations** and adds no configuration keys. Two changes may
-require attention: an interface change for maintainers who implement
-`DurableRunStore` themselves, and a console-prompt behaviour change for anyone
-piping answers into Artisan commands. One known limitation is also worth reading
-if you use durable child swarms.
+v0.25.0 has **no migrations**. Three changes may require attention: new
+command-overlap lease configuration and scheduler guidance for operators, an
+interface change for maintainers who implement `DurableRunStore` themselves, and
+a console-prompt behaviour change for anyone piping answers into Artisan
+commands. One known limitation is also worth reading if you use durable child
+swarms.
+
+### Relay and recovery now own finite overlap leases (#454)
+
+`swarm:relay` and `swarm:recover` now acquire distinct command-owned atomic
+leases before entering their sweeps. This protects manual, supervisor, and
+job-driven invocations in addition to scheduler-launched copies. Contention
+warns, emits `status: skipped_overlap`, exits `1`, and performs no work.
+
+Two additive configuration keys are available:
+
+- `swarm.commands.overlap.store` / `SWARM_COMMAND_OVERLAP_STORE` selects the
+  atomic cache store; `null` inherits `cache.default`.
+- `swarm.commands.overlap.lease_seconds` /
+  `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` defaults to `3600` and must exceed the
+  worst-case relay or recovery duration.
+
+Array, null, failover, and non-lock-capable stores now fail before a sweep. File
+locks cover one host only. Multi-host deployments require a shared atomic store;
+set `SWARM_COMMAND_OVERLAP_STORE` only when `cache.default` is unsuitable.
+
+Existing applications must reconcile their scheduler entries. Rerunning
+`swarm:install:durable` does not rewrite a previously managed schedule block.
+Replace bare `withoutOverlapping()` calls (Laravel's 24-hour default) or fixed
+expiries with the lease-derived whole-minute expiry:
+
+```php
+Schedule::command('swarm:relay')
+    ->everyMinute()
+    ->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+
+Schedule::command('swarm:recover')
+    ->everyFiveMinutes()
+    ->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+```
+
+The scheduler mutex uses Laravel's scheduler cache store; the command lease uses
+the configured overlap store. `swarm:health --durable` now validates and reports
+the command lease without acquiring it. See
+[Command overlap leases](docs/maintenance.md#command-overlap-leases).
 
 ### `DurableRunStore` interface: child-dispatch claim signatures changed (#431)
 
@@ -1365,7 +1405,7 @@ The new migration creates `swarm_audit_outbox`. Schedule the relay if you
 have not already (the same relay drains both durable and audit lanes):
 
 ```php
-Schedule::command('swarm:relay')->everyMinute();
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 You can also drain audit only:
@@ -1942,7 +1982,7 @@ it, durable swarms will stall after every step because the outbox is never drain
 
 ```php
 // app/Console/Kernel.php (or routes/console.php in Laravel 11+)
-Schedule::command('swarm:relay')->everyMinute();
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 If you also schedule `swarm:recover`, the relay should run at the same or higher frequency.

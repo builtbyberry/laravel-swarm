@@ -321,6 +321,28 @@ describe('relay scheduling note', function (): void {
 
         expect($exitCode)->toBe(0);
     });
+
+    test('--durable validates and reports the command overlap lease', function (): void {
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
+        $payload = json_decode(Artisan::output(), true);
+        $check = collect($payload['checks'])->firstWhere('component', 'Command overlap lease');
+
+        expect($exitCode)->toBe(0)
+            ->and($check['status'])->toBe('ok')
+            ->and($check['details'])->toContain('3600 seconds');
+    });
+
+    test('--durable fails when the command overlap lease is unsafe', function (): void {
+        config()->set('swarm.commands.overlap.store', 'array');
+
+        $exitCode = Artisan::call('swarm:health', ['--durable' => true, '--json' => true]);
+        $payload = json_decode(Artisan::output(), true);
+        $check = collect($payload['checks'])->firstWhere('component', 'Command overlap lease');
+
+        expect($exitCode)->toBe(1)
+            ->and($check['status'])->toBe('failed')
+            ->and($check['details'])->toContain('cannot provide the required command-level cross-process lock');
+    });
 });
 
 // ---------------------------------------------------------------------------

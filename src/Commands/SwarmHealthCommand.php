@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
@@ -30,8 +31,12 @@ class SwarmHealthCommand extends Command
 
     protected $description = 'Verify Laravel Swarm persistence readiness';
 
-    public function handle(Application $app, ConfigRepository $config, Connection $connection): int
-    {
+    public function handle(
+        Application $app,
+        ConfigRepository $config,
+        Connection $connection,
+        CommandOverlapGuard $overlapGuard,
+    ): int {
         $auditOnly = $this->option('audit') === true;
 
         $results = [];
@@ -55,12 +60,13 @@ class SwarmHealthCommand extends Command
 
             if ($this->option('durable') === true) {
                 $results[] = $this->runActiveContextCaptureCheck($config);
+                $results[] = $this->runCommandOverlapCheck($overlapGuard, $config);
                 $results[] = [
                     'component' => 'Relay scheduling',
                     'driver' => 'n/a',
                     'store' => 'n/a',
                     'status' => 'note',
-                    'details' => "swarm:relay must run every minute for durable execution to advance — Schedule::command('swarm:relay')->everyMinute()",
+                    'details' => 'swarm:relay must run every minute for durable execution to advance — derive withoutOverlapping() minutes from swarm.commands.overlap.lease_seconds',
                 ];
                 $results[] = $this->runOutboxStalenessCheck($config, $connection);
                 $results[] = $this->runQueueRoutingCheck($config, $connection);
@@ -104,6 +110,36 @@ class SwarmHealthCommand extends Command
         return $hasFailure
             ? self::FAILURE
             : self::SUCCESS;
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runCommandOverlapCheck(CommandOverlapGuard $guard, ConfigRepository $config): array
+    {
+        try {
+            $lease = $guard->inspect();
+
+            return [
+                'component' => 'Command overlap lease',
+                'driver' => $lease['driver'],
+                'store' => $lease['store'],
+                'status' => 'ok',
+                'details' => "Atomic command lease is available for {$lease['lease_seconds']} seconds",
+            ];
+        } catch (Throwable $exception) {
+            $configuredStore = $config->get('swarm.commands.overlap.store');
+
+            return [
+                'component' => 'Command overlap lease',
+                'driver' => 'unknown',
+                'store' => is_string($configuredStore) && $configuredStore !== ''
+                    ? $configuredStore
+                    : (string) $config->get('cache.default'),
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ];
+        }
     }
 
     /**

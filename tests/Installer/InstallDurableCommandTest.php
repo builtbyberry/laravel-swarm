@@ -58,6 +58,8 @@ test('swarm:install:durable wires up the durable runtime on the happy path', fun
     $this->assertScheduleEntry('swarm:relay');
     $this->assertScheduleEntry('swarm:recover');
     $this->assertScheduleEntry('swarm:prune');
+    $this->assertFileContains('routes/console.php', "swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)))");
+    $this->assertFileContains('routes/console.php', "swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)))");
 
     // Worker snippets exist so the operator can copy-paste rather than
     // dig through docs.

@@ -39,6 +39,11 @@ abstract class TestCase extends Orchestra
         $app->singleton(DispatcherContract::class, fn (Application $app): Dispatcher => new Dispatcher($app));
         $app['config']->set('concurrency.default', 'sync');
         $app['config']->set('cache.default', 'array');
+        $app['config']->set('cache.stores.swarm-command-overlap', [
+            'driver' => 'file',
+            'path' => sys_get_temp_dir().'/laravel-swarm-tests/command-overlap-'.getmypid(),
+        ]);
+        $app['config']->set('swarm.commands.overlap.store', 'swarm-command-overlap');
         $app['config']->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
         $app['config']->set('database.default', 'testing');
         $app['config']->set('database.connections.testing', $this->resolveTestingDatabaseConfig());
