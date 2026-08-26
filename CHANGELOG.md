@@ -47,6 +47,15 @@ the package's own documentation references.
 
 ### Changed
 
+- **Cross-component docblock claims are now an explicit review blocker (#452).**
+  `AGENTS.md` asks reviewers whether a docblock asserts something about a file
+  it is not in, permits comments that explain their own code, and directs
+  duplicated claims about another component's API, behavior, or infrastructure
+  back to the owning source. The Docs engineer review lens now applies the same
+  check. This is deliberately a manual reminder: the documentation-reference
+  test added in #450 proves that references resolve, not that semantic claims
+  are true.
+
 - **Five dead `{@see}` references in `src/` corrected**, all found by the new
   check on its first run. `DatabaseDurableRunStore` pointed at
   `openForDisplay()` twice as though it owned the method (it is on

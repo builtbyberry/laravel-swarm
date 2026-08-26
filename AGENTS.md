@@ -41,6 +41,9 @@ A feature or fix is complete only when all of the following are true. Reviewers 
 - **Test coverage** — new behavior has deterministic Pest tests; concurrency-sensitive paths have a `test:process-concurrency` lane entry.
 - **CHANGELOG.md** — every PR includes a changelog entry. Breaking changes also require an `UPGRADING.md` section.
 - **Docs parity** — public surface changes update the relevant file in `docs/` or `README.md` in the same PR, not a follow-up.
+- **Docblock truth boundary** — a docblock may describe the code in its own file and explain why that code is shaped that way. At review, ask: “Does this docblock assert something about a file it isn’t in?” If it restates another component's API, behavior, or infrastructure, replace the duplicated claim with a link to the owning source. Fine: [`ScriptedAgent`](src/Testing/ScriptedAgent.php) explains why it retains its own deprecated marker. Not fine: [`VendorOnlySequentialSwarm`](tests/Fixtures/Swarms/VendorOnlySequentialSwarm.php) claiming that [`PendingRun`](src/Support/PendingRun.php) requires a declared class for streaming; that duplicates another component's API and is false because `PendingRun::stream()` exists.
+
+  [`DocumentationReferenceTest`](tests/Unit/DocumentationReferenceTest.php), shipped for #450, checks only that references resolve. It cannot validate semantic claims. A green run means the links exist, not that the documentation is true; this rule is a manual review reminder, not an automated truth check.
 
 If a gap is deferred, it must be recorded as a named follow-up with an owner, not silently dropped.
 
@@ -138,7 +141,7 @@ Default review lenses:
 - Engineering manager: blast radius, cohesion, rollback safety, and delivery slicing.
 - Security specialist: redaction/capture behavior, sensitive surfaces, and failure paths.
 - QA specialist: deterministic regression coverage, edge cases, and assertion resilience.
-- Docs engineer: behavior/docs/changelog parity and configuration clarity.
+- Docs engineer: behavior/docs/changelog parity and configuration clarity; apply the Definition of Done's **Docblock truth boundary** to cross-component docblock assertions.
 - Systems integrator: migration/config compatibility and deployment/runtime wiring risk.
 - Regulatory specialist: auditability, provenance requirements, and compliance evidence quality.
 
