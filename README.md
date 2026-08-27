@@ -64,6 +64,13 @@ Earlier versions of this document asked you to set `"minimum-stability": "dev"` 
 
 Laravel Swarm orchestrates the same Laravel AI agents, providers, and streams as your application. Treat Composer updates to Laravel or `laravel/ai` as integration-test events: run your test suite and any queued, streamed, or durable swarm smoke paths after dependency changes. This package's [changelog](CHANGELOG.md) covers Swarm-owned changes; it does not replace verification against upstream Laravel or Laravel AI releases.
 
+Because Laravel AI is pre-1.0, Laravel Swarm intentionally validates and
+supports one Laravel AI minor line at a time. A patch within the declared range
+still needs integration testing; a new minor is unsupported until a later Swarm
+release explicitly adopts it after validation. Application test results do not
+expand the Composer range declared by the package. See the
+[Laravel AI compatibility policy](UPGRADING.md#laravel-ai-compatibility-policy).
+
 ## Installation
 
 Require the package with Composer, then run the interactive installer:
