@@ -5,8 +5,8 @@
 Durable-execution correctness and documentation integrity, carrying the work
 deferred from v0.23.0: the child-swarm dispatch race, overlap protection for the
 two commands the package tells you to schedule, a `laravel/ai` compatibility
-policy with a nightly `0.x-dev` lane, CI merge gates, and PR-time validation of
-the package's own documentation references.
+policy, CI merge gates, and PR-time validation of the package's own
+documentation references.
 
 ### Added
 
@@ -46,6 +46,15 @@ the package's own documentation references.
   against a deliberately broken reference of its own kind.
 
 ### Changed
+
+- **Laravel AI compatibility is now an explicit, single-minor-line policy
+  (#435).** Because `laravel/ai` is pre-1.0, every patch and minor dependency
+  update is an integration-test event, but testing does not expand the declared
+  Composer range. Laravel Swarm supports one validated Laravel AI minor line at
+  a time; a new breaking minor becomes supported only when a later Swarm release
+  explicitly adopts it after validation. v0.25.0 remains on
+  `laravel/ai ^0.10.3`; Laravel AI 0.11 is a separate architectural adoption,
+  not a dual-version compatibility promise.
 
 - **Cross-component docblock claims are now an explicit review blocker (#452).**
   `AGENTS.md` asks reviewers whether a docblock asserts something about a file

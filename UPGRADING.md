@@ -244,6 +244,20 @@ was dropped; 0.8 was dropped in v0.20.0; 0.6 / 0.7 earlier, in v0.13.0) and is
 contracts, streaming behavior, and provider integrations can change between
 releases without the stability guarantees of a stable major line.
 
+### Laravel AI compatibility policy
+
+Laravel Swarm intentionally validates and supports one pre-1.0 Laravel AI minor
+line at a time. Every Laravel AI patch or minor update is an integration-test
+event: run the automated suite and the queued, streamed, and durable paths your
+application uses before deploying the resolved version.
+
+Integration testing is not a compatibility grant. A patch is supported only
+when it remains inside the `laravel/ai` range declared by the installed Laravel
+Swarm release. A new minor outside that range is unsupported until a later
+Laravel Swarm release explicitly adopts that minor line after validation. Do
+not widen the application constraint or infer official support only because a
+local smoke test passes.
+
 When upgrading PHP, Laravel, or Laravel AI alongside Swarm:
 
 1. Note the currently resolved versions with `php -v` and `composer show laravel/framework laravel/ai builtbyberry/laravel-swarm`.
@@ -256,7 +270,7 @@ You may pin `laravel/ai` to an exact or narrower range in your application’s
 `composer.json` when you need reproducible builds or a slower upgrade cadence:
 
 ```bash
-composer require laravel/ai:0.9.0
+composer require laravel/ai:0.10.3
 ```
 
 That pins your application’s dependency resolution. It does not change the semver
@@ -275,6 +289,14 @@ interface change for maintainers who implement `DurableRunStore` themselves, and
 a console-prompt behaviour change for anyone piping answers into Artisan
 commands. One known limitation is also worth reading if you use durable child
 swarms.
+
+### Laravel AI compatibility in v0.25.0
+
+v0.25.0 remains on `laravel/ai ^0.10.3`. Laravel AI 0.11 is outside this
+release's declared support range and is being handled as a separate
+architectural adoption. Do not broaden the dependency to `^0.10 || ^0.11` on
+the assumption that application-level tests establish package compatibility;
+wait for a Laravel Swarm release that explicitly adopts the 0.11 minor line.
 
 ### Relay and recovery now own finite overlap leases (#454)
 
