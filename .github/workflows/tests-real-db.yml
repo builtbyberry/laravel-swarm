@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   tests-real-db-mysql:
-    name: PHP 8.5 - real DB (mysql-8)
+    name: PHP 8.4 - real DB (mysql-8)
     runs-on: ubuntu-24.04
 
     services:
@@ -61,7 +61,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.5'
+          php-version: '8.4'
           tools: composer:v2
           extensions: pdo, pdo_mysql
           coverage: none
@@ -102,7 +102,7 @@ jobs:
         run: composer test:process-concurrency:real-db
 
   tests-real-db-postgres:
-    name: PHP 8.5 - real DB (postgres-16)
+    name: PHP 8.4 - real DB (postgres-16)
     runs-on: ubuntu-24.04
 
     services:
@@ -135,7 +135,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.5'
+          php-version: '8.4'
           tools: composer:v2
           extensions: pdo, pdo_pgsql
           coverage: none

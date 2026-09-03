@@ -52,11 +52,11 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 
 ## Requirements
 
-- PHP **^8.5**
+- PHP **^8.4**
 - Laravel **13** (`illuminate/*` **^13.0**)
 - `laravel/ai` **^0.10.3**
 
-The PHP **^8.5** floor is a deliberate requirement — the package builds on 8.5 language features. As of **v0.24.0** the `laravel/ai` floor is **^0.10.3**; support for **0.9** was dropped then (0.8 was dropped in v0.20.0, and 0.6 / 0.7 earlier still, in v0.13.0). Consumers pinned below `laravel/ai` 0.10.3 must upgrade — and because 0.10 widens the `Agent` contract's prompt-family signatures, agents implementing that contract directly need a one-line change. See the [changelog](CHANGELOG.md#v0240---2026-08-14) and [UPGRADING.md](UPGRADING.md#upgrading-to-v0240) for what the 0.10 adoption changes.
+PHP **^8.4** is supported alongside PHP 8.5. As of **v0.24.0** the `laravel/ai` floor is **^0.10.3**; support for **0.9** was dropped then (0.8 was dropped in v0.20.0, and 0.6 / 0.7 earlier still, in v0.13.0). Consumers pinned below `laravel/ai` 0.10.3 must upgrade — and because 0.10 widens the `Agent` contract's prompt-family signatures, agents implementing that contract directly need a one-line change. See the [changelog](CHANGELOG.md#v0240---2026-08-14) and [UPGRADING.md](UPGRADING.md#upgrading-to-v0240) for what the 0.10 adoption changes.
 
 **No special stability configuration is required.** `laravel/ai` ships stable tags on the 0.10 line, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
 
