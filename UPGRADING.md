@@ -283,12 +283,12 @@ stability settings to install Swarm — see
 
 ## Upgrading to v0.25.0
 
-v0.25.0 has **no migrations**. Three changes may require attention: new
+v0.25.0 has **no migrations**. Four changes may require attention: new
 command-overlap lease configuration and scheduler guidance for operators, an
 interface change for maintainers who implement `DurableRunStore` themselves, and
 a console-prompt behaviour change for anyone piping answers into Artisan
-commands. One known limitation is also worth reading if you use durable child
-swarms.
+commands, plus a security-driven Guzzle compatibility floor. One known
+limitation is also worth reading if you use durable child swarms.
 
 ### Laravel AI compatibility in v0.25.0
 
@@ -297,6 +297,21 @@ release's declared support range and is being handled as a separate
 architectural adoption. Do not broaden the dependency to `^0.10 || ^0.11` on
 the assumption that application-level tests establish package compatibility;
 wait for a Laravel Swarm release that explicitly adopts the 0.11 minor line.
+
+### Security-driven Guzzle compatibility floor
+
+v0.25.0 excludes Guzzle versions affected by CVE-2026-69246: versions below
+7.15.2 and the 8.0.0 release. Applications pinned to an affected version must
+allow Composer to resolve Guzzle 7.15.2 or later, or 8.0.1 or later.
+
+```bash
+composer update guzzlehttp/guzzle --with-all-dependencies
+```
+
+If resolution fails, inspect the root application's direct Guzzle constraint
+and `composer why-not guzzlehttp/guzzle 7.15.2` (or `8.0.1`) before changing
+Laravel Swarm's constraint. The exclusion is intentional and must not be
+bypassed to preserve an older lock file.
 
 ### Relay and recovery now own finite overlap leases (#454)
 
@@ -417,8 +432,8 @@ public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $d
 
 `updateChildRun()` must apply `whereIn('status', $fromStatuses)` when the array
 is non-empty and return whether a row was written; `undispatchedChildRuns()`
-must select only children that are pending **and** unclaimed. A claim is never
-reclaimed on age — see the limitation below.
+must select only children that are pending or running **and** unclaimed. A claim
+is never reclaimed on age — see the limitation below.
 
 ### Piped answers to console prompts are no longer read
 
@@ -472,11 +487,12 @@ confidently wrong answer instead of failing. Fixing the strand therefore require
 separating a child's operational input from its evidence view, which is tracked
 separately.
 
-**What to do:** nothing is required. If a parent run is waiting on a child that
-never started, `php artisan swarm:inspect <run-id>` shows the child intent as
-`pending` with a stamped dispatch claim and no corresponding run; cancel the
-parent with `php artisan swarm:cancel <run-id>` and re-dispatch it. Keeping
-`swarm.capture.inputs` enabled does not currently change this behaviour.
+**What to do:** no proactive migration is required. If a parent run is waiting
+on a child that never started, `php artisan swarm:inspect <run-id>` shows the
+child intent as `pending` with a stamped dispatch claim and no corresponding
+run; cancel the parent with `php artisan swarm:cancel <run-id>` and re-dispatch
+it. Keeping `swarm.capture.inputs` enabled does not currently change this
+behaviour.
 ## Upgrading to v0.24.0
 
 **`laravel/ai` moves to `^0.10.3`.** laravel/ai 0.10 widens the `Agent` contract's

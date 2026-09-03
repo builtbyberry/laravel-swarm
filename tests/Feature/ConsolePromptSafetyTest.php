@@ -8,30 +8,11 @@ use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Input\StreamableInputInterface;
 
 /**
- * Pins the fix for #449: a console command must not block forever on a stdin
- * that will never answer.
+ * Run a real command process with stdin held open but never written.
  *
- * WHY A SUBPROCESS. The hang cannot be observed in-process. It happens inside
- * Symfony's `TerminalInputHelper::waitForInput()`, which busy-waits on the
- * `php://stdin` resource of the *running process* — so a test that asserts on a
- * guard, or that constructs a command directly, proves nothing about it. The
- * first attempt at this fix shipped exactly that kind of test, and it passed
- * identically with and without the fix.
- *
- * WHY A HELD-OPEN PIPE, NOT /dev/null. `/dev/null` reads EOF immediately, so
- * every command completes in under a second whether or not it is fixed — a pin
- * bound to it passes vacuously. The condition that actually hangs is a pipe held
- * open by a writer that never writes: readable never becomes true and the
- * busy-wait spins forever. That is what these tests create.
- *
- * WHY `--env=testing`. `ConfiguresPrompts` arms the blocking Prompts fallback
- * when `windows_os() || $app->runningUnitTests()`, and `runningUnitTests()` is
- * `$app['env'] === 'testing'` — a shipped configuration value, not "PHPUnit is
- * running". An application deployed with `APP_ENV=testing` arms it in
- * production, which is why this is not a test-only concern.
- *
- * Verified against the pre-fix tree: `make:swarm:swarm` with no name blocked to
- * the 20s ceiling and exits in ~0.3s with the fix.
+ * The process boundary and held-open pipe are the regression fixture: an
+ * in-process assertion or an input closed at EOF passes without exercising the
+ * hang. GitHub issue #449 owns the upstream diagnosis and captured stack.
  *
  * @return array{timedOut: bool, seconds: float, output: string, spawned: bool}
  */

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -48,6 +49,7 @@ class DurableChildSwarmCoordinator
         protected DurableOutbox $outbox,
         protected ConfigRepository $config,
         protected LoggerInterface $logger,
+        protected SwarmAuditDispatcher $audit,
     ) {}
 
     public function afterChildIntentForTesting(?callable $hook): void
@@ -185,12 +187,46 @@ class DurableChildSwarmCoordinator
             return;
         }
 
-        // Gated on the claim, so it fires exactly once per child.
-        $this->events->dispatch(new SwarmChildStarted(
-            parentRunId: (string) $child['parent_run_id'],
-            childRunId: $childRunId,
-            childSwarmClass: $childSwarmClass,
-        ));
+        // Gated on the claim, so delivery is attempted at most once per child.
+        // The child is already durable at this point; an application listener must
+        // not turn its own notification failure into a parent retry or duplicate run.
+        try {
+            $this->events->dispatch(new SwarmChildStarted(
+                parentRunId: (string) $child['parent_run_id'],
+                childRunId: $childRunId,
+                childSwarmClass: $childSwarmClass,
+            ));
+        } catch (Throwable $exception) {
+            $failure = $this->capture->failureArray($exception);
+
+            $this->logger->warning('laravel-swarm: a SwarmChildStarted listener failed after the child was dispatched; the event will not be retried.', [
+                'parent_run_id' => $child['parent_run_id'] ?? null,
+                'child_run_id' => $childRunId,
+                'child_swarm_class' => $childSwarmClass,
+                'exception_class' => $failure['class'],
+                'exception_message' => $failure['message'] ?? null,
+            ]);
+
+            try {
+                $this->audit->emit('child.started_delivery_failed', [
+                    'parent_run_id' => $child['parent_run_id'] ?? null,
+                    'child_run_id' => $childRunId,
+                    'child_swarm_class' => $childSwarmClass,
+                    'exception_class' => $failure['class'],
+                    'exception_message' => $failure['message'] ?? null,
+                ]);
+            } catch (Throwable $auditException) {
+                // The child is already durable. Evidence-delivery failure cannot
+                // safely turn notification failure into a replayable parent error.
+                $auditFailure = $this->capture->failureArray($auditException);
+                $this->logger->error('laravel-swarm: child-start listener failure evidence could not be delivered; the dispatched child remains authoritative.', [
+                    'parent_run_id' => $child['parent_run_id'] ?? null,
+                    'child_run_id' => $childRunId,
+                    'exception_class' => $auditFailure['class'],
+                    'exception_message' => $auditFailure['message'] ?? null,
+                ]);
+            }
+        }
     }
 
     /**
@@ -252,10 +288,9 @@ class DurableChildSwarmCoordinator
     /**
      * Hand this worker's dispatch claim back.
      *
-     * A claim held by a worker that dispatched nothing keeps the child out of the
-     * recovery sweep until it goes stale, so failing to release it delays recovery by a
-     * full grace window. That is recoverable but not free — say so rather than
-     * discarding the signal.
+     * A claim held by a worker that dispatched nothing keeps the child out of every
+     * recovery sweep. Claims are not reclaimed by age, so a failed release needs an
+     * actionable operator signal rather than a false promise of automatic recovery.
      *
      * @param  array<string, mixed>  $child
      */
@@ -265,7 +300,7 @@ class DurableChildSwarmCoordinator
             return;
         }
 
-        $this->logger->warning('laravel-swarm: could not hand back a durable child dispatch claim; recovery will re-claim it once it goes stale.', [
+        $this->logger->warning('laravel-swarm: could not hand back a durable child dispatch claim; it will not be reclaimed automatically. Inspect and cancel the parent run. A replacement requires application-owned dispatch code and the original operational input.', [
             'child_run_id' => $childRunId,
             'parent_run_id' => $child['parent_run_id'] ?? null,
             'claimed_at' => $dispatchedAt->toIso8601String(),

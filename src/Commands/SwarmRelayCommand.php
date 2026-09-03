@@ -170,8 +170,10 @@ class SwarmRelayCommand extends Command
                         // Only retry transient failures when --max-attempts gives a finite budget.
                         // Without it the loop would spin forever during a sustained queue outage.
                         $shouldRetryTransient = $hasTransient && $maxAttempts !== null && $attempts < $maxAttempts;
+                        $shouldContinueForProgress = $madeProgress
+                            && ($maxAttempts === null || $attempts < $maxAttempts);
 
-                    } while ($drainUntilEmpty && ($madeProgress || $shouldRetryTransient));
+                    } while ($drainUntilEmpty && ($shouldContinueForProgress || $shouldRetryTransient));
 
                     return self::SUCCESS;
                 },
@@ -217,7 +219,7 @@ class SwarmRelayCommand extends Command
                 ...$audit->metadata($actorMetadata),
             ]);
 
-            $this->components->warn('Another swarm:relay invocation holds the command overlap lease; this drain was skipped.');
+            $this->components->warn('Run swarm:health --durable. Another swarm:relay invocation holds the command overlap lease; this drain was skipped.');
 
             return self::FAILURE;
         }

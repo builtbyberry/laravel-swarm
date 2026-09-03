@@ -72,6 +72,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
+use Psr\Log\LoggerInterface;
 
 function configureDurableRuntime(): void
 {
@@ -2717,17 +2718,19 @@ test('durable child recovery does not create a second child run when dispatch ma
     FakeResearcher::fake(['parent-step']);
 
     $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $parentRunId = $response->runId;
+    unset($response);
     $manager = app(DurableSwarmManager::class);
 
-    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($parentRunId, 0))->handle($manager);
 
-    $child = app(DurableRunStore::class)->childRuns($response->runId)[0];
+    $child = app(DurableRunStore::class)->childRuns($parentRunId)[0];
 
     DB::table('swarm_durable_child_runs')
         ->where('child_run_id', $child['child_run_id'])
         ->update(['dispatched_at' => null]);
 
-    $manager->recover(runId: $response->runId);
+    app(DurableChildSwarmCoordinator::class)->dispatchChildIntent($child);
 
     expect(DB::table('swarm_durable_runs')->where('run_id', $child['child_run_id'])->count())->toBe(1)
         ->and(app(DurableRunStore::class)->childRunForChild($child['child_run_id'])['dispatched_at'])->not->toBeNull();
@@ -2768,6 +2771,27 @@ test('durable child dispatch claim admits exactly one worker', function () {
         ->toContain($childRunId);
 });
 
+test('failed child claim release warns that recovery is not automatic', function () {
+    $store = Mockery::mock(DurableRunStore::class);
+    $store->shouldReceive('releaseChildRunDispatch')->once()->andReturnFalse();
+    $logger = Mockery::spy(LoggerInterface::class);
+    $coordinator = app()->makeWith(DurableChildSwarmCoordinator::class, [
+        'durableRuns' => $store,
+        'logger' => $logger,
+    ]);
+    $claimedAt = CarbonImmutable::now('UTC');
+
+    $method = new ReflectionMethod($coordinator, 'releaseClaim');
+    $method->invoke($coordinator, 'child-run', $claimedAt, ['parent_run_id' => 'parent-run']);
+
+    $logger->shouldHaveReceived('warning')->once()->withArgs(
+        fn (string $message, array $context): bool => str_contains($message, 'will not be reclaimed automatically')
+            && str_contains($message, 'replacement requires application-owned dispatch code')
+            && $context['child_run_id'] === 'child-run'
+            && $context['parent_run_id'] === 'parent-run',
+    );
+});
+
 test('durable child dispatch fires SwarmChildStarted once when the intent is dispatched twice', function () {
     Event::fake([SwarmChildStarted::class]);
     FakeResearcher::fake(['parent-step']);
@@ -2780,7 +2804,7 @@ test('durable child dispatch fires SwarmChildStarted once when the intent is dis
     $child = app(DurableRunStore::class)->childRuns($response->runId)[0];
 
     // A second sweep re-dispatching the same intent — reachable today because
-    // reachable because withoutOverlapping() never serialises a sweep against the
+    // withoutOverlapping() never serialises a sweep against the
     // parent's inline dispatch, and a manual swarm:recover is outside it entirely.
     app(DurableChildSwarmCoordinator::class)->dispatchChildIntent([
         'parent_run_id' => $response->runId,
@@ -2797,6 +2821,103 @@ test('durable child dispatch fires SwarmChildStarted once when the intent is dis
     // The loser must not have clobbered the winner's live child, nor created a second run.
     expect(app(DurableRunStore::class)->childRunForChild($child['child_run_id'])['status'])->toBe('pending')
         ->and(DB::table('swarm_durable_runs')->where('run_id', $child['child_run_id'])->count())->toBe(1);
+});
+
+test('a throwing SwarmChildStarted listener cannot fail or replay a dispatched child', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+    $logger = Mockery::spy(LoggerInterface::class);
+    $audit = Mockery::mock(SwarmAuditDispatcher::class);
+    $audit->shouldReceive('emit')->once()->withArgs(
+        fn (string $category, array $payload): bool => $category === 'child.started_delivery_failed'
+            && $payload['exception_class'] === RuntimeException::class
+            && $payload['exception_message'] === '[redacted]',
+    );
+    $audit->shouldReceive('emit')->zeroOrMoreTimes();
+    $audit->shouldReceive('metadata')->zeroOrMoreTimes()->andReturnUsing(fn (array $metadata): array => $metadata);
+    app()->instance(LoggerInterface::class, $logger);
+    app()->instance(SwarmAuditDispatcher::class, $audit);
+    app()->forgetInstance(DurableChildSwarmCoordinator::class);
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    $listenerAttempts = 0;
+    Event::listen(SwarmChildStarted::class, function () use (&$listenerAttempts): never {
+        $listenerAttempts++;
+
+        throw new RuntimeException('listener failed');
+    });
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $parentRunId = $response->runId;
+    unset($response);
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($parentRunId, 0))->handle($manager);
+
+    $child = app(DurableRunStore::class)->childRuns($parentRunId)[0];
+
+    expect($child['dispatched_at'])->not->toBeNull()
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $child['child_run_id'])->count())->toBe(1);
+
+    app(DurableChildSwarmCoordinator::class)->dispatchChildIntent($child);
+
+    expect($listenerAttempts)->toBe(1)
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $child['child_run_id'])->count())->toBe(1);
+
+    $logger->shouldHaveReceived('warning')->once()->withArgs(
+        fn (string $message, array $context): bool => str_contains($message, 'event will not be retried')
+            && $context['parent_run_id'] === $parentRunId
+            && $context['child_run_id'] === $child['child_run_id']
+            && $context['exception_class'] === RuntimeException::class
+            && $context['exception_message'] === '[redacted]',
+    );
+});
+
+test('a child-start evidence failure cannot invalidate the dispatched child', function () {
+    config()->set('swarm.capture.inputs', false);
+    config()->set('swarm.capture.outputs', false);
+    $logger = Mockery::spy(LoggerInterface::class);
+    $audit = Mockery::mock(SwarmAuditDispatcher::class);
+    $audit->shouldReceive('emit')->once()->withArgs(
+        fn (string $category): bool => $category === 'child.started_delivery_failed',
+    )->andThrow(new RuntimeException('audit sink failed'));
+    $audit->shouldReceive('emit')->zeroOrMoreTimes();
+    $audit->shouldReceive('metadata')->zeroOrMoreTimes()->andReturnUsing(fn (array $metadata): array => $metadata);
+    app()->instance(LoggerInterface::class, $logger);
+    app()->instance(SwarmAuditDispatcher::class, $audit);
+    app()->forgetInstance(DurableChildSwarmCoordinator::class);
+    app()->forgetInstance(DurableSwarmManager::class);
+
+    $listenerAttempts = 0;
+    Event::listen(SwarmChildStarted::class, function () use (&$listenerAttempts): never {
+        $listenerAttempts++;
+
+        throw new RuntimeException('listener failed');
+    });
+    FakeResearcher::fake(['parent-step']);
+
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $parentRunId = $response->runId;
+    unset($response);
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($parentRunId, 0))->handle($manager);
+
+    $child = app(DurableRunStore::class)->childRuns($parentRunId)[0];
+    app(DurableChildSwarmCoordinator::class)->dispatchChildIntent($child);
+
+    expect($listenerAttempts)->toBe(1)
+        ->and($child['dispatched_at'])->not->toBeNull()
+        ->and(DB::table('swarm_durable_runs')->where('run_id', $child['child_run_id'])->count())->toBe(1);
+
+    $logger->shouldHaveReceived('error')->once()->withArgs(
+        fn (string $message, array $context): bool => str_contains($message, 'dispatched child remains authoritative')
+            && $context['parent_run_id'] === $parentRunId
+            && $context['child_run_id'] === $child['child_run_id']
+            && $context['exception_class'] === RuntimeException::class
+            && $context['exception_message'] === '[redacted]',
+    );
 });
 
 test('durable child dispatch holds the claim across dispatch and hands it back on failure', function () {
@@ -2842,8 +2963,8 @@ test('durable child dispatch holds the claim across dispatch and hands it back o
     // Claimed before the dispatch ran...
     expect($claimDuringDispatch)->not->toBeNull();
 
-    // ...and handed back after it failed. A claim held by a worker that dispatched
-    // nothing keeps the child out of the recovery sweep until it goes stale.
+    // ...and handed back after it failed. An unreleased claim would keep the child
+    // out of every recovery sweep indefinitely.
     expect($child['status'])->toBe('failed')
         ->and($child['dispatched_at'])->toBeNull();
 

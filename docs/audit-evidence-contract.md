@@ -609,6 +609,29 @@ Additional frozen fields by category:
 | `durable.completed`                   | `duration_ms` (int)                                                                 |
 | `durable.failed`                      | `exception_class` (string), `timed_out` (bool), `duration_ms` (int)                 |
 
+#### Child Runtime
+
+| Category                        |
+|---------------------------------|
+| `child.started`                 |
+| `child.started_delivery_failed` |
+| `child.completed`               |
+| `child.failed`                  |
+
+`child.started_delivery_failed` records that a `SwarmChildStarted` listener
+threw after the child run was durably dispatched. The child remains
+authoritative and the notification is not retried.
+
+Frozen fields on `child.started_delivery_failed` evidence:
+
+| Field                 | Type             | Notes                                                        |
+|-----------------------|------------------|--------------------------------------------------------------|
+| `parent_run_id`       | string&#124;null | Parent durable run identifier.                               |
+| `child_run_id`        | string           | The already-dispatched child run identifier.                 |
+| `child_swarm_class`   | string           | FQCN of the dispatched child swarm.                          |
+| `exception_class`     | string           | FQCN of the exception thrown by the application listener.    |
+| `exception_message`   | string&#124;null | Capture-gated listener message; `[redacted]` when disabled.   |
+
 #### Durable Wait and Signal
 
 | Category          |
