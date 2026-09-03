@@ -4,9 +4,11 @@
 
 Durable-execution correctness and documentation integrity, carrying the work
 deferred from v0.23.0: the child-swarm dispatch race, overlap protection for the
-two commands the package tells you to schedule, a `laravel/ai` compatibility
-policy, CI merge gates, and PR-time validation of the package's own
-documentation references.
+two commands the package tells you to schedule, an explicit `laravel/ai`
+pre-1.0 compatibility policy, PR-time validation of the package's own
+documentation references, and a companion vector-memory compatibility release.
+The child operational-input question and dispatch strand moved to v0.26.0 on
+2026-07-29; CI quality gates moved to v0.26.0 on 2026-09-02.
 
 ### Added
 
@@ -74,6 +76,13 @@ documentation references.
   method that no longer exists; the mapping lives in `StreamEventMapper::map()`.
   `PhpStanTypeAliases` used `{@see}` for `@phpstan-import-type`, which is an
   annotation rather than a symbol. No behaviour changes.
+
+- **Vector-backed memory remains installable with the current core release.**
+  Companion package `builtbyberry/laravel-swarm-memory-vector` v0.1.1 widens its
+  core constraint through `^0.24` and its Laravel AI constraint through
+  `^0.10.3`. Its full suite passes against every supported core line from v0.20
+  through v0.24, and a clean Packagist install resolves the published companion
+  with Laravel Swarm v0.24.0 and Laravel AI v0.10.3.
 
 ### Fixed
 
@@ -143,7 +152,7 @@ documentation references.
   between losing piped answers and hanging indefinitely. See `UPGRADING.md`;
   `--force` is the replacement.
 
-- **Race-safe child-swarm dispatch: the dispatch marker is now an expiring lease,
+- **Race-safe child-swarm dispatch: the dispatch marker is now an ownership claim,
   and the claim — not the error classifier — decides who dispatches.** A durable
   child could be dispatched twice, and the loser would bury the winner. More than
   one worker can reach a child's dispatch: `swarm:recover` sweeps children the
