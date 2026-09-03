@@ -102,9 +102,12 @@ The child operational-input question and dispatch strand moved to v0.26.0 on
 - **Vector-backed memory remains installable with the current core release.**
   Companion package `builtbyberry/laravel-swarm-memory-vector` v0.1.2 widens its
   core constraint through `^0.25` while retaining Laravel AI support through
-  `^0.10.3`. Its full suite passes against every supported published core line
-  from v0.20 through v0.24. Its final compatibility proof is rerun against the
-  exact v0.25 wrap commit and records that core SHA before release handoff.
+  `^0.10.3`; v0.1.3 adds PHP 8.4 support while preserving that compatibility.
+  The published v0.1.3 suite passes against every supported published core line
+  from v0.20 through v0.24, and its PHP 8.4 candidate proof passed against
+  immutable core commit `97bf2267ca347ce3886c81c9d72d3e6ac05ddb89`
+  before release handoff. A final Packagist-only proof follows the core v0.25.0
+  tag, as tracked by #493.
 
 ### Fixed
 
