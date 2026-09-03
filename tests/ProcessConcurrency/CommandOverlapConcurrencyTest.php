@@ -110,7 +110,9 @@ beforeEach(function (): void {
 });
 
 afterEach(function (): void {
-    (new Filesystem)->deleteDirectory($this->commandOverlapRoot);
+    if (isset($this->commandOverlapRoot)) {
+        (new Filesystem)->deleteDirectory($this->commandOverlapRoot);
+    }
 });
 
 test('a second real process cannot enter while the command lease is held', function (): void {

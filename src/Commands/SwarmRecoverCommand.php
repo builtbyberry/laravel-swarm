@@ -80,7 +80,7 @@ class SwarmRecoverCommand extends Command
                 ...$audit->metadata($actorMetadata),
             ]);
 
-            $this->components->warn('Another swarm:recover invocation holds the command overlap lease; this sweep was skipped.');
+            $this->components->warn('Run swarm:health --durable. Another swarm:recover invocation holds the command overlap lease; this sweep was skipped.');
 
             return self::FAILURE;
         }

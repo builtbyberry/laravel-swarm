@@ -129,9 +129,12 @@ test('swarm recover contention is observable and never enters the recovery sweep
     } finally {
         $lock->release();
     }
+    $output = Artisan::output();
 
     expect($exit)->toBe(1)
-        ->and(Artisan::output())->toContain('holds the command overlap lease')
+        ->and($output)->toContain('holds the command overlap lease')
+        ->and($output)->toContain('swarm:health')
+        ->and($output)->toContain('--durable')
         ->and($sink->recordsForCategory('command.recover'))->toHaveCount(1)
         ->and($sink->recordsForCategory('command.recover')[0]['status'])->toBe('skipped_overlap');
 });
@@ -153,9 +156,12 @@ test('swarm relay contention is observable and never drains either outbox', func
     } finally {
         $lock->release();
     }
+    $output = Artisan::output();
 
     expect($exit)->toBe(1)
-        ->and(Artisan::output())->toContain('holds the command overlap lease')
+        ->and($output)->toContain('holds the command overlap lease')
+        ->and($output)->toContain('swarm:health')
+        ->and($output)->toContain('--durable')
         ->and($sink->recordsForCategory('command.relay'))->toHaveCount(1)
         ->and($sink->recordsForCategory('command.relay')[0]['status'])->toBe('skipped_overlap');
 });

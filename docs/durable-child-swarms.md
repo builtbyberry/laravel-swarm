@@ -119,6 +119,36 @@ parent next step.
 Child output and failure details stay on the child lineage row and child run
 history. They are not copied wholesale into the parent runtime context.
 
+### Uncatchable death before child start
+
+A child dispatch claim is handed back after ordinary exceptions, validation
+failures, and PHP-level timeouts. It is not reclaimed by age. If a worker is
+killed uncatchably after claiming the child but before its durable run commits,
+the parent can therefore remain waiting on a `pending` child that has a claim but
+no corresponding run.
+
+Use this manual runbook:
+
+1. Inspect the parent with
+   `php artisan swarm:inspect <parent-run-id> --json`. In its `children` array,
+   identify a `pending` child with a claim timestamp and copy its child run id.
+2. Run `php artisan swarm:inspect <child-run-id> --json` and confirm it reports
+   that the durable run was not found. A live child run means the claim is valid
+   and must not be replaced.
+3. Cancel the waiting parent with
+   `php artisan swarm:cancel <parent-run-id>`.
+4. Start a replacement through your application's normal dispatch code using
+   the original operational input. There is no generic Artisan redispatch
+   command because the package cannot reconstruct redacted input safely.
+
+`swarm:recover` cannot clear or retry this stamped claim. If the application did
+not retain the original operational input, it cannot safely create a replacement;
+leave the parent cancelled and investigate from application-owned records.
+Recovery cannot safely automate this yet because the stored child intent is the
+capture/evidence view and may contain `[redacted]` instead of operational input
+when input capture is disabled. The operational-input separation and observable
+degraded recovery path are tracked for v0.26.0.
+
 ## Inspecting Parent And Child Runs
 
 Inspect the parent:

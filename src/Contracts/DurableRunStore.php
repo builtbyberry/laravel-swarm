@@ -302,7 +302,7 @@ interface DurableRunStore
     public function markChildTerminalEventDispatched(string $childRunId): bool;
 
     /**
-     * Child intents awaiting dispatch: pending and unclaimed.
+     * Child intents awaiting dispatch: pending or running, and unclaimed.
      *
      * @return array<int, array<string, mixed>>
      */

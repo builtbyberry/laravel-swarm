@@ -49,6 +49,18 @@ The child operational-input question and dispatch strand moved to v0.26.0 on
 
 ### Changed
 
+- **Composer's `dev-main` branch alias now identifies the v0.25 development
+  line.** It previously remained on `0.23.x-dev`, so consumers testing the main
+  branch through a `^0.25@dev` constraint could not resolve it as v0.25.
+
+- **The Guzzle conflict floor now excludes every release affected by
+  CVE-2026-69246.** Composer can no longer select versions below 7.15.2 or the
+  vulnerable 8.0.0 release through Laravel's transitive HTTP dependency.
+
+- **The pull-request checklist now matches the release workflow.** Every PR is
+  directed to the active version's `- unreleased` section; the stale docs/chore
+  exemption and nonexistent generic `## Unreleased` target are gone.
+
 - **Laravel AI compatibility is now an explicit, single-minor-line policy
   (#435).** Because `laravel/ai` is pre-1.0, every patch and minor dependency
   update is an integration-test event, but testing does not expand the declared
@@ -78,15 +90,15 @@ The child operational-input question and dispatch strand moved to v0.26.0 on
   annotation rather than a symbol. No behaviour changes.
 
 - **Vector-backed memory remains installable with the current core release.**
-  Companion package `builtbyberry/laravel-swarm-memory-vector` v0.1.1 widens its
-  core constraint through `^0.24` and its Laravel AI constraint through
-  `^0.10.3`. Its full suite passes against every supported core line from v0.20
-  through v0.24, and a clean Packagist install resolves the published companion
-  with Laravel Swarm v0.24.0 and Laravel AI v0.10.3.
+  Companion package `builtbyberry/laravel-swarm-memory-vector` v0.1.2 widens its
+  core constraint through `^0.25` while retaining Laravel AI support through
+  `^0.10.3`. Its full suite passes against every supported published core line
+  from v0.20 through v0.24. Its final compatibility proof is rerun against the
+  exact v0.25 wrap commit and records that core SHA before release handoff.
 
 ### Fixed
 
-- **`swarm:recover` and `swarm:relay` now own finite overlap protection (#454).**
+- **BREAKING (relay/recovery operations): `swarm:recover` and `swarm:relay` now own finite overlap protection (#454).**
   Scheduler scaffolding already used `withoutOverlapping()`, but that mutex was
   editable application code, applied only to scheduler-launched copies, used the
   scheduler's cache store, and previously inherited Laravel's 24-hour crash
@@ -112,7 +124,7 @@ The child operational-input question and dispatch strand moved to v0.26.0 on
   stops blocking after expiry; command integration tests pin both keys, evidence,
   exit codes, unsafe-store failure, and owner-safe exception release.
 
-- **Console commands no longer hang forever on a stdin that cannot answer.** A
+- **BREAKING (non-interactive CLI): console commands no longer hang forever on a stdin that cannot answer.** A
   command that prompts with no terminal behind it did not fail — it blocked
   indefinitely, which in CI or a test lane reads as a stuck runner rather than a
   failure. Diagnosed by sampling a hung process: 2266 of 2313 samples sat inside
@@ -152,7 +164,7 @@ The child operational-input question and dispatch strand moved to v0.26.0 on
   between losing piped answers and hanging indefinitely. See `UPGRADING.md`;
   `--force` is the replacement.
 
-- **Race-safe child-swarm dispatch: the dispatch marker is now an ownership claim,
+- **BREAKING (custom `DurableRunStore` implementations): race-safe child-swarm dispatch makes the dispatch marker an ownership claim,
   and the claim — not the error classifier — decides who dispatches.** A durable
   child could be dispatched twice, and the loser would bury the winner. More than
   one worker can reach a child's dispatch: `swarm:recover` sweeps children the
@@ -173,6 +185,14 @@ The child operational-input question and dispatch strand moved to v0.26.0 on
   driver-specific SQLSTATE after the fact. Every exit that does not leave a run
   dispatched hands the claim back through the new
   `DurableRunStore::releaseChildRunDispatch()`.
+
+  A throwing application listener for `SwarmChildStarted` is logged and isolated
+  after the child run has been dispatched, so it cannot fail or replay the
+  parent. The failure also emits `child.started_delivery_failed` audit evidence
+  with capture-gated diagnostics; a failure of that evidence sink is logged but
+  cannot invalidate the authoritative child dispatch. Start notification is
+  deliberately at-most-once; observers that need an exhaustive view must
+  reconcile child run state or consume terminal events.
 
   The claim does **not** expire, and one narrow strand is knowingly left open: a
   worker killed uncatchably between claiming a child and committing its run —
@@ -205,8 +225,9 @@ The child operational-input question and dispatch strand moved to v0.26.0 on
   because a swept retry re-reads a `[redacted]` input under
   `swarm.capture.inputs=false` and would run the child on the literal sentinel.
 
-  `DurableRunStore` is an internal contract, but implementors outside this package
-  must update four signatures — see `UPGRADING.md`.
+  Custom `DurableRunStore` implementations must update four signatures — see
+  `UPGRADING.md`.
+
 ## v0.24.1 - 2026-08-24
 
 Documentation-only correction. No code, configuration, or dependency changes —
