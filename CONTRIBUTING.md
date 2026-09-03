@@ -44,14 +44,17 @@ composer lint
 composer analyse
 ```
 
-Continuous integration runs the same checks on **stable-latest** and **lowest**
-Composer resolutions: `composer test:coverage`, `composer test:process-concurrency:ci`,
-and `composer analyse`; plus `composer lint` and `composer test:compliance` (the
-scope-isolation/propagation + replay-determinism `compliance` Pest group, a discrete
-re-runnable evidence lane) on **stable-latest** only. Install PCOV for PHP locally when you want to
-match CI or debug coverage failures; otherwise `composer test` remains the default
-fast path without coverage. If workflow runtime becomes prohibitive, maintainers may
-split **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
+Continuous integration runs the same checks on PHP **8.4** and **8.5**, each on
+**stable-latest** and **lowest** Composer resolutions:
+`composer test:coverage:ci`, `composer test:process-concurrency:ci`, and
+`composer analyse`; plus `composer lint` and `composer test:compliance` (the
+scope-isolation/propagation + replay-determinism `compliance` Pest group, a
+discrete re-runnable evidence lane) on **stable-latest** only. The real MySQL
+and PostgreSQL process-concurrency jobs run on PHP **8.4**, the minimum supported
+runtime. Install PCOV for PHP locally when you want to match CI or debug coverage
+failures; otherwise `composer test` remains the default fast path without
+coverage. If workflow runtime becomes prohibitive, maintainers may split
+**lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
 until then, pull requests validate both matrices equally.
 
 **Dependency advisories** — a separate `audit` workflow runs `composer audit` on

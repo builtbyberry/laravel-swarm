@@ -17,7 +17,7 @@
         }
     ],
     "require": {
-        "php": "^8.5",
+        "php": "^8.4",
         "illuminate/bus": "^13.0",
         "illuminate/cache": "^13.0",
         "illuminate/concurrency": "^13.0",
@@ -34,7 +34,7 @@
         "laravel/ai": "^0.10.3"
     },
     "require-dev": {
-        "builtbyberry/laravel-swarm-installer-testkit": "^0.1.0",
+        "builtbyberry/laravel-swarm-installer-testkit": "^0.1.3",
         "larastan/larastan": "^3.10",
         "laravel/pint": "^1.29",
         "orchestra/testbench": "^11.1",

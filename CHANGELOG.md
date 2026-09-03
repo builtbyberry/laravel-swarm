@@ -6,7 +6,8 @@ Durable-execution correctness and documentation integrity, carrying the work
 deferred from v0.23.0: the child-swarm dispatch race, overlap protection for the
 two commands the package tells you to schedule, an explicit `laravel/ai`
 pre-1.0 compatibility policy, PR-time validation of the package's own
-documentation references, and a companion vector-memory compatibility release.
+documentation references, a companion vector-memory compatibility release, and
+PHP 8.4 support across core and the first-party companion ecosystem.
 The child operational-input question and dispatch strand moved to v0.26.0 on
 2026-07-29; CI quality gates moved to v0.26.0 on 2026-09-02.
 
@@ -48,6 +49,15 @@ The child operational-input question and dispatch strand moved to v0.26.0 on
   against a deliberately broken reference of its own kind.
 
 ### Changed
+
+- **PHP 8.4 is now supported across Laravel Swarm and its first-party
+  companions (#493).** Core lowers its runtime requirement from `^8.5` to
+  `^8.4`, removes the inaccurate claim that it depends on PHP 8.5 language
+  features, and tests PHP 8.4 and 8.5 against latest and lowest supported
+  dependency sets. The minimum-runtime database and process-concurrency lanes
+  run on PHP 8.4. Compatibility patch releases for the installer testkit, MCP,
+  Filament, Pulse, and vector-memory companions carry the same runtime matrix.
+  PHP 8.3 is not part of the supported range.
 
 - **Composer's `dev-main` branch alias now identifies the v0.25 development
   line.** It previously remained on `0.23.x-dev`, so consumers testing the main
