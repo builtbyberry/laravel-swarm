@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands\Install;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
@@ -31,6 +32,8 @@ use function Laravel\Prompts\confirm;
 #[AsCommand(name: 'swarm:install:durable')]
 class InstallDurableCommand extends Command
 {
+    use DetachesUnanswerableStdin;
+
     protected $signature = 'swarm:install:durable
                             {--queue= : Queue name for durable jobs (default: swarm-durable)}
                             {--migrate : Run any pending package migrations without prompting}
@@ -295,12 +298,12 @@ class InstallDurableCommand extends Command
             // so a re-run check by sha256 is straightforward.
             $lines[] = 'use Illuminate\\Support\\Facades\\Schedule as SwarmDurableSchedule;';
             $lines[] = '';
-            $lines[] = "SwarmDurableSchedule::command('swarm:relay')->everyMinute()->withoutOverlapping()->runInBackground();";
-            $lines[] = "SwarmDurableSchedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping()->runInBackground();";
+            $lines[] = "SwarmDurableSchedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)))->runInBackground();";
+            $lines[] = "SwarmDurableSchedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)))->runInBackground();";
             $lines[] = "SwarmDurableSchedule::command('swarm:prune')->daily()->runInBackground();";
         } else {
-            $lines[] = "Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping()->runInBackground();";
-            $lines[] = "Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping()->runInBackground();";
+            $lines[] = "Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)))->runInBackground();";
+            $lines[] = "Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)))->runInBackground();";
             $lines[] = "Schedule::command('swarm:prune')->daily()->runInBackground();";
         }
 

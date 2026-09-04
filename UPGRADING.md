@@ -244,6 +244,20 @@ was dropped; 0.8 was dropped in v0.20.0; 0.6 / 0.7 earlier, in v0.13.0) and is
 contracts, streaming behavior, and provider integrations can change between
 releases without the stability guarantees of a stable major line.
 
+### Laravel AI compatibility policy
+
+Laravel Swarm intentionally validates and supports one pre-1.0 Laravel AI minor
+line at a time. Every Laravel AI patch or minor update is an integration-test
+event: run the automated suite and the queued, streamed, and durable paths your
+application uses before deploying the resolved version.
+
+Integration testing is not a compatibility grant. A patch is supported only
+when it remains inside the `laravel/ai` range declared by the installed Laravel
+Swarm release. A new minor outside that range is unsupported until a later
+Laravel Swarm release explicitly adopts that minor line after validation. Do
+not widen the application constraint or infer official support only because a
+local smoke test passes.
+
 When upgrading PHP, Laravel, or Laravel AI alongside Swarm:
 
 1. Note the currently resolved versions with `php -v` and `composer show laravel/framework laravel/ai builtbyberry/laravel-swarm`.
@@ -256,7 +270,7 @@ You may pin `laravel/ai` to an exact or narrower range in your application’s
 `composer.json` when you need reproducible builds or a slower upgrade cadence:
 
 ```bash
-composer require laravel/ai:0.9.0
+composer require laravel/ai:0.10.3
 ```
 
 That pins your application’s dependency resolution. It does not change the semver
@@ -267,6 +281,218 @@ with `"prefer-stable": true`. Your application needs no special Composer
 stability settings to install Swarm — see
 [Composer minimum-stability](#composer-minimum-stability).
 
+## Upgrading to v0.25.0
+
+v0.25.0 has **no migrations**. Four changes may require attention: new
+command-overlap lease configuration and scheduler guidance for operators, an
+interface change for maintainers who implement `DurableRunStore` themselves, and
+a console-prompt behaviour change for anyone piping answers into Artisan
+commands, plus a security-driven Guzzle compatibility floor. One known
+limitation is also worth reading if you use durable child swarms.
+
+### Laravel AI compatibility in v0.25.0
+
+v0.25.0 remains on `laravel/ai ^0.10.3`. Laravel AI 0.11 is outside this
+release's declared support range and is being handled as a separate
+architectural adoption. Do not broaden the dependency to `^0.10 || ^0.11` on
+the assumption that application-level tests establish package compatibility;
+wait for a Laravel Swarm release that explicitly adopts the 0.11 minor line.
+
+### Security-driven Guzzle compatibility floor
+
+v0.25.0 excludes Guzzle versions affected by CVE-2026-69246: versions below
+7.15.2 and the 8.0.0 release. Applications pinned to an affected version must
+allow Composer to resolve Guzzle 7.15.2 or later, or 8.0.1 or later.
+
+```bash
+composer update guzzlehttp/guzzle --with-all-dependencies
+```
+
+If resolution fails, inspect the root application's direct Guzzle constraint
+and `composer why-not guzzlehttp/guzzle 7.15.2` (or `8.0.1`) before changing
+Laravel Swarm's constraint. The exclusion is intentional and must not be
+bypassed to preserve an older lock file.
+
+### Relay and recovery now own finite overlap leases (#454)
+
+`swarm:relay` and `swarm:recover` now acquire distinct command-owned atomic
+leases before entering their sweeps. This protects manual, supervisor, and
+job-driven invocations in addition to scheduler-launched copies. Contention
+warns, emits `status: skipped_overlap`, exits `1`, and performs no work.
+
+Two additive configuration keys are available:
+
+- `swarm.commands.overlap.store` / `SWARM_COMMAND_OVERLAP_STORE` selects the
+  atomic cache store; `null` inherits `cache.default`.
+- `swarm.commands.overlap.lease_seconds` /
+  `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` defaults to `3600` and must exceed the
+  worst-case relay or recovery duration.
+
+Array, null, failover, and non-lock-capable stores now fail before a sweep. File
+locks cover one host only. Multi-host deployments require a shared atomic store;
+set `SWARM_COMMAND_OVERLAP_STORE` only when `cache.default` is unsuitable.
+
+Existing applications must reconcile their scheduler entries. Rerunning
+`swarm:install:durable` does not rewrite a previously managed schedule block.
+Replace bare `withoutOverlapping()` calls (Laravel's 24-hour default) or fixed
+expiries with the lease-derived whole-minute expiry:
+
+```php
+Schedule::command('swarm:relay')
+    ->everyMinute()
+    ->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+
+Schedule::command('swarm:recover')
+    ->everyFiveMinutes()
+    ->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+```
+
+The scheduler mutex uses Laravel's scheduler cache store; the command lease uses
+the configured overlap store. `swarm:health --durable` now validates and reports
+the command lease without acquiring it. See
+[Command overlap leases](docs/maintenance.md#command-overlap-leases).
+
+### `DurableRunStore` interface: child-dispatch claim signatures changed (#431)
+
+The child-swarm dispatch marker became a **lease** rather than a one-way
+marker, so three methods changed shape and one is new:
+
+```php
+public function markChildRunDispatched(
+    string $childRunId,
+    ?DateTimeInterface $dispatchedAt = null,
+): bool;                                    // was: (string $childRunId): void
+
+public function releaseChildRunDispatch(
+    string $childRunId,
+    DateTimeInterface $dispatchedAt,
+): bool;                                    // new
+
+public function updateChildRun(
+    string $childRunId,
+    string $status,
+    ?string $output = null,
+    ?array $failure = null,
+    array $fromStatuses = [],
+): bool;                                    // was: (...): void
+
+public function undispatchedChildRuns(
+    ?string $runId = null,
+    ?string $swarmClass = null,
+    int $limit = 50,
+): array;                                   // unchanged signature, tighter contract
+```
+
+**Who is affected:** applications that implement `DurableRunStore` directly with
+a custom store class, and anything extending `DatabaseDurableRunStore` and
+overriding these four methods. PHP raises a fatal declaration-compatibility
+error at class load, so this fails immediately and visibly rather than silently.
+
+**Who is not affected:** applications that only *call* the store (via
+`app(DurableRunStore::class)->...`), use the default database driver, or reach
+the store through `DurableSwarmManager`. No application-level call site changes:
+the added parameters are optional and the `void → bool` returns are additive for
+callers that ignored them.
+
+**Action required:** custom stores must adopt the three changed signatures
+above. `undispatchedChildRuns()` keeps its signature but its contract tightens:
+it must select only pending, unclaimed children. The
+returns are load-bearing, so a stub that always reports success is wrong —
+`markChildRunDispatched()` must return `true` only for the caller that actually
+took the claim, or two workers will dispatch the same child. A minimal correct
+implementation mirrors the shipped one:
+
+```php
+public function markChildRunDispatched(
+    string $childRunId,
+    ?DateTimeInterface $dispatchedAt = null,
+): bool {
+    $timestamp = $dispatchedAt !== null
+        ? Carbon::instance($dispatchedAt)->utc()
+        : Carbon::now('UTC');
+
+    // One conditional UPDATE, so concurrent workers race a single row and
+    // exactly one wins. Returning true unconditionally would let two workers
+    // dispatch the same child.
+    return $this->childRunTable()
+        ->where('child_run_id', $childRunId)
+        ->whereIn('status', ['pending', 'running'])
+        ->whereNull('dispatched_at')
+        ->update(['dispatched_at' => $timestamp, 'updated_at' => $timestamp]) === 1;
+}
+
+public function releaseChildRunDispatch(string $childRunId, DateTimeInterface $dispatchedAt): bool
+{
+    return $this->childRunTable()
+        ->where('child_run_id', $childRunId)
+        ->where('dispatched_at', Carbon::instance($dispatchedAt)->utc())
+        ->update(['dispatched_at' => null, 'updated_at' => Carbon::now('UTC')]) === 1;
+}
+```
+
+`updateChildRun()` must apply `whereIn('status', $fromStatuses)` when the array
+is non-empty and return whether a row was written; `undispatchedChildRuns()`
+must select only children that are pending or running **and** unclaimed. A claim
+is never reclaimed on age — see the limitation below.
+
+### Piped answers to console prompts are no longer read
+
+Commands that prompt now detach stdin when this process has no terminal, so a
+prompt cannot block forever on a stream that will never become readable (#449).
+
+The side effect is that a piped answer is no longer consumed:
+
+```bash
+# Previously confirmed the action. Now declines and exits non-zero.
+echo yes | php artisan swarm:audit:reconcile --dismiss=42 --reason="stale"
+```
+
+**Action:** pass the command's own non-interactive flag instead. For
+`swarm:audit:reconcile` that is `--force`:
+
+```bash
+php artisan swarm:audit:reconcile --dismiss=42 --reason="stale" --force
+```
+
+**Why it cannot be avoided.** Nothing can distinguish a pipe that will deliver a
+line from one that never will — the read blocks either way, and a command that
+blocks forever is worse than one that declines. An operator at a real terminal
+is unaffected; the detach only happens when stdin is not a TTY.
+
+**Not affected:** interactive terminal use, `--no-interaction` (which
+short-circuits before any stream is read), and anything already passing explicit
+flags.
+
+### Known limitation: a child stranded by an uncatchable worker death
+
+Dispatching a child stamps a claim on its intent row so exactly one worker
+dispatches it. Every exit that does not leave a run dispatched hands that claim
+back — but a `catch` block cannot cover an uncatchable death. A worker SIGKILLed
+on deploy, reaped by `queue:work --timeout`, OOM-killed or evicted **between
+claiming the child and committing its run** leaves a claim nobody hands back, and
+that child is not re-dispatched: its parent waits on it indefinitely.
+
+**How narrow this is:** the window spans container resolution, input validation
+and input guardrails — ordinarily milliseconds — and closes as soon as the
+child's run row is committed. It requires an uncatchable kill inside that window
+specifically. A worker that throws, times out at the PHP level, or fails
+validation releases its claim normally.
+
+**Why it is not fixed here.** Re-dispatching a stranded child means a recovery
+sweep must dispatch it, and the sweep can only build the child's input from the
+stored `context_payload` — which is the capture/evidence view and is the literal
+string `[redacted]` whenever `swarm.capture.inputs` is `false` (the default). A
+sweep that re-dispatched today would run the child on that sentinel and return a
+confidently wrong answer instead of failing. Fixing the strand therefore requires
+separating a child's operational input from its evidence view, which is tracked
+separately.
+
+**What to do:** no proactive migration is required. If a parent run is waiting
+on a child that never started, `php artisan swarm:inspect <run-id>` shows the
+child intent as `pending` with a stamped dispatch claim and no corresponding
+run; cancel the parent with `php artisan swarm:cancel <run-id>` and re-dispatch
+it. Keeping `swarm.capture.inputs` enabled does not currently change this
+behaviour.
 ## Upgrading to v0.24.0
 
 **`laravel/ai` moves to `^0.10.3`.** laravel/ai 0.10 widens the `Agent` contract's
@@ -1217,7 +1443,7 @@ The new migration creates `swarm_audit_outbox`. Schedule the relay if you
 have not already (the same relay drains both durable and audit lanes):
 
 ```php
-Schedule::command('swarm:relay')->everyMinute();
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 You can also drain audit only:
@@ -1794,7 +2020,7 @@ it, durable swarms will stall after every step because the outbox is never drain
 
 ```php
 // app/Console/Kernel.php (or routes/console.php in Laravel 11+)
-Schedule::command('swarm:relay')->everyMinute();
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 If you also schedule `swarm:recover`, the relay should run at the same or higher frequency.

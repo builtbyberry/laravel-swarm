@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Console\Command;
@@ -23,7 +24,19 @@ class SwarmRecoverCommand extends Command
 
     protected $description = 'Redispatch recoverable durable swarm runs';
 
-    public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit, ConfigRepository $config, Connection $connection): int
+    protected $help = <<<'HELP'
+        Redispatch recoverable durable swarm work. Schedule this safety-net command
+        every five minutes with an explicit finite scheduler mutex:
+
+          Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+
+        The command also owns a finite atomic lease, which covers manual and
+        supervisor invocation. Configure swarm.commands.overlap.store with an
+        atomic lock-capable cache store and size lease_seconds above the worst-case
+        recovery duration. Lock contention warns, exits non-zero, and performs no sweep.
+        HELP;
+
+    public function handle(DurableSwarmManager $manager, SwarmAuditDispatcher $audit, ConfigRepository $config, Connection $connection, CommandOverlapGuard $overlap): int
     {
         $runIdOption = $this->option('run-id');
         $swarmOption = $this->option('swarm');
@@ -32,10 +45,18 @@ class SwarmRecoverCommand extends Command
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
         try {
-            $runIds = $manager->recover(
-                runId: $targetRunId,
-                swarmClass: $targetSwarmClass,
-                limit: $this->optionInt('limit', 50),
+            $runIds = [];
+            $result = $overlap->run(
+                CommandOverlapGuard::RECOVER_KEY,
+                function () use ($manager, $targetRunId, $targetSwarmClass, &$runIds): int {
+                    $runIds = $manager->recover(
+                        runId: $targetRunId,
+                        swarmClass: $targetSwarmClass,
+                        limit: $this->optionInt('limit', 50),
+                    );
+
+                    return self::SUCCESS;
+                },
             );
         } catch (Throwable $exception) {
             $audit->emit('command.recover', [
@@ -47,6 +68,21 @@ class SwarmRecoverCommand extends Command
             ]);
 
             throw $exception;
+        }
+
+        if ($result === null) {
+            $audit->emit('command.recover', [
+                'target_run_id' => $targetRunId,
+                'target_swarm_class' => $targetSwarmClass,
+                'recovered_count' => 0,
+                'recovered_run_ids' => [],
+                'status' => 'skipped_overlap',
+                ...$audit->metadata($actorMetadata),
+            ]);
+
+            $this->components->warn('Run swarm:health --durable. Another swarm:recover invocation holds the command overlap lease; this sweep was skipped.');
+
+            return self::FAILURE;
         }
 
         $audit->emit('command.recover', [

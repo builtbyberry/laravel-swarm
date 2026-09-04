@@ -131,7 +131,7 @@ php artisan swarm:inspect <run-id> --json
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:recover')->everyMinute();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 Schedule::command('swarm:prune')->daily();
 ```
 

@@ -12,6 +12,6 @@
 - [ ] `composer test` passes locally
 - [ ] `composer analyse` passes locally
 - [ ] `composer lint` passes locally
-- [ ] CHANGELOG entry added under `## Unreleased` (skip for docs-only or chore PRs)
+- [ ] CHANGELOG entry added under the active version's `- unreleased` section
 - [ ] Public surface changes reflected in `docs/public-surface.md`
 - [ ] New public APIs have example coverage or documentation updated

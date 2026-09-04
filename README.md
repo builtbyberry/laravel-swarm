@@ -52,17 +52,24 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 
 ## Requirements
 
-- PHP **^8.5**
+- PHP **^8.4**
 - Laravel **13** (`illuminate/*` **^13.0**)
 - `laravel/ai` **^0.10.3**
 
-The PHP **^8.5** floor is a deliberate requirement — the package builds on 8.5 language features. As of **v0.24.0** the `laravel/ai` floor is **^0.10.3**; support for **0.9** was dropped then (0.8 was dropped in v0.20.0, and 0.6 / 0.7 earlier still, in v0.13.0). Consumers pinned below `laravel/ai` 0.10.3 must upgrade — and because 0.10 widens the `Agent` contract's prompt-family signatures, agents implementing that contract directly need a one-line change. See the [changelog](CHANGELOG.md#v0240---2026-08-14) and [UPGRADING.md](UPGRADING.md#upgrading-to-v0240) for what the 0.10 adoption changes.
+PHP **^8.4** is supported alongside PHP 8.5. As of **v0.24.0** the `laravel/ai` floor is **^0.10.3**; support for **0.9** was dropped then (0.8 was dropped in v0.20.0, and 0.6 / 0.7 earlier still, in v0.13.0). Consumers pinned below `laravel/ai` 0.10.3 must upgrade — and because 0.10 widens the `Agent` contract's prompt-family signatures, agents implementing that contract directly need a one-line change. See the [changelog](CHANGELOG.md#v0240---2026-08-14) and [UPGRADING.md](UPGRADING.md#upgrading-to-v0240) for what the 0.10 adoption changes.
 
 **No special stability configuration is required.** `laravel/ai` ships stable tags on the 0.10 line, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
 
 Earlier versions of this document asked you to set `"minimum-stability": "dev"` in your application's `composer.json`. That is no longer necessary, and as of **v0.23.0** it is no longer recommended — it loosens the resolution floor for your *entire* dependency tree, not just for Swarm. If you added those keys solely to install this package, you can remove them.
 
 Laravel Swarm orchestrates the same Laravel AI agents, providers, and streams as your application. Treat Composer updates to Laravel or `laravel/ai` as integration-test events: run your test suite and any queued, streamed, or durable swarm smoke paths after dependency changes. This package's [changelog](CHANGELOG.md) covers Swarm-owned changes; it does not replace verification against upstream Laravel or Laravel AI releases.
+
+Because Laravel AI is pre-1.0, Laravel Swarm intentionally validates and
+supports one Laravel AI minor line at a time. A patch within the declared range
+still needs integration testing; a new minor is unsupported until a later Swarm
+release explicitly adopts it after validation. Application test results do not
+expand the Composer range declared by the package. See the
+[Laravel AI compatibility policy](UPGRADING.md#laravel-ai-compatibility-policy).
 
 ## Installation
 
@@ -365,10 +372,18 @@ Schedule the relay, recovery, and pruning for durable execution:
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:relay')->everyMinute();   // required: drains the outbox after each checkpoint
-Schedule::command('swarm:recover')->everyMinute(); // safety net: redispatches stranded runs
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));        // required: drains the outbox
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60))); // safety net: redispatches stranded runs
 Schedule::command('swarm:prune')->daily();         // retention: removes expired persistence rows
 ```
+
+Both operational commands also own a finite atomic lease, so manual and
+supervisor invocations are protected too. The default one-hour lease must exceed
+your worst-case command duration. File-cache locks cover one host only; multi-host
+deployments require a shared atomic default cache store, or must set
+`SWARM_COMMAND_OVERLAP_STORE` when the default is unsuitable. Override the
+duration with `SWARM_COMMAND_OVERLAP_LEASE_SECONDS`. See
+[Command overlap leases](docs/maintenance.md#command-overlap-leases).
 
 Start with [Durable Execution](docs/durable-execution.md), then use the topic guides for [waits and signals](docs/durable-waits-and-signals.md), [retries and progress](docs/durable-retries-and-progress.md), [child swarms](docs/durable-child-swarms.md), and [webhooks](docs/durable-webhooks.md).
 

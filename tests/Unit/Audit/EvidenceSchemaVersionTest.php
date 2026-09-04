@@ -55,6 +55,7 @@ const AUDIT_CATEGORIES = [
     'durable.checkpointed_hierarchical',
     // child.*
     'child.started',
+    'child.started_delivery_failed',
     'child.completed',
     'child.failed',
     // signal / wait / progress

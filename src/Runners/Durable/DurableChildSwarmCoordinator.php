@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
@@ -18,9 +19,12 @@ use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
+use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -43,6 +47,9 @@ class DurableChildSwarmCoordinator
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
         protected DurableOutbox $outbox,
+        protected ConfigRepository $config,
+        protected LoggerInterface $logger,
+        protected SwarmAuditDispatcher $audit,
     ) {}
 
     public function afterChildIntentForTesting(?callable $hook): void
@@ -136,36 +143,168 @@ class DurableChildSwarmCoordinator
         // capture/evidence view and is `[redacted]` under swarm.capture.inputs=false.
         $contextPayload = is_array($child['context_payload'] ?? null) ? $child['context_payload'] : [];
 
-        if ($this->durableRuns->find($childRunId) === null) {
-            try {
-                $swarm = $this->application->make($childSwarmClass);
+        // The CLAIM is authoritative, not the error classifier. More than one worker can
+        // arrive here for the same child: `swarm:recover` sweeps children the parent may be
+        // inline-dispatching this instant, and the withoutOverlapping() the installer
+        // scaffolds never serialises a sweep against that inline dispatch — it only
+        // serialises sweep against sweep, and only when the schedule mutex's cache store is
+        // shared and lock-capable. A manual `php artisan swarm:recover` is outside it
+        // entirely. Winning this conditional update is what grants the right to dispatch —
+        // exactly one worker wins however many arrive — so a duplicate start() is
+        // unreachable rather than something we must recognise from a driver-specific
+        // SQLSTATE after the fact. Everything below runs for the winner.
+        $dispatchedAt = CarbonImmutable::now('UTC');
 
-                if (! $swarm instanceof Swarm) {
-                    throw new SwarmException("Unable to resolve child swarm [{$childSwarmClass}] from the container.");
-                }
-
-                $response = $this->application->make(SwarmRunner::class)->dispatchDurable($swarm, RunContext::fromPayload($contextPayload));
-                unset($response);
-            } catch (Throwable $exception) {
-                $this->durableRuns->updateChildRun($childRunId, 'failed', null, $this->failurePayload($exception));
-
-                $parent = $this->durableRuns->find((string) $child['parent_run_id']);
-
-                if ($parent !== null) {
-                    $this->reconcileTerminalChildrenForParent($parent);
-                }
-
-                return;
-            }
+        if (! $this->durableRuns->markChildRunDispatched($childRunId, $dispatchedAt)) {
+            return;
         }
 
-        $this->durableRuns->markChildRunDispatched($childRunId);
+        // A run row already exists for a child we just claimed: an earlier attempt
+        // committed start() and then had its claim handed back without the run being
+        // reaped. Do not dispatch it a second time; its execution is recoverable()'s
+        // problem. SwarmChildStarted deliberately does NOT fire here —
+        // start() commits the row inside a transaction but enqueues the job later, at
+        // PendingDispatch destruct, so a row alone is not evidence anything is executing.
+        // The claim is deliberately KEPT here rather than handed back: the run exists, so
+        // the child genuinely is dispatched, and the claim is what stops the sweep
+        // re-selecting it on every pass.
+        if ($this->durableRuns->find($childRunId) !== null) {
+            return;
+        }
 
-        $this->events->dispatch(new SwarmChildStarted(
-            parentRunId: (string) $child['parent_run_id'],
-            childRunId: $childRunId,
-            childSwarmClass: $childSwarmClass,
-        ));
+        try {
+            $swarm = $this->application->make($childSwarmClass);
+
+            if (! $swarm instanceof Swarm) {
+                throw new SwarmException("Unable to resolve child swarm [{$childSwarmClass}] from the container.");
+            }
+
+            $response = $this->application->make(SwarmRunner::class)->dispatchDurable($swarm, RunContext::fromPayload($contextPayload));
+            unset($response);
+        } catch (Throwable $exception) {
+            $this->failDispatch($childRunId, $dispatchedAt, $child, $exception);
+
+            return;
+        }
+
+        // Gated on the claim, so delivery is attempted at most once per child.
+        // The child is already durable at this point; an application listener must
+        // not turn its own notification failure into a parent retry or duplicate run.
+        try {
+            $this->events->dispatch(new SwarmChildStarted(
+                parentRunId: (string) $child['parent_run_id'],
+                childRunId: $childRunId,
+                childSwarmClass: $childSwarmClass,
+            ));
+        } catch (Throwable $exception) {
+            $failure = $this->capture->failureArray($exception);
+
+            $this->logger->warning('laravel-swarm: a SwarmChildStarted listener failed after the child was dispatched; the event will not be retried.', [
+                'parent_run_id' => $child['parent_run_id'] ?? null,
+                'child_run_id' => $childRunId,
+                'child_swarm_class' => $childSwarmClass,
+                'exception_class' => $failure['class'],
+                'exception_message' => $failure['message'] ?? null,
+            ]);
+
+            try {
+                $this->audit->emit('child.started_delivery_failed', [
+                    'parent_run_id' => $child['parent_run_id'] ?? null,
+                    'child_run_id' => $childRunId,
+                    'child_swarm_class' => $childSwarmClass,
+                    'exception_class' => $failure['class'],
+                    'exception_message' => $failure['message'] ?? null,
+                ]);
+            } catch (Throwable $auditException) {
+                // The child is already durable. Evidence-delivery failure cannot
+                // safely turn notification failure into a replayable parent error.
+                $auditFailure = $this->capture->failureArray($auditException);
+                $this->logger->error('laravel-swarm: child-start listener failure evidence could not be delivered; the dispatched child remains authoritative.', [
+                    'parent_run_id' => $child['parent_run_id'] ?? null,
+                    'child_run_id' => $childRunId,
+                    'exception_class' => $auditFailure['class'],
+                    'exception_message' => $auditFailure['message'] ?? null,
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Resolve the failure of a dispatch this worker holds the claim for.
+     *
+     * @param  array<string, mixed>  $child
+     */
+    protected function failDispatch(string $childRunId, CarbonImmutable $dispatchedAt, array $child, Throwable $exception): void
+    {
+        // start() commits the run row inside a transaction and enqueues the job later, at
+        // PendingDispatch destruct — so an exception raised on the way out lands here with
+        // the row already persisted. Marking that child failed would bury a run that is
+        // genuinely recoverable, which is the same reasoning the run-row gate above
+        // applies. Hand the claim back and let recoverable() own it.
+        if ($this->durableRuns->find($childRunId) !== null) {
+            // Keep the claim: the run exists, so the child is dispatched and recovery owns
+            // driving it. Handing the claim back here would put it straight back into the
+            // sweep, which would re-claim, re-see the run, and release again on every pass.
+            $this->logger->warning('laravel-swarm: durable child dispatch failed after its run was created; leaving it to recovery rather than failing it.', [
+                'child_run_id' => $childRunId,
+                'parent_run_id' => $child['parent_run_id'] ?? null,
+                'exception' => $exception::class,
+            ]);
+
+            return;
+        }
+
+        // A dispatch failure stays terminal: the retry path is gated on separating the
+        // child's operational input from the capture/evidence view, because a swept retry
+        // re-reads a `[redacted]` input under swarm.capture.inputs=false and would run the
+        // child on the literal sentinel. Until that lands the child fails loudly.
+        //
+        // The write is conditional: the child may have completed under another worker while
+        // this dispatch was failing, and a no-op means that worker owns its terminal state
+        // and is already reconciling the parent.
+        $failed = $this->durableRuns->updateChildRun($childRunId, 'failed', null, $this->failurePayload($exception), ['pending']);
+
+        if (! $failed) {
+            $this->logger->info('laravel-swarm: durable child dispatch failed but the child had already reached a terminal status; leaving reconciliation to its owner.', [
+                'child_run_id' => $childRunId,
+                'parent_run_id' => $child['parent_run_id'] ?? null,
+                'exception' => $exception::class,
+            ]);
+        }
+
+        $this->releaseClaim($childRunId, $dispatchedAt, $child);
+
+        if (! $failed) {
+            return;
+        }
+
+        $parent = $this->durableRuns->find((string) $child['parent_run_id']);
+
+        if ($parent !== null) {
+            $this->reconcileTerminalChildrenForParent($parent);
+        }
+    }
+
+    /**
+     * Hand this worker's dispatch claim back.
+     *
+     * A claim held by a worker that dispatched nothing keeps the child out of every
+     * recovery sweep. Claims are not reclaimed by age, so a failed release needs an
+     * actionable operator signal rather than a false promise of automatic recovery.
+     *
+     * @param  array<string, mixed>  $child
+     */
+    protected function releaseClaim(string $childRunId, CarbonImmutable $dispatchedAt, array $child): void
+    {
+        if ($this->durableRuns->releaseChildRunDispatch($childRunId, $dispatchedAt)) {
+            return;
+        }
+
+        $this->logger->warning('laravel-swarm: could not hand back a durable child dispatch claim; it will not be reclaimed automatically. Inspect and cancel the parent run. A replacement requires application-owned dispatch code and the original operational input.', [
+            'child_run_id' => $childRunId,
+            'parent_run_id' => $child['parent_run_id'] ?? null,
+            'claimed_at' => $dispatchedAt->toIso8601String(),
+        ]);
     }
 
     /**

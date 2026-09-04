@@ -189,11 +189,33 @@ If you are using durable execution, also schedule the relay and recovery command
 use Illuminate\Support\Facades\Schedule;
 
 // Required: drain the durable outbox so steps/branches are dispatched after each checkpoint.
-Schedule::command('swarm:relay')->everyMinute();
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 
 // Safety net: redispatch runs that were checkpointed but never received a queue job.
-Schedule::command('swarm:recover')->everyFiveMinutes();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
+
+### Command overlap leases
+
+The scheduler mutex is defense in depth: it covers only scheduler-launched
+copies, uses Laravel's scheduler cache store, and skips the event before the
+command can emit `command.recover` or `command.relay` audit evidence. Every
+shipped example derives the scheduler expiry from the command lease, rounding up
+to Laravel's whole-minute scheduler unit. This keeps shortened and lengthened
+leases aligned and avoids Laravel's 24-hour scheduler default after a hard crash.
+Scheduled execution becomes eligible when that rounded-up scheduler mutex
+expires; direct command invocation is eligible at the exact command-lease expiry.
+
+Each command also acquires its own finite atomic lease from
+`swarm.commands.overlap.store` (`SWARM_COMMAND_OVERLAP_STORE`; `null` uses the
+default cache store). `swarm.commands.overlap.lease_seconds` defaults to 3600.
+Set it longer than the worst-case invocation: a command that outlives its lease
+is no longer protected from overlap, while a hard-crashed process becomes
+startable when the lease expires. Array, null, failover, and non-lock-capable
+stores fail before any sweep. File locks cover processes on one host only;
+multi-host deployments require a shared atomic store such as Redis, Memcached,
+DynamoDB, or database cache. Lock contention warns, records
+`status: skipped_overlap`, exits non-zero, and performs no sweep.
 
 `swarm:relay` must run at least as frequently as you want checkpointed steps to
 advance. The default limit is 100 rows per run; pass `--limit` to tune, or
@@ -287,7 +309,7 @@ On database persistence, run `php artisan migrate` to create the
 `swarm_audit_outbox` table. The existing relay schedule covers both lanes:
 
 ```php
-Schedule::command('swarm:relay')->everyMinute();
+Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 ```
 
 To drain a single lane during focused recovery:

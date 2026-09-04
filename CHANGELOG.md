@@ -1,5 +1,246 @@
 # Changelog
 
+## v0.25.0 - unreleased
+
+Durable-execution correctness and documentation integrity, carrying the work
+deferred from v0.23.0: the child-swarm dispatch race, overlap protection for the
+two commands the package tells you to schedule, an explicit `laravel/ai`
+pre-1.0 compatibility policy, PR-time validation of the package's own
+documentation references, a companion vector-memory compatibility release, and
+PHP 8.4 support across core and the first-party companion ecosystem.
+The child operational-input question and dispatch strand moved to v0.26.0 on
+2026-07-29; CI quality gates moved to v0.26.0 on 2026-09-02.
+
+### Added
+
+- **The package's documentation references are now validated on every pull
+  request.** Nothing checked them before: `src/` carries ~600 `{@see}`
+  references plus file paths, Artisan command names and stated requirements
+  quoted in prose, and PHPStan has no phpdoc reference rules. v0.23.0 showed the
+  cost — `AGENTS.md` pointed every agent at a review skill that is not
+  installed, listed 8 of the package's 29 Artisan commands, and carried stale
+  dependency pins. All mechanically checkable; none checked.
+
+  `tests/Unit/DocumentationReferenceTest.php` asserts four things: every
+  `{@see}` in `src/` resolves to a real type, member, constant or function;
+  every repository path named in a source comment or a relative markdown link
+  exists; every documented `php artisan` command in this package's own
+  namespaces is registered by it; and the README's stated requirements agree
+  with `composer.json`. Failures name each offender with its file and line — a
+  corpus-total assertion is insufficient, as a `>= 11` floor in this repo once
+  demonstrated by passing while every generator stub beneath it was broken.
+
+  **Scope is referential only, by design.** These checks answer "does the thing
+  this sentence points at exist" and nothing more. They cannot catch a semantic
+  claim that was false when written, which was the other half of the v0.23.0
+  defects. A green run means the references resolve, not that the documentation
+  is true — the test says so in its own docblock, so the next reader does not
+  assume broader coverage.
+
+  Each check is narrow on purpose, because an over-eager reference check
+  produces false positives, gets suppressed, and then reports green while
+  testing nothing. Facade members, global functions, unimported package types
+  and uninstalled optional dependencies all resolve rather than failing;
+  `config/*.php` paths are excluded because every one named in prose except
+  `config/swarm.php` belongs to the consuming application; and the requirements
+  check reads only the README's `## Requirements` block, so prose that
+  legitimately cites an older version — "the MCP tools added in `laravel/ai`
+  0.8" — is not mistaken for a stale pin. Each check was verified to fail
+  against a deliberately broken reference of its own kind.
+
+### Changed
+
+- **PHP 8.4 is now supported across Laravel Swarm and its first-party
+  companions (#493).** Core lowers its runtime requirement from `^8.5` to
+  `^8.4`, removes the inaccurate claim that it depends on PHP 8.5 language
+  features, and tests PHP 8.4 and 8.5 against latest and lowest supported
+  dependency sets. The minimum-runtime database and process-concurrency lanes
+  run on PHP 8.4. Compatibility patch releases for the installer testkit, MCP,
+  Filament, Pulse, and vector-memory companions carry the same runtime matrix.
+  PHP 8.3 is not part of the supported range.
+
+- **Composer's `dev-main` branch alias now identifies the v0.25 development
+  line.** It previously remained on `0.23.x-dev`, so consumers testing the main
+  branch through a `^0.25@dev` constraint could not resolve it as v0.25.
+
+- **The Guzzle conflict floor now excludes every release affected by
+  CVE-2026-69246.** Composer can no longer select versions below 7.15.2 or the
+  vulnerable 8.0.0 release through Laravel's transitive HTTP dependency.
+
+- **The pull-request checklist now matches the release workflow.** Every PR is
+  directed to the active version's `- unreleased` section; the stale docs/chore
+  exemption and nonexistent generic `## Unreleased` target are gone.
+
+- **Laravel AI compatibility is now an explicit, single-minor-line policy
+  (#435).** Because `laravel/ai` is pre-1.0, every patch and minor dependency
+  update is an integration-test event, but testing does not expand the declared
+  Composer range. Laravel Swarm supports one validated Laravel AI minor line at
+  a time; a new breaking minor becomes supported only when a later Swarm release
+  explicitly adopts it after validation. v0.25.0 remains on
+  `laravel/ai ^0.10.3`; Laravel AI 0.11 is a separate architectural adoption,
+  not a dual-version compatibility promise.
+
+- **Cross-component docblock claims are now an explicit review blocker (#452).**
+  `AGENTS.md` asks reviewers whether a docblock asserts something about a file
+  it is not in, permits comments that explain their own code, and directs
+  duplicated claims about another component's API, behavior, or infrastructure
+  back to the owning source. The Docs engineer review lens now applies the same
+  check. This is deliberately a manual reminder: the documentation-reference
+  test added in #450 proves that references resolve, not that semantic claims
+  are true.
+
+- **Five dead `{@see}` references in `src/` corrected**, all found by the new
+  check on its first run. `DatabaseDurableRunStore` pointed at
+  `openForDisplay()` twice as though it owned the method (it is on
+  `SwarmPersistenceCipher`) and at `openChildContextForDisplay()`, which exists
+  nowhere — the real helper is `openContextTopLevelInputForDisplay()`.
+  `StreamStepAccumulator` pointed at `SequentialRunner::mapStreamEvent()`, a
+  method that no longer exists; the mapping lives in `StreamEventMapper::map()`.
+  `PhpStanTypeAliases` used `{@see}` for `@phpstan-import-type`, which is an
+  annotation rather than a symbol. No behaviour changes.
+
+- **Vector-backed memory remains installable with the current core release.**
+  Companion package `builtbyberry/laravel-swarm-memory-vector` v0.1.2 widens its
+  core constraint through `^0.25` while retaining Laravel AI support through
+  `^0.10.3`; v0.1.3 adds PHP 8.4 support while preserving that compatibility.
+  The published v0.1.3 suite passes against the supported range endpoints,
+  core v0.20.0 and v0.24.1, and its PHP 8.4 candidate proof passed against
+  immutable core commit `97bf2267ca347ce3886c81c9d72d3e6ac05ddb89`
+  before release handoff. A final Packagist-only proof follows the core v0.25.0
+  tag, as tracked by #493.
+
+### Fixed
+
+- **BREAKING (relay/recovery operations): `swarm:recover` and `swarm:relay` now own finite overlap protection (#454).**
+  Scheduler scaffolding already used `withoutOverlapping()`, but that mutex was
+  editable application code, applied only to scheduler-launched copies, used the
+  scheduler's cache store, and previously inherited Laravel's 24-hour crash
+  expiry. Manual, supervisor, and job-driven invocations had no command-owned
+  protection at all.
+
+  Both commands now acquire distinct finite atomic cache leases before entering
+  their sweep. Contention emits `status: skipped_overlap`, warns, exits non-zero,
+  and never calls the recovery manager or either outbox. Array, null, failover,
+  and non-lock-capable stores fail before work rather than simulating safety.
+  `SWARM_COMMAND_OVERLAP_STORE` selects the store; file locks cover one host,
+  while multi-host deployments require a shared atomic store. The one-hour
+  `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` default must exceed the application's
+  worst-case invocation: hard crashes unblock at expiry, and an invocation that
+  outlives its lease is no longer protected.
+
+  The installer and every shipped scheduling example now use relay every minute,
+  recovery every five minutes, and derive `withoutOverlapping()` minutes from the
+  configured command lease as defense in depth. This finite scheduler expiry stays
+  aligned when the lease changes instead of inheriting Laravel's 24-hour default.
+  Deterministic process-concurrency coverage proves
+  a second OS process cannot enter during the lease and that a hard-crashed holder
+  stops blocking after expiry; command integration tests pin both keys, evidence,
+  exit codes, unsafe-store failure, and owner-safe exception release.
+
+- **BREAKING (non-interactive CLI): console commands no longer hang forever on a stdin that cannot answer.** A
+  command that prompts with no terminal behind it did not fail — it blocked
+  indefinitely, which in CI or a test lane reads as a stuck runner rather than a
+  failure. Diagnosed by sampling a hung process: 2266 of 2313 samples sat inside
+  `stream_select()`, in Symfony's `TerminalInputHelper::waitForInput()`.
+
+  What blocks is narrower than "stdin is not a terminal". The busy-wait is keyed
+  on the *identity of the stream*: `QuestionHelper` reads
+  `$input->getStream() ?? \STDIN`, and `TerminalInputHelper` only spins when
+  that stream's uri is `php://stdin`. So every prompting command now detaches an
+  unanswerable stdin in `initialize()` — if the input has no stream of its own
+  and this process has no terminal, it is given an empty in-memory stream. The
+  busy-wait becomes unreachable, the question reads EOF, and the prompt returns
+  its own declared default, or aborts loudly where an argument is required.
+
+  This changes only what a prompt READS FROM, never whether it is asked, so
+  behaviour on a non-terminal run is unchanged: `laravel/prompts` already
+  returned its declared default there, and every command still reaches the same
+  branch it reached before. An operator at a real terminal is unaffected —
+  the hook does not fire when stdin is a TTY.
+
+  Covers all four generators (`make:swarm`, `make:swarm:swarm`,
+  `make:swarm:agent`, `make:memory-tool`) including the framework's inherited
+  prompt for a missing argument, which fires before `handle()` runs, plus
+  `make:swarm:blueprint`, `swarm:audit:reconcile` and the five
+  `swarm:install:*` sub-installers.
+
+  Note the condition arming the blocking fallback is
+  `windows_os() || $app->runningUnitTests()`, and `runningUnitTests()` is
+  `$app['env'] === 'testing'` — a shipped configuration value, not "PHPUnit is
+  running". An application deployed with `APP_ENV=testing` arms it in
+  production, so this was never a test-only concern.
+
+  **One behaviour change, and it is a regression:** a piped answer is no longer
+  read. `echo yes | php artisan swarm:audit:reconcile --dismiss=42` previously
+  confirmed and now declines. Nothing can distinguish a pipe that will deliver a
+  line from one that never will — the read blocks either way — so the choice is
+  between losing piped answers and hanging indefinitely. See `UPGRADING.md`;
+  `--force` is the replacement.
+
+- **BREAKING (custom `DurableRunStore` implementations): race-safe child-swarm dispatch makes the dispatch marker an ownership claim,
+  and the claim — not the error classifier — decides who dispatches.** A durable
+  child could be dispatched twice, and the loser would bury the winner. More than
+  one worker can reach a child's dispatch: `swarm:recover` sweeps children the
+  parent may be inline-dispatching at that instant, and the scheduler-level
+  `withoutOverlapping()` the installer scaffolds serialises neither a sweep against
+  an inline dispatch nor two hosts unless its cache store is shared. Both saw `find() === null`,
+  both called `dispatchDurable()`, and the loser caught the unique-key
+  `QueryException` and wrote `failed` over the **winner's live child**, releasing
+  the parent's wait with `child_failed` while that child executed normally — so
+  under a fail-run policy the parent failed while its child was running. No
+  infrastructure fault was required. `SwarmChildStarted` also fired
+  unconditionally, so a re-dispatched intent emitted it twice.
+
+  `markChildRunDispatched()` now returns whether the caller won the conditional
+  claim (which is also guarded on status, so a child that already reached a
+  terminal state cannot be claimed and dispatched), and only that winner dispatches or emits `SwarmChildStarted` — a
+  duplicate `start()` is unreachable rather than something to recognise from a
+  driver-specific SQLSTATE after the fact. Every exit that does not leave a run
+  dispatched hands the claim back through the new
+  `DurableRunStore::releaseChildRunDispatch()`.
+
+  A throwing application listener for `SwarmChildStarted` is logged and isolated
+  after the child run has been dispatched, so it cannot fail or replay the
+  parent. The failure also emits `child.started_delivery_failed` audit evidence
+  with capture-gated diagnostics; a failure of that evidence sink is logged but
+  cannot invalidate the authoritative child dispatch. Start notification is
+  deliberately at-most-once; observers that need an exhaustive view must
+  reconcile child run state or consume terminal events.
+
+  The claim does **not** expire, and one narrow strand is knowingly left open: a
+  worker killed uncatchably between claiming a child and committing its run —
+  SIGKILL on deploy, `queue:work --timeout`, OOM, eviction — leaves a claim
+  nobody hands back, and that child is not re-dispatched. Re-dispatching it would
+  mean a recovery sweep building the child's input from the stored
+  `context_payload`, which is the capture/evidence view and is `[redacted]`
+  whenever `swarm.capture.inputs` is `false` (the default) — so the sweep would
+  run the child on the literal sentinel and return a confident wrong answer
+  instead of failing. Closing the strand therefore waits on separating a child's
+  operational input from its evidence view; `UPGRADING.md` documents the window,
+  how narrow it is, and how to recover a parent stuck behind it.
+
+  `updateChildRun()` now returns whether it wrote and accepts an optional
+  expected-status set; the failure path uses it so a child that finished under
+  another worker is not overwritten with `failed`, and the parent is reconciled
+  only when this worker actually owns the terminal write. A dispatch that fails
+  *after* `start()` committed the child's run — reachable because the queue write
+  happens at `PendingDispatch` destruct — no longer marks that child failed
+  either; it is left to `recoverable()`, which is the same reasoning the run-row
+  gate applies. Both of those, and a claim that cannot be handed back, are now
+  logged rather than silently swallowed.
+
+  Covered by regression tests that fail without the fix, plus a
+  `tests/ProcessConcurrency` lane racing four real OS processes for one child's
+  claim.
+
+  Dispatch failures otherwise stay **terminal** for now: the retry path is gated
+  on separating a child's operational input from the capture/evidence view,
+  because a swept retry re-reads a `[redacted]` input under
+  `swarm.capture.inputs=false` and would run the child on the literal sentinel.
+
+  Custom `DurableRunStore` implementations must update four signatures — see
+  `UPGRADING.md`.
+
 ## v0.24.1 - 2026-08-24
 
 Documentation-only correction. No code, configuration, or dependency changes —

@@ -124,7 +124,7 @@ $this->postJson('/swarm/webhooks/start/approval-swarm', ['document_id' => 100], 
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('swarm:recover')->everyMinute();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 Schedule::command('swarm:prune')->daily();
 ```
 

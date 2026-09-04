@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Commands;
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use Illuminate\Console\GeneratorCommand;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -23,6 +24,7 @@ use Symfony\Component\Console\Attribute\AsCommand;
 #[AsCommand(name: 'make:swarm:agent')]
 class MakeSwarmAgentCommand extends GeneratorCommand
 {
+    use DetachesUnanswerableStdin;
     use ResolvesStringConsoleInput;
 
     /**

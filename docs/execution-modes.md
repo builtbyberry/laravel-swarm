@@ -292,7 +292,7 @@ $detail = $response->inspect(); // DurableRunDetail
 **Key requirements:**
 - `swarm.persistence.driver` must be `database` — durable state cannot be held only in cache.
 - Package migrations must be published and run before dispatching durable runs.
-- Schedule `swarm:recover` frequently (every minute recommended) so stalled runs are automatically advanced after worker failures.
+- Schedule `swarm:recover` every five minutes with the configured overlap protection so stalled runs are automatically advanced after worker failures.
 - Schedule `swarm:prune` to retire expired run records.
 
 **Gotchas:**
@@ -401,9 +401,12 @@ Make sure the following is in place before switching to durable execution:
 ],
 
 // routes/console.php
-Schedule::command('swarm:recover')->everyMinute();
+Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
 Schedule::command('swarm:prune')->daily();
 ```
+
+The explicit scheduler mutex is defense in depth; the command-owned finite
+lease also covers manual invocation. See [Command overlap leases](maintenance.md#command-overlap-leases).
 
 ## Production Mode Selection
 

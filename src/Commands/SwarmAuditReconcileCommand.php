@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\DetachesUnanswerableStdin;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\ResolvesStringConsoleInput;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
@@ -19,6 +20,7 @@ use Throwable;
 #[AsCommand(name: 'swarm:audit:reconcile')]
 class SwarmAuditReconcileCommand extends Command
 {
+    use DetachesUnanswerableStdin;
     use ResolvesStringConsoleInput;
 
     protected ?string $reconcileAuditError = null;

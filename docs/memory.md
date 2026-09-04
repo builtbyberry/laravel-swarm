@@ -1016,4 +1016,4 @@ For aggregate Pulse internals — period selectors, recorder enable flag, troubl
 - [Durable Execution](durable-execution.md) — checkpointing, crash-resume, and replay
 - [Configuration](configuration.md) — `swarm.memory.replay_mode` and all memory config keys
 - [Public Surface](public-surface.md) — `SwarmMemory`, `MemoryEntry`, `MemoryScope`, `MemorySnapshot`, `ReplayMode`, `#[MemoryReplay]` in the public surface matrix
-- [laravel-swarm-memory-vector](https://github.com/builtbyberry/laravel-swarm-memory-vector) — vector-backed recall companion package (v0.1.0+, requires laravel-swarm v0.9.0+)
+- [laravel-swarm-memory-vector](https://github.com/builtbyberry/laravel-swarm-memory-vector#requirements) — vector-backed recall companion package; v0.1.3 supports PHP ^8.4, Laravel Swarm ^0.20–^0.25, and Laravel AI ^0.9 or ^0.10.3. Let Composer select a compatible tagged release.

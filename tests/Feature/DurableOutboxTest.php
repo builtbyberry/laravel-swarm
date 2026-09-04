@@ -887,6 +887,19 @@ test('swarm:relay --drain-until-empty --max-attempts retries transient failures 
     expect($exitCode)->toBe(1); // still failing after 3 attempts
 });
 
+test('swarm:relay --max-attempts caps iterations even while every batch makes progress', function (): void {
+    $outbox = Mockery::mock(DurableOutbox::class);
+    $outbox->shouldReceive('drain')
+        ->twice()
+        ->andReturn(new DrainResult(1, 0, 0));
+    app()->instance(DurableOutbox::class, $outbox);
+
+    $exitCode = Artisan::call('swarm:relay', ['--drain-until-empty' => true, '--max-attempts' => 2]);
+
+    expect($exitCode)->toBe(0)
+        ->and(Artisan::output())->toContain('Dispatched 2');
+});
+
 test('swarm:relay --drain-until-empty --max-attempts exits success when transient failures clear before limit', function (): void {
     // Two transient-failure passes, then clean on the third — exits success.
     outboxBindStubOutbox(
