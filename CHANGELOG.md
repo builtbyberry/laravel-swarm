@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.25.0 - unreleased
+## v0.25.0 - 2026-09-03
 
 Durable-execution correctness and documentation integrity, carrying the work
 deferred from v0.23.0: the child-swarm dispatch race, overlap protection for the
