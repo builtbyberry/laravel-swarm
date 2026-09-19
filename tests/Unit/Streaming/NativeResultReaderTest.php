@@ -7,6 +7,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Tests\Unit\Streaming\Fixtures\LegacyToolResult;
 use Laravel\Ai\Responses\Data\ToolResult;
 
+// Attribute coverage to the C3 mapping boundary, not incidental application boot.
+covers(SwarmToolResult::class);
+
 it('reads additive native result flags without changing historical defaults', function (array $flags, bool $denied, bool $failed) {
     $payload = [
         'type' => 'swarm_tool_result', 'id' => 'native-event', 'invocation_id' => 'native-invocation',

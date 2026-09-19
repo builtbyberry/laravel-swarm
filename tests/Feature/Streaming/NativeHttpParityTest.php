@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures\NativeChildAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures\NativeFailoverAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures\NativeHttpAgent;
@@ -30,6 +31,9 @@ use Laravel\Ai\Events\StreamingAgent;
 use Laravel\Ai\Events\ToolFailed;
 use Laravel\Ai\Events\ToolInvoked;
 use Laravel\Ai\Exceptions\RateLimitedException;
+
+// Attribute coverage to the C3 mapping boundary, not incidental application boot.
+covers(StreamEventMapper::class, SwarmToolResult::class);
 
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');

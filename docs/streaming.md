@@ -210,9 +210,10 @@ stream and the durable snapshot exactly like any other tool, including a
 
 Streamed tool results preserve native `denied` and `failed` flags under full,
 redacted and skipped capture, including database replay. Redaction removes payload
-values, not these outcome flags. The native streamed `successful` and `error`
-fields remain unchanged; Swarm does not classify an error-looking result string
-as an exception. In official Laravel AI, tool validation errors and caught nested
+values, not these outcome flags. The native streamed `successful`
+classification remains unchanged; error text still follows the capture policy
+(unchanged under Full, redacted under Redact, absent under Skip). Swarm does not
+classify an error-looking result string as an exception. In official Laravel AI, tool validation errors and caught nested
 `AgentTool` failures can be ordinary text results, while a max-step result can be
 failed without invoking the tool. Unsupported native approvals still fail at the
 [approval boundary](native-outcome-boundary.md).
