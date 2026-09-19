@@ -53,7 +53,7 @@ it('prioritizes native rejection over an earlier ordinary process failure', func
             iterator_to_array(StaticSwarm::make()->stream('task'));
         }
     })->toThrow($agent === PendingAgent::class ? UnsupportedNativeApprovalException::class : ApprovalNotResumableException::class);
-})->with(['parallel', 'static-prompt', 'static-stream'])->with([PendingAgent::class, ThrowingApprovalAgent::class])->with(['task', 'closure-failure', 'resource-failure'])->with([false, true]);
+})->with(['parallel', 'static-prompt', 'static-stream'])->with([PendingAgent::class, ThrowingApprovalAgent::class])->with(['task', 'closure-failure', 'resource-failure', 'malformed-failure', 'malformed-success', 'closure-success', 'wake-failure-success'])->with([false, true]);
 
 it('keeps ordinary process failure ordering when no approval is pending', function () {
     expect(fn () => app(SwarmRunner::class)->parallel([new FailingAgent, new PlainStreamEditor])->prompt('task'))
