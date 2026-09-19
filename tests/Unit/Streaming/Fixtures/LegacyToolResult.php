@@ -2,12 +2,14 @@
 
 declare(strict_types=1);
 
-namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
+namespace BuiltByBerry\LaravelSwarm\Tests\Unit\Streaming\Fixtures;
 
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Support\ToolResultEncoding;
 use Laravel\Ai\Responses\Data\ToolResult;
 
-final class SwarmToolResult extends SwarmStreamEvent
+// v0.25.0 reader at be7df78e8fde12362cfff9007cfe723d572a5e4f; only class/namespace relocated.
+final class LegacyToolResult extends SwarmStreamEvent
 {
     public function __construct(
         public string $id,
@@ -78,8 +80,6 @@ final class SwarmToolResult extends SwarmStreamEvent
                 arguments: self::arrayValue($toolResult, 'arguments'),
                 result: $toolResult['result'] ?? null,
                 resultId: is_string($toolResult['result_id'] ?? null) ? $toolResult['result_id'] : null,
-                denied: is_bool($toolResult['denied'] ?? null) ? $toolResult['denied'] : false,
-                failed: is_bool($toolResult['failed'] ?? null) ? $toolResult['failed'] : false,
             ),
             successful: is_bool($payload['successful'] ?? null) ? $payload['successful'] : false,
             error: is_string($payload['error'] ?? null) ? $payload['error'] : null,

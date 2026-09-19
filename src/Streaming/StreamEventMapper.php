@@ -280,6 +280,8 @@ class StreamEventMapper
                 arguments: [],
                 result: null,
                 resultId: $toolResult->resultId,
+                denied: $toolResult->denied,
+                failed: $toolResult->failed,
             );
         }
 
@@ -289,6 +291,8 @@ class StreamEventMapper
             arguments: $this->redactArrayPreservingKeys($toolResult->arguments),
             result: $this->redactValue($toolResult->result),
             resultId: $toolResult->resultId,
+            denied: $toolResult->denied,
+            failed: $toolResult->failed,
         );
     }
 
