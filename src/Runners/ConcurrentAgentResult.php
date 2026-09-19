@@ -140,7 +140,7 @@ class ConcurrentAgentResult
             ], JSON_THROW_ON_ERROR), true, flags: JSON_THROW_ON_ERROR);
         } catch (Throwable) {
             $failure = [
-                'class' => json_decode(json_encode($this->failure::class, JSON_INVALID_UTF8_SUBSTITUTE), true),
+                'class' => json_decode(json_encode($this->failure::class, JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR), true),
                 'message' => 'Concurrent agent failure could not be transported.',
                 'parameters' => [],
                 'transport_failed' => true,
