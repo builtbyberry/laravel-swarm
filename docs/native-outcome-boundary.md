@@ -22,7 +22,10 @@ outcome takes precedence over an ordinary sibling failure, regardless of branch
 order. With no native rejection, the first ordinary failure retains precedence.
 Sync execution still stops at its first failure. Custom concurrency drivers keep
 their existing behavior; Swarm cannot inspect a sibling outcome a custom driver
-discards. Other native errors retain their existing handling.
+discards. Ordinary failures retain their existing retry policy. If an ordinary
+exception's constructor data cannot be transported, the selected failure is an
+explicit `SwarmException`; worker-side reporting preserves the original error.
+An untransportable ordinary failure cannot hide a sibling native rejection.
 
 ## Effects, capture and operator recovery
 

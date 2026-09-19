@@ -12,6 +12,12 @@ class FailingAgent extends PendingAgent
 {
     public function prompt(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
+        if ($prompt === 'closure-failure') {
+            throw new ContextFailure(fn () => null);
+        }
+        if ($prompt === 'resource-failure') {
+            throw new ContextFailure(fopen('php://temp', 'r+'));
+        }
         throw new \RuntimeException('ordinary-first');
     }
 }

@@ -36,24 +36,24 @@ it('preserves the unsupported outcome type across real process workers', functio
     })->toThrow(UnsupportedNativeApprovalException::class);
 })->with(['parallel', 'static-prompt', 'static-stream']);
 
-it('prioritizes native rejection over an earlier ordinary process failure', function (string $path, string $agent) {
+it('prioritizes native rejection over an earlier ordinary process failure', function (string $path, string $agent, string $ordinaryPrompt, bool $nativeFirst) {
     config()->set('tests.native.mixed', true);
     config()->set('tests.native.plan', ['start_at' => 'parallel', 'nodes' => [
-        'parallel' => ['type' => 'parallel', 'branches' => ['ordinary', 'pending'], 'next' => 'finish'],
-        'ordinary' => ['type' => 'worker', 'agent' => FailingAgent::class, 'prompt' => 'task'],
+        'parallel' => ['type' => 'parallel', 'branches' => $nativeFirst ? ['pending', 'ordinary'] : ['ordinary', 'pending'], 'next' => 'finish'],
+        'ordinary' => ['type' => 'worker', 'agent' => FailingAgent::class, 'prompt' => $ordinaryPrompt],
         'pending' => ['type' => 'worker', 'agent' => $agent, 'prompt' => 'task'],
         'finish' => ['type' => 'finish', 'output_from' => 'pending'],
     ]]);
-    expect(function () use ($path, $agent) {
+    expect(function () use ($path, $agent, $ordinaryPrompt, $nativeFirst) {
         if ($path === 'parallel') {
-            app(SwarmRunner::class)->parallel([new FailingAgent, new $agent])->prompt('task');
+            app(SwarmRunner::class)->parallel($nativeFirst ? [new $agent, new FailingAgent] : [new FailingAgent, new $agent])->prompt($ordinaryPrompt);
         } elseif ($path === 'static-prompt') {
             StaticSwarm::make()->prompt('task');
         } else {
             iterator_to_array(StaticSwarm::make()->stream('task'));
         }
     })->toThrow($agent === PendingAgent::class ? UnsupportedNativeApprovalException::class : ApprovalNotResumableException::class);
-})->with(['parallel', 'static-prompt', 'static-stream'])->with([PendingAgent::class, ThrowingApprovalAgent::class]);
+})->with(['parallel', 'static-prompt', 'static-stream'])->with([PendingAgent::class, ThrowingApprovalAgent::class])->with(['task', 'closure-failure', 'resource-failure'])->with([false, true]);
 
 it('keeps ordinary process failure ordering when no approval is pending', function () {
     expect(fn () => app(SwarmRunner::class)->parallel([new FailingAgent, new PlainStreamEditor])->prompt('task'))

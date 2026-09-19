@@ -5,10 +5,6 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\UnsupportedNativeApprovalException;
-use Closure;
-use Illuminate\Concurrency\ForkDriver;
-use Illuminate\Concurrency\ProcessDriver;
-use Illuminate\Contracts\Concurrency\Driver;
 use Laravel\Ai\Exceptions\ApprovalNotResumableException;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Streaming\Events\ToolApprovalRequest;
@@ -26,33 +22,20 @@ class NativeOutcomeValidator
     }
 
     /**
-     * Inspect all built-in concurrent worker outcomes before selecting a batch failure.
-     * Other drivers retain their own execution and exception semantics.
+     * Inspect returned worker outcomes without invoking the concurrency driver.
      *
-     * @param  array<Closure>  $callbacks
+     * @param  array<ConcurrentAgentResult|array<mixed>>  $results
      * @return array<mixed>
      */
-    public function runConcurrent(Driver $driver, array $callbacks): array
+    public function validateConcurrentResults(array $results): array
     {
-        if (! $driver instanceof ProcessDriver && ! $driver instanceof ForkDriver) {
-            return $driver->run($callbacks);
-        }
-
-        $wrapped = [];
-        foreach ($callbacks as $key => $callback) {
-            $wrapped[$key] = static function () use ($callback): ConcurrentAgentResult {
-                return ConcurrentAgentResult::capture($callback);
-            };
-        }
-        $results = $driver->run($wrapped);
-
         foreach ($results as $result) {
-            if (in_array($result->failureClass(), [UnsupportedNativeApprovalException::class, ApprovalNotResumableException::class], true)) {
+            if ($result instanceof ConcurrentAgentResult && in_array($result->failureClass(), [UnsupportedNativeApprovalException::class, ApprovalNotResumableException::class], true)) {
                 $result->value();
             }
         }
 
-        return array_map(static fn (ConcurrentAgentResult $result): array => $result->value(), $results);
+        return array_map(static fn (ConcurrentAgentResult|array $result): array => $result instanceof ConcurrentAgentResult ? $result->value() : $result, $results);
     }
 
     public function validateResponse(AgentResponse $response): void
