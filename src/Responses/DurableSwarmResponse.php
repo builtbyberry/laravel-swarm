@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
+use BuiltByBerry\LaravelSwarm\Testing\FakePendingDispatch;
 use Illuminate\Foundation\Bus\PendingDispatch;
-use Laravel\Ai\FakePendingDispatch;
 
 class DurableSwarmResponse
 {
