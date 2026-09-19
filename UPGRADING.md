@@ -282,6 +282,28 @@ stability settings to install Swarm — see
 
 ## Upgrading to v0.26.0
 
+### Streamed tool-result evidence and downgrades
+
+Sequential and static-hierarchical streams now retain native tool-result `denied`
+and `failed` flags under full, redacted and skipped capture and after replay. No
+schema, serialized job, store signature or capture-default change is required.
+Historical rows without the flags still read with false defaults. Native event
+IDs, timestamps and available invocation IDs retain their existing provenance.
+
+An unmodified pre-C3 reader can parse the additive flags but drops them when it
+reconstructs the nested native tool result, potentially making its
+`successful()` disagree with the preserved streamed status. The regression suite
+runs the candidate JSON through the v0.25.0 reader to demonstrate this loss.
+**Once corrected evidence is persisted, downgrading to that unmodified reader is
+not supported.** Draining workers or pinning the dependency pair does not repair
+this semantic loss. Retain a correction-preserving reader, or return to reviewed
+design before any downgrade; do not delete or rewrite evidence to enable it.
+Deploy the compatible reader and official dependency together, draining existing
+workers before switching code. This restriction also applies to evidence moved
+to cold storage. C2's approval rejection and nonretryability must remain intact.
+
+See [streaming provenance and failure stages](docs/streaming.md).
+
 ### Native pending approval now fails explicitly
 
 An agent returning pending native tool approvals now fails its affected Swarm

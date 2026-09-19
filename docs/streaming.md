@@ -189,6 +189,14 @@ first-class on the causal log — "structure as payload".
 preserves upstream event **IDs** and **timestamps** in typed replay. **Invocation
 IDs** are passed through when the upstream provider includes them.
 
+These native identities describe provider events. Swarm `run_id` and `node_id`
+describe orchestration; they are not substitutes for native invocation or tool
+identities. Missing invocation IDs stay absent. Swarm does not invent generation
+IDs or join native tool-invocation IDs to streamed provider call IDs by comparing
+arguments. Native event subscribers remain application-owned; Swarm does not
+install a second global native-event collector or add native event usage a second
+time to step usage.
+
 ### Tool calls (including MCP tools)
 
 Swarm's tool model is **pure passthrough**. A `laravel/ai` `ToolCall` /
@@ -199,6 +207,16 @@ events — Swarm does not interpret the tool's arguments or result. That means t
 MCP-specific configuration: an MCP-backed tool's call and result flow through the
 stream and the durable snapshot exactly like any other tool, including a
 **structured** (non-scalar) MCP result, which is preserved intact.
+
+Streamed tool results preserve native `denied` and `failed` flags under full,
+redacted and skipped capture, including database replay. Redaction removes payload
+values, not these outcome flags. The native streamed `successful`
+classification remains unchanged; error text still follows the capture policy
+(unchanged under Full, redacted under Redact, absent under Skip). Swarm does not
+classify an error-looking result string as an exception. In official Laravel AI, tool validation errors and caught nested
+`AgentTool` failures can be ordinary text results, while a max-step result can be
+failed without invoking the tool. Unsupported native approvals still fail at the
+[approval boundary](native-outcome-boundary.md).
 
 A tool's `result` and its `arguments` are both typed `mixed`, so at the edges
 either can be a value JSON cannot represent (for example, a binary-ish MCP result
@@ -216,6 +234,12 @@ is the field that realistically carries such a value; arguments share the same
 type and degrade path for safety.)
 
 ## Persisted Replay
+
+The v0.26.0 reader accepts historical result rows without the additive `denied`
+and `failed` booleans, defaulting each to false. An older reader can parse new
+rows while silently dropping those flags: that is wire compatibility, **not** a
+safe semantic downgrade. Once corrected evidence has been persisted, retain a
+reader that preserves it. See [the downgrade restriction](../UPGRADING.md#streamed-tool-result-evidence-and-downgrades).
 
 In-memory replay is always available after a successful synchronous stream
 completes. **Database-backed replay** of the exact emitted sequence is **opt-in**.
@@ -393,6 +417,18 @@ Full detail: [Persistence And History — Payload Limits](persistence-and-histor
 If the final streamed agent fails, live execution yields a `swarm_stream_error`
 event, marks run history failed, dispatches `SwarmFailed`, and **re-throws** the
 underlying exception to the caller.
+
+Native stream exhaustion, native completion callbacks and synchronous tool
+observers run before Swarm marks the affected step complete. If they throw, Swarm
+fails the run without publishing a successful terminal event. Native provider
+failover before any output remains available; after output or tool effects, do
+not assume the attempt can be replayed safely. Inspect effects before an
+operator-controlled restart. Discarding an unfinished consumer marks that run
+failed and closes its local stream state; it does not hard-cancel a provider call.
+
+The public Swarm `then()` callback is a different stage: it observes an already
+completed Swarm response. If that observer throws, completed history and replay
+remain successful.
 
 ## Timeouts
 

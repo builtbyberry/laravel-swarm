@@ -33,6 +33,19 @@ _To be filled in during release wrap-up._
 
 ### Fixed
 
+- Preserve native streamed tool-result `denied` and `failed` flags through full,
+  redacted and skipped capture and historical/hot/cold replay, for sequential
+  and static-hierarchical streams. Existing native event identities, outcome
+  vocabulary, usage accounting and callback stages remain unchanged. Chosen:
+  retain native evidence with additive reader fields; rejected: dropping flags,
+  inferring failure from text, or introducing a second telemetry collector.
+  Controlled native HTTP, interleaved generator/Fiber, teardown, storage and
+  old-reader tests cover the boundary. Old readers parse new rows but lose the
+  correction: after corrected evidence is persisted, retain a compatible reader
+  or return to reviewed design before downgrade. Worker drain alone is
+  insufficient. Error text still follows capture policy (review C3-F1). New
+  parity tests attribute coverage to their mapping/reader targets without changing
+  test execution or the coverage threshold (review C3-F2). See UPGRADING.md.
 - Preserve rejected native approval outcomes across fallible failure listeners,
   snapshot cleanup and parent joins (review C2-F1); classify approval events as
   rejected in the upstream event inventory (review C2-F2).

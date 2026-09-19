@@ -1405,6 +1405,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 arguments: [],
                 result: null,
                 resultId: $toolResult->resultId,
+                denied: $toolResult->denied,
+                failed: $toolResult->failed,
             );
         }
 
@@ -1414,6 +1416,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             arguments: $this->redactStaticArrayPreservingKeys($toolResult->arguments),
             result: $this->redactStaticValue($toolResult->result),
             resultId: $toolResult->resultId,
+            denied: $toolResult->denied,
+            failed: $toolResult->failed,
         );
     }
 
