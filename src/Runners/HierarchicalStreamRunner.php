@@ -282,6 +282,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
 
             try {
                 $coordinatorResponse = $coordinator->prompt($context->input);
+                $this->outcomes->validateResponse($coordinatorResponse);
             } finally {
                 ActiveRunContext::exit();
             }

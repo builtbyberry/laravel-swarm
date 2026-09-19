@@ -133,6 +133,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         protected SnapshotsMemory $snapshots,
         protected AgentVisibleMemoryView $view,
         protected MemoryReplayCoordinator $coordinator,
+        protected NativeOutcomeValidator $outcomes,
     ) {
         parent::__construct(
             $config,
@@ -854,6 +855,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             try {
                                 $branchStartedAt = MonotonicTime::now();
                                 $response = $worker->prompt($input);
+                                Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
                                     'output' => (string) $response,
@@ -1062,7 +1064,9 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             );
 
         try {
-            foreach ($agent->stream($input) as $event) {
+            $stream = $agent->stream($input);
+            foreach ($stream as $event) {
+                $this->outcomes->validateEvent($event);
                 if ($event instanceof TextDelta) {
                     $output .= $event->delta;
                     $swarmEvent = new SwarmTextDelta(
@@ -1183,6 +1187,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $unknownStreamEventClasses[get_debug_type($event)] = true;
                 }
             }
+            $stream->then($this->outcomes->validateResponse(...));
 
             return ['output' => $output, 'usage' => $stepUsage];
         } finally {

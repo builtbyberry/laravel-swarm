@@ -72,6 +72,7 @@ class HierarchicalRunner
         protected AgentVisibleMemoryView $view,
         protected StreamEventMapper $mapper,
         protected DurableNodeStreamRecorder $nodeStream,
+        protected NativeOutcomeValidator $outcomes,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -989,6 +990,7 @@ class HierarchicalRunner
                             try {
                                 $startedAt = MonotonicTime::now();
                                 $response = $worker->prompt($input);
+                                Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
                                     'output' => (string) $response,
@@ -1571,6 +1573,7 @@ class HierarchicalRunner
 
         try {
             $response = $agent->prompt($input);
+            $this->outcomes->validateResponse($response);
         } finally {
             ActiveRunContext::exit();
         }
@@ -1677,13 +1680,15 @@ class HierarchicalRunner
         ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
 
         try {
-            foreach ($agent->stream($input) as $event) {
+            $stream = $agent->stream($input);
+            foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 
                 if ($swarmEvent !== null) {
                     $sink($swarmEvent);
                 }
             }
+            $stream->then($this->outcomes->validateResponse(...));
         } finally {
             // Persist any tool call left without a result (happy path or a crash
             // mid-node) so the frozen snapshot records every tool the agent invoked,

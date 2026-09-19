@@ -12,12 +12,14 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
+use BuiltByBerry\LaravelSwarm\Exceptions\UnsupportedNativeApprovalException;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRetryPolicy;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
+use Laravel\Ai\Exceptions\ApprovalNotResumableException;
 use Psr\Log\LoggerInterface;
 use ReflectionClass;
 use Throwable;
@@ -43,6 +45,10 @@ class DurableRetryHandler
      */
     public function scheduleRunRetryIfAllowed(array $run, Swarm $swarm, RunContext $context, string $token, int $stepLeaseSeconds, int $stepIndex, Throwable $exception): array
     {
+        if ($exception instanceof UnsupportedNativeApprovalException || $exception instanceof ApprovalNotResumableException) {
+            return ['scheduled' => false];
+        }
+
         $policy = $this->resolveRetryPolicy($swarm, $this->agentClassForStep($swarm, $run, $stepIndex));
 
         if ($policy === null || $this->isNonRetryable($policy, $exception)) {
@@ -99,6 +105,10 @@ class DurableRetryHandler
      */
     public function scheduleBranchRetryIfAllowed(array $run, array $branch, Swarm $swarm, RunContext $context, string $token, Throwable $exception): array
     {
+        if ($exception instanceof UnsupportedNativeApprovalException || $exception instanceof ApprovalNotResumableException) {
+            return ['scheduled' => false];
+        }
+
         $policy = $this->resolveRetryPolicy($swarm, (string) $branch['agent_class']);
 
         if ($policy === null || $this->isNonRetryable($policy, $exception)) {

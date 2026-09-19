@@ -80,6 +80,7 @@ class ParallelRunner
                 try {
                     $startedAt = MonotonicTime::now();
                     $response = $agent->prompt($input);
+                    Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                     return [
                         'output' => (string) $response,

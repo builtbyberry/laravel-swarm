@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Exceptions\UnsupportedNativeApprovalException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
@@ -24,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
+use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
@@ -40,6 +42,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Exceptions\ApprovalNotResumableException;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -73,6 +76,7 @@ class DurableBranchAdvancer
         protected AgentVisibleMemoryView $view,
         protected DurableNodeStreamRecorder $nodeStream,
         protected StreamEventMapper $mapper,
+        protected NativeOutcomeValidator $outcomes,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId): void
@@ -137,12 +141,14 @@ class DurableBranchAdvancer
         // memory view on a crash-resume retry, or under live memory on a first
         // attempt. The callback returns `true` when boundary dispatch should
         // follow and `false` on all early-return paths.
+        $unsupportedOutcome = null;
+
         /** @var bool $shouldDispatch */
         $shouldDispatch = $this->coordinator->during(
             $run['swarm_class'],
             $runId,
             (int) $branch['step_index'],
-            function (?MemorySnapshot $existing) use ($run, $branch, $runId, $branchId, $token, $context, $swarm, $stepLeaseSeconds, $durableStreaming, $branchEpoch, $branchNodeId): bool {
+            function (?MemorySnapshot $existing) use ($run, $branch, $runId, $branchId, $token, $context, $swarm, $stepLeaseSeconds, $durableStreaming, $branchEpoch, $branchNodeId, &$unsupportedOutcome): bool {
                 $agent = $this->application->make($branch['agent_class']);
 
                 if (! $agent instanceof Agent) {
@@ -251,9 +257,9 @@ class DurableBranchAdvancer
                     }
 
                     // Branch is terminally failing — log before marking failed so the
-                    // exception is visible in application logs even though this code
-                    // path never rethrows (silent failure was the v0.3 / v0.4.0
-                    // behavior; see issue #1).
+                    // exception is visible even for ordinary branch failures that
+                    // do not rethrow. Unsupported native outcomes propagate after
+                    // fenced terminalization and parent/join dispatch below.
                     $this->logger->error('Durable swarm branch failed — retries exhausted or non-retryable.', [
                         'run_id' => $runId,
                         'branch_id' => $branchId,
@@ -267,6 +273,10 @@ class DurableBranchAdvancer
                         $this->durableRuns->markBranchFailed($runId, $branchId, $token, $this->capture->failureArray($exception));
                     } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                         return false;
+                    }
+
+                    if ($exception instanceof UnsupportedNativeApprovalException || $exception instanceof ApprovalNotResumableException) {
+                        $unsupportedOutcome = $exception;
                     }
 
                     if ($this->branches->parallelFailurePolicy($context) === DurableParallelFailurePolicy::FailRun) {
@@ -290,6 +300,11 @@ class DurableBranchAdvancer
             $run = $this->runs->requireRun($runId);
             $this->hierarchical->dispatchWaitingBoundary($run, false);
         }
+
+        // Preserve fenced failure and parent/join dispatch before failing the queue job.
+        if ($unsupportedOutcome !== null) {
+            throw $unsupportedOutcome;
+        }
     }
 
     /**
@@ -303,6 +318,7 @@ class DurableBranchAdvancer
     protected function promptBranchAgent(Agent $agent, array $branch, MemorySnapshot $snapshot): array
     {
         $response = $agent->prompt($branch['input']);
+        $this->outcomes->validateResponse($response);
 
         foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
             $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
@@ -339,13 +355,15 @@ class DurableBranchAdvancer
         $accumulator = new StreamStepAccumulator($snapshot);
 
         try {
-            foreach ($agent->stream($branch['input']) as $event) {
+            $stream = $agent->stream($branch['input']);
+            foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, (int) $branch['step_index'], $agent, $accumulator);
 
                 if ($swarmEvent !== null) {
                     $sink($swarmEvent);
                 }
             }
+            $stream->then($this->outcomes->validateResponse(...));
         } finally {
             foreach ($accumulator->pendingToolCalls as $unpairedCall) {
                 $accumulator->snapshot = $this->snapshots->appendToolCall(

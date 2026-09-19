@@ -282,6 +282,30 @@ stability settings to install Swarm — see
 
 ## Upgrading to v0.26.0
 
+### Native pending approval now fails explicitly
+
+An agent returning pending native tool approvals now fails its affected Swarm
+step/node/branch instead of allowing an empty or partial response to appear
+successful. The internal `UnsupportedNativeApprovalException`, or the native
+`ApprovalNotResumableException` when Laravel AI rejects the outcome first, is
+nonretryable regardless of configured durable policies or queue tries. For
+example, a queued two-agent workflow whose first agent asks for native tool
+approval fails before invoking the second agent; raising queue tries to five
+will not restart it. A durable parent configured for `partial_success` can still
+complete using successful siblings while the approval-pending branch stays failed.
+
+No supported Swarm approval continuation is removed: native approval integration
+remains unavailable, and existing Swarm inter-step waits/signals remain supported.
+Inspect effects before manually restarting: other native tools, conversation
+storage and ordinary captured tool events may already exist. Do not treat the
+failure as proof that nothing acted. See [native approval outcomes](docs/native-outcome-boundary.md).
+
+No new schema, config, serialized job format or maintenance command is introduced.
+Deploy and roll back the official dependency/Swarm code pair together after worker
+drain and applicable old-job/row fixture proof; reverting this boundary also removes
+its explicit rejection and no-retry safeguards. Later adoption components have
+separate preservation and rollback evidence requirements.
+
 ### Laravel AI dependency and fake compatibility
 
 **Breaking:** require official `laravel/ai ^0.11.2`; 0.10 is no longer supported.

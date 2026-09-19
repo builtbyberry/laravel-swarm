@@ -51,6 +51,7 @@ class SequentialRunner
         protected StreamStepCheckpointStore $checkpoints,
         protected StreamEventMapper $mapper,
         protected LoggerInterface $logger,
+        protected NativeOutcomeValidator $outcomes,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -218,6 +219,7 @@ class SequentialRunner
                                 yield $swarmEvent;
                             }
                         }
+                        $stream->then($this->outcomes->validateResponse(...));
                     } finally {
                         // Flush any tool calls without a matching ToolResult into
                         // the snapshot. This runs on the happy path (calls left
@@ -274,6 +276,7 @@ class SequentialRunner
                     );
 
                     $response = $agent->prompt($input);
+                    $this->outcomes->validateResponse($response);
                     $output = (string) $response;
                     $stepUsage = $this->usageFromResponse($response);
                     $this->appendResponseToolCalls($snapshot, $response);
@@ -385,6 +388,7 @@ class SequentialRunner
 
         try {
             $response = $agent->prompt($input);
+            $this->outcomes->validateResponse($response);
         } finally {
             ActiveRunContext::exit();
         }
@@ -462,13 +466,15 @@ class SequentialRunner
         ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
 
         try {
-            foreach ($agent->stream($input) as $event) {
+            $stream = $agent->stream($input);
+            foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 
                 if ($swarmEvent !== null) {
                     $sink($swarmEvent);
                 }
             }
+            $stream->then($this->outcomes->validateResponse(...));
         } finally {
             $this->flushPendingToolCalls($accumulator);
             $this->breadcrumbUnknownStreamEvents($accumulator->unknownEventClasses, $state->context->runId, $index);
