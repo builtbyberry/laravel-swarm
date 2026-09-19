@@ -238,9 +238,8 @@ changes even when the application-facing swarm API stays the same.
 
 ## Dependency Upgrades
 
-`laravel/ai` is required in the **^0.10** range as of v0.24.0 (support for 0.9
-was dropped; 0.8 was dropped in v0.20.0; 0.6 / 0.7 earlier, in v0.13.0) and is
-**pre-1.0**. Public
+`laravel/ai` is required in the **^0.11.2** range as of v0.26.0; support for
+0.10 is dropped. Laravel AI remains **pre-1.0**. Public
 contracts, streaming behavior, and provider integrations can change between
 releases without the stability guarantees of a stable major line.
 
@@ -270,7 +269,7 @@ You may pin `laravel/ai` to an exact or narrower range in your application’s
 `composer.json` when you need reproducible builds or a slower upgrade cadence:
 
 ```bash
-composer require laravel/ai:0.10.3
+composer require laravel/ai:0.11.2
 ```
 
 That pins your application’s dependency resolution. It does not change the semver
@@ -280,6 +279,36 @@ As of v0.23.0 this package’s `composer.json` uses `"minimum-stability": "stabl
 with `"prefer-stable": true`. Your application needs no special Composer
 stability settings to install Swarm — see
 [Composer minimum-stability](#composer-minimum-stability).
+
+## Upgrading to v0.26.0
+
+### Laravel AI dependency and fake compatibility
+
+**Breaking:** require official `laravel/ai ^0.11.2`; 0.10 is no longer supported.
+PHP and Illuminate requirements are unchanged. Keep stable dependency resolution;
+no fork, patch, development branch, or upstream change is required.
+
+Swarm now owns its internal fake pending dispatch. Queued and durable fake
+responses keep their public `PendingDispatch` constructor contract and fluent
+routing, but record intent only. They never wrap a real job or dispatch on
+object destruction. Unsupported response methods, including queued `then()`
+and `catch()`, still fail. See [testing limits](docs/testing.md#fake-dispatch-limits).
+
+Deploy the dependency and Swarm code as a pair: stop intake, drain in-flight
+calls and queued work, stop workers, update Composer dependencies and application
+code, refresh autoload/opcache, restart workers, smoke-test your supported modes
+and durable operators, then resume intake. Never mix old and new code in
+long-lived workers. No schema, serialized job format, config, or retention
+change is introduced by this compatibility step.
+
+Rollback requires the previous dependency **and** code pair after the same
+drain/stop procedure, plus proof that the old readers accept the jobs and rows
+your application retains. The compatibility step alone does not establish that
+proof. The broader v0.26.0 preservation and upgrade verification remains pending.
+Once corrected denied/failed tool-result evidence is written by the later stream
+adoption, old readers must preserve those semantics: retain a compatible reader
+or block the downgrade. Parseability alone is not sufficient. Existing prune and
+recovery schedules and the `APP_KEY` rotation boundary still apply.
 
 ## Upgrading to v0.25.0
 
@@ -1686,9 +1715,10 @@ are documented as **passthrough** and may evolve with `laravel/ai`:
   `ReasoningEnd`, `ToolCall`, `ToolResult`, `StreamEnd`, and `Error` —
   yielded as-is from the provider stream into the runner's translation
   layer.
-- `Laravel\Ai\FakePendingDispatch` — referenced by
-  `BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse::syncQueueRouting()`
-  to bypass queue-routing reads under `Bus::fake()`.
+- `Laravel\Ai\FakePendingDispatch` — used historically by the Swarm fake.
+  In v0.26.0 this coupling is removed; the Swarm-owned internal
+  [FakePendingDispatch](src/Testing/FakePendingDispatch.php) supplies inert
+  dispatch intent under `Swarm::fake()`, independently of `Bus::fake()`.
 
 Treat these as read-only snapshots of the vendor data. Their shapes are not
 covered by Swarm's semver guarantees; if `laravel/ai` changes them, Swarm

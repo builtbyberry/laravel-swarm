@@ -42,7 +42,6 @@ use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\Contracts\Agent;
-use Laravel\Ai\FakePendingDispatch;
 
 /**
  * Test double that records calls for assertions.

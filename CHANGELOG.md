@@ -11,7 +11,14 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Breaking:** require official `laravel/ai ^0.11.2` and drop the 0.10 line.
+  PHP and Illuminate constraints are unchanged; deploy or roll back the
+  dependency and Swarm code together after draining workers (see UPGRADING.md).
+- Replace the removed vendor fake pending dispatch with a small internal Swarm
+  fake, preserving response types, fluent routing, intent assertions, and inert
+  destruction. Real job execution is tested separately with native agent fakes;
+  wrapping native jobs or adding queued completion callbacks was rejected
+  because Swarm fakes must remain intent-only.
 
 ## v0.25.0 - 2026-09-03
 
