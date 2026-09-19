@@ -390,7 +390,7 @@ it('preserves live native rejection through failure listeners', function (string
 
 it('persists rejected branch failure before fallible logging', function () {
     nativeOutcomeRuntime();
-    $logger = Mockery::mock(LoggerInterface::class, app(LoggerInterface::class));
+    $logger = Mockery::mock(LoggerInterface::class)->shouldIgnoreMissing();
     $logger->shouldReceive('error')->once()->andThrow(new RuntimeException('logging unavailable'));
     app()->instance(LoggerInterface::class, $logger);
     $runId = ParallelSwarm::make()->dispatchDurable('task')->runId;
