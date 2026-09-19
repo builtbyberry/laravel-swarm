@@ -211,6 +211,7 @@ class SequentialRunner
                     $stream = $agent->stream($input);
                     $accumulator = new StreamStepAccumulator($snapshot);
 
+                    $nativeStreamFailure = null;
                     try {
                         foreach ($stream as $event) {
                             $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
@@ -220,32 +221,39 @@ class SequentialRunner
                             }
                         }
                         $stream->then($this->outcomes->validateResponse(...));
+                    } catch (Throwable $exception) {
+                        $nativeStreamFailure = $exception;
+                        throw $exception;
                     } finally {
-                        // Flush any tool calls without a matching ToolResult into
-                        // the snapshot. This runs on the happy path (calls left
-                        // pending at stream end) AND on abandonment (the generator
-                        // was torn down mid-stream by a worker crash, so the
-                        // `foreach` never reached `StreamEnd`). Doing it in
-                        // `finally` makes the append crash-safe: an in-flight call
-                        // is persisted with result=null instead of being lost, so
-                        // the frozen snapshot is a faithful record of every tool
-                        // the agent invoked and replay can rebuild byte-identically.
-                        $this->flushPendingToolCalls($accumulator);
+                        try {
+                            // Flush any tool calls without a matching ToolResult into
+                            // the snapshot. This runs on the happy path (calls left
+                            // pending at stream end) AND on abandonment (the generator
+                            // was torn down mid-stream by a worker crash, so the
+                            // `foreach` never reached `StreamEnd`). Doing it in
+                            // `finally` makes the append crash-safe: an in-flight call
+                            // is persisted with result=null instead of being lost, so
+                            // the frozen snapshot is a faithful record of every tool
+                            // the agent invoked and replay can rebuild byte-identically.
+                            $this->flushPendingToolCalls($accumulator);
 
-                        // Restore the live SwarmMemory binding even if the stream
-                        // was abandoned mid-flight. No-op on the fresh-execution
-                        // path (begin() never swapped).
-                        $this->coordinator->end($boundary);
+                            // Restore the live SwarmMemory binding even if the stream
+                            // was abandoned mid-flight. No-op on the fresh-execution
+                            // path (begin() never swapped).
 
-                        // One breadcrumb per step for any stream events this
-                        // chain did not recognize (also fires if the generator
-                        // was abandoned mid-stream). Logs the dropped event
-                        // classes; never throws.
-                        $this->breadcrumbUnknownStreamEvents(
-                            $accumulator->unknownEventClasses,
-                            $state->context->runId,
-                            $index,
-                        );
+                            // One breadcrumb per step for any stream events this
+                            // chain did not recognize (also fires if the generator
+                            // was abandoned mid-stream). Logs the dropped event
+                            // classes; never throws.
+                            $this->breadcrumbUnknownStreamEvents(
+                                $accumulator->unknownEventClasses,
+                                $state->context->runId,
+                                $index,
+                            );
+                        } finally {
+                            $this->coordinator->end($boundary);
+                            NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
+                        }
                     }
 
                     $output = $accumulator->output;
@@ -465,6 +473,7 @@ class SequentialRunner
         $startedAt = MonotonicTime::now();
         ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
 
+        $nativeStreamFailure = null;
         try {
             $stream = $agent->stream($input);
             foreach ($stream as $event) {
@@ -475,10 +484,17 @@ class SequentialRunner
                 }
             }
             $stream->then($this->outcomes->validateResponse(...));
+        } catch (Throwable $exception) {
+            $nativeStreamFailure = $exception;
+            throw $exception;
         } finally {
-            $this->flushPendingToolCalls($accumulator);
-            $this->breadcrumbUnknownStreamEvents($accumulator->unknownEventClasses, $state->context->runId, $index);
-            ActiveRunContext::exit();
+            try {
+                $this->flushPendingToolCalls($accumulator);
+                $this->breadcrumbUnknownStreamEvents($accumulator->unknownEventClasses, $state->context->runId, $index);
+            } finally {
+                ActiveRunContext::exit();
+                NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
+            }
         }
 
         $this->guardrails->validateStep(

@@ -142,6 +142,15 @@ The child operational-input question and dispatch strand moved to v0.26.0 on
 
 ### Fixed
 
+- Preserve rejected native approval outcomes across fallible failure listeners,
+  snapshot cleanup and parent joins (review C2-F1); classify approval events as
+  rejected in the upstream event inventory (review C2-F2).
+- Inspect all built-in process/fork batch outcomes before choosing a failure so
+  an earlier ordinary error cannot hide a sibling approval rejection (review
+  C2-F3). Sync short-circuit and custom-driver behavior stay unchanged. Keeping
+  only the first concurrent error was rejected because it can permit retries
+  after tool effects; real-process and actual queue-worker tests cover the choice.
+
 - **BREAKING (relay/recovery operations): `swarm:recover` and `swarm:relay` now own finite overlap protection (#454).**
   Scheduler scaffolding already used `withoutOverlapping()`, but that mutex was
   editable application code, applied only to scheduler-launched copies, used the

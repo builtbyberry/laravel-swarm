@@ -41,6 +41,7 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Laravel\Ai\Contracts\Agent;
+use Throwable;
 
 /**
  * @internal
@@ -1005,7 +1006,7 @@ class HierarchicalRunner
                     }
 
                     /** @var array<string, array{output: string, usage: array<string, int>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
-                    $results = $this->concurrency->driver()->run($callbacks);
+                    $results = $this->outcomes->runConcurrent($this->concurrency->driver(), $callbacks);
 
                     foreach ($results as $branchNodeId => $rowData) {
                         if (! isset($branchSnapshots[$branchNodeId])) {
@@ -1679,6 +1680,7 @@ class HierarchicalRunner
         $startedAt = MonotonicTime::now();
         ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
 
+        $nativeStreamFailure = null;
         try {
             $stream = $agent->stream($input);
             foreach ($stream as $event) {
@@ -1689,17 +1691,24 @@ class HierarchicalRunner
                 }
             }
             $stream->then($this->outcomes->validateResponse(...));
+        } catch (Throwable $exception) {
+            $nativeStreamFailure = $exception;
+            throw $exception;
         } finally {
-            // Persist any tool call left without a result (happy path or a crash
-            // mid-node) so the frozen snapshot records every tool the agent invoked,
-            // exactly as the live stream does. Then clear the run frame.
-            foreach ($accumulator->pendingToolCalls as $unpairedCall) {
-                $accumulator->snapshot = $this->snapshots->appendToolCall(
-                    $accumulator->snapshot,
-                    SnapshotToolCallNormalizer::entry($unpairedCall),
-                );
+            try {
+                // Persist any tool call left without a result (happy path or a crash
+                // mid-node) so the frozen snapshot records every tool the agent invoked,
+                // exactly as the live stream does. Then clear the run frame.
+                foreach ($accumulator->pendingToolCalls as $unpairedCall) {
+                    $accumulator->snapshot = $this->snapshots->appendToolCall(
+                        $accumulator->snapshot,
+                        SnapshotToolCallNormalizer::entry($unpairedCall),
+                    );
+                }
+            } finally {
+                ActiveRunContext::exit();
+                NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
-            ActiveRunContext::exit();
         }
 
         $this->guardrails->validateStep(

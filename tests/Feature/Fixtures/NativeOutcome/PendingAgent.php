@@ -12,11 +12,13 @@ use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Exceptions\ApprovalNotResumableException;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
+use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\Usage;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use Laravel\Ai\Responses\StreamedAgentResponse;
 use Laravel\Ai\Streaming\Events\StreamEnd;
 use Laravel\Ai\Streaming\Events\ToolApprovalRequest;
+use Laravel\Ai\Streaming\Events\ToolCall;
 
 class PendingAgent extends PlainStreamEditor
 {
@@ -45,6 +47,9 @@ class PendingAgent extends PlainStreamEditor
     {
         return (new StreamableAgentResponse('pending-invocation', function (): Generator {
             self::$calls++;
+            if (config('tests.native.unmatched_tool', false)) {
+                yield new ToolCall('ordinary-call', new ToolCallData('ordinary-tool', 'ordinary', ['input' => 'ordinary-input']), 122);
+            }
             if (config('tests.native.throw', false)) {
                 throw ApprovalNotResumableException::make();
             }

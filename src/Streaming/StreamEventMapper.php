@@ -69,6 +69,8 @@ class StreamEventMapper
      * a lifecycle event ({@see StreamEnd} records usage) or an unrecognized event
      * (recorded as a breadcrumb class on the accumulator, never thrown). Throws
      * {@see SwarmStreamProviderException} on a provider error event.
+     *
+     * @see NativeOutcomeValidator
      */
     public function map(
         mixed $event,

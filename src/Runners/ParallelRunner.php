@@ -39,6 +39,7 @@ class ParallelRunner
         protected ConfigRepository $config,
         protected SnapshotsMemory $snapshots,
         protected AgentVisibleMemoryView $view,
+        protected NativeOutcomeValidator $outcomes,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -96,7 +97,7 @@ class ParallelRunner
         }
 
         /** @var array<int, array{output: string, usage: array<string, int>, class: string, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
-        $results = $this->concurrency->driver()->run($callbacks);
+        $results = $this->outcomes->runConcurrent($this->concurrency->driver(), $callbacks);
 
         foreach ($results as $rowIndex => $rowData) {
             if (! isset($snapshots[$rowIndex])) {

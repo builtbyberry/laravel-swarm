@@ -6,7 +6,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
+use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Exceptions\UnsupportedNativeApprovalException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
@@ -16,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Fixtures\NativeOutcome\HierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Fixtures\NativeOutcome\ParallelSwarm;
@@ -38,6 +41,7 @@ use Laravel\Ai\Approvals\Decisions;
 use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Exceptions\ApprovalNotResumableException;
 use Laravel\Ai\Responses\AgentResponse;
+use Psr\Log\LoggerInterface;
 
 function nativeOutcomeRuntime(): void
 {
@@ -49,6 +53,30 @@ function nativeOutcomeRuntime(): void
         app()->forgetInstance($abstract);
     }
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
+}
+
+function nativeOutcomeAssertWorkerFailure(object $job, string $exception): void
+{
+    config()->set('swarm.queue.tries', 5);
+    config()->set('swarm.durable.job.tries', 5);
+    config()->set('queue.connections.native-worker', ['driver' => 'database', 'connection' => 'testing', 'table' => 'jobs', 'queue' => 'test', 'retry_after' => 90]);
+    Schema::create('jobs', function (Blueprint $table) {
+        $table->bigIncrements('id');
+        $table->string('queue')->index();
+        $table->longText('payload');
+        $table->unsignedTinyInteger('attempts');
+        $table->unsignedInteger('reserved_at')->nullable();
+        $table->unsignedInteger('available_at');
+        $table->unsignedInteger('created_at');
+    });
+    $queue = app('queue')->connection('native-worker');
+    $queue->push($job);
+    $queued = $queue->pop('test');
+    expect($queued->maxTries())->toBe(5);
+    expect(fn () => app('queue.worker')->process('native-worker', $queued, new WorkerOptions(maxTries: 5)))
+        ->toThrow($exception);
+    expect($queued->hasFailed())->toBeTrue()->and($queued->isReleased())->toBeFalse()
+        ->and($queue->size('test'))->toBe(0)->and(PendingAgent::$calls)->toBe(1);
 }
 
 function nativeOutcomeParallelPlan(): array
@@ -198,37 +226,24 @@ it('fails real queued and broadcast workflow handlers without releasing', functi
     expect($rows)->not->toContain('approval-secret', 'argument-secret', 'reason-secret', 'provider-secret');
 })->with(['invoke', 'broadcast']);
 
-it('prevents Laravel workers from retrying either native approval failure with five tries', function (string $kind, bool $nativeThrows) {
+it('prevents Laravel workers from retrying either native approval failure with five tries', function (string $kind, bool $nativeThrows, bool $listenerThrows) {
     nativeOutcomeRuntime();
     config()->set('tests.native.throw', $nativeThrows);
+    if ($listenerThrows) {
+        app('events')->listen(SwarmFailed::class, fn () => throw new RuntimeException('failure listener unavailable'));
+    }
+
     config()->set('swarm.queue.tries', 5);
-    config()->set('queue.connections.native-worker', ['driver' => 'database', 'connection' => 'testing', 'table' => 'jobs', 'queue' => 'test', 'retry_after' => 90]);
-    Schema::create('jobs', function (Blueprint $table) {
-        $table->bigIncrements('id');
-        $table->string('queue')->index();
-        $table->longText('payload');
-        $table->unsignedTinyInteger('attempts');
-        $table->unsignedInteger('reserved_at')->nullable();
-        $table->unsignedInteger('available_at');
-        $table->unsignedInteger('created_at');
-    });
     $context = RunContext::fromTask('task');
     $job = $kind === 'invoke'
         ? new InvokeSwarm(SequentialSwarm::class, $context->toQueuePayload())
         : new BroadcastSwarm(SequentialSwarm::class, $context->toQueuePayload(), ['test']);
-    $queue = app('queue')->connection('native-worker');
-    $queue->push($job);
-    $queued = $queue->pop('test');
-    expect($queued->maxTries())->toBe(5);
-    $exception = $nativeThrows ? ApprovalNotResumableException::class : UnsupportedNativeApprovalException::class;
-    expect(fn () => app('queue.worker')->process('native-worker', $queued, new WorkerOptions(maxTries: 5)))
-        ->toThrow($exception);
-    expect($queued->hasFailed())->toBeTrue()->and($queued->isReleased())->toBeFalse()
-        ->and($queue->size('test'))->toBe(0)->and(PendingAgent::$calls)->toBe(1);
-})->with(['invoke', 'broadcast'])->with([false, true]);
+    nativeOutcomeAssertWorkerFailure($job, $nativeThrows ? ApprovalNotResumableException::class : UnsupportedNativeApprovalException::class);
+})->with(['invoke', 'broadcast'])->with([false, true])->with([false, true]);
 
-it('fails a queued hierarchical resume at the pending worker after a real parallel join', function () {
+it('fails a queued hierarchical resume at the pending worker after a real parallel join', function (bool $nativeThrows, bool $listenerThrows) {
     nativeOutcomeRuntime();
+    config()->set('tests.native.throw', $nativeThrows);
     config()->set('swarm.queue.hierarchical_parallel.coordination', 'multi_worker');
     $plan = nativeOutcomeParallelPlan();
     $plan['nodes']['parallel']['branches'] = ['writer', 'second_writer'];
@@ -242,15 +257,16 @@ it('fails a queued hierarchical resume at the pending worker after a real parall
     foreach (app(DurableRunStore::class)->branchesFor($context->runId) as $branch) {
         (new AdvanceDurableBranch($context->runId, $branch['branch_id']))->handle($manager);
     }
-    $resume = (new ResumeQueuedHierarchicalSwarm($context->runId))->withFakeQueueInteractions();
-    expect(fn () => app()->call([$resume, 'handle']))->toThrow(UnsupportedNativeApprovalException::class);
-    $resume->assertFailedWith(UnsupportedNativeApprovalException::class);
-    $resume->assertNotReleased();
+    if ($listenerThrows) {
+        app('events')->listen(SwarmFailed::class, fn () => throw new RuntimeException('resume failure listener unavailable'));
+    }
+    $resume = new ResumeQueuedHierarchicalSwarm($context->runId);
+    nativeOutcomeAssertWorkerFailure($resume, $nativeThrows ? ApprovalNotResumableException::class : UnsupportedNativeApprovalException::class);
     expect(app(RunHistoryStore::class)->find($context->runId)['status'])->toBe('failed')
         ->and($manager->find($context->runId)['status'])->toBe('failed')
         ->and(PendingAgent::$calls)->toBe(1);
     Event::assertNotDispatched(SwarmCompleted::class);
-});
+})->with([false, true])->with([false, true]);
 
 it('never retries a native pre-response approval exception in durable runs or branches', function (string $swarm) {
     nativeOutcomeRuntime();
@@ -271,3 +287,118 @@ it('never retries a native pre-response approval exception in durable runs or br
     $row = isset($branch) ? app(DurableRunStore::class)->findBranch($runId, $branch['branch_id']) : $manager->find($runId);
     expect($row['status'])->toBe('failed')->and($row['retry_attempt'])->toBe(0);
 })->with([SequentialSwarm::class, ParallelSwarm::class]);
+
+it('preserves durable native failures when failure listeners throw', function (string $swarm, bool $nativeThrows) {
+    nativeOutcomeRuntime();
+    config()->set('tests.native.throw', $nativeThrows);
+    config()->set('swarm.durable.parallel.failure_policy', 'fail_run');
+    $runId = $swarm::make()->dispatchDurable('task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    if ($swarm === ParallelSwarm::class) {
+        (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+        $branch = collect(app(DurableRunStore::class)->branchesFor($runId))->firstWhere('agent_class', PendingAgent::class);
+        $job = new AdvanceDurableBranch($runId, $branch['branch_id']);
+    } else {
+        $job = new AdvanceDurableSwarm($runId, 0);
+    }
+    $listeners = 0;
+    app('events')->listen(SwarmFailed::class, function () use (&$listeners) {
+        $listeners++;
+        throw new RuntimeException('terminal failure listener unavailable');
+    });
+    nativeOutcomeAssertWorkerFailure($job, $nativeThrows ? ApprovalNotResumableException::class : UnsupportedNativeApprovalException::class);
+    expect($listeners)->toBe(1)->and(PendingAgent::$calls)->toBe(1);
+})->with([SequentialSwarm::class, ParallelSwarm::class])->with([false, true]);
+
+it('preserves native rejection when unmatched stream call cleanup fails', function (string $path, bool $nativeThrows) {
+    nativeOutcomeRuntime();
+    config()->set('tests.native.unmatched_tool', true);
+    config()->set('tests.native.throw', $nativeThrows);
+    config()->set('swarm.streaming.integrity.enabled', true);
+    $snapshots = Mockery::mock(SnapshotsMemory::class, app(SnapshotsMemory::class));
+    $snapshots->shouldReceive('appendToolCall')->once()->andThrow(new RuntimeException('snapshot unavailable'));
+    app()->instance(SnapshotsMemory::class, $snapshots);
+    $exception = $nativeThrows ? ApprovalNotResumableException::class : UnsupportedNativeApprovalException::class;
+    if (str_starts_with($path, 'live')) {
+        $stream = match ($path) {
+            'live-sequential' => app(SwarmRunner::class)->agent(new PendingAgent)->stream('task'),
+            'live-static' => StaticSwarm::make()->stream('task'),
+            'live-hierarchical' => HierarchicalSwarm::make()->stream('task'),
+        };
+        expect(fn () => iterator_to_array($stream))->toThrow($exception);
+    } else {
+        $swarm = match ($path) {
+            'durable-sequential' => StreamingSequentialSwarm::class,
+            'durable-static' => StreamingStaticSwarm::class,
+            'durable-branch' => StreamingParallelSwarm::class,
+        };
+        $runId = $swarm::make()->dispatchDurable('task')->runId;
+        $manager = app(DurableSwarmManager::class);
+        $index = 0;
+        if ($path !== 'durable-sequential') {
+            (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+            $index = 1;
+        }
+        $branch = collect(app(DurableRunStore::class)->branchesFor($runId))->firstWhere('agent_class', PendingAgent::class);
+        $job = $branch === null ? new AdvanceDurableSwarm($runId, $index) : new AdvanceDurableBranch($runId, $branch['branch_id']);
+        $job->withFakeQueueInteractions();
+        expect(fn () => $job->handle($manager))->toThrow($exception);
+        $job->assertFailedWith($exception);
+        $job->assertNotReleased();
+        $row = $branch === null ? $manager->find($runId) : app(DurableRunStore::class)->findBranch($runId, $branch['branch_id']);
+        expect($row['status'])->toBe('failed')->and($row['retry_attempt'])->toBe(0);
+    }
+    expect(PendingAgent::$calls)->toBe(1)
+        ->and(ActiveRunContext::current())->toBeNull();
+})->with(['live-sequential', 'live-static', 'live-hierarchical', 'durable-sequential', 'durable-static', 'durable-branch'])->with([false, true]);
+
+it('fails the branch queue job if parent join dispatch is unavailable after native rejection', function (bool $nativeThrows) {
+    nativeOutcomeRuntime();
+    config()->set('tests.native.throw', $nativeThrows);
+    config()->set('swarm.durable.parallel.failure_policy', 'partial_success');
+    $store = Mockery::mock(DurableRunStore::class, app(DurableRunStore::class));
+    $store->shouldReceive('releaseWaitingRunForJoin')->once()->andThrow(new RuntimeException('join unavailable'));
+    app()->instance(DurableRunStore::class, $store);
+    $runId = ParallelSwarm::make()->dispatchDurable('task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    $branches = collect($store->branchesFor($runId));
+    $writer = $branches->firstWhere('agent_class', FakeWriter::class);
+    (new AdvanceDurableBranch($runId, $writer['branch_id']))->handle($manager);
+    $branch = $branches->firstWhere('agent_class', PendingAgent::class);
+    nativeOutcomeAssertWorkerFailure(new AdvanceDurableBranch($runId, $branch['branch_id']), $nativeThrows ? ApprovalNotResumableException::class : UnsupportedNativeApprovalException::class);
+    expect($store->findBranch($runId, $branch['branch_id'])['status'])->toBe('failed')
+        ->and($store->findBranch($runId, $branch['branch_id'])['retry_attempt'])->toBe(0)
+        ->and($manager->find($runId)['status'])->toBe('waiting');
+})->with([false, true]);
+
+it('preserves live native rejection through failure listeners', function (string $path, bool $nativeThrows) {
+    config()->set('tests.native.throw', $nativeThrows);
+    $listeners = 0;
+    app('events')->listen(SwarmFailed::class, function () use (&$listeners) {
+        $listeners++;
+        throw new RuntimeException('live failure listener unavailable');
+    });
+    $stream = match ($path) {
+        'sequential' => app(SwarmRunner::class)->agent(new PendingAgent)->stream('task'),
+        'static' => StaticSwarm::make()->stream('task'),
+        'hierarchical' => HierarchicalSwarm::make()->stream('task'),
+    };
+    expect(fn () => iterator_to_array($stream))->toThrow($nativeThrows ? ApprovalNotResumableException::class : UnsupportedNativeApprovalException::class);
+    expect($listeners)->toBe(1);
+})->with(['sequential', 'static', 'hierarchical'])->with([false, true]);
+
+it('persists rejected branch failure before fallible logging', function () {
+    nativeOutcomeRuntime();
+    $logger = Mockery::mock(LoggerInterface::class, app(LoggerInterface::class));
+    $logger->shouldReceive('error')->once()->andThrow(new RuntimeException('logging unavailable'));
+    app()->instance(LoggerInterface::class, $logger);
+    $runId = ParallelSwarm::make()->dispatchDurable('task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    $branch = collect(app(DurableRunStore::class)->branchesFor($runId))->firstWhere('agent_class', PendingAgent::class);
+    $job = (new AdvanceDurableBranch($runId, $branch['branch_id']))->withFakeQueueInteractions();
+    expect(fn () => $job->handle($manager))->toThrow(UnsupportedNativeApprovalException::class);
+    $job->assertFailedWith(UnsupportedNativeApprovalException::class);
+    expect(app(DurableRunStore::class)->findBranch($runId, $branch['branch_id'])['status'])->toBe('failed');
+});

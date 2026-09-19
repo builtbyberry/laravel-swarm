@@ -11,7 +11,18 @@ integration. Laravel AI can instead throw its own `ApprovalNotResumableException
 when an agent cannot return a resumable approval outcome; that native exception
 keeps its type. Both bypass application durable retry policies and fail the
 actual queue job without automatic release, including when configured tries
-exceeds one. Other native errors retain their existing handling.
+exceeds one. Failure listeners, snapshot cleanup, and parent/join dispatch cannot
+replace a detected native rejection with a retryable exception. Cleanup still
+attempts the existing fenced writes; infrastructure outages can prevent those
+writes or delay parent coordination and require the existing recovery procedures.
+
+For Laravel's built-in process and fork drivers, a concurrent batch inspects all
+returned worker outcomes before selecting its failure. An unsupported native
+outcome takes precedence over an ordinary sibling failure, regardless of branch
+order. With no native rejection, the first ordinary failure retains precedence.
+Sync execution still stops at its first failure. Custom concurrency drivers keep
+their existing behavior; Swarm cannot inspect a sibling outcome a custom driver
+discards. Other native errors retain their existing handling.
 
 ## Effects, capture and operator recovery
 
@@ -36,13 +47,14 @@ Durable branch failure still respects lease fencing and the configured
 successful siblings may complete using those siblings; the rejected branch stays
 failed and contributes no successful step or output. With `fail_run` or
 `collect_failures`, the existing parent failure behavior remains. A failed branch
-job is reported only after the existing parent/join dispatch path is preserved.
+job fails after attempting the existing parent/join dispatch path, even if that
+follow-up operation also fails.
 
 ## Invocation inventory
 
-Native execution stays in the existing callers. The validator only inspects an
-outcome or event; it does not execute, queue, retry, store conversations or own a
-topology. Provider/tool calls remain outside Swarm database transactions.
+Native execution stays in the existing callers. The validator inspects native
+outcomes and selects failures from the existing concurrency driver results; it does not replace native agent invocation, queue
+jobs, conversation storage, or topology execution. Provider/tool calls remain outside Swarm database transactions.
 
 | Native caller | Invocation and check | Execution paths |
 | --- | --- | --- |

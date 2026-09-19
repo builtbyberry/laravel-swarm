@@ -12,6 +12,13 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 #[Topology(TopologyEnum::StaticHierarchical)]
 class StaticSwarm extends SequentialSwarm implements HasRoutePlan
 {
+    public function agents(): array
+    {
+        return config('tests.native.mixed')
+            ? [new FailingAgent, new PendingAgent, new ThrowingApprovalAgent]
+            : parent::agents();
+    }
+
     public function plan(): array
     {
         return config('tests.native.plan', [
