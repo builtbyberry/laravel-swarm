@@ -41,6 +41,7 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Laravel\Ai\Contracts\Agent;
+use Throwable;
 
 /**
  * @internal
@@ -72,6 +73,7 @@ class HierarchicalRunner
         protected AgentVisibleMemoryView $view,
         protected StreamEventMapper $mapper,
         protected DurableNodeStreamRecorder $nodeStream,
+        protected NativeOutcomeValidator $outcomes,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -989,6 +991,7 @@ class HierarchicalRunner
                             try {
                                 $startedAt = MonotonicTime::now();
                                 $response = $worker->prompt($input);
+                                Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
                                     'output' => (string) $response,
@@ -1002,8 +1005,10 @@ class HierarchicalRunner
                         };
                     }
 
+                    $driver = $this->concurrency->driver();
+                    $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
                     /** @var array<string, array{output: string, usage: array<string, int>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
-                    $results = $this->concurrency->driver()->run($callbacks);
+                    $results = $this->outcomes->validateConcurrentResults($results);
 
                     foreach ($results as $branchNodeId => $rowData) {
                         if (! isset($branchSnapshots[$branchNodeId])) {
@@ -1571,6 +1576,7 @@ class HierarchicalRunner
 
         try {
             $response = $agent->prompt($input);
+            $this->outcomes->validateResponse($response);
         } finally {
             ActiveRunContext::exit();
         }
@@ -1676,25 +1682,35 @@ class HierarchicalRunner
         $startedAt = MonotonicTime::now();
         ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
 
+        $nativeStreamFailure = null;
         try {
-            foreach ($agent->stream($input) as $event) {
+            $stream = $agent->stream($input);
+            foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 
                 if ($swarmEvent !== null) {
                     $sink($swarmEvent);
                 }
             }
+            $stream->then($this->outcomes->validateResponse(...));
+        } catch (Throwable $exception) {
+            $nativeStreamFailure = $exception;
+            throw $exception;
         } finally {
-            // Persist any tool call left without a result (happy path or a crash
-            // mid-node) so the frozen snapshot records every tool the agent invoked,
-            // exactly as the live stream does. Then clear the run frame.
-            foreach ($accumulator->pendingToolCalls as $unpairedCall) {
-                $accumulator->snapshot = $this->snapshots->appendToolCall(
-                    $accumulator->snapshot,
-                    SnapshotToolCallNormalizer::entry($unpairedCall),
-                );
+            try {
+                // Persist any tool call left without a result (happy path or a crash
+                // mid-node) so the frozen snapshot records every tool the agent invoked,
+                // exactly as the live stream does. Then clear the run frame.
+                foreach ($accumulator->pendingToolCalls as $unpairedCall) {
+                    $accumulator->snapshot = $this->snapshots->appendToolCall(
+                        $accumulator->snapshot,
+                        SnapshotToolCallNormalizer::entry($unpairedCall),
+                    );
+                }
+            } finally {
+                ActiveRunContext::exit();
+                NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
-            ActiveRunContext::exit();
         }
 
         $this->guardrails->validateStep(

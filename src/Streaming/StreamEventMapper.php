@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
+use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
@@ -58,6 +59,7 @@ class StreamEventMapper
     public function __construct(
         protected SwarmCapture $capture,
         protected SnapshotsMemory $snapshots,
+        protected NativeOutcomeValidator $outcomes,
     ) {}
 
     /**
@@ -67,6 +69,8 @@ class StreamEventMapper
      * a lifecycle event ({@see StreamEnd} records usage) or an unrecognized event
      * (recorded as a breadcrumb class on the accumulator, never thrown). Throws
      * {@see SwarmStreamProviderException} on a provider error event.
+     *
+     * @see NativeOutcomeValidator
      */
     public function map(
         mixed $event,
@@ -75,6 +79,8 @@ class StreamEventMapper
         Agent $agent,
         StreamStepAccumulator $accumulator,
     ): ?SwarmStreamEvent {
+        $this->outcomes->validateEvent($event);
+
         if ($event instanceof TextDelta) {
             $accumulator->output .= $event->delta;
             $swarmEvent = new SwarmTextDelta(

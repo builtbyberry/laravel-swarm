@@ -3,32 +3,21 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
+use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
+use BuiltByBerry\LaravelSwarm\Runners\StaticHierarchicalStreamRunner;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use Laravel\Ai\Streaming\Events\StreamEvent;
 
 /**
- * F1 guard for the laravel/ai floor (issue #255).
+ * Pin the upstream event inventory so additions and removals require explicit triage.
  *
- * The two streaming runners (SequentialRunner, StaticHierarchicalStreamRunner)
- * map a fixed set of laravel/ai `Streaming\Events\*` types into swarm events and
- * the durable snapshot; everything else falls into a log-once `else` breadcrumb
- * that — by design — never throws. That is the right failure mode for a benign
- * lifecycle event, but it means a NEW content-bearing event introduced by an
- * upstream bump would be silently dropped from the snapshot with only a log
- * line as evidence. A green suite does not catch that on its own.
- *
- * This test pins the upstream event set so any addition (or removal) fails the
- * suite loudly and forces a deliberate re-triage of the runner match chains,
- * rather than letting a new event slip through the breadcrumb unnoticed.
- *
+ * @see StreamEventMapper
+ * @see StaticHierarchicalStreamRunner
+ * @see NativeOutcomeValidator
  * @see RecordsUnknownStreamEvents
  */
 
-/**
- * Event types the runner match chains explicitly handle (mapped to a
- * SwarmStreamEvent and/or recorded in the durable snapshot).
- *
- * @var array<int, string>
- */
+/** @var array<int, string> */
 const HANDLED_AI_STREAM_EVENTS = [
     'Error',
     'ReasoningDelta',
@@ -40,35 +29,17 @@ const HANDLED_AI_STREAM_EVENTS = [
     'ToolResult',
 ];
 
-/**
- * Event types the runners deliberately do NOT map; they flow through the
- * breadcrumb `else` today. Two kinds live here:
- *
- *  - Provider lifecycle and non-content-bearing markers (Citation,
- *    ProviderToolEvent, ReasoningStart, StreamStart, TextStart) that carry
- *    nothing the durable snapshot needs.
- *  - ToolApprovalRequest — laravel/ai 0.10's human-in-the-loop control event.
- *    Unlike the markers above it DOES carry state (pending approvals plus raw
- *    provider replay blocks), but Swarm does not adopt HITL in this release, so
- *    it neither acts on nor snapshots the approval pause. The breadcrumb records
- *    only the class name, never the payload, so nothing escapes SwarmCapture
- *    redaction. When Swarm adopts human-in-the-loop, move it to HANDLED and map
- *    it in SequentialRunner + StaticHierarchicalStreamRunner with redaction of
- *    the approval and provider-content state.
- *
- * Listed here so the set is triaged, not ignored — promote one to HANDLED if a
- * future release starts capturing it.
- *
- * @var array<int, string>
- */
+/** @var array<int, string> */
 const IGNORED_AI_STREAM_EVENTS = [
     'Citation',
     'ProviderToolEvent',
     'ReasoningStart',
     'StreamStart',
     'TextStart',
-    'ToolApprovalRequest',
 ];
+
+/** @var array<int, string> */
+const REJECTED_AI_STREAM_EVENTS = ['ToolApprovalRequest'];
 
 test('laravel/ai stream event set stays in lock-step with the runners triage', function (): void {
     $directory = dirname((new ReflectionClass(StreamEvent::class))->getFileName());
@@ -83,17 +54,14 @@ test('laravel/ai stream event set stays in lock-step with the runners triage', f
 
     $triaged = collect(HANDLED_AI_STREAM_EVENTS)
         ->merge(IGNORED_AI_STREAM_EVENTS)
+        ->merge(REJECTED_AI_STREAM_EVENTS)
         ->sort()
         ->values()
         ->all();
 
-    // A laravel/ai bump that adds (or removes) a Streaming\Events\* class fails
-    // here until it is triaged into HANDLED_AI_STREAM_EVENTS (map it in both
-    // runners) or IGNORED_AI_STREAM_EVENTS (confirmed safe to let it breadcrumb).
     expect($triaged)->toBe(
         $discovered,
-        'A laravel/ai Streaming\\Events\\* class is not triaged. Add it to HANDLED_AI_STREAM_EVENTS '
-        .'(and map it in SequentialRunner + StaticHierarchicalStreamRunner) or to IGNORED_AI_STREAM_EVENTS '
-        .'(confirmed it carries no durable content and may fall through the breadcrumb).',
+        'A laravel/ai Streaming\\Events\\* class is not triaged. Review the owning mapper and validator '
+        .'before adding it to HANDLED_AI_STREAM_EVENTS, IGNORED_AI_STREAM_EVENTS, or REJECTED_AI_STREAM_EVENTS.',
     );
 });

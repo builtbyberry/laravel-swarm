@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 // Here we want the durable retry profile (tries=3 + backoff) from swarm.durable.job.*.
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\ConfiguresDurableAdvanceJob;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\EmitsSwarmJobTelemetry;
+use BuiltByBerry\LaravelSwarm\Jobs\Concerns\FailsUnsupportedNativeOutcome;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use Illuminate\Bus\Queueable;
 use Illuminate\Container\Container;
@@ -25,6 +26,7 @@ class ResumeQueuedHierarchicalSwarm implements ShouldQueue
 {
     use ConfiguresDurableAdvanceJob;
     use EmitsSwarmJobTelemetry;
+    use FailsUnsupportedNativeOutcome;
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
@@ -39,9 +41,9 @@ class ResumeQueuedHierarchicalSwarm implements ShouldQueue
 
     public function handle(QueuedHierarchicalCoordinator $coordinator): void
     {
-        $this->withSwarmJobTelemetry(function () use ($coordinator): void {
+        $this->withoutNativeOutcomeRetry(fn () => $this->withSwarmJobTelemetry(function () use ($coordinator): void {
             $coordinator->resumeAfterParallelJoin($this->runId);
-        });
+        }));
     }
 
     public function displayName(): string

@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Jobs;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\ConfiguresDurableAdvanceJob;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\EmitsSwarmJobTelemetry;
+use BuiltByBerry\LaravelSwarm\Jobs\Concerns\FailsUnsupportedNativeOutcome;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use Illuminate\Bus\Queueable;
 use Illuminate\Container\Container;
@@ -21,6 +22,7 @@ class AdvanceDurableSwarm implements ShouldQueue
 {
     use ConfiguresDurableAdvanceJob;
     use EmitsSwarmJobTelemetry;
+    use FailsUnsupportedNativeOutcome;
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
@@ -36,9 +38,9 @@ class AdvanceDurableSwarm implements ShouldQueue
 
     public function handle(DurableSwarmManager $manager): void
     {
-        $this->withSwarmJobTelemetry(function () use ($manager): void {
+        $this->withoutNativeOutcomeRetry(fn () => $this->withSwarmJobTelemetry(function () use ($manager): void {
             $manager->advance($this->runId, $this->stepIndex);
-        });
+        }));
     }
 
     public function displayName(): string

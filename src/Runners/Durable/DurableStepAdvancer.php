@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
+use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Throwable;
@@ -117,18 +118,22 @@ class DurableStepAdvancer
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
             return;
         } catch (Throwable $exception) {
-            $retry = $this->retryHandler->scheduleRunRetryIfAllowed($run, $swarm, $context, $token, $stepLeaseSeconds, $expectedStepIndex, $exception);
-            if ($retry['scheduled']) {
-                return;
-            }
-
             try {
-                $this->terminal->failRun($run, $token, $exception, $context, $stepLeaseSeconds);
-            } catch (LostDurableLeaseException|LostSwarmLeaseException) {
-                return;
-            }
+                $retry = $this->retryHandler->scheduleRunRetryIfAllowed($run, $swarm, $context, $token, $stepLeaseSeconds, $expectedStepIndex, $exception);
+                if ($retry['scheduled']) {
+                    return;
+                }
 
-            throw $exception;
+                try {
+                    $this->terminal->failRun($run, $token, $exception, $context, $stepLeaseSeconds);
+                } catch (LostDurableLeaseException|LostSwarmLeaseException) {
+                    return;
+                }
+
+                throw $exception;
+            } finally {
+                NativeOutcomeValidator::rethrowIfUnsupported($exception);
+            }
         }
 
         $run = $this->runs->requireRun($runId);

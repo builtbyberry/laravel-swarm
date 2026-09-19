@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\ConfiguresQueuedSwarmJob;
 use BuiltByBerry\LaravelSwarm\Jobs\Concerns\EmitsSwarmJobTelemetry;
+use BuiltByBerry\LaravelSwarm\Jobs\Concerns\FailsUnsupportedNativeOutcome;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Bus\Queueable;
@@ -23,6 +24,7 @@ class InvokeSwarm implements ShouldQueue
 {
     use ConfiguresQueuedSwarmJob;
     use EmitsSwarmJobTelemetry;
+    use FailsUnsupportedNativeOutcome;
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
@@ -46,7 +48,7 @@ class InvokeSwarm implements ShouldQueue
      */
     public function handle(SwarmRunner $runner): void
     {
-        $this->withSwarmJobTelemetry(function () use ($runner): void {
+        $this->withoutNativeOutcomeRetry(fn () => $this->withSwarmJobTelemetry(function () use ($runner): void {
             $swarm = Container::getInstance()->make($this->swarmClass);
             $context = RunContext::fromPayload($this->task);
 
@@ -55,7 +57,7 @@ class InvokeSwarm implements ShouldQueue
             }
 
             $runner->runQueued($swarm, $context);
-        });
+        }));
     }
 
     /**

@@ -20,6 +20,28 @@ _To be filled in during release wrap-up._
   wrapping native jobs or adding queued completion callbacks was rejected
   because Swarm fakes must remain intent-only.
 
+- **Behavior impact:** reject unsupported native tool-approval outcomes before
+  the affected Swarm step/node/branch is recorded as successful. Native
+  `ApprovalNotResumableException` also bypasses retries. Durable run/branch
+  policies and all affected queue jobs cannot automatically retry these outcomes,
+  even with tries > 1; permitted partial parents still use successful siblings.
+  Detection can follow tool effects and ordinary captured tool events. Chosen:
+  explicit failure with operator-controlled restart; rejected: silent success,
+  automatic effect replay or a synthetic continuation API. Native HTTP, process,
+  real-job and negative-control proof covers the boundary. See
+  [native approval outcomes](docs/native-outcome-boundary.md) and UPGRADING.md.
+
+### Fixed
+
+- Preserve rejected native approval outcomes across fallible failure listeners,
+  snapshot cleanup and parent joins (review C2-F1); classify approval events as
+  rejected in the upstream event inventory (review C2-F2).
+- Inspect all built-in process/fork batch outcomes before choosing a failure so
+  an earlier ordinary error cannot hide a sibling approval rejection (review
+  C2-F3). Sync short-circuit and custom-driver behavior stay unchanged. Keeping
+  only the first concurrent error was rejected because it can permit retries
+  after tool effects; real-process and actual queue-worker tests cover the choice.
+
 ## v0.25.0 - 2026-09-03
 
 Durable-execution correctness and documentation integrity, carrying the work

@@ -133,6 +133,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         protected SnapshotsMemory $snapshots,
         protected AgentVisibleMemoryView $view,
         protected MemoryReplayCoordinator $coordinator,
+        protected NativeOutcomeValidator $outcomes,
     ) {
         parent::__construct(
             $config,
@@ -433,7 +434,12 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
             return $response;
         } catch (Throwable $exception) {
-            yield $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $streamTelemetryStart, $streamSequenceIndex, $historyRowStarted);
+            try {
+                yield $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $streamTelemetryStart, $streamSequenceIndex, $historyRowStarted);
+
+            } finally {
+                NativeOutcomeValidator::rethrowIfUnsupported($exception);
+            }
 
             throw $exception;
         }
@@ -854,6 +860,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             try {
                                 $branchStartedAt = MonotonicTime::now();
                                 $response = $worker->prompt($input);
+                                Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
                                     'output' => (string) $response,
@@ -870,8 +877,10 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         };
                     }
 
+                    $driver = $this->concurrency->driver();
+                    $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
                     /** @var array<int, array{output: string, usage: array<string, int>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
-                    $results = $this->concurrency->driver()->run($callbacks);
+                    $results = $this->outcomes->validateConcurrentResults($results);
 
                     $policy = GuardrailParallelFailurePolicy::tryFrom((string) $this->config->get(
                         'swarm.guardrails.parallel_failure_policy',
@@ -1061,8 +1070,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 $this->view->present($swarm, $context, $agent),
             );
 
+        $nativeStreamFailure = null;
         try {
-            foreach ($agent->stream($input) as $event) {
+            $stream = $agent->stream($input);
+            foreach ($stream as $event) {
+                $this->outcomes->validateEvent($event);
                 if ($event instanceof TextDelta) {
                     $output .= $event->delta;
                     $swarmEvent = new SwarmTextDelta(
@@ -1183,37 +1195,45 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $unknownStreamEventClasses[get_debug_type($event)] = true;
                 }
             }
+            $stream->then($this->outcomes->validateResponse(...));
 
             return ['output' => $output, 'usage' => $stepUsage];
+        } catch (Throwable $exception) {
+            $nativeStreamFailure = $exception;
+            throw $exception;
         } finally {
-            // Flush any tool calls without a matching ToolResult into the
-            // snapshot — on the happy path (calls pending at stream end) AND on
-            // abandonment (the generator was torn down mid-stream, so the foreach
-            // never reached StreamEnd). Doing it in finally makes the append
-            // crash-safe: an in-flight call is persisted with result=null instead
-            // of being lost, mirroring SequentialRunner.
-            foreach ($pendingToolCalls as $unpairedCall) {
-                $snapshot = $this->snapshots->appendToolCall(
-                    $snapshot,
-                    SnapshotToolCallNormalizer::entry($unpairedCall),
+            try {
+                // Flush any tool calls without a matching ToolResult into the
+                // snapshot — on the happy path (calls pending at stream end) AND on
+                // abandonment (the generator was torn down mid-stream, so the foreach
+                // never reached StreamEnd). Doing it in finally makes the append
+                // crash-safe: an in-flight call is persisted with result=null instead
+                // of being lost, mirroring SequentialRunner.
+                foreach ($pendingToolCalls as $unpairedCall) {
+                    $snapshot = $this->snapshots->appendToolCall(
+                        $snapshot,
+                        SnapshotToolCallNormalizer::entry($unpairedCall),
+                    );
+                }
+
+                // Clear the frozen-view override even if the stream was abandoned
+                // mid-flight (no-op on the fresh-execution path), then exit the run
+                // frame. Flush first, then exit, so the frame is still live while the
+                // snapshot append runs.
+
+                // One breadcrumb per step for any stream events this chain did not
+                // recognize (also fires if the generator was abandoned mid-stream).
+                // Logs the dropped event classes; never throws.
+                $this->breadcrumbUnknownStreamEvents(
+                    $unknownStreamEventClasses,
+                    $context->runId,
+                    $stepIndex,
                 );
+            } finally {
+                $this->coordinator->end($boundary);
+                ActiveRunContext::exit();
+                NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
-
-            // Clear the frozen-view override even if the stream was abandoned
-            // mid-flight (no-op on the fresh-execution path), then exit the run
-            // frame. Flush first, then exit, so the frame is still live while the
-            // snapshot append runs.
-            $this->coordinator->end($boundary);
-            ActiveRunContext::exit();
-
-            // One breadcrumb per step for any stream events this chain did not
-            // recognize (also fires if the generator was abandoned mid-stream).
-            // Logs the dropped event classes; never throws.
-            $this->breadcrumbUnknownStreamEvents(
-                $unknownStreamEventClasses,
-                $context->runId,
-                $stepIndex,
-            );
         }
     }
 
