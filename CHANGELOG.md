@@ -36,7 +36,7 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
   and upgrade limits. Chosen: source-backed bounded adoption; rejected: broad runtime
   deletion or treating green PR tests as release readiness. C6 is docs-only; existing
   reference tests plus independent semantic review verify the change. Companion
-  gap C5-R1, source-comment follow-up C6-R1 and the separate post-main moving-dev
+  gap C5-R1 and the separate post-main moving-dev
   gate remain open; no shipment is implied.
 
 - **Breaking:** require official `laravel/ai ^0.11.2` and drop the 0.10 line.
@@ -60,6 +60,11 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
   [native approval outcomes](docs/native-outcome-boundary.md) and UPGRADING.md.
 
 ### Fixed
+
+- Correct queue-setting ownership and conditional retry/replay source comments
+  (review C6-R1, C6-R2). Link execution and memory-selection behavior to their owning
+  sources; remove byte-identical output and crash-safe flush promises. This changes
+  comments only, with no executable code or configuration-value changes.
 
 - Make the unknown-stream test fixture implement the native `StreamEvent`
   contract while retaining its unknown type and secret privacy sentinel. This
