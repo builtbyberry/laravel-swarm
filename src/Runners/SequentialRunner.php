@@ -419,9 +419,9 @@ class SequentialRunner
      * the rest of durable execution is unchanged.
      *
      * The sink is invoked synchronously per event; a throwing sink aborts the step
-     * (whose events are still retractable on resume). Unpaired tool calls are
-     * flushed to the snapshot in `finally`, so a crash mid-node still records every
-     * tool the agent invoked, exactly as the live stream does.
+     * (whose events are still retractable on resume). When execution reaches
+     * `finally`, it calls {@see flushPendingToolCalls()} for observed unpaired
+     * calls. Hard process termination may bypass that cleanup.
      *
      * @param  callable(SwarmStreamEvent): void  $sink
      */
@@ -501,9 +501,10 @@ class SequentialRunner
     }
 
     /**
-     * Flush any tool calls left without a matching ToolResult into the snapshot,
-     * persisting each with result=null. Shared by the live stream and the durable
-     * per-node stream so a crash mid-node records every tool the agent invoked.
+     * Append the observed unpaired calls to the snapshot. Both streaming paths
+     * call this during cleanup; it cannot account for unobserved calls or cleanup
+     * bypassed by hard process termination. Entry shape is owned by
+     * {@see SnapshotToolCallNormalizer::entry()}.
      */
     private function flushPendingToolCalls(StreamStepAccumulator $accumulator): void
     {
