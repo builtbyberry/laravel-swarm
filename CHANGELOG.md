@@ -7,7 +7,13 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- Preservation evidence for all 30 retained Swarm responsibilities and eight
+  selected native integrations under official Laravel AI 0.11.2. Native HTTP
+  tests cover middleware/options, deferred tool discovery, structured routing,
+  conversation memory and repeatable effects on workflow retry. Baseline tests
+  characterize signal capture/crash windows, stranded child claims and concrete
+  durable-store requirements; they do not expand those guarantees. See the
+  [row-to-evidence report](docs/ai-0112-preservation-evidence.md).
 
 ### Changed
 
