@@ -282,6 +282,36 @@ stability settings to install Swarm — see
 
 ## Upgrading to v0.26.0
 
+### Upgrade execution and verification
+
+1. Stop new swarm intake; drain in-flight provider calls and queued work, then
+   stop workers. Inventory pending, waiting and running durable work before the
+   switch, including application-owned swarm/agent classes and queue payloads.
+2. Deploy the official dependency lock and Swarm code together. Refresh autoload
+   and opcache, then restart workers. Never mix old/new code in long-lived workers.
+3. Smoke-test the synchronous, queued, streamed and durable modes your application
+   uses, plus its status/history, signal/recovery and replay operations. Resume
+   intake only after these pass. Keep existing `swarm:prune` and `swarm:recover`
+   schedules; this adoption adds no migration, backfill, config or retention owner.
+4. Retain `APP_KEY` for existing sealed rows. Key rotation without a compatible
+   re-encryption/key strategy is a separate operation and can make rows unreadable.
+
+The [C5 upgrade evidence](docs/ai-0112-upgrade-evidence.md) records executed
+v0.25 job/row fixtures, candidate-to-old-reader checks, a custom native
+`ConversationStore`, dependency lanes and bounded companion contract smoke.
+These fixtures do not validate every application's serialized classes. Validate
+those classes and custom stores in your own upgrade rehearsal.
+
+Rollback uses the same stop/drain procedure and a tested dependency/code pair.
+**After corrected denied/failed evidence exists, an unmodified v0.25 reader is
+not an eligible rollback target**, even when rows parse. Retain a compatible
+reader or return to reviewed design; do not erase evidence. The C2 approval
+rejection and retry boundary must also remain intact.
+
+Maintainers must separately run the exact compatible moving-dev nightly workflow
+on `main` after its authorized merge, verifying its lock and required suites
+before any later tag/release completion. C5's PR checks do not satisfy that gate.
+
 ### Streamed tool-result evidence and downgrades
 
 Sequential and static-hierarchical streams now retain native tool-result `denied`
@@ -350,7 +380,7 @@ change is introduced by this compatibility step.
 Rollback requires the previous dependency **and** code pair after the same
 drain/stop procedure, plus proof that the old readers accept the jobs and rows
 your application retains. The compatibility step alone does not establish that
-proof. The broader v0.26.0 preservation and upgrade verification remains pending.
+proof. See the bounded preservation and upgrade evidence linked above; application-specific rehearsal and release readiness remain separate gates.
 Once corrected denied/failed tool-result evidence is written by the later stream
 adoption, old readers must preserve those semantics: retain a compatible reader
 or block the downgrade. Parseability alone is not sufficient. Existing prune and

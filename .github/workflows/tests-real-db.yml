@@ -29,8 +29,12 @@ permissions:
 
 jobs:
   tests-real-db-mysql:
-    name: PHP 8.4 - real DB (mysql-8)
+    name: PHP 8.4 - real DB (mysql-8, ${{ matrix.dependencies }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        dependencies: [stable, moving-dev]
 
     services:
       mysql:
@@ -67,8 +71,23 @@ jobs:
           coverage: none
           ini-values: memory_limit=512M
 
+      - name: Preserve production manifest
+        run: cp composer.json /tmp/swarm-production-composer.json
+
+      - name: Require compatible moving development dependencies
+        if: matrix.dependencies == 'moving-dev'
+        run: |
+          composer require --no-update "laravel/ai:0.x-dev"
+          composer require --no-update --dev "laravel/framework:13.x-dev"
+
       - name: Install dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      - name: Restore production manifest
+        run: cp /tmp/swarm-production-composer.json composer.json
+
+      - name: Verify official dependencies
+        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }}
 
       # testbench-core no longer auto-creates this symlink in some versions; the
       # process-concurrency tests spawn a real artisan subprocess that needs it.
@@ -102,8 +121,12 @@ jobs:
         run: composer test:process-concurrency:real-db
 
   tests-real-db-postgres:
-    name: PHP 8.4 - real DB (postgres-16)
+    name: PHP 8.4 - real DB (postgres-16, ${{ matrix.dependencies }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        dependencies: [stable, moving-dev]
 
     services:
       postgres:
@@ -141,8 +164,23 @@ jobs:
           coverage: none
           ini-values: memory_limit=512M
 
+      - name: Preserve production manifest
+        run: cp composer.json /tmp/swarm-production-composer.json
+
+      - name: Require compatible moving development dependencies
+        if: matrix.dependencies == 'moving-dev'
+        run: |
+          composer require --no-update "laravel/ai:0.x-dev"
+          composer require --no-update --dev "laravel/framework:13.x-dev"
+
       - name: Install dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      - name: Restore production manifest
+        run: cp /tmp/swarm-production-composer.json composer.json
+
+      - name: Verify official dependencies
+        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }}
 
       # testbench-core no longer auto-creates this symlink in some versions; the
       # process-concurrency tests spawn a real artisan subprocess that needs it.
