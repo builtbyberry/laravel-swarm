@@ -140,6 +140,16 @@ excludes AI 0.11. Marshall release finding **C5-R1**, owner Daniel, retains the
 separate companion-release scoping requirement. Passing these harnesses does not
 close that release-level gap.
 
+## Final C5 landing evidence
+
+[PR #501](https://github.com/builtbyberry/laravel-swarm/pull/501) merged reviewed
+head `7d945d6044ac2bb42e3234154ce7ea17ebae94d1` into the release branch at
+`334ab6691e19328fd55c595dafe68a9a4d278a1f`. Its final stable/dev runs execute
+2,235 tests / 10,542 assertions after C5-F1; all 12 distinct checks pass. The
+[C6 execution index](ai-0112-release-evidence.md#what-was-executed) preserves
+exact run links, dependency references and real-DB lane attribution. These
+landing results supplement, rather than relabel, the earlier local results above.
+
 ## Separate release gate — still outstanding
 
 After a separately authorized merge to `main`, dispatch the exact compatible

@@ -28,6 +28,17 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
 
 ### Changed
 
+- Reconcile streaming topology, default versus coordinated queue execution,
+  unavailable queued whole-workflow callbacks, and the resume job's durable retry
+  profile with their owning sources. Bound queue restarts to the actual duplicate/coordination path (review C6-F1), and stream resume to readable checkpoints and selected frozen memory, without byte-identical output or effect-deduplication promises (review C6-F2). Supported stream callbacks and lifecycle
+  completion examples remain. Publish the [complete 44-row disposition and deletion
+  evidence](docs/ai-0112-release-evidence.md), native tool/history/privacy boundaries,
+  and upgrade limits. Chosen: source-backed bounded adoption; rejected: broad runtime
+  deletion or treating green PR tests as release readiness. C6 is docs-only; existing
+  reference tests plus independent semantic review verify the change. Companion
+  gap C5-R1, source-comment follow-up C6-R1 and the separate post-main moving-dev
+  gate remain open; no shipment is implied.
+
 - **Breaking:** require official `laravel/ai ^0.11.2` and drop the 0.10 line.
   PHP and Illuminate constraints are unchanged; deploy or roll back the
   dependency and Swarm code together after draining workers (see UPGRADING.md).
