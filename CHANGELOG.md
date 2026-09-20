@@ -7,6 +7,17 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
 
 ### Added
 
+- Upgrade fixtures execute v0.25 serialized jobs and sealed active rows against
+  the adoption candidate, and candidate-written rows through historical readers.
+  A custom native conversation store preserves text/tool history while Swarm
+  capture remains disabled; actual database history redaction is asserted
+  (review C5-F1). Minimum/current and official moving-dev CI lanes
+  verify lock and installed-source provenance before running hard gates, including
+  MySQL/Postgres concurrency checks. See the [upgrade evidence](docs/ai-0112-upgrade-evidence.md)
+  for exact bounds, companion manifest limitations and the separate post-main gate.
+  Chosen: refuse semantic downgrade after corrected evidence; rejected: treating
+  parseable rows as rollback safety or deleting evidence to permit rollback.
+
 - Preservation evidence for all 30 retained Swarm responsibilities and eight
   selected native integrations under official Laravel AI 0.11.2. Native HTTP
   tests cover middleware/options, deferred tool discovery, structured routing,
@@ -38,6 +49,10 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
   [native approval outcomes](docs/native-outcome-boundary.md) and UPGRADING.md.
 
 ### Fixed
+
+- Make the unknown-stream test fixture implement the native `StreamEvent`
+  contract while retaining its unknown type and secret privacy sentinel. This
+  corrects moving-dev test input without changing production event handling.
 
 - Preserve native streamed tool-result `denied` and `failed` flags through full,
   redacted and skipped capture and historical/hot/cold replay, for sequential
