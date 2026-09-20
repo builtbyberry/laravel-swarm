@@ -1,6 +1,6 @@
 # Execution Modes
 
-Every swarm class supports six execution modes through the `Runnable` trait: `prompt()` (and its alias `run()`), `queue()`, `stream()`, `broadcast()` / `broadcastNow()`, `broadcastOnQueue()`, and `dispatchDurable()`. The mode you choose determines whether the run is synchronous or background, whether it streams tokens to the caller, and whether it can recover from partial failures mid-run. Most of the modes mirror the Laravel AI agent API deliberately — if you know how to run an agent, the same verbs work on swarms.
+The `Runnable` trait exposes six execution modes, subject to topology and dispatch validation: `prompt()` (and its alias `run()`), `queue()`, `stream()`, `broadcast()` / `broadcastNow()`, `broadcastOnQueue()`, and `dispatchDurable()`. The mode you choose determines whether the run is synchronous or background, whether it streams tokens to the caller, and whether it can recover from partial failures mid-run. Most of the modes mirror the Laravel AI agent API deliberately — if you know how to run an agent, the same verbs work on swarms.
 
 ## Single Agent (`Swarm::agent()`)
 
@@ -63,6 +63,8 @@ Prefer a full `Swarm` class when the same topology is reused across your app, be
 | `broadcast()` / `broadcastNow()` | `StreamableSwarmResponse` | No | Yes (push) | No | No | Medium |
 | `broadcastOnQueue()` | `QueuedSwarmResponse` | Yes | Yes (push) | No | No | Medium |
 | `dispatchDurable()` | `DurableSwarmResponse` | Yes | No | Yes | Yes | High |
+
+The table describes default dispatch behavior. Generated hierarchical `multi_worker` queueing adds branch/join coordination and recovery, not a checkpoint after every routed step. Non-durable streams have [bounded snapshot/checkpoint resume](streaming.md#crash-replay-durability); durable per-node streaming records causal evidence rather than returning a live `StreamableSwarmResponse`.
 
 **Streaming** column means typed token events are emitted while the run progresses. **Checkpointing** means per-step state is persisted so the run can be resumed after a worker death. **Recovery** means a crashed or stalled run can be automatically advanced by `swarm:recover` without re-running completed steps.
 
@@ -139,17 +141,17 @@ ContentPipelineSwarm::make()
 - When the workflow is long-running enough that a mid-job server restart would be expensive to replay from the beginning (use `dispatchDurable()`).
 
 **Gotchas:**
-- One Laravel queue job owns one full swarm run. If the job fails partway through, all progress is lost — queue retries restart from the beginning, not from the last completed agent.
-- Do not use serialized closures with `then()` / `catch()` on the response for real workloads — they can capture excess state, fail serialization, or embed sensitive data in queue payloads. Listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead.
+- By default one Laravel queue job owns the workflow; there is no per-agent recovery cursor. Opt-in generated hierarchical `multi_worker` coordination persists branch/join state and has [separate recovery](hierarchical-routing.md#queue). Static hierarchy keeps its in-process queued path. An ordinary queue retry may re-enter the workflow from the beginning; it is not an external-effect deduplicator.
+- Whole-workflow `then()` / `catch()` callbacks are unavailable: [QueuedSwarmResponse](../src/Responses/QueuedSwarmResponse.php) proxies only methods present on its pending dispatch. Listen to `SwarmCompleted` and `SwarmFailed` lifecycle events. This does not remove stream `each()` / `then()` callbacks.
 - Queued swarms are re-resolved from the container; do not rely on runtime instance state. Pass per-run data in the task payload or a `RunContext`.
 
 #### Queue retry & timeout
 
-Queued swarm jobs are attempted **once** by default, regardless of the queue worker's `--tries` flag.
+Ordinary `InvokeSwarm` and `BroadcastSwarm` jobs are attempted **once** by default through [ConfiguresQueuedSwarmJob](../src/Jobs/Concerns/ConfiguresQueuedSwarmJob.php), regardless of the queue worker's `--tries` flag.
 
-**Why once?** A queued run holds no checkpoint. A retry does not resume from the last completed agent — it re-executes the entire swarm from step 0: re-dispatching all tool calls and re-spending all LLM tokens. Silently inheriting a worker-wide `--tries=3` means a transient worker crash restarts a full, potentially expensive run three times over. Swarm asserts the safe default here because only Swarm knows these runs are not checkpointed.
+**Why once?** Ordinary queued work has no per-agent recovery cursor. A retry can re-enter the workflow from the beginning and repeat tool calls and provider costs. The [runner](../src/Runners/SwarmRunner.php) may suppress duplicate execution through terminal history or a held lease; this is not external-effect deduplication. Generated hierarchical `multi_worker` branch/join recovery is separate. The ordinary job default avoids blindly inheriting a worker-wide retry count.
 
-**Contrast with durable jobs.** `dispatchDurable()` jobs derive explicit tries/timeout/backoff from `swarm.durable.job.*` and are safe to retry because each attempt advances from the last persisted checkpoint, not from the beginning. `SWARM_QUEUE_TRIES` does **not** affect durable advance jobs (`AdvanceDurableSwarm`/`AdvanceDurableBranch`), which always derive their tries from `swarm.durable.job.tries`.
+**Durable and coordinated resume jobs.** `AdvanceDurableSwarm`, `AdvanceDurableBranch` and [ResumeQueuedHierarchicalSwarm](../src/Jobs/ResumeQueuedHierarchicalSwarm.php) use [ConfiguresDurableAdvanceJob](../src/Jobs/Concerns/ConfiguresDurableAdvanceJob.php): `swarm.durable.job.tries` (default 3), backoff and step timeout plus margin. `SWARM_QUEUE_TRIES` does not configure them. Checkpoints and leases protect Swarm state, but unfinished work may repeat provider/tool effects; see [preserved operational limits](ai-0112-preservation-evidence.md#supported-combinations-and-operational-limits). Unsupported native approval outcomes bypass retries in either job profile.
 
 **Opting in.** If your swarms are idempotent and the token cost of a full restart is acceptable, raise the limit via config or env:
 
@@ -198,7 +200,7 @@ return ContentPipelineSwarm::make()->stream([
 **Topology constraint — not parallel.** Sequential, hierarchical, and static-hierarchical swarms stream (for hierarchical, the coordinator runs synchronously and worker nodes stream). A **parallel** swarm cannot stream — concurrent agents do not map to a single ordered event stream — so use `prompt()` for parallel, or a sequential swarm if you need streamed output.
 
 **When NOT to use:**
-- Parallel or hierarchical topologies.
+- Top-level parallel topology (generated and static hierarchical topologies are supported).
 - When the client might disconnect mid-stream — events already emitted to the transport cannot be recalled, and if the run fails after partial emission there is no automatic recovery.
 - When you need the run to outlive the HTTP request (use `broadcastOnQueue()` or `dispatchDurable()`).
 
@@ -283,7 +285,7 @@ $detail = $response->inspect(); // DurableRunDetail
 - Long-running processes measured in minutes to hours where restarting from the beginning is expensive.
 - Production-critical workflows (billing pipelines, compliance checks, large data migrations) where partial progress must not be discarded.
 
-**Topology:** Sequential, parallel, and hierarchical swarms are all supported. For hierarchical swarms, the coordinator runs first and returns the route plan; Laravel Swarm persists that plan and advances one routed worker node per durable job. Parallel groups create durable branch jobs with independent leases, then join before continuing.
+**Topology:** Sequential, parallel, generated hierarchical and static hierarchical swarms are supported. For hierarchical swarms, the coordinator runs first and returns the route plan; Laravel Swarm persists that plan and advances one routed worker node per durable job. Parallel groups create durable branch jobs with independent leases, then join before continuing.
 
 **When NOT to use:**
 - Simple background tasks that complete in a few seconds or where a full restart is acceptable. Use `queue()` — it is simpler and has no operational overhead.

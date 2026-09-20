@@ -442,6 +442,10 @@ The plan must satisfy all of these:
   `prompt()`
 - parallel failure policy for coordinated segments follows `swarm.durable.parallel.failure_policy` / `#[DurableParallelFailurePolicy]` (same semantics as durable branches)
 
+[ResumeQueuedHierarchicalSwarm](../src/Jobs/ResumeQueuedHierarchicalSwarm.php) uses the
+[durable advance retry profile](../src/Jobs/Concerns/ConfiguresDurableAdvanceJob.php),
+not `swarm.queue.tries`. Lease fencing does not deduplicate external tool effects.
+
 ### `dispatchDurable()`
 
 - the same validated plan is used

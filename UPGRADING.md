@@ -282,6 +282,32 @@ stability settings to install Swarm — see
 
 ## Upgrading to v0.26.0
 
+### Adoption scope and application dependency example
+
+This version is currently unreleased. For a release candidate, use the exact
+reviewed source/lock in an isolated rehearsal. Once v0.26.0 is published, an
+application pinned to the older lines can update both constraints together:
+
+```bash
+composer require 'builtbyberry/laravel-swarm:^0.26.0' 'laravel/ai:^0.11.2' -W
+```
+
+Keep Swarm's existing PHP/Illuminate floors and a stable application dependency
+policy. Do not relax to a fork or development branch to resolve companion conflicts:
+**C5-R1 remains open**, because observed companion manifests stop at core `^0.25`
+and memory-vector also excludes AI 0.11. Their temporary contract harnesses are
+not published installability proof. Resolve companion release compatibility
+before applying this example to an app that installs them.
+
+The [44-row release evidence](docs/ai-0112-release-evidence.md) preserves public
+verbs/aliases, response and operator types, attributes/config defaults, declared-class
+background constraints and supported deprecated helpers. The only selected removal
+is obsolete vendor fake coupling. Queued whole-workflow `then()` / `catch()` were
+not implemented; use lifecycle listeners. Stream `each()` / `then()` remain.
+Native ToolSearch/history are opt-in; Swarm capture and sealing do not govern
+native conversation storage. Provider failover does not replace workflow retries.
+These are contract clarifications, not new callback, history or recovery features.
+
 ### Upgrade execution and verification
 
 1. Stop new swarm intake; drain in-flight provider calls and queued work, then

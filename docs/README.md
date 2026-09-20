@@ -19,6 +19,7 @@ The recommended reading path for new users.
 - [Choosing an Execution Mode](execution-modes.md) — prompt, queue, stream, or durable: when to use each
 - [Structured Input](structured-input.md)
 - [Testing](testing.md)
+- [Laravel AI 0.11.2 adoption contracts and release evidence](ai-0112-release-evidence.md) — all 44 dispositions, executed proof, deletion manifest and outstanding release gates
 
 ---
 

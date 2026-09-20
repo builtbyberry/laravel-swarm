@@ -8,6 +8,10 @@ This report records package integration evidence. The HTTP tests execute the
 official native invocation code against controlled transport responses; they do
 not claim a live provider service was exercised.
 
+For the complete A/R/D disposition index, exact deletion manifest and later C5
+landing evidence, see [C6 release evidence](ai-0112-release-evidence.md). The C4
+results below remain historical C4 measurements.
+
 ## Executed lanes
 
 Local results below are from the C4 candidate. **T** is

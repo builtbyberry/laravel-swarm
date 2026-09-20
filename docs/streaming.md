@@ -109,9 +109,11 @@ broadcasts each event immediately from the worker, and records completion
 through normal swarm history and lifecycle events.
 
 These are stream-event helpers, not lifecycle broadcasting for every topology.
-They are sequential-only for the same reason `stream()` is sequential-only. For
-prompt, queued, durable, parallel, or hierarchical operational feeds, listen to
-Laravel Swarm lifecycle events and broadcast your own application events.
+They use the same sequential, generated hierarchical and static hierarchical
+paths as `stream()` in [SwarmRunner](../src/Runners/SwarmRunner.php); top-level
+parallel live streaming is rejected by [DispatchValidator](../src/Runners/DispatchValidator.php).
+For workflow operational feeds across all modes, listen to Laravel Swarm
+lifecycle events and broadcast your own application events.
 
 Broadcast helpers do not retry or buffer transport delivery. If Laravel
 broadcasting throws while the helper is consuming the stream, live `broadcast()`
@@ -280,64 +282,44 @@ Configuration for replay storage drivers and prefixes lives under
 
 ## Crash-Replay Durability
 
-Persisted replay above re-yields a stream that **completed**. A separate
-guarantee covers the stream that **did not**: a non-durable streamed run whose
-generator is abandoned mid-stream — a worker crash, a dropped HTTP connection, a
-`break` out of the loop before `swarm_stream_end`.
+Persisted replay re-yields stored events. Re-executing an abandoned live stream
+with the same run id is a different operation: it can reuse selected memory
+snapshots and completed non-final sequential checkpoints, but it may invoke
+providers and tools again.
 
-Two things make such a run recoverable:
+- **Tool-call capture:** the streaming accumulator records observed tool pairs
+  in the memory snapshot and attempts to flush incomplete pairs with a null
+  result during generator teardown. A hard process death or failed persistence
+  is not a guaranteed flush or a receipt for an external effect.
+- **FrozenView:** when a prior snapshot is available, selected memory reads use
+  that frozen view. The final streamed agent is still invoked again; identical
+  memory does not guarantee identical provider output, event IDs or external
+  effects. FreshExecution opts out of frozen replay.
+- **Completed sequential steps:** a non-final step can be skipped only when its
+  checkpoint was successfully written and remains readable. Its output/usage
+  are rehydrated into the next step. Checkpoint writes are best-effort; missing
+  or unreadable checkpoints and unfinished work permit re-execution. The final
+  step is never checkpoint-skipped.
 
-- **Crash-safe tool-call capture.** Each agent the runner streams freezes a
-  memory snapshot keyed by `(run_id, step_index)` before its invocation. Tool
-  calls observed during the invocation are appended to that snapshot. If the
-  generator is torn down mid-stream, any tool call still in flight (a
-  `swarm_tool_call` whose `swarm_tool_result` never arrived) is still flushed
-  into the snapshot with a `null` result. No partial or lost pairs: the frozen
-  snapshot is a faithful record of every tool the agent invoked before the
-  tear-down.
-- **Byte-identical resume.** Re-running the same swarm with the **same run id**
-  resumes from the frozen snapshot instead of re-reading live memory. The final
-  streamed step detects the prior frozen snapshot, serves the agent the frozen
-  memory view (so a value some other run has since changed cannot leak in), and
-  rebuilds the tool-call record from scratch. A deterministic agent therefore
-  re-emits the same upstream text, reasoning, and tool events it produced before
-  the crash.
+[SequentialRunner](../src/Runners/SequentialRunner.php) owns these checkpoint
+conditions; [StreamingCrashReplayTest](../tests/Feature/StreamingCrashReplayTest.php)
+and the [R19 execution evidence](ai-0112-preservation-evidence.md#retained-swarm-responsibilities)
+characterize them. They do not establish exactly-once arbitrary tool effects.
+Durable execution adds cross-job state checkpoints and fences, but unfinished
+provider/tool work may still repeat there too.
 
-> **Scope — the whole pipeline.** Byte-identical resume covers every step of a
-> multi-step sequential `stream()`. The **final, streamed** step replays from its
-> frozen snapshot (above). Each **non-final** step is checkpointed when it
-> completes, and on resume a completed non-final step is **skipped**: its
-> provider is not re-invoked and its tool side effects do not re-fire (a primer
-> step that writes to memory does not run again). Its recorded output is
-> rehydrated into the next step's prompt, so the downstream stream is
-> byte-identical to the original run. A step that crashed *before* it completed
-> has no checkpoint and re-executes on resume.
->
-> This is same-process, single-`stream()` resume. It is **not** exactly-once
-> execution of external side effects across process boundaries — for
-> checkpointed, cross-process execution use `dispatchDurable()`
-> ([Durable Execution](durable-execution.md)).
->
-> Note that the swarm's own lifecycle events — `swarm_step_start` /
-> `swarm_step_end` and the `step.started` / `step.completed` audit records —
-> are re-emitted for a skipped step on each resume attempt (the agent's
-> *upstream* text/tool events are not). Treat these framework step events as
-> per-attempt, not exactly-once: a consumer that bills or counts per
-> `step.completed` should key on `(run_id, step_index)` to dedupe across resumes.
->
-> A skipped step still re-runs its **step guardrails** against the rehydrated
-> output (parity with a fresh run), so step guardrails must be **deterministic** —
-> a guardrail that depends on wall-clock or external state (e.g. a rate or
-> time-window rule) can reject on resume a step the original attempt passed.
+A skipped step re-emits Swarm step lifecycle/audit events and re-runs its step
+guardrails against the rehydrated output; its native invocation is skipped.
+Treat those framework events as attempt observations and keep guardrails
+deterministic if resumed output must pass the same policy.
 
-> **Sequential only.** This skip-on-resume optimisation applies to sequential
-> `stream()`. A **static-hierarchical** streamed run re-executes every reachable
-> worker on resume — each runs under its frozen snapshot, so the memory it sees
-> is deterministic, but its provider *is* re-invoked and usage / `step.completed`
-> telemetry / stream events are re-emitted across the crashed and resumed
-> attempts. The byte-identical-memory guarantee holds; the per-step *skip* does
-> not. For cross-process idempotent checkpointing of hierarchical work, use
-> `dispatchDurable()` ([Durable Execution](durable-execution.md)).
+The non-final skip optimization is sequential-only. Static-hierarchical workers
+execute again under their applicable frozen snapshots; their provider calls,
+usage and events may repeat. See
+[StaticHierarchicalStreamRunner](../src/Runners/StaticHierarchicalStreamRunner.php)
+and [its crash-replay tests](../tests/Feature/StaticHierarchicalStreamCrashReplayTest.php).
+For cross-job orchestration recovery use [Durable Execution](durable-execution.md),
+with the [same external-effect limits](ai-0112-preservation-evidence.md#supported-combinations-and-operational-limits).
 
 The frozen view is scoped per-invocation on the run's internal active-run frame
 rather than rebound globally, so two streams running concurrently in one process

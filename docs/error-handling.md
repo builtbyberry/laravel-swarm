@@ -261,9 +261,9 @@ try {
 
 ### `queue()`
 
-The queue job fails. Laravel's standard job retry configuration applies if `tries` is set on the job or the queue connection. `SwarmFailed` fires on the final failure (after retries are exhausted). There is no checkpoint recovery — if the job fails mid-run, queue retry restarts the swarm from the beginning.
+Ordinary `InvokeSwarm` / `BroadcastSwarm` jobs use `swarm.queue.tries` (default 1), overriding the worker's tries default. A retry may restart uncheckpointed workflow work and repeat effects. `SwarmFailed` is emitted by the [runner failure path](../src/Runners/SwarmRunner.php), not only after Laravel exhausts retries. Generated hierarchical `multi_worker` execution has separate branch/join recovery; its [resume job](../src/Jobs/ResumeQueuedHierarchicalSwarm.php) uses the durable advance retry profile. [Unsupported native approval outcomes](native-outcome-boundary.md) are nonretryable regardless of these settings.
 
-Do not use `then()` / `catch()` callbacks on the response for real workloads; listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead.
+Queued whole-workflow `then()` / `catch()` callbacks are unavailable; listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead. Stream callbacks remain supported.
 
 ### `stream()`
 
@@ -277,12 +277,10 @@ The failed step is checkpointed. The `DurableRetry` policy applies (if configure
 
 These are distinct mechanisms and should not be confused.
 
-**Queue retry** — Laravel re-dispatches the entire `InvokeSwarm` job from the beginning. Every agent in the swarm runs again. This is the only failure recovery available for `queue()` runs. Configure it through standard Laravel queue settings (`tries`, `backoff`, etc. on the connection or job):
+**Queue retry** — Laravel re-delivers an `InvokeSwarm` job. Ordinary queueing has no per-step recovery cursor, so work may start over; terminal history and coordinated leases can suppress a duplicate. Configure ordinary job attempts with `swarm.queue.tries` / `SWARM_QUEUE_TRIES`, only for idempotent workloads. Generated hierarchical `multi_worker` joins instead have the [coordinated recovery path](hierarchical-routing.md#queue). Neither retry mechanism guarantees exactly-once external effects.
 
-```php
-// In the connection or queue config, or via job-level settings
-'tries' => 3,
-'backoff' => [10, 60, 300],
+```env
+SWARM_QUEUE_TRIES=3
 ```
 
 **Durable retry (`#[DurableRetry]`)** — a per-step retry within the durable execution engine. When a durable step fails, the retry policy determines whether and when to re-run that single step. Completed steps are not re-run. The run resumes from the failed step after the backoff window. Configure it on the swarm class:
