@@ -28,6 +28,9 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
 
 ### Changed
 
+- **Development version:** update the `dev-main` branch alias from `0.25.x-dev`
+  to `0.26.x-dev` so development installs identify the current release line.
+
 - **Documented adoption contracts:** reconcile streaming topology, default versus coordinated queue execution,
   unavailable queued whole-workflow callbacks, and the resume job's durable retry
   profile with their owning sources. Bound queue restarts to the actual duplicate/coordination path (review C6-F1), and stream resume to readable checkpoints and selected frozen memory, without byte-identical output or effect-deduplication promises (review C6-F2). Supported stream callbacks and lifecycle
