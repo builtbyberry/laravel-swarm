@@ -66,6 +66,15 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
 
 ### Fixed
 
+- Preserve native approval rejections when job failure telemetry also throws
+  (readiness READY-R3). The original rejection reaches the permanent-failure
+  guard instead of an ordinary telemetry error allowing a worker retry. Chosen:
+  retain the original native failure even if telemetry is incomplete; rejected:
+  repeating possible tool effects to recover telemetry. Actual database-worker
+  tests with five allowed tries cover both native exception types, all five
+  package jobs, failed telemetry lookups and failed telemetry-state writes;
+  ordinary failure retry behavior remains unchanged.
+
 - Correct queue-setting ownership and conditional retry/replay source comments
   (review C6-R1, C6-R2). Link execution and memory-selection behavior to their owning
   sources; remove byte-identical output and crash-safe flush promises. This changes

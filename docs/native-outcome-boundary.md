@@ -45,6 +45,12 @@ is safe. A restart can repeat those effects. Swarm does not invent an approval,
 reject a tool on the user's behalf, create a synthetic wait, or resume a native
 interrupted turn.
 
+If failure telemetry itself throws while handling either native rejection,
+the original rejection still reaches the queue job's permanent-failure guard.
+Telemetry may be incomplete; its failure must not make the rejected work eligible
+for automatic retry. Ordinary failures retain their existing exception and retry
+behavior.
+
 Durable branch failure still respects lease fencing and the configured
 `swarm.durable.parallel.failure_policy`. Under `partial_success`, a parent with
 successful siblings may complete using those siblings; the rejected branch stays

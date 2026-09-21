@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Jobs\Concerns;
 
+use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Telemetry\PackageJobTelemetryState;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
@@ -35,8 +36,12 @@ trait EmitsSwarmJobTelemetry
             $result = $callback();
         } catch (Throwable $exception) {
             $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
-            $this->emitSwarmJobTelemetry('job.failed', 'failed', $durationMs, $exception, $startedAtMs);
-            $this->swarmJobTelemetryState()->markFailed($this->swarmJobTelemetryKey());
+            try {
+                $this->emitSwarmJobTelemetry('job.failed', 'failed', $durationMs, $exception, $startedAtMs);
+                $this->swarmJobTelemetryState()->markFailed($this->swarmJobTelemetryKey());
+            } finally {
+                NativeOutcomeValidator::rethrowIfUnsupported($exception);
+            }
 
             throw $exception;
         }
