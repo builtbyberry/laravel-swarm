@@ -333,9 +333,9 @@ class DurableBranchAdvancer
      * it with the branch node id + branch epoch and appends it. Output text, usage, and
      * paired tool calls accumulate exactly as the live stream and the durable sequential
      * node do, so the returned triple is shaped identically to {@see promptBranchAgent()}
-     * and the rest of branch commit is unchanged. Unpaired tool calls are flushed in
-     * `finally` so a crash mid-branch still records every tool the agent invoked — its
-     * unsealed events stay retractable on resume.
+     * and the rest of branch commit is unchanged. The `finally` block attempts to
+     * append unpaired tool calls on normal completion or exception unwinding;
+     * hard process termination can bypass it, and snapshot persistence can fail.
      *
      * @param  array<string, mixed>  $branch
      * @param  callable(SwarmStreamEvent): void  $sink

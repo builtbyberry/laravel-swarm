@@ -1698,9 +1698,9 @@ class HierarchicalRunner
             throw $exception;
         } finally {
             try {
-                // Persist any tool call left without a result (happy path or a crash
-                // mid-node) so the frozen snapshot records every tool the agent invoked,
-                // exactly as the live stream does. Then clear the run frame.
+                // Attempt to append tool calls left without a result on normal
+                // completion or exception unwinding. Hard process termination can
+                // bypass finally, and snapshot persistence can fail.
                 foreach ($accumulator->pendingToolCalls as $unpairedCall) {
                     $accumulator->snapshot = $this->snapshots->appendToolCall(
                         $accumulator->snapshot,

@@ -17,9 +17,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
  *   captures `scope`, `scope_id`, `key`, `value`, and `metadata` plus optional
  *   ISO-8601 `created_at` / `updated_at` strings so a replay can rebuild a
  *   {@see MemoryEntry} byte-identical to the original.
- * - `toolCalls` — input/output pairs for every tool the agent called during
- *   its invocation. Streamed runs (issue #115) replay byte-identical from
- *   this list.
+ * - `toolCalls` — captured tool input/output pairs. Invocation and replay
+ *   handling are owned by [SequentialRunner](../Runners/SequentialRunner.php)
+ *   and {@see MemoryReplayCoordinator}.
  *
  * Snapshots are produced by implementations of
  * {@see SnapshotsMemory} and consumed by

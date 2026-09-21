@@ -38,8 +38,8 @@ class DurableSequentialStepAdvancer
      * ({@see DurableNodeStreamRecorder::streamingActive()}) decide whether this
      * attempt emits via the sink or falls back to `prompt()` — so an operator can
      * shed the per-event write load without ever dropping a retraction (the seal
-     * still fires at checkpoint). Either path runs inside the replay coordinator so
-     * a resume replays byte-identically.
+     * still fires at checkpoint). Both paths invoke {@see MemoryReplayCoordinator};
+     * that collaborator owns memory selection for the resumed invocation.
      */
     public function advance(SwarmExecutionState $state, int $expectedStepIndex, int $attemptEpoch = 0, bool $durableStreaming = false): SwarmStep
     {
