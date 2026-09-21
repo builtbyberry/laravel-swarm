@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.26.0 - unreleased
+## v0.26.0 - 2026-09-21
 
 Selective adoption of official Laravel AI ^0.11.2 while preserving supported
 Swarm capabilities, with native boundary compatibility and upgrade evidence.
