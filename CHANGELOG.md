@@ -7,7 +7,7 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
 
 ### Added
 
-- Upgrade fixtures execute v0.25 serialized jobs and sealed active rows against
+- **Upgrade and dependency evidence:** fixtures execute v0.25 serialized jobs and sealed active rows against
   the adoption candidate, and candidate-written rows through historical readers.
   A custom native conversation store preserves text/tool history while Swarm
   capture remains disabled; actual database history redaction is asserted
@@ -18,7 +18,7 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
   Chosen: refuse semantic downgrade after corrected evidence; rejected: treating
   parseable rows as rollback safety or deleting evidence to permit rollback.
 
-- Preservation evidence for all 30 retained Swarm responsibilities and eight
+- **Retained workflow coverage:** preservation evidence for all 30 retained Swarm responsibilities and eight
   selected native integrations under official Laravel AI 0.11.2. Native HTTP
   tests cover middleware/options, deferred tool discovery, structured routing,
   conversation memory and repeatable effects on workflow retry. Baseline tests
@@ -28,7 +28,7 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
 
 ### Changed
 
-- Reconcile streaming topology, default versus coordinated queue execution,
+- **Documented adoption contracts:** reconcile streaming topology, default versus coordinated queue execution,
   unavailable queued whole-workflow callbacks, and the resume job's durable retry
   profile with their owning sources. Bound queue restarts to the actual duplicate/coordination path (review C6-F1), and stream resume to readable checkpoints and selected frozen memory, without byte-identical output or effect-deduplication promises (review C6-F2). Supported stream callbacks and lifecycle
   completion examples remain. Publish the [complete 44-row disposition and deletion
@@ -36,19 +36,21 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
   and upgrade limits. Chosen: source-backed bounded adoption; rejected: broad runtime
   deletion or treating green PR tests as release readiness. C6 is docs-only; existing
   reference tests plus independent semantic review verify the change. Companion
-  gap C5-R1 and the separate post-main moving-dev
-  gate remain open; no shipment is implied.
+  publication is verified separately under C5-R1 with fresh Packagist-only
+  installation against published core v0.26 and all four companions. A separate
+  post-main moving-dev nightly must pass before core tagging; component and PR
+  checks do not replace either release gate.
 
-- **Breaking:** require official `laravel/ai ^0.11.2` and drop the 0.10 line.
+- **BREAKING:** require official `laravel/ai ^0.11.2` and drop the 0.10 line.
   PHP and Illuminate constraints are unchanged; deploy or roll back the
   dependency and Swarm code together after draining workers (see UPGRADING.md).
-- Replace the removed vendor fake pending dispatch with a small internal Swarm
+- **Intent-only fakes:** replace the removed vendor fake pending dispatch with a small internal Swarm
   fake, preserving response types, fluent routing, intent assertions, and inert
   destruction. Real job execution is tested separately with native agent fakes;
   wrapping native jobs or adding queued completion callbacks was rejected
   because Swarm fakes must remain intent-only.
 
-- **Behavior impact:** reject unsupported native tool-approval outcomes before
+- **Native approval boundary:** reject unsupported native tool-approval outcomes before
   the affected Swarm step/node/branch is recorded as successful. Native
   `ApprovalNotResumableException` also bypasses retries. Durable run/branch
   policies and all affected queue jobs cannot automatically retry these outcomes,
@@ -70,7 +72,7 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
   contract while retaining its unknown type and secret privacy sentinel. This
   corrects moving-dev test input without changing production event handling.
 
-- Preserve native streamed tool-result `denied` and `failed` flags through full,
+- **Stream outcome evidence:** preserve native streamed tool-result `denied` and `failed` flags through full,
   redacted and skipped capture and historical/hot/cold replay, for sequential
   and static-hierarchical streams. Existing native event identities, outcome
   vocabulary, usage accounting and callback stages remain unchanged. Chosen:

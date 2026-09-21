@@ -284,8 +284,8 @@ stability settings to install Swarm — see
 
 ### Adoption scope and application dependency example
 
-This version is currently unreleased. For a release candidate, use the exact
-reviewed source/lock in an isolated rehearsal. Once v0.26.0 is published, an
+For a release candidate, use the exact reviewed source/lock in an isolated
+rehearsal. When installing the published v0.26.0 release, an
 application pinned to the older lines can update both constraints together:
 
 ```bash
@@ -294,10 +294,11 @@ composer require 'builtbyberry/laravel-swarm:^0.26.0' 'laravel/ai:^0.11.2' -W
 
 Keep Swarm's existing PHP/Illuminate floors and a stable application dependency
 policy. Do not relax to a fork or development branch to resolve companion conflicts:
-**C5-R1 remains open**, because observed companion manifests stop at core `^0.25`
-and memory-vector also excludes AI 0.11. Their temporary contract harnesses are
-not published installability proof. Resolve companion release compatibility
-before applying this example to an app that installs them.
+the release-level **C5-R1** gate requires fresh Packagist-only installation proof
+against published core v0.26 and all four companions. Candidate aliases, path
+repositories, synthetic metadata and installs against core v0.25 do not satisfy
+that gate. Verify published companion compatibility before applying this example
+to an app that installs them; the historical C5 contract harnesses are not that proof.
 
 The [44-row release evidence](docs/ai-0112-release-evidence.md) preserves public
 verbs/aliases, response and operator types, attributes/config defaults, declared-class

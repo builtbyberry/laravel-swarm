@@ -218,15 +218,17 @@ C1-C5 executable reports, exact-source semantic review and C6's independently
 reviewed documentation diff. DocumentationReferenceTest validates resolving
 references only; it does not prove these sentences true.
 
-Outstanding beyond C6:
+Release follow-through beyond the C6 evidence snapshot:
 
-- **C5-R1, medium, owner Daniel:** published optional companion constraints exclude
-  adoption core/AI versions. Temporary candidate/path smoke is not released
-  ecosystem installability. Separate companion scoping remains required.
-- **C6-R1, low, owner Daniel, target v0.26.0 review:** the existing comment above
-  `swarm.queue.tries` in [config/swarm.php](../config/swarm.php) incorrectly includes
-  ResumeQueuedHierarchicalSwarm. Its actual durable trait is linked above. Config
-  edits are outside C6; the source-comment follow-up stays open in Marshall.
+- **C5-R1, medium, owner Daniel:** the C5 snapshot found companion manifests
+  excluding adoption core/AI versions. Closure requires fresh Packagist-only
+  installation against published core v0.26 and all four companions. Temporary
+  candidate aliases, path repositories, synthetic metadata and core v0.25 installs
+  do not establish that released ecosystem compatibility.
+- **C6-R1 and C6-R2 are fixed:** [PR #503](https://github.com/builtbyberry/laravel-swarm/pull/503)
+  corrected queue-setting ownership and conditional retry/replay comments after
+  C6. Independent verification confirmed unchanged executable PHP tokens and
+  resolving source references; Marshall records both findings as fixed.
 - Independent release readiness and its required findings remain separate from
   component change review; this report does not clear or approve that gate.
 - After a separately authorized main merge, dispatch the exact compatible
