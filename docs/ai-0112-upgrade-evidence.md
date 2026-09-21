@@ -135,9 +135,11 @@ compatibility** or companion release qualification.
 Harness: materialize each pinned tree, preserve `composer.json`, admit core
 `0.26.0` through a path repository pointing at the candidate, and for vector
 admit official AI `^0.11.2`; run `composer update` then `composer test`.
-All observed published companion constraints stop at core `^0.25`; vector also
-excludes AI 0.11. Marshall release finding **C5-R1**, owner Daniel, retains the
-separate companion-release scoping requirement. Passing these harnesses does not
+At the C5 observation above, all published companion constraints stopped at core
+`^0.25`; vector also excluded AI 0.11. This is historical candidate evidence.
+Marshall release finding **C5-R1**, owner Daniel, remains the separate gate for
+fresh Packagist-only installation against published core v0.26 and all four
+companions. Passing these harnesses or installing against core v0.25 does not
 close that release-level gap.
 
 ## Final C5 landing evidence
@@ -150,7 +152,7 @@ head `7d945d6044ac2bb42e3234154ce7ea17ebae94d1` into the release branch at
 exact run links, dependency references and real-DB lane attribution. These
 landing results supplement, rather than relabel, the earlier local results above.
 
-## Separate release gate — still outstanding
+## Separate post-main release gate
 
 After a separately authorized merge to `main`, dispatch the exact compatible
 `nightly.yml` workflow on `main`, verify actual official moving-dev lock/source

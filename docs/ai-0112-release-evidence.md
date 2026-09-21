@@ -5,7 +5,8 @@ This is the complete disposition index for approved Audit 225 v8 / Decision 2357
 approved responsibilities; it does not revise the audit or add integrations.
 The baseline is Swarm v0.25.0 `be7df78e8fde12362cfff9007cfe723d572a5e4f`.
 C6 starts from C5 merge `334ab6691e19328fd55c595dafe68a9a4d278a1f` and changes
-only documentation. The release remains unreleased.
+only documentation. This component evidence does not establish publication or
+completion of the separate release gates below.
 
 ## What was executed
 
@@ -218,15 +219,17 @@ C1-C5 executable reports, exact-source semantic review and C6's independently
 reviewed documentation diff. DocumentationReferenceTest validates resolving
 references only; it does not prove these sentences true.
 
-Outstanding beyond C6:
+Release follow-through beyond the C6 evidence snapshot:
 
-- **C5-R1, medium, owner Daniel:** published optional companion constraints exclude
-  adoption core/AI versions. Temporary candidate/path smoke is not released
-  ecosystem installability. Separate companion scoping remains required.
-- **C6-R1, low, owner Daniel, target v0.26.0 review:** the existing comment above
-  `swarm.queue.tries` in [config/swarm.php](../config/swarm.php) incorrectly includes
-  ResumeQueuedHierarchicalSwarm. Its actual durable trait is linked above. Config
-  edits are outside C6; the source-comment follow-up stays open in Marshall.
+- **C5-R1, medium, owner Daniel:** the C5 snapshot found companion manifests
+  excluding adoption core/AI versions. Closure requires fresh Packagist-only
+  installation against published core v0.26 and all four companions. Temporary
+  candidate aliases, path repositories, synthetic metadata and core v0.25 installs
+  do not establish that released ecosystem compatibility.
+- **C6-R1 and C6-R2 are fixed:** [PR #503](https://github.com/builtbyberry/laravel-swarm/pull/503)
+  corrected queue-setting ownership and conditional retry/replay comments after
+  C6. Independent verification confirmed unchanged executable PHP tokens and
+  resolving source references; Marshall records both findings as fixed.
 - Independent release readiness and its required findings remain separate from
   component change review; this report does not clear or approve that gate.
 - After a separately authorized main merge, dispatch the exact compatible
