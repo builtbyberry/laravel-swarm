@@ -5,7 +5,8 @@ This is the complete disposition index for approved Audit 225 v8 / Decision 2357
 approved responsibilities; it does not revise the audit or add integrations.
 The baseline is Swarm v0.25.0 `be7df78e8fde12362cfff9007cfe723d572a5e4f`.
 C6 starts from C5 merge `334ab6691e19328fd55c595dafe68a9a4d278a1f` and changes
-only documentation. The release remains unreleased.
+only documentation. This component evidence does not establish publication or
+completion of the separate release gates below.
 
 ## What was executed
 
