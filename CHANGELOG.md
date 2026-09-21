@@ -75,6 +75,11 @@ Swarm capabilities, with native boundary compatibility and upgrade evidence.
   package jobs, failed telemetry lookups and failed telemetry-state writes;
   ordinary failure retry behavior remains unchanged.
 
+- Remove remaining source-comment promises of crash-safe tool-call capture and
+  byte-identical resumed output; link replay handling to its owning sources.
+  Remove the stale configuration-doc statement that C6-R1 is still open
+  (readiness READY-R1, READY-R2). These corrections leave executable PHP unchanged.
+
 - Correct queue-setting ownership and conditional retry/replay source comments
   (review C6-R1, C6-R2). Link execution and memory-selection behavior to their owning
   sources; remove byte-identical output and crash-safe flush promises. This changes

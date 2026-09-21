@@ -174,8 +174,7 @@ Queue connection and name used for `queue()` execution and hierarchical parallel
 [ResumeQueuedHierarchicalSwarm](../src/Jobs/ResumeQueuedHierarchicalSwarm.php)
 uses [ConfiguresDurableAdvanceJob](../src/Jobs/Concerns/ConfiguresDurableAdvanceJob.php)
 for retries, backoff and timeout; ordinary `swarm.queue.tries` / `timeout` do not
-configure it. The existing queue comment in config incorrectly includes this job;
-that source-comment follow-up is tracked as C6-R1 in the [release evidence](ai-0112-release-evidence.md).
+configure it.
 
 ## Streaming / Replay
 

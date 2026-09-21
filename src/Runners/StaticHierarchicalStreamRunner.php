@@ -1203,12 +1203,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             throw $exception;
         } finally {
             try {
-                // Flush any tool calls without a matching ToolResult into the
-                // snapshot — on the happy path (calls pending at stream end) AND on
-                // abandonment (the generator was torn down mid-stream, so the foreach
-                // never reached StreamEnd). Doing it in finally makes the append
-                // crash-safe: an in-flight call is persisted with result=null instead
-                // of being lost, mirroring SequentialRunner.
+                // Attempt to append tool calls without a matching ToolResult on
+                // normal completion or generator unwinding. Hard process termination
+                // can bypass finally, and snapshot persistence can fail; this is not
+                // a crash-safe record of every tool effect. Entry shape is owned by
+                // SnapshotToolCallNormalizer::entry().
                 foreach ($pendingToolCalls as $unpairedCall) {
                     $snapshot = $this->snapshots->appendToolCall(
                         $snapshot,
