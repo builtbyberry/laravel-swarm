@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Exceptions\UnsupportedNativeApprovalException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
@@ -24,6 +25,7 @@ use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
+use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
@@ -40,6 +42,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Exceptions\ApprovalNotResumableException;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -73,6 +76,7 @@ class DurableBranchAdvancer
         protected AgentVisibleMemoryView $view,
         protected DurableNodeStreamRecorder $nodeStream,
         protected StreamEventMapper $mapper,
+        protected NativeOutcomeValidator $outcomes,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId): void
@@ -137,158 +141,168 @@ class DurableBranchAdvancer
         // memory view on a crash-resume retry, or under live memory on a first
         // attempt. The callback returns `true` when boundary dispatch should
         // follow and `false` on all early-return paths.
-        /** @var bool $shouldDispatch */
-        $shouldDispatch = $this->coordinator->during(
-            $run['swarm_class'],
-            $runId,
-            (int) $branch['step_index'],
-            function (?MemorySnapshot $existing) use ($run, $branch, $runId, $branchId, $token, $context, $swarm, $stepLeaseSeconds, $durableStreaming, $branchEpoch, $branchNodeId): bool {
-                $agent = $this->application->make($branch['agent_class']);
+        $unsupportedOutcome = null;
 
-                if (! $agent instanceof Agent) {
-                    throw new SwarmException("Durable branch agent [{$branch['agent_class']}] must resolve to a Laravel AI agent.");
-                }
+        try {
+            /** @var bool $shouldDispatch */
+            $shouldDispatch = $this->coordinator->during(
+                $run['swarm_class'],
+                $runId,
+                (int) $branch['step_index'],
+                function (?MemorySnapshot $existing) use ($run, $branch, $runId, $branchId, $token, $context, $swarm, $stepLeaseSeconds, $durableStreaming, $branchEpoch, $branchNodeId, &$unsupportedOutcome): bool {
+                    $agent = $this->application->make($branch['agent_class']);
 
-                $this->durableRuns->markBranchRunning($runId, $branchId, $token);
+                    if (! $agent instanceof Agent) {
+                        throw new SwarmException("Durable branch agent [{$branch['agent_class']}] must resolve to a Laravel AI agent.");
+                    }
 
-                $timeoutSeconds = max((int) ceil((Carbon::parse($run['timeout_at'], 'UTC')->diffInSeconds(now('UTC'), false)) * -1), 1);
-                $state = new SwarmExecutionState(
-                    swarm: $swarm,
-                    topology: Topology::from($run['topology']),
-                    executionMode: ExecutionMode::Durable,
-                    deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
-                    maxAgentExecutions: (int) $run['total_steps'],
-                    ttlSeconds: $this->runs->ttlSeconds(),
-                    leaseSeconds: null,
-                    executionToken: null,
-                    verifyOwnership: fn (): null => $this->durableRuns->assertBranchOwned($runId, $branchId, $token),
-                    context: $context,
-                    contextStore: $this->contextStore,
-                    artifactRepository: $this->artifactRepository,
-                    historyStore: $this->historyStore,
-                    events: $this->events,
-                    queueHierarchicalParallelCoordination: null,
-                );
+                    $this->durableRuns->markBranchRunning($runId, $branchId, $token);
 
-                $startedAt = MonotonicTime::now();
-                $step = null;
+                    $timeoutSeconds = max((int) ceil((Carbon::parse($run['timeout_at'], 'UTC')->diffInSeconds(now('UTC'), false)) * -1), 1);
+                    $state = new SwarmExecutionState(
+                        swarm: $swarm,
+                        topology: Topology::from($run['topology']),
+                        executionMode: ExecutionMode::Durable,
+                        deadlineMonotonic: hrtime(true) + ($timeoutSeconds * 1_000_000_000),
+                        maxAgentExecutions: (int) $run['total_steps'],
+                        ttlSeconds: $this->runs->ttlSeconds(),
+                        leaseSeconds: null,
+                        executionToken: null,
+                        verifyOwnership: fn (): null => $this->durableRuns->assertBranchOwned($runId, $branchId, $token),
+                        context: $context,
+                        contextStore: $this->contextStore,
+                        artifactRepository: $this->artifactRepository,
+                        historyStore: $this->historyStore,
+                        events: $this->events,
+                        queueHierarchicalParallelCoordination: null,
+                    );
 
-                try {
-                    $this->stepsRecorder->started($state, (int) $branch['step_index'], $branch['agent_class'], $branch['input']);
+                    $startedAt = MonotonicTime::now();
+                    $step = null;
 
-                    // On the fresh-execution path we freeze a new snapshot from live
-                    // memory. On the replay path the snapshot already exists; we keep
-                    // its frozen entries (the determinism guarantee) but clear the
-                    // partial tool-call record so this attempt can rebuild it. Both
-                    // paths converge on an unfrozen MemorySnapshot we can append to.
-                    /** @var MemorySnapshot $snapshot */
-                    $snapshot = $existing !== null
-                        ? $this->snapshots->resetToolCalls($existing)
-                        : $this->snapshots->snapshot(
-                            $runId,
-                            (int) $branch['step_index'],
-                            $this->view->present($swarm, $context, $agent),
+                    try {
+                        $this->stepsRecorder->started($state, (int) $branch['step_index'], $branch['agent_class'], $branch['input']);
+
+                        // On the fresh-execution path we freeze a new snapshot from live
+                        // memory. On the replay path the snapshot already exists; we keep
+                        // its frozen entries (the determinism guarantee) but clear the
+                        // partial tool-call record so this attempt can rebuild it. Both
+                        // paths converge on an unfrozen MemorySnapshot we can append to.
+                        /** @var MemorySnapshot $snapshot */
+                        $snapshot = $existing !== null
+                            ? $this->snapshots->resetToolCalls($existing)
+                            : $this->snapshots->snapshot(
+                                $runId,
+                                (int) $branch['step_index'],
+                                $this->view->present($swarm, $context, $agent),
+                            );
+
+                        ActiveRunContext::enter($runId, $swarm::class, $context);
+
+                        try {
+                            // The kill-switch is consulted per attempt (#310 KS1): when the opt-in is
+                            // pinned AND streaming is active, the branch streams its events into the
+                            // run-scoped causal log via the per-attempt sink, stamped with the branch
+                            // node id + branch epoch; otherwise (unpinned, or operator paused emission)
+                            // it runs the unchanged blocking prompt(). The void above already ran for
+                            // any pinned run regardless of the kill-switch, so a retraction is never
+                            // dropped. Both shapes return [output, usage, snapshot].
+                            [$output, $usage, $snapshot] = $this->nodeStream->streamingActive($durableStreaming)
+                                ? $this->streamBranchAgent($state, $agent, $branch, $snapshot, $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch))
+                                : $this->promptBranchAgent($agent, $branch, $snapshot);
+                        } finally {
+                            ActiveRunContext::exit();
+                        }
+                        $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
+
+                        $this->guardrails->validateStep(
+                            $swarm,
+                            GuardrailStepContext::fromState(
+                                $state,
+                                (int) $branch['step_index'],
+                                $branch['agent_class'],
+                                $branch['input'],
+                                $output,
+                                is_array($branch['metadata'] ?? null) ? $branch['metadata'] : [],
+                            ),
+                            $state->context,
+                        );
+                        $step = $this->stepsRecorder->completed(
+                            state: $state,
+                            index: (int) $branch['step_index'],
+                            agentClass: $branch['agent_class'],
+                            input: $branch['input'],
+                            output: $output,
+                            usage: $usage,
+                            durationMs: $durationMs,
+                            metadata: is_array($branch['metadata'] ?? null) ? $branch['metadata'] : [],
+                            updateContext: false,
+                            storeContext: false,
+                            storeArtifacts: false,
                         );
 
-                    ActiveRunContext::enter($runId, $swarm::class, $context);
+                        $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step): void {
+                            if (is_string($branch['node_id'] ?? null)) {
+                                $this->durableRuns->storeHierarchicalNodeOutput($runId, $branch['node_id'], $output, $this->runs->ttlSeconds());
+                            }
 
-                    try {
-                        // The kill-switch is consulted per attempt (#310 KS1): when the opt-in is
-                        // pinned AND streaming is active, the branch streams its events into the
-                        // run-scoped causal log via the per-attempt sink, stamped with the branch
-                        // node id + branch epoch; otherwise (unpinned, or operator paused emission)
-                        // it runs the unchanged blocking prompt(). The void above already ran for
-                        // any pinned run regardless of the kill-switch, so a retraction is never
-                        // dropped. Both shapes return [output, usage, snapshot].
-                        [$output, $usage, $snapshot] = $this->nodeStream->streamingActive($durableStreaming)
-                            ? $this->streamBranchAgent($state, $agent, $branch, $snapshot, $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch))
-                            : $this->promptBranchAgent($agent, $branch, $snapshot);
-                    } finally {
-                        ActiveRunContext::exit();
-                    }
-                    $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
-
-                    $this->guardrails->validateStep(
-                        $swarm,
-                        GuardrailStepContext::fromState(
-                            $state,
-                            (int) $branch['step_index'],
-                            $branch['agent_class'],
-                            $branch['input'],
-                            $output,
-                            is_array($branch['metadata'] ?? null) ? $branch['metadata'] : [],
-                        ),
-                        $state->context,
-                    );
-                    $step = $this->stepsRecorder->completed(
-                        state: $state,
-                        index: (int) $branch['step_index'],
-                        agentClass: $branch['agent_class'],
-                        input: $branch['input'],
-                        output: $output,
-                        usage: $usage,
-                        durationMs: $durationMs,
-                        metadata: is_array($branch['metadata'] ?? null) ? $branch['metadata'] : [],
-                        updateContext: false,
-                        storeContext: false,
-                        storeArtifacts: false,
-                    );
-
-                    $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step): void {
-                        if (is_string($branch['node_id'] ?? null)) {
-                            $this->durableRuns->storeHierarchicalNodeOutput($runId, $branch['node_id'], $output, $this->runs->ttlSeconds());
-                        }
-
-                        $this->persistBranchStepArtifacts($runId, $step);
-                        $this->durableRuns->markBranchCompleted($runId, $branchId, $token, $output, $usage, $durationMs);
-                    });
-                } catch (LostDurableLeaseException|LostSwarmLeaseException) {
-                    return false;
-                } catch (Throwable $exception) {
-                    $retry = $this->retryHandler->scheduleBranchRetryIfAllowed($run, $branch, $swarm, $context, $token, $exception);
-                    if ($retry['scheduled']) {
-                        return false;
-                    }
-
-                    // Branch is terminally failing — log before marking failed so the
-                    // exception is visible in application logs even though this code
-                    // path never rethrows (silent failure was the v0.3 / v0.4.0
-                    // behavior; see issue #1).
-                    $this->logger->error('Durable swarm branch failed — retries exhausted or non-retryable.', [
-                        'run_id' => $runId,
-                        'branch_id' => $branchId,
-                        'agent_class' => (string) $branch['agent_class'],
-                        'retry_attempt' => (int) ($branch['retry_attempt'] ?? 0),
-                        'exception' => $exception::class,
-                        'message' => $exception->getMessage(),
-                    ]);
-
-                    try {
-                        $this->durableRuns->markBranchFailed($runId, $branchId, $token, $this->capture->failureArray($exception));
+                            $this->persistBranchStepArtifacts($runId, $step);
+                            $this->durableRuns->markBranchCompleted($runId, $branchId, $token, $output, $usage, $durationMs);
+                        });
                     } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                         return false;
+                    } catch (Throwable $exception) {
+                        if ($exception instanceof UnsupportedNativeApprovalException || $exception instanceof ApprovalNotResumableException) {
+                            $unsupportedOutcome = $exception;
+                        }
+
+                        $retry = $this->retryHandler->scheduleBranchRetryIfAllowed($run, $branch, $swarm, $context, $token, $exception);
+                        if ($retry['scheduled']) {
+                            return false;
+                        }
+
+                        try {
+                            $this->durableRuns->markBranchFailed($runId, $branchId, $token, $this->capture->failureArray($exception));
+                        } catch (LostDurableLeaseException|LostSwarmLeaseException) {
+                            return false;
+                        }
+
+                        // Persist the fenced failure before fallible logging, so a logging
+                        // outage cannot leave this rejected branch eligible for recovery.
+                        $this->logger->error('Durable swarm branch failed — retries exhausted or non-retryable.', [
+                            'run_id' => $runId,
+                            'branch_id' => $branchId,
+                            'agent_class' => (string) $branch['agent_class'],
+                            'retry_attempt' => (int) ($branch['retry_attempt'] ?? 0),
+                            'exception' => $exception::class,
+                            'message' => $exception->getMessage(),
+                        ]);
+
+                        if ($this->branches->parallelFailurePolicy($context) === DurableParallelFailurePolicy::FailRun) {
+                            $this->hierarchical->failWaitingParentFromBranches(
+                                $run,
+                                $context,
+                                $stepLeaseSeconds,
+                                function (array $freshRun, string $freshToken, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId): void {
+                                    $this->terminal->failCurrentRunFromBranchFailures($freshRun, $freshToken, $context, $stepLeaseSeconds, $parentNodeId);
+                                },
+                            );
+                        }
                     }
 
-                    if ($this->branches->parallelFailurePolicy($context) === DurableParallelFailurePolicy::FailRun) {
-                        $this->hierarchical->failWaitingParentFromBranches(
-                            $run,
-                            $context,
-                            $stepLeaseSeconds,
-                            function (array $freshRun, string $freshToken, RunContext $context, int $stepLeaseSeconds, ?string $parentNodeId): void {
-                                $this->terminal->failCurrentRunFromBranchFailures($freshRun, $freshToken, $context, $stepLeaseSeconds, $parentNodeId);
-                            },
-                        );
-                    }
-                }
+                    return true;
+                },
+                $context,
+            );
 
-                return true;
-            },
-            $context,
-        );
+            if ($shouldDispatch) {
+                $run = $this->runs->requireRun($runId);
+                $this->hierarchical->dispatchWaitingBoundary($run, false);
+            }
 
-        if ($shouldDispatch) {
-            $run = $this->runs->requireRun($runId);
-            $this->hierarchical->dispatchWaitingBoundary($run, false);
+        } finally {
+            // Never let a failure in fenced persistence or parent/join dispatch restore retries.
+            NativeOutcomeValidator::rethrowIfUnsupported($unsupportedOutcome);
         }
     }
 
@@ -303,6 +317,7 @@ class DurableBranchAdvancer
     protected function promptBranchAgent(Agent $agent, array $branch, MemorySnapshot $snapshot): array
     {
         $response = $agent->prompt($branch['input']);
+        $this->outcomes->validateResponse($response);
 
         foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
             $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
@@ -318,9 +333,9 @@ class DurableBranchAdvancer
      * it with the branch node id + branch epoch and appends it. Output text, usage, and
      * paired tool calls accumulate exactly as the live stream and the durable sequential
      * node do, so the returned triple is shaped identically to {@see promptBranchAgent()}
-     * and the rest of branch commit is unchanged. Unpaired tool calls are flushed in
-     * `finally` so a crash mid-branch still records every tool the agent invoked — its
-     * unsealed events stay retractable on resume.
+     * and the rest of branch commit is unchanged. The `finally` block attempts to
+     * append unpaired tool calls on normal completion or exception unwinding;
+     * hard process termination can bypass it, and snapshot persistence can fail.
      *
      * @param  array<string, mixed>  $branch
      * @param  callable(SwarmStreamEvent): void  $sink
@@ -338,34 +353,44 @@ class DurableBranchAdvancer
 
         $accumulator = new StreamStepAccumulator($snapshot);
 
+        $nativeStreamFailure = null;
         try {
-            foreach ($agent->stream($branch['input']) as $event) {
+            $stream = $agent->stream($branch['input']);
+            foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, (int) $branch['step_index'], $agent, $accumulator);
 
                 if ($swarmEvent !== null) {
                     $sink($swarmEvent);
                 }
             }
+            $stream->then($this->outcomes->validateResponse(...));
+        } catch (Throwable $exception) {
+            $nativeStreamFailure = $exception;
+            throw $exception;
         } finally {
-            foreach ($accumulator->pendingToolCalls as $unpairedCall) {
-                $accumulator->snapshot = $this->snapshots->appendToolCall(
-                    $accumulator->snapshot,
-                    SnapshotToolCallNormalizer::entry($unpairedCall),
-                );
-            }
+            try {
+                foreach ($accumulator->pendingToolCalls as $unpairedCall) {
+                    $accumulator->snapshot = $this->snapshots->appendToolCall(
+                        $accumulator->snapshot,
+                        SnapshotToolCallNormalizer::entry($unpairedCall),
+                    );
+                }
 
-            // Breadcrumb any provider event the mapper's instanceof chain did not
-            // recognize, mirroring the sequential path (SequentialRunner::streamStep).
-            // Without this a branch silently drops unknown event classes — its frozen
-            // snapshot is the durable replay source, so the drop must stay observable.
-            // Degrade-safe (logs, never throws); fires on the happy path and on a
-            // mid-stream crash alike, so a branch that abandons mid-stream still
-            // records that its snapshot is incomplete.
-            $this->breadcrumbUnknownStreamEvents(
-                $accumulator->unknownEventClasses,
-                $state->context->runId,
-                (int) $branch['step_index'],
-            );
+                // Breadcrumb any provider event the mapper's instanceof chain did not
+                // recognize, mirroring the sequential path (SequentialRunner::streamStep).
+                // Without this a branch silently drops unknown event classes — its frozen
+                // snapshot is the durable replay source, so the drop must stay observable.
+                // Degrade-safe (logs, never throws); fires on the happy path and on a
+                // mid-stream crash alike, so a branch that abandons mid-stream still
+                // records that its snapshot is incomplete.
+                $this->breadcrumbUnknownStreamEvents(
+                    $accumulator->unknownEventClasses,
+                    $state->context->runId,
+                    (int) $branch['step_index'],
+                );
+            } finally {
+                NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
+            }
         }
 
         return [$accumulator->output, $accumulator->stepUsage, $accumulator->snapshot];

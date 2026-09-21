@@ -54,11 +54,11 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 
 - PHP **^8.4**
 - Laravel **13** (`illuminate/*` **^13.0**)
-- `laravel/ai` **^0.10.3**
+- `laravel/ai` **^0.11.2**
 
-PHP **^8.4** is supported alongside PHP 8.5. As of **v0.24.0** the `laravel/ai` floor is **^0.10.3**; support for **0.9** was dropped then (0.8 was dropped in v0.20.0, and 0.6 / 0.7 earlier still, in v0.13.0). Consumers pinned below `laravel/ai` 0.10.3 must upgrade — and because 0.10 widens the `Agent` contract's prompt-family signatures, agents implementing that contract directly need a one-line change. See the [changelog](CHANGELOG.md#v0240---2026-08-14) and [UPGRADING.md](UPGRADING.md#upgrading-to-v0240) for what the 0.10 adoption changes.
+PHP **^8.4** is supported alongside PHP 8.5. As of **v0.26.0**, the official `laravel/ai` floor is **^0.11.2** and support for **0.10** is dropped. Upgrade the dependency and Swarm together; see [UPGRADING.md](UPGRADING.md#upgrading-to-v0260).
 
-**No special stability configuration is required.** `laravel/ai` ships stable tags on the 0.10 line, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
+**No special stability configuration is required.** `laravel/ai` ships stable tags on the 0.11 line, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
 
 Earlier versions of this document asked you to set `"minimum-stability": "dev"` in your application's `composer.json`. That is no longer necessary, and as of **v0.23.0** it is no longer recommended — it loosens the resolution floor for your *entire* dependency tree, not just for Swarm. If you added those keys solely to install this package, you can remove them.
 
@@ -210,9 +210,9 @@ return response()->json($response);
 | --- | --- | --- |
 | `prompt()` | `SwarmResponse` | The request can wait for the full result. |
 | `run()` | `SwarmResponse` | Existing code still calls the compatibility alias. |
-| `queue()` | `QueuedSwarmResponse` | One background job can own the workflow. |
-| `stream()` | `StreamableSwarmResponse` | A sequential workflow should emit live progress or token events. |
-| `broadcast()` / `broadcastNow()` | `StreamableSwarmResponse` | A sequential workflow should stream and broadcast typed events immediately. |
+| `queue()` | `QueuedSwarmResponse` | Background execution; optional generated-hierarchy branch/join coordination. |
+| `stream()` | `StreamableSwarmResponse` | A supported streaming topology should emit live progress or token events. |
+| `broadcast()` / `broadcastNow()` | `StreamableSwarmResponse` | A supported streaming topology should stream and broadcast typed events. |
 | `broadcastOnQueue()` | `QueuedSwarmResponse` | A worker should stream and broadcast typed events. |
 | `dispatchDurable()` | `DurableSwarmResponse` | The workflow needs checkpointing, recovery, operator controls, or branch jobs. |
 
@@ -220,7 +220,7 @@ return response()->json($response);
 
 `queue()` and `dispatchDurable()` return dispatch handles with a `runId`. Listen for lifecycle events or inspect persisted history for eventual results.
 
-`stream()` and the broadcast helpers support sequential swarms only. Use lifecycle events and application-owned broadcasts for queued, durable, parallel, or hierarchical operations feeds.
+`stream()` and the broadcast helpers support sequential, generated hierarchical and static hierarchical swarms. The generated coordinator runs synchronously; workers stream. Top-level parallel live streaming is unsupported. See [streaming topology](docs/streaming.md#topology-sequential-static-hierarchical-and-hierarchical). For workflow operations feeds across all modes, use lifecycle events and application-owned broadcasts.
 
 ## Queueing a Swarm
 
@@ -260,9 +260,11 @@ SWARM_CAPTURE_ACTIVE_CONTEXT=true
 
 You may still leave input, output, and artifact capture disabled for redacted history.
 
+`queue()` defaults to a single workflow job. Generated hierarchical swarms may opt into database-backed [multi-worker coordination](docs/hierarchical-routing.md#queue); static hierarchy retains its in-process queued path. Queued whole-workflow `then()` / `catch()` callbacks are unavailable; use `SwarmCompleted` / `SwarmFailed` lifecycle listeners. Stream `each()` / `then()` callbacks remain supported.
+
 ## Streaming a Swarm
 
-Use `stream()` when a browser, CLI, or custom consumer needs live typed events from a sequential swarm:
+Use `stream()` when a browser, CLI, or custom consumer needs live typed events from a supported streaming topology:
 
 ```php
 foreach (ContentPipeline::make()->stream(['topic' => 'Laravel queues']) as $event) {
@@ -322,11 +324,11 @@ $runId = (string) Str::uuid();
 
 ArticlePipeline::make()->stream(RunContext::from($task, $runId)); // abandoned mid-stream
 
-// Resume on a fresh worker: same run id picks up where it left off.
+// Resume on a fresh worker: reuse available snapshots/checkpoints; unfinished work may repeat.
 return ArticlePipeline::make()->stream(RunContext::from($task, $runId));
 ```
 
-On resume, already-completed non-final steps are **skipped** (their providers are not re-invoked and tool side effects do not re-fire — their output is rehydrated from a per-step checkpoint), and the terminal streamed step **replays byte-identically** from its frozen memory snapshot. Governed by the memory replay mode (`frozen_view` default; `fresh_execution` opts out) and the database persistence driver. See [Streaming — Crash-Replay Durability](docs/streaming.md#crash-replay-durability).
+On sequential resume, a completed non-final step is skipped **only when its checkpoint was successfully persisted and remains readable**. Checkpoint writes are best-effort; missing/unreadable checkpoints, unfinished steps and the final streamed step permit provider/tool re-execution. FrozenView stabilizes selected memory reads, not provider output bytes or arbitrary external effects. Governed by the memory replay mode (`frozen_view` default; `fresh_execution` opts out) and database persistence. See [Streaming — Crash-Replay Durability](docs/streaming.md#crash-replay-durability).
 
 ### Tool calls (including MCP tools) (v0.13.0)
 
@@ -620,7 +622,7 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 - Run `php artisan migrate` on database persistence to create `swarm_audit_outbox` — required for the v0.5 default `SWARM_AUDIT_FAILURE_POLICY=queue` (sink failures persist for retry instead of being silently dropped). Cache persistence detects the missing outbox and falls back to log-and-swallow automatically.
 - Schedule `swarm:recover` every five minutes for durable execution and coordinated multi-worker hierarchical queueing. Recovery redispatches runs whose workers died between checkpoint and dispatch. See [Maintenance](docs/maintenance.md).
 - Schedule `swarm:prune` daily for database retention cleanup, or set `SWARM_PREVENT_PRUNE=true` when retention is managed outside the package.
-- **Streaming crash-replay (v0.12.0):** `php artisan migrate` creates `swarm_stream_step_checkpoints`, which records each completed non-final streamed step's raw output + usage so an abandoned `stream()` run resumes idempotently (no provider re-invoke, no side-effect re-fire). It is operational resume state, encrypted at rest by default under the database driver (`swarm.persistence.encrypt_at_rest`), and pruned with the run — early-pruned alongside snapshots by `swarm:memory:purge` (`--keep-snapshots` retains both) and cascade-deleted via the `swarm_run_histories` foreign key as the `swarm:prune` backstop. See [Streaming — Crash-Replay Durability](docs/streaming.md#crash-replay-durability).
+- **Streaming crash-replay (v0.12.0):** `php artisan migrate` creates `swarm_stream_step_checkpoints`, which stores completed non-final sequential step output + usage on a best-effort basis. A successfully persisted, readable checkpoint skips that step's invocation on resume; missing checkpoints and final/unfinished work may repeat effects. It is operational resume state, encrypted at rest by default under the database driver (`swarm.persistence.encrypt_at_rest`), and pruned with the run — early-pruned alongside snapshots by `swarm:memory:purge` (`--keep-snapshots` retains both) and cascade-deleted via the `swarm_run_histories` foreign key as the `swarm:prune` backstop. See [Streaming — Crash-Replay Durability](docs/streaming.md#crash-replay-durability).
 - **Rotate `APP_KEY` carefully (v0.12.1):** when `encrypt_at_rest` is on, durable operational resume state is sealed with the active `APP_KEY`. Rotating the key without re-keying the stored rows now makes durable resume **fail loud** with a clear `SwarmException` ("…verify APP_KEY…") instead of silently resuming from a wrong/empty prompt — re-point `APP_KEY` to the key that sealed the rows and re-dispatch the affected runs. See [Upgrading to v0.12.1](UPGRADING.md#upgrading-to-v0121).
 - Treat operational swarm tables as TTL-based runtime storage, not immutable compliance archives.
 - Bind `SwarmAuditSink` for regulated evidence export.
@@ -655,6 +657,8 @@ Audit-path exception **messages** are redacted to `[redacted]` by default since 
 See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full reference. When responding to an audit-outbox page, see the [Operator Runbook: Audit Outbox Triage](docs/operator-runbook-audit-outbox.md).
 
 ## Documentation
+
+For the unreleased v0.26.0 adoption, see the [44-row contracts and evidence index](docs/ai-0112-release-evidence.md) and [upgrade instructions](UPGRADING.md#upgrading-to-v0260). Companion installability and the post-main moving-dev gate remain separate release requirements.
 
 The full documentation site is at **[swarm.builtbyberry.com](https://swarm.builtbyberry.com)** — searchable, versioned, and the recommended starting point.
 

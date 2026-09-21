@@ -171,6 +171,11 @@ Queue connection and name used for `queue()` execution and hierarchical parallel
 
 ---
 
+[ResumeQueuedHierarchicalSwarm](../src/Jobs/ResumeQueuedHierarchicalSwarm.php)
+uses [ConfiguresDurableAdvanceJob](../src/Jobs/Concerns/ConfiguresDurableAdvanceJob.php)
+for retries, backoff and timeout; ordinary `swarm.queue.tries` / `timeout` do not
+configure it.
+
 ## Streaming / Replay
 
 Controls the optional persisted stream replay feature. Replay is disabled by default. See [streaming.md](streaming.md) for full streaming and replay behavior.

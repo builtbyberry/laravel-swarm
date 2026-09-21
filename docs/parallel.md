@@ -253,5 +253,5 @@ See [Testing](testing.md) for the full testing guide, including lifecycle event 
 
 - [examples/parallel-research-swarm](../examples/parallel-research-swarm/README.md) — working example with market, competitor, and customer researcher agents
 - [Durable Execution](durable-execution.md) — checkpointed background execution including durable parallel branches
-- [Streaming](streaming.md) — sequential-only; not available for Parallel swarms
+- [Streaming](streaming.md) — supports sequential and both hierarchical topologies; not top-level Parallel swarms
 - [Testing](testing.md) — fakes, assertions, and process-concurrency test lane

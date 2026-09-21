@@ -78,6 +78,8 @@ final class SwarmToolResult extends SwarmStreamEvent
                 arguments: self::arrayValue($toolResult, 'arguments'),
                 result: $toolResult['result'] ?? null,
                 resultId: is_string($toolResult['result_id'] ?? null) ? $toolResult['result_id'] : null,
+                denied: is_bool($toolResult['denied'] ?? null) ? $toolResult['denied'] : false,
+                failed: is_bool($toolResult['failed'] ?? null) ? $toolResult['failed'] : false,
             ),
             successful: is_bool($payload['successful'] ?? null) ? $payload['successful'] : false,
             error: is_string($payload['error'] ?? null) ? $payload['error'] : null,

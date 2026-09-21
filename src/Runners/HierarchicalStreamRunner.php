@@ -282,6 +282,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
 
             try {
                 $coordinatorResponse = $coordinator->prompt($context->input);
+                $this->outcomes->validateResponse($coordinatorResponse);
             } finally {
                 ActiveRunContext::exit();
             }
@@ -444,7 +445,12 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
 
             return $response;
         } catch (Throwable $exception) {
-            yield $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $streamTelemetryStart, $streamSequenceIndex, $historyRowStarted);
+            try {
+                yield $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $streamTelemetryStart, $streamSequenceIndex, $historyRowStarted);
+
+            } finally {
+                NativeOutcomeValidator::rethrowIfUnsupported($exception);
+            }
 
             throw $exception;
         }

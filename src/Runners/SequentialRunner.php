@@ -51,6 +51,7 @@ class SequentialRunner
         protected StreamStepCheckpointStore $checkpoints,
         protected StreamEventMapper $mapper,
         protected LoggerInterface $logger,
+        protected NativeOutcomeValidator $outcomes,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -124,15 +125,10 @@ class SequentialRunner
 
                 $isFinal = $index === $lastIndex;
 
-                // Idempotent multi-step resume (issue #202): on a crash-resume
-                // re-run, a completed non-final step is skipped entirely — its
-                // provider is not re-invoked and its tool side effects do not
-                // re-fire. Probe the per-step checkpoint BEFORE freezing a
-                // snapshot so the skip path never overwrites the prior frozen
-                // row. Gated on the same frozen-view replay mode as #192, so
-                // fresh_execution swarms are unaffected. The final streamed step
-                // is never checkpoint-skipped — it always replays from its frozen
-                // snapshot (the #192 guarantee).
+                // Reuse a non-final step only when replay is enabled and its
+                // checkpoint can be read. Probe before opening a new snapshot;
+                // a completed invocation alone does not guarantee a checkpoint.
+                // The final streamed step is never checkpoint-skipped.
                 $resumeCheckpoint = (! $isFinal && $replayEnabled)
                     ? $this->checkpoints->find($state->context->runId, $index)
                     : null;
@@ -152,16 +148,10 @@ class SequentialRunner
                 $stepUsage = [];
 
                 if ($resumeCheckpoint !== null) {
-                    // Skip path: rehydrate the recorded output + usage instead of
-                    // invoking the agent. completed() re-seeds last_output/steps
-                    // into the context so the next step's prompt() is
-                    // byte-identical, and we re-run the step guardrails on the
-                    // rehydrated output for parity with a fresh run. storeArtifacts
-                    // is false: the artifact was already persisted on the original
-                    // attempt and swarm_artifacts has no unique key, so re-storing
-                    // would duplicate the row; the in-memory addArtifact() inside
-                    // completed() still runs so the response artifact list is
-                    // correct.
+                    // Reuse recorded output and usage without invoking this agent,
+                    // revalidate guardrails, and avoid another artifact write.
+                    // Completion bookkeeping is owned by
+                    // [SwarmStepRecorder](SwarmStepRecorder.php).
                     $output = (string) $resumeCheckpoint->output;
                     $stepUsage = $resumeCheckpoint->usage;
 
@@ -189,14 +179,10 @@ class SequentialRunner
                     // (its restore lives in the streamed step's finally).
                     StructuredOutputStreamingException::guard($agent, "step:{$index}");
 
-                    // The final (streamed) step opens a snapshot-backed replay
-                    // boundary so a crash-resume re-run replays byte-identically:
-                    // begin() detects a prior frozen snapshot, swaps SwarmMemory to
-                    // the frozen view, and returns it for resetToolCalls() below.
-                    // First-attempt streamed steps take the fresh-execution path
-                    // and freeze a new snapshot. The binding is restored in the
-                    // streamed step's finally, so the swap never leaks past the
-                    // agent invocation.
+                    // Open the final invocation's memory boundary; snapshot selection
+                    // belongs to [MemoryReplayCoordinator](../Memory/MemoryReplayCoordinator.php).
+                    // The agent is invoked again below. Frozen memory does not make
+                    // its output byte-identical or prevent repeated external effects.
                     $boundary = $this->coordinator->begin($state->swarm::class, $state->context->runId, $index);
 
                     $snapshot = $boundary->isReplay()
@@ -210,6 +196,7 @@ class SequentialRunner
                     $stream = $agent->stream($input);
                     $accumulator = new StreamStepAccumulator($snapshot);
 
+                    $nativeStreamFailure = null;
                     try {
                         foreach ($stream as $event) {
                             $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
@@ -218,32 +205,35 @@ class SequentialRunner
                                 yield $swarmEvent;
                             }
                         }
+                        $stream->then($this->outcomes->validateResponse(...));
+                    } catch (Throwable $exception) {
+                        $nativeStreamFailure = $exception;
+                        throw $exception;
                     } finally {
-                        // Flush any tool calls without a matching ToolResult into
-                        // the snapshot. This runs on the happy path (calls left
-                        // pending at stream end) AND on abandonment (the generator
-                        // was torn down mid-stream by a worker crash, so the
-                        // `foreach` never reached `StreamEnd`). Doing it in
-                        // `finally` makes the append crash-safe: an in-flight call
-                        // is persisted with result=null instead of being lost, so
-                        // the frozen snapshot is a faithful record of every tool
-                        // the agent invoked and replay can rebuild byte-identically.
-                        $this->flushPendingToolCalls($accumulator);
+                        try {
+                            // Attempt to flush observed calls without matching results
+                            // when normal completion or generator unwinding reaches
+                            // this finally block. Hard process termination may bypass
+                            // it; this is not a crash-safe record of every tool effect.
+                            $this->flushPendingToolCalls($accumulator);
 
-                        // Restore the live SwarmMemory binding even if the stream
-                        // was abandoned mid-flight. No-op on the fresh-execution
-                        // path (begin() never swapped).
-                        $this->coordinator->end($boundary);
+                            // Restore the live SwarmMemory binding even if the stream
+                            // was abandoned mid-flight. No-op on the fresh-execution
+                            // path (begin() never swapped).
 
-                        // One breadcrumb per step for any stream events this
-                        // chain did not recognize (also fires if the generator
-                        // was abandoned mid-stream). Logs the dropped event
-                        // classes; never throws.
-                        $this->breadcrumbUnknownStreamEvents(
-                            $accumulator->unknownEventClasses,
-                            $state->context->runId,
-                            $index,
-                        );
+                            // One breadcrumb per step for any stream events this
+                            // chain did not recognize (also fires if the generator
+                            // was abandoned mid-stream). Logs the dropped event
+                            // classes; never throws.
+                            $this->breadcrumbUnknownStreamEvents(
+                                $accumulator->unknownEventClasses,
+                                $state->context->runId,
+                                $index,
+                            );
+                        } finally {
+                            $this->coordinator->end($boundary);
+                            NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
+                        }
                     }
 
                     $output = $accumulator->output;
@@ -274,6 +264,7 @@ class SequentialRunner
                     );
 
                     $response = $agent->prompt($input);
+                    $this->outcomes->validateResponse($response);
                     $output = (string) $response;
                     $stepUsage = $this->usageFromResponse($response);
                     $this->appendResponseToolCalls($snapshot, $response);
@@ -385,6 +376,7 @@ class SequentialRunner
 
         try {
             $response = $agent->prompt($input);
+            $this->outcomes->validateResponse($response);
         } finally {
             ActiveRunContext::exit();
         }
@@ -427,9 +419,9 @@ class SequentialRunner
      * the rest of durable execution is unchanged.
      *
      * The sink is invoked synchronously per event; a throwing sink aborts the step
-     * (whose events are still retractable on resume). Unpaired tool calls are
-     * flushed to the snapshot in `finally`, so a crash mid-node still records every
-     * tool the agent invoked, exactly as the live stream does.
+     * (whose events are still retractable on resume). When execution reaches
+     * `finally`, it calls {@see flushPendingToolCalls()} for observed unpaired
+     * calls. Hard process termination may bypass that cleanup.
      *
      * @param  callable(SwarmStreamEvent): void  $sink
      */
@@ -461,18 +453,28 @@ class SequentialRunner
         $startedAt = MonotonicTime::now();
         ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
 
+        $nativeStreamFailure = null;
         try {
-            foreach ($agent->stream($input) as $event) {
+            $stream = $agent->stream($input);
+            foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 
                 if ($swarmEvent !== null) {
                     $sink($swarmEvent);
                 }
             }
+            $stream->then($this->outcomes->validateResponse(...));
+        } catch (Throwable $exception) {
+            $nativeStreamFailure = $exception;
+            throw $exception;
         } finally {
-            $this->flushPendingToolCalls($accumulator);
-            $this->breadcrumbUnknownStreamEvents($accumulator->unknownEventClasses, $state->context->runId, $index);
-            ActiveRunContext::exit();
+            try {
+                $this->flushPendingToolCalls($accumulator);
+                $this->breadcrumbUnknownStreamEvents($accumulator->unknownEventClasses, $state->context->runId, $index);
+            } finally {
+                ActiveRunContext::exit();
+                NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
+            }
         }
 
         $this->guardrails->validateStep(
@@ -499,9 +501,10 @@ class SequentialRunner
     }
 
     /**
-     * Flush any tool calls left without a matching ToolResult into the snapshot,
-     * persisting each with result=null. Shared by the live stream and the durable
-     * per-node stream so a crash mid-node records every tool the agent invoked.
+     * Append the observed unpaired calls to the snapshot. Both streaming paths
+     * call this during cleanup; it cannot account for unobserved calls or cleanup
+     * bypassed by hard process termination. Entry shape is owned by
+     * {@see SnapshotToolCallNormalizer::entry()}.
      */
     private function flushPendingToolCalls(StreamStepAccumulator $accumulator): void
     {

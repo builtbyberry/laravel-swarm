@@ -585,11 +585,12 @@ return [
         'connection' => env('SWARM_QUEUE_CONNECTION'),
         'name' => env('SWARM_QUEUE'),
         /*
-         * Queued swarm jobs (InvokeSwarm, BroadcastSwarm, ResumeQueuedHierarchicalSwarm) are attempted
-         * ONCE by default, regardless of the worker's global --tries flag. A retry restarts the entire
-         * swarm run from step 0 — re-dispatching tools and re-spending LLM tokens — so blind retries
-         * are unsafe. Set SWARM_QUEUE_TRIES > 1 only if your swarms are idempotent and the token cost
-         * of a full restart is acceptable.
+         * Ordinary queued-job attempts default to one. Set SWARM_QUEUE_TRIES > 1 only when repeated
+         * effects and additional provider costs are acceptable for your idempotent workflow.
+         * See [ConfiguresQueuedSwarmJob](../src/Jobs/Concerns/ConfiguresQueuedSwarmJob.php) for consumers
+         * of these settings, and [queue retry guidance](../docs/execution-modes.md#queue-retry--timeout).
+         * For coordinated resume settings, follow the trait used by
+         * [ResumeQueuedHierarchicalSwarm](../src/Jobs/ResumeQueuedHierarchicalSwarm.php).
          * SWARM_QUEUE_TIMEOUT is intentionally null (inherit worker --timeout) — a low package default
          * would kill legitimately long LLM runs; the safety concern is retries, not timeout.
          */

@@ -308,7 +308,7 @@ class ContentPipelineSwarm implements Swarm
 - Steps are logically ordered and each step refines or transforms the previous result.
 - You need a guaranteed execution order with no branching.
 - You want the simplest mental model — agents run one after another, full stop.
-- You need `stream()` support (streaming is sequential-only).
+- You need `stream()` support with a simple ordered chain (both hierarchical topologies also support streaming).
 
 ## When To Consider Another Topology
 

@@ -15,10 +15,11 @@ trait ConfiguresQueuedSwarmJob
     public ?int $timeout = null;
 
     /**
-     * Queued swarm runs are attempted once by default, regardless of the worker's
-     * global --tries. A retry restarts the entire swarm run from step 0, re-dispatching
-     * tools and re-spending LLM tokens. Set swarm.queue.tries > 1 only when your swarms
-     * are idempotent and the token cost of a full restart is acceptable.
+     * Return the configured attempt limit for jobs using this trait.
+     *
+     * See [SwarmRunner](../../Runners/SwarmRunner.php) for execution and
+     * duplicate handling, and [queue retry guidance](../../../docs/execution-modes.md#queue-retry--timeout)
+     * for the operational limits of increasing this setting.
      */
     public function tries(): int
     {

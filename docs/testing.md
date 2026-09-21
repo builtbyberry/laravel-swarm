@@ -21,6 +21,27 @@ ArticlePipeline::fake(['first', 'second']);
 expect((string) ArticlePipeline::make()->prompt('Draft a blog outline about Laravel queues.'))->toBe('first');
 ```
 
+## Fake Dispatch Limits
+
+`Swarm::fake()` and `YourSwarm::fake()` record queue and durable dispatch intent.
+Their responses use the Swarm-owned internal
+[FakePendingDispatch](../src/Testing/FakePendingDispatch.php), with an inert
+job-shaped object and no dispatch on destruction. Fluent queue configuration
+returns the same response without scheduling work or updating durable routing.
+Condition callbacks passed to `when()` / `unless()` still run normally; deferred
+chain and deduplicator callbacks do not. Queued `then()` / `catch()` remain
+unsupported and throw rather than simulate completion.
+
+Fake intent does not prove provider calls, queue serialization, worker execution,
+durable coordination, database writes, or audit effects. Execute real Swarm jobs
+in separate feature tests with native `Agent::fake()` (or controlled HTTP
+responses) at the provider boundary. See
+[QueuedSwarmTest](../tests/Feature/QueuedSwarmTest.php) and
+[VendorAgentCompatibilityTest](../tests/Feature/VendorAgentCompatibilityTest.php).
+Streams stay lazy: assertions record consumption, not construction;
+`broadcast()` / `broadcastNow()` use the streamed assertion bucket and
+`broadcastOnQueue()` uses the queued bucket.
+
 ## Building A `RunContext` For Tests
 
 `RunContext::fake()` is a named constructor for ad-hoc test setup. It returns a

@@ -238,9 +238,8 @@ changes even when the application-facing swarm API stays the same.
 
 ## Dependency Upgrades
 
-`laravel/ai` is required in the **^0.10** range as of v0.24.0 (support for 0.9
-was dropped; 0.8 was dropped in v0.20.0; 0.6 / 0.7 earlier, in v0.13.0) and is
-**pre-1.0**. Public
+`laravel/ai` is required in the **^0.11.2** range as of v0.26.0; support for
+0.10 is dropped. Laravel AI remains **pre-1.0**. Public
 contracts, streaming behavior, and provider integrations can change between
 releases without the stability guarantees of a stable major line.
 
@@ -270,7 +269,7 @@ You may pin `laravel/ai` to an exact or narrower range in your application’s
 `composer.json` when you need reproducible builds or a slower upgrade cadence:
 
 ```bash
-composer require laravel/ai:0.10.3
+composer require laravel/ai:0.11.2
 ```
 
 That pins your application’s dependency resolution. It does not change the semver
@@ -280,6 +279,139 @@ As of v0.23.0 this package’s `composer.json` uses `"minimum-stability": "stabl
 with `"prefer-stable": true`. Your application needs no special Composer
 stability settings to install Swarm — see
 [Composer minimum-stability](#composer-minimum-stability).
+
+## Upgrading to v0.26.0
+
+### Adoption scope and application dependency example
+
+For a release candidate, use the exact reviewed source/lock in an isolated
+rehearsal. When installing the published v0.26.0 release, an
+application pinned to the older lines can update both constraints together:
+
+```bash
+composer require 'builtbyberry/laravel-swarm:^0.26.0' 'laravel/ai:^0.11.2' -W
+```
+
+Keep Swarm's existing PHP/Illuminate floors and a stable application dependency
+policy. Do not relax to a fork or development branch to resolve companion conflicts:
+the release-level **C5-R1** gate requires fresh Packagist-only installation proof
+against published core v0.26 and all four companions. Candidate aliases, path
+repositories, synthetic metadata and installs against core v0.25 do not satisfy
+that gate. Verify published companion compatibility before applying this example
+to an app that installs them; the historical C5 contract harnesses are not that proof.
+
+The [44-row release evidence](docs/ai-0112-release-evidence.md) preserves public
+verbs/aliases, response and operator types, attributes/config defaults, declared-class
+background constraints and supported deprecated helpers. The only selected removal
+is obsolete vendor fake coupling. Queued whole-workflow `then()` / `catch()` were
+not implemented; use lifecycle listeners. Stream `each()` / `then()` remain.
+Native ToolSearch/history are opt-in; Swarm capture and sealing do not govern
+native conversation storage. Provider failover does not replace workflow retries.
+These are contract clarifications, not new callback, history or recovery features.
+
+### Upgrade execution and verification
+
+1. Stop new swarm intake; drain in-flight provider calls and queued work, then
+   stop workers. Inventory pending, waiting and running durable work before the
+   switch, including application-owned swarm/agent classes and queue payloads.
+2. Deploy the official dependency lock and Swarm code together. Refresh autoload
+   and opcache, then restart workers. Never mix old/new code in long-lived workers.
+3. Smoke-test the synchronous, queued, streamed and durable modes your application
+   uses, plus its status/history, signal/recovery and replay operations. Resume
+   intake only after these pass. Keep existing `swarm:prune` and `swarm:recover`
+   schedules; this adoption adds no migration, backfill, config or retention owner.
+4. Retain `APP_KEY` for existing sealed rows. Key rotation without a compatible
+   re-encryption/key strategy is a separate operation and can make rows unreadable.
+
+The [C5 upgrade evidence](docs/ai-0112-upgrade-evidence.md) records executed
+v0.25 job/row fixtures, candidate-to-old-reader checks, a custom native
+`ConversationStore`, dependency lanes and bounded companion contract smoke.
+These fixtures do not validate every application's serialized classes. Validate
+those classes and custom stores in your own upgrade rehearsal.
+
+Rollback uses the same stop/drain procedure and a tested dependency/code pair.
+**After corrected denied/failed evidence exists, an unmodified v0.25 reader is
+not an eligible rollback target**, even when rows parse. Retain a compatible
+reader or return to reviewed design; do not erase evidence. The C2 approval
+rejection and retry boundary must also remain intact.
+
+Maintainers must separately run the exact compatible moving-dev nightly workflow
+on `main` after its authorized merge, verifying its lock and required suites
+before any later tag/release completion. C5's PR checks do not satisfy that gate.
+
+### Streamed tool-result evidence and downgrades
+
+Sequential and static-hierarchical streams now retain native tool-result `denied`
+and `failed` flags under full, redacted and skipped capture and after replay. No
+schema, serialized job, store signature or capture-default change is required.
+Historical rows without the flags still read with false defaults. Native event
+IDs, timestamps and available invocation IDs retain their existing provenance.
+
+An unmodified pre-C3 reader can parse the additive flags but drops them when it
+reconstructs the nested native tool result, potentially making its
+`successful()` disagree with the preserved streamed status. The regression suite
+runs the candidate JSON through the v0.25.0 reader to demonstrate this loss.
+**Once corrected evidence is persisted, downgrading to that unmodified reader is
+not supported.** Draining workers or pinning the dependency pair does not repair
+this semantic loss. Retain a correction-preserving reader, or return to reviewed
+design before any downgrade; do not delete or rewrite evidence to enable it.
+Deploy the compatible reader and official dependency together, draining existing
+workers before switching code. This restriction also applies to evidence moved
+to cold storage. C2's approval rejection and nonretryability must remain intact.
+
+See [streaming provenance and failure stages](docs/streaming.md).
+
+### Native pending approval now fails explicitly
+
+An agent returning pending native tool approvals now fails its affected Swarm
+step/node/branch instead of allowing an empty or partial response to appear
+successful. The internal `UnsupportedNativeApprovalException`, or the native
+`ApprovalNotResumableException` when Laravel AI rejects the outcome first, is
+nonretryable regardless of configured durable policies or queue tries. For
+example, a queued two-agent workflow whose first agent asks for native tool
+approval fails before invoking the second agent; raising queue tries to five
+will not restart it. A durable parent configured for `partial_success` can still
+complete using successful siblings while the approval-pending branch stays failed.
+
+No supported Swarm approval continuation is removed: native approval integration
+remains unavailable, and existing Swarm inter-step waits/signals remain supported.
+Inspect effects before manually restarting: other native tools, conversation
+storage and ordinary captured tool events may already exist. Do not treat the
+failure as proof that nothing acted. See [native approval outcomes](docs/native-outcome-boundary.md).
+
+No new schema, config, serialized job format or maintenance command is introduced.
+Deploy and roll back the official dependency/Swarm code pair together after worker
+drain and applicable old-job/row fixture proof; reverting this boundary also removes
+its explicit rejection and no-retry safeguards. Later adoption components have
+separate preservation and rollback evidence requirements.
+
+### Laravel AI dependency and fake compatibility
+
+**Breaking:** require official `laravel/ai ^0.11.2`; 0.10 is no longer supported.
+PHP and Illuminate requirements are unchanged. Keep stable dependency resolution;
+no fork, patch, development branch, or upstream change is required.
+
+Swarm now owns its internal fake pending dispatch. Queued and durable fake
+responses keep their public `PendingDispatch` constructor contract and fluent
+routing, but record intent only. They never wrap a real job or dispatch on
+object destruction. Unsupported response methods, including queued `then()`
+and `catch()`, still fail. See [testing limits](docs/testing.md#fake-dispatch-limits).
+
+Deploy the dependency and Swarm code as a pair: stop intake, drain in-flight
+calls and queued work, stop workers, update Composer dependencies and application
+code, refresh autoload/opcache, restart workers, smoke-test your supported modes
+and durable operators, then resume intake. Never mix old and new code in
+long-lived workers. No schema, serialized job format, config, or retention
+change is introduced by this compatibility step.
+
+Rollback requires the previous dependency **and** code pair after the same
+drain/stop procedure, plus proof that the old readers accept the jobs and rows
+your application retains. The compatibility step alone does not establish that
+proof. See the bounded preservation and upgrade evidence linked above; application-specific rehearsal and release readiness remain separate gates.
+Once corrected denied/failed tool-result evidence is written by the later stream
+adoption, old readers must preserve those semantics: retain a compatible reader
+or block the downgrade. Parseability alone is not sufficient. Existing prune and
+recovery schedules and the `APP_KEY` rotation boundary still apply.
 
 ## Upgrading to v0.25.0
 
@@ -1686,9 +1818,10 @@ are documented as **passthrough** and may evolve with `laravel/ai`:
   `ReasoningEnd`, `ToolCall`, `ToolResult`, `StreamEnd`, and `Error` —
   yielded as-is from the provider stream into the runner's translation
   layer.
-- `Laravel\Ai\FakePendingDispatch` — referenced by
-  `BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse::syncQueueRouting()`
-  to bypass queue-routing reads under `Bus::fake()`.
+- `Laravel\Ai\FakePendingDispatch` — used historically by the Swarm fake.
+  In v0.26.0 this coupling is removed; the Swarm-owned internal
+  [FakePendingDispatch](src/Testing/FakePendingDispatch.php) supplies inert
+  dispatch intent under `Swarm::fake()`, independently of `Bus::fake()`.
 
 Treat these as read-only snapshots of the vendor data. Their shapes are not
 covered by Swarm's semver guarantees; if `laravel/ai` changes them, Swarm

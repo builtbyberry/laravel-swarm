@@ -301,56 +301,60 @@ class SwarmRunner
         } catch (LostSwarmLeaseException) {
             return null;
         } catch (Throwable $exception) {
-            if ($exception instanceof GuardrailViolation) {
-                $context->mergeMetadata($exception->safeContextMetadata());
-            }
-
             try {
-                if ($historyStarted) {
-                    $this->historyStore->fail($context->runId, $exception, $contextTtl, $state->executionToken, $state->leaseSeconds);
-                } else {
-                    $this->historyStore->recordPreflightFailure(
-                        $context->runId,
-                        $swarm::class,
-                        $topology->value,
+                if ($exception instanceof GuardrailViolation) {
+                    $context->mergeMetadata($exception->safeContextMetadata());
+                }
+
+                try {
+                    if ($historyStarted) {
+                        $this->historyStore->fail($context->runId, $exception, $contextTtl, $state->executionToken, $state->leaseSeconds);
+                    } else {
+                        $this->historyStore->recordPreflightFailure(
+                            $context->runId,
+                            $swarm::class,
+                            $topology->value,
+                            $context,
+                            $context->metadata,
+                            $exception,
+                            $contextTtl,
+                        );
+                    }
+                } catch (LostSwarmLeaseException) {
+                    return null;
+                }
+
+                $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
+
+                $this->events->dispatch(new SwarmFailed(
+                    runId: $context->runId,
+                    swarmClass: $swarm::class,
+                    topology: $topology->value,
+                    exception: $this->capture->failureException($exception),
+                    durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
+                    metadata: $context->metadata,
+                    executionMode: $executionMode->value,
+                    exceptionClass: $exception::class,
+                ));
+
+                // Skip the run.failed audit emit when the cause was an audit halt —
+                // re-emitting through the same dispatcher would just halt again and
+                // mask the original sink failure with a duplicate halt exception.
+                if (! $exception instanceof HaltsSwarmExecution) {
+                    $this->auditEmitter->emitRunFailed(
                         $context,
-                        $context->metadata,
+                        $swarm::class,
+                        $topology,
+                        $executionMode,
                         $exception,
-                        $contextTtl,
+                        MonotonicTime::elapsedMilliseconds($startedAt),
                     );
                 }
-            } catch (LostSwarmLeaseException) {
-                return null;
+
+                throw $exception;
+            } finally {
+                NativeOutcomeValidator::rethrowIfUnsupported($exception);
             }
-
-            $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
-
-            $this->events->dispatch(new SwarmFailed(
-                runId: $context->runId,
-                swarmClass: $swarm::class,
-                topology: $topology->value,
-                exception: $this->capture->failureException($exception),
-                durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
-                metadata: $context->metadata,
-                executionMode: $executionMode->value,
-                exceptionClass: $exception::class,
-            ));
-
-            // Skip the run.failed audit emit when the cause was an audit halt —
-            // re-emitting through the same dispatcher would just halt again and
-            // mask the original sink failure with a duplicate halt exception.
-            if (! $exception instanceof HaltsSwarmExecution) {
-                $this->auditEmitter->emitRunFailed(
-                    $context,
-                    $swarm::class,
-                    $topology,
-                    $executionMode,
-                    $exception,
-                    MonotonicTime::elapsedMilliseconds($startedAt),
-                );
-            }
-
-            throw $exception;
         }
     }
 
@@ -656,7 +660,11 @@ class SwarmRunner
         } catch (LostSwarmLeaseException) {
             return null;
         } catch (Throwable $exception) {
-            $this->handleResumeFailure($state, $swarm, $topology, $context, $exception, $startedAt, $contextTtl, $runId);
+            try {
+                $this->handleResumeFailure($state, $swarm, $topology, $context, $exception, $startedAt, $contextTtl, $runId);
+            } finally {
+                NativeOutcomeValidator::rethrowIfUnsupported($exception);
+            }
             throw $exception;
         }
 

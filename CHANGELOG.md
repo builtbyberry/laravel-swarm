@@ -1,5 +1,116 @@
 # Changelog
 
+## v0.26.0 - unreleased
+
+Selective adoption of official Laravel AI ^0.11.2 while preserving supported
+Swarm capabilities, with native boundary compatibility and upgrade evidence.
+
+### Added
+
+- **Upgrade and dependency evidence:** fixtures execute v0.25 serialized jobs and sealed active rows against
+  the adoption candidate, and candidate-written rows through historical readers.
+  A custom native conversation store preserves text/tool history while Swarm
+  capture remains disabled; actual database history redaction is asserted
+  (review C5-F1). Minimum/current and official moving-dev CI lanes
+  verify lock and installed-source provenance before running hard gates, including
+  MySQL/Postgres concurrency checks. See the [upgrade evidence](docs/ai-0112-upgrade-evidence.md)
+  for exact bounds, companion manifest limitations and the separate post-main gate.
+  Chosen: refuse semantic downgrade after corrected evidence; rejected: treating
+  parseable rows as rollback safety or deleting evidence to permit rollback.
+
+- **Retained workflow coverage:** preservation evidence for all 30 retained Swarm responsibilities and eight
+  selected native integrations under official Laravel AI 0.11.2. Native HTTP
+  tests cover middleware/options, deferred tool discovery, structured routing,
+  conversation memory and repeatable effects on workflow retry. Baseline tests
+  characterize signal capture/crash windows, stranded child claims and concrete
+  durable-store requirements; they do not expand those guarantees. See the
+  [row-to-evidence report](docs/ai-0112-preservation-evidence.md).
+
+### Changed
+
+- **Development version:** update the `dev-main` branch alias from `0.25.x-dev`
+  to `0.26.x-dev` so development installs identify the current release line.
+
+- **Documented adoption contracts:** reconcile streaming topology, default versus coordinated queue execution,
+  unavailable queued whole-workflow callbacks, and the resume job's durable retry
+  profile with their owning sources. Bound queue restarts to the actual duplicate/coordination path (review C6-F1), and stream resume to readable checkpoints and selected frozen memory, without byte-identical output or effect-deduplication promises (review C6-F2). Supported stream callbacks and lifecycle
+  completion examples remain. Publish the [complete 44-row disposition and deletion
+  evidence](docs/ai-0112-release-evidence.md), native tool/history/privacy boundaries,
+  and upgrade limits. Chosen: source-backed bounded adoption; rejected: broad runtime
+  deletion or treating green PR tests as release readiness. C6 is docs-only; existing
+  reference tests plus independent semantic review verify the change. Companion
+  publication is verified separately under C5-R1 with fresh Packagist-only
+  installation against published core v0.26 and all four companions. A separate
+  post-main moving-dev nightly must pass before core tagging; component and PR
+  checks do not replace either release gate.
+
+- **BREAKING:** require official `laravel/ai ^0.11.2` and drop the 0.10 line.
+  PHP and Illuminate constraints are unchanged; deploy or roll back the
+  dependency and Swarm code together after draining workers (see UPGRADING.md).
+- **Intent-only fakes:** replace the removed vendor fake pending dispatch with a small internal Swarm
+  fake, preserving response types, fluent routing, intent assertions, and inert
+  destruction. Real job execution is tested separately with native agent fakes;
+  wrapping native jobs or adding queued completion callbacks was rejected
+  because Swarm fakes must remain intent-only.
+
+- **Native approval boundary:** reject unsupported native tool-approval outcomes before
+  the affected Swarm step/node/branch is recorded as successful. Native
+  `ApprovalNotResumableException` also bypasses retries. Durable run/branch
+  policies and all affected queue jobs cannot automatically retry these outcomes,
+  even with tries > 1; permitted partial parents still use successful siblings.
+  Detection can follow tool effects and ordinary captured tool events. Chosen:
+  explicit failure with operator-controlled restart; rejected: silent success,
+  automatic effect replay or a synthetic continuation API. Native HTTP, process,
+  real-job and negative-control proof covers the boundary. See
+  [native approval outcomes](docs/native-outcome-boundary.md) and UPGRADING.md.
+
+### Fixed
+
+- Preserve native approval rejections when job failure telemetry also throws
+  (readiness READY-R3). The original rejection reaches the permanent-failure
+  guard instead of an ordinary telemetry error allowing a worker retry. Chosen:
+  retain the original native failure even if telemetry is incomplete; rejected:
+  repeating possible tool effects to recover telemetry. Actual database-worker
+  tests with five allowed tries cover both native exception types, all five
+  package jobs, failed telemetry lookups and failed telemetry-state writes;
+  ordinary failure retry behavior remains unchanged.
+
+- Remove remaining source-comment promises of crash-safe tool-call capture and
+  byte-identical resumed output; link replay handling to its owning sources.
+  Remove the stale configuration-doc statement that C6-R1 is still open
+  (readiness READY-R1, READY-R2). These corrections leave executable PHP unchanged.
+
+- Correct queue-setting ownership and conditional retry/replay source comments
+  (review C6-R1, C6-R2). Link execution and memory-selection behavior to their owning
+  sources; remove byte-identical output and crash-safe flush promises. This changes
+  comments only, with no executable code or configuration-value changes.
+
+- Make the unknown-stream test fixture implement the native `StreamEvent`
+  contract while retaining its unknown type and secret privacy sentinel. This
+  corrects moving-dev test input without changing production event handling.
+
+- **Stream outcome evidence:** preserve native streamed tool-result `denied` and `failed` flags through full,
+  redacted and skipped capture and historical/hot/cold replay, for sequential
+  and static-hierarchical streams. Existing native event identities, outcome
+  vocabulary, usage accounting and callback stages remain unchanged. Chosen:
+  retain native evidence with additive reader fields; rejected: dropping flags,
+  inferring failure from text, or introducing a second telemetry collector.
+  Controlled native HTTP, interleaved generator/Fiber, teardown, storage and
+  old-reader tests cover the boundary. Old readers parse new rows but lose the
+  correction: after corrected evidence is persisted, retain a compatible reader
+  or return to reviewed design before downgrade. Worker drain alone is
+  insufficient. Error text still follows capture policy (review C3-F1). New
+  parity tests attribute coverage to their mapping/reader targets without changing
+  test execution or the coverage threshold (review C3-F2). See UPGRADING.md.
+- Preserve rejected native approval outcomes across fallible failure listeners,
+  snapshot cleanup and parent joins (review C2-F1); classify approval events as
+  rejected in the upstream event inventory (review C2-F2).
+- Inspect all built-in process/fork batch outcomes before choosing a failure so
+  an earlier ordinary error cannot hide a sibling approval rejection (review
+  C2-F3). Sync short-circuit and custom-driver behavior stay unchanged. Keeping
+  only the first concurrent error was rejected because it can permit retries
+  after tool effects; real-process and actual queue-worker tests cover the choice.
+
 ## v0.25.0 - 2026-09-03
 
 Durable-execution correctness and documentation integrity, carrying the work

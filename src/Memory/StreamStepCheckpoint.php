@@ -5,26 +5,16 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
 /**
- * Immutable record of a completed non-final streamed step, used to resume a
- * crashed `stream()` run idempotently (issue #202).
+ * Immutable streamed-step checkpoint carrying output and usage for the
+ * `(run_id, step_index)` natural key.
  *
- * A {@see MemorySnapshot} freezes the
- * agent-visible memory *view* and tool calls for `(run_id, step_index)`, but
- * deliberately does NOT carry the agent's *output* string or usage. Those are
- * the only data a resume needs to skip an already-completed non-final step:
- * the raw output is fed verbatim into the next step's prompt, and the usage is
- * re-merged so the run total is byte-identical. This value object carries
- * exactly that pair, keyed by the same `(run_id, step_index)` natural key.
+ * This value object retains the supplied output string and usage counters
+ * without transformation, with optional persistence timestamps. It accepts a
+ * nullable output and does not decide whether a checkpoint is resumable.
  *
- * The stored `$output` is the RAW, un-redacted, un-truncated value the original
- * step produced — byte-identity of the downstream prompt depends on it. The
- * checkpoint is operational resume state (parallel to `swarm_contexts.input`),
- * not a capture/evidence surface.
- *
- * `$output` is nullable purely so the read-side hydrator can distinguish a
- * completed step (non-null) from a row that does not exist — the store contract
- * never returns an incomplete checkpoint, so a checkpoint handed to a caller
- * always has a non-null output.
+ * Checkpoint selection and resumed execution are owned by
+ * [SequentialRunner](../Runners/SequentialRunner.php); memory snapshots
+ * have their own shape in {@see MemorySnapshot}.
  */
 final readonly class StreamStepCheckpoint
 {
