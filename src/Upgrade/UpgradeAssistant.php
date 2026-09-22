@@ -49,11 +49,16 @@ final class UpgradeAssistant
             $findings[] = compact('id', 'level', 'message');
         };
         $requirements = [];
-        $object = json_decode($manifest->contents, false, 512, JSON_THROW_ON_ERROR);
-        foreach (['require', 'require-dev'] as $section) {
-            if (isset($manifest->data[$section]) && ! ($object->{$section} instanceof \stdClass)) {
-                throw new RuntimeException("Manifest {$section} must be a JSON object.");
+        $object = $manifest->object;
+        foreach (['config', 'require', 'require-dev', 'replace', 'provide'] as $field) {
+            if (property_exists($object, $field) && ! $object->{$field} instanceof \stdClass) {
+                throw new RuntimeException("Manifest {$field} must be a JSON object.");
             }
+        }
+        if (isset($object->config) && property_exists($object->config, 'platform') && ! $object->config->platform instanceof \stdClass) {
+            throw new RuntimeException('Manifest config.platform must be a JSON object.');
+        }
+        foreach (['require', 'require-dev'] as $section) {
             foreach (($manifest->data[$section] ?? []) as $package => $constraint) {
                 if (! is_string($constraint)) {
                     throw new RuntimeException('Dependency constraints must be strings.');
@@ -85,10 +90,13 @@ final class UpgradeAssistant
         } else {
             try {
                 $lock = new JsonDocument($lockBytes);
-                if (! isset($lock->data['packages']) || ! is_array($lock->data['packages'])) {
+                if (! isset($lock->object->packages) || ! is_array($lock->object->packages)) {
                     throw new RuntimeException('The lock must contain a packages array.');
                 }
-                $locked = $this->packages(array_merge($lock->data['packages'], $lock->data['packages-dev'] ?? []));
+                if (property_exists($lock->object, 'packages-dev') && ! is_array($lock->object->{'packages-dev'})) {
+                    throw new RuntimeException('The lock packages-dev must be an array.');
+                }
+                $locked = $this->packages(array_merge($lock->object->packages, $lock->object->{'packages-dev'} ?? []));
                 if (! empty($lock->data['aliases'])) {
                     $add('lock-aliases', 'blocker', 'The lock contains aliases; select an official stable dependency pair manually.');
                 }
@@ -101,7 +109,7 @@ final class UpgradeAssistant
         } else {
             try {
                 $installedDocument = new JsonDocument($installedBytes);
-                $installed = $this->packages($installedDocument->data['packages'] ?? null);
+                $installed = $this->packages($installedDocument->object->packages ?? null);
             } catch (Throwable $e) {
                 $add('invalid-installed', 'blocker', 'Cannot safely read installed.json: '.$e->getMessage());
             }
@@ -289,8 +297,22 @@ final class UpgradeAssistant
         }
         $result = [];
         foreach ($packages as $package) {
-            if (! is_array($package) || ! isset($package['name'], $package['version']) || ! is_string($package['name']) || ! is_string($package['version'])) {
+            if (! $package instanceof \stdClass || ! isset($package->name, $package->version) || ! is_string($package->name) || ! is_string($package->version)) {
                 throw new RuntimeException('Invalid package metadata.');
+            }
+            if (property_exists($package, 'source')) {
+                if (! $package->source instanceof \stdClass) {
+                    throw new RuntimeException('Package source metadata must be an object.');
+                }
+                foreach (['type', 'url', 'reference'] as $field) {
+                    if (! isset($package->source->{$field}) || ! is_string($package->source->{$field}) || $package->source->{$field} === '') {
+                        throw new RuntimeException('Package source metadata requires string type, url and reference.');
+                    }
+                }
+            }
+            $package = get_object_vars($package);
+            if (isset($package['source'])) {
+                $package['source'] = get_object_vars($package['source']);
             }
             if (isset($result[$package['name']])) {
                 throw new RuntimeException('Duplicate package metadata.');

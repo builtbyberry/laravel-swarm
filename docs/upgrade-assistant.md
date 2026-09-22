@@ -36,7 +36,7 @@ Use `--help` for supported options.
 ## Preview and select safe fixes
 
 The default operation is read-only. It reports root constraints, locked versions,
-installed versions when available, source references, exact proposed dependency
+installed versions when available, source references in JSON, exact proposed dependency
 changes, blocking findings, and manual verification tasks.
 
 The recipe covers core, Laravel AI and any explicitly declared Pulse, Filament,

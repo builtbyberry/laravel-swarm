@@ -212,7 +212,7 @@ it('keeps a recoverable backup and original manifest when atomic replacement fai
     };
     expect(fn () => $editor->apply($this->upgradeRoot, $this->prepareManifest))->toThrow(RuntimeException::class, 'Atomic manifest replacement failed')
         ->and(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->beforeManifest)
-        ->and(glob($this->upgradeRoot.'/.swarm-upgrade/.manifest-*'))->toBe([]);
+        ->and(glob($this->upgradeRoot.'/.swarm-upgrade-manifest-*'))->toBe([]);
     $backups = glob($this->upgradeRoot.'/.swarm-upgrade/*.json');
     expect($backups)->toHaveCount(1);
     $record = json_decode(file_get_contents($backups[0]), true, flags: JSON_THROW_ON_ERROR);
@@ -238,5 +238,28 @@ it('does not change the manifest when saving its backup fails', function () {
     expect(fn () => $editor->apply($this->upgradeRoot, $this->prepareManifest))->toThrow(RuntimeException::class, 'backup write unavailable')
         ->and(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->beforeManifest)
         ->and(glob($this->upgradeRoot.'/.swarm-upgrade/*.json'))->toBe([])
-        ->and(glob($this->upgradeRoot.'/.swarm-upgrade/.manifest-*'))->toBe([]);
+        ->and(glob($this->upgradeRoot.'/.swarm-upgrade-manifest-*'))->toBe([]);
+});
+
+test('atomic replacement stages in the manifest directory even when backup storage could be mounted separately', function (): void {
+    $editor = new class extends ManifestEditor
+    {
+        public array $renames = [];
+
+        protected function renameFile(string $from, string $to): bool
+        {
+            $this->renames[] = [$from, $to];
+
+            return parent::renameFile($from, $to);
+        }
+    };
+    $before = file_get_contents($this->upgradeRoot.'/composer.json');
+    $result = $editor->apply($this->upgradeRoot, fn (): array => ['before' => $before, 'after' => $before."\n"]);
+    $editor->restore($this->upgradeRoot, $result['backup_id']);
+    expect($editor->renames)->toHaveCount(2);
+    foreach ($editor->renames as [$from, $to]) {
+        expect(dirname($from))->toBe(dirname($to));
+    }
+    expect(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($before)
+        ->and(glob($this->upgradeRoot.'/.swarm-upgrade-manifest-*'))->toBe([]);
 });

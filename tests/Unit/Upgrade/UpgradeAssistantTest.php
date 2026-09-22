@@ -12,8 +12,8 @@ beforeEach(function (): void {
     // A deliberately unusual, valid format exercises exact byte preservation.
     $this->upgradeManifest = "{\r\n\t\"require\" : {\"builtbyberry/laravel-swarm\": \"^0.25.0\", \"laravel/ai\":\"^0.10.3\"},\r\n\t\"description\": \"Keep \\\"quotes\\\" and Unicode \\u00e9\", \"extra\": [true, false, null, -1.2e+3, {\"version\":\"^0.25.0\"}]\r\n}\r\n";
     $this->upgradePackages = [
-        ['name' => 'builtbyberry/laravel-swarm', 'version' => 'v0.25.0', 'source' => ['reference' => str_repeat('a', 40)]],
-        ['name' => 'laravel/ai', 'version' => 'v0.10.3', 'source' => ['reference' => str_repeat('b', 40)]],
+        ['name' => 'builtbyberry/laravel-swarm', 'version' => 'v0.25.0', 'source' => ['type' => 'git', 'url' => 'https://github.com/builtbyberry/laravel-swarm.git', 'reference' => str_repeat('a', 40)]],
+        ['name' => 'laravel/ai', 'version' => 'v0.10.3', 'source' => ['type' => 'git', 'url' => 'https://github.com/laravel/ai.git', 'reference' => str_repeat('b', 40)]],
     ];
     file_put_contents($this->upgradeRoot.'/composer.json', $this->upgradeManifest);
     file_put_contents($this->upgradeRoot.'/composer.lock', json_encode(['packages' => $this->upgradePackages]));
@@ -128,4 +128,41 @@ test('a current compatible caret is preserved and only lock resolution remains m
     file_put_contents($this->upgradeRoot.'/composer.lock', json_encode(['packages' => $this->upgradePackages]));
     $report = $this->upgradeAssistant->inspect($this->upgradeRoot);
     expect($report['actions'])->toBe([])->and($report['can_apply'])->toBeFalse()->and($report['runtime_verified'])->toBeFalse();
+});
+
+test('malformed manifest object shapes fail closed before a preview permits edits', function (string $field, mixed $value): void {
+    $manifest = json_decode($this->upgradeManifest, true);
+    $manifest[$field] = $value;
+    file_put_contents($this->upgradeRoot.'/composer.json', json_encode($manifest));
+    expect(fn () => $this->upgradeAssistant->inspect($this->upgradeRoot))->toThrow(RuntimeException::class, 'must be a JSON object');
+})->with([
+    ['config', 'invalid'], ['config', null], ['config', []],
+    ['require-dev', null], ['require-dev', []], ['require', null],
+    ['provide', false], ['replace', 'invalid'],
+]);
+
+test('malformed package container and source shapes produce blocking reports', function (string $case): void {
+    $lock = ['packages' => $this->upgradePackages];
+    match ($case) {
+        'source-scalar' => $lock['packages'][0]['source'] = 'invalid',
+        'source-list' => $lock['packages'][0]['source'] = [],
+        'source-null' => $lock['packages'][0]['source'] = null,
+        'source-incomplete' => $lock['packages'][0]['source'] = ['reference' => 'a'],
+        'source-number' => $lock['packages'][0]['source']['reference'] = 12,
+        'packages-object' => $lock['packages'] = (object) $this->upgradePackages,
+        'dev-null' => $lock['packages-dev'] = null,
+        'dev-object' => $lock['packages-dev'] = (object) [],
+    };
+    file_put_contents($this->upgradeRoot.'/composer.lock', json_encode($lock));
+    $report = $this->upgradeAssistant->inspect($this->upgradeRoot);
+    expect($report['can_apply'])->toBeFalse()
+        ->and(array_column($report['findings'], 'id'))->toContain('invalid-lock');
+})->with(['source-scalar', 'source-list', 'source-null', 'source-incomplete', 'source-number', 'packages-object', 'dev-null', 'dev-object']);
+
+test('installed package object masquerading as a list blocks fixes', function (): void {
+    mkdir($this->upgradeRoot.'/vendor/composer', 0700, true);
+    file_put_contents($this->upgradeRoot.'/vendor/composer/installed.json', json_encode(['packages' => (object) $this->upgradePackages]));
+    $report = $this->upgradeAssistant->inspect($this->upgradeRoot);
+    expect($report['can_apply'])->toBeFalse()
+        ->and(array_column($report['findings'], 'id'))->toContain('invalid-installed');
 });

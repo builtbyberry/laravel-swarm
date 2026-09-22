@@ -26,7 +26,8 @@ Options:
   --restore=ID    Restore a manifest backup only if later edits will not be lost.
   --help          Show this help.
 
-Default: read-only preview. No application boot, Composer execution, or lock edits.
+Default: read-only preview. No Composer execution or lock edits.
+Standalone does not boot the target app; Artisan boots Laravel normally.
 Exit codes: 0 file operation completed; 1 report requires manual verification;
 2 invalid input, unsafe state, or I/O failure. No result certifies runtime readiness.
 Backups: .swarm-upgrade/ in the application; retain privately and remove manually.

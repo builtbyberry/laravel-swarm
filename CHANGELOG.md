@@ -13,6 +13,9 @@ Preview and safely apply application upgrade guidance.
   support a guarded manifest restore. Human and JSON reports keep Composer
   resolution, application testing and operational upgrade steps explicit.
   See the [upgrade assistant](docs/upgrade-assistant.md).
+- Reject malformed metadata before permitting edits; stage atomic replacement
+  beside the manifest; clarify standalone versus Artisan boot behavior and JSON
+  provenance output (review UPG-R1, UPG-R2, UPG-R3, UPG-R4).
 
 Chosen: mechanical dependency edits with manual runtime verification; rejected:
 automatic application rewrites or treating a manifest restore as package/data

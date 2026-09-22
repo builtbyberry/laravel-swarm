@@ -161,7 +161,9 @@ class ManifestEditor
      */
     private function replace(string $root, string $directory, array $rootStat, array $directoryStat, string $before, string $after, array $identity, array $metadata): void
     {
-        $temporary = $directory.'/.manifest-'.bin2hex(random_bytes(16));
+        // Keep source and destination in the same directory: PHP may otherwise
+        // emulate an EXDEV rename using a non-atomic copy and unlink.
+        $temporary = $root.'/.swarm-upgrade-manifest-'.bin2hex(random_bytes(16));
         $handle = $this->writeExclusive($temporary, $after);
         try {
             $stat = fstat($handle);

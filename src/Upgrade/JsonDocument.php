@@ -10,6 +10,8 @@ use stdClass;
 /** JSON object with exact string spans for narrowly scoped, byte-preserving edits. */
 final class JsonDocument
 {
+    public readonly stdClass $object;
+
     /** @var array<string, mixed> */
     public readonly array $data;
 
@@ -29,6 +31,7 @@ final class JsonDocument
             throw new RuntimeException('Expected a JSON object.');
         }
 
+        $this->object = $object;
         $this->data = (array) json_decode($contents, true, 512, JSON_THROW_ON_ERROR);
         preg_match_all('/"(?:\\\\.|[^"\\\\])*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null|[{}\[\]:,]/s', $contents, $matches, PREG_OFFSET_CAPTURE);
         $this->tokens = $matches[0];
