@@ -9,7 +9,8 @@
 /.claude export-ignore
 /.github export-ignore
 /.idea export-ignore
-/bin export-ignore
+/bin/* export-ignore
+/bin/swarm-upgrade -export-ignore
 /docs export-ignore
 /examples export-ignore
 /tests export-ignore

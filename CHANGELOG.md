@@ -6,11 +6,17 @@ Preview and safely apply application upgrade guidance.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- `swarm:upgrade` and a standalone pre-upgrade CLI inspect application dependencies
+  for the v0.25-to-v0.26 recipe, preview exact fixes and apply only explicitly
+  selected manifest edits after checking the reviewed digest. Writes preserve
+  unrelated bytes and file ownership/permissions, retain private backups and
+  support a guarded manifest restore. Human and JSON reports keep Composer
+  resolution, application testing and operational upgrade steps explicit.
+  See the [upgrade assistant](docs/upgrade-assistant.md).
 
-### Changed
-
-_To be filled in during release wrap-up._
+Chosen: mechanical dependency edits with manual runtime verification; rejected:
+automatic application rewrites or treating a manifest restore as package/data
+rollback. This release changes no orchestration behavior, schema or config default.
 
 ## v0.26.0 - 2026-09-21
 
