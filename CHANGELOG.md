@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.26.1 - unreleased
+
+Preview and safely apply application upgrade guidance.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.26.0 - 2026-09-21
 
 Selective adoption of official Laravel AI ^0.11.2 while preserving supported
