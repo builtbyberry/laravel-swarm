@@ -76,6 +76,19 @@ final class UpgradeAssistant
                 $add('custom-'.$field, 'blocker', "Manifest {$field} requires manual dependency review; automatic edits are unavailable.");
             }
         }
+        if (property_exists($object, 'repositories') && ! is_array($object->repositories) && ! $object->repositories instanceof \stdClass) {
+            throw new RuntimeException('Manifest repositories must be a JSON array or object.');
+        }
+        if (isset($object->config) && property_exists($object->config, 'vendor-dir') && ! is_string($object->config->{'vendor-dir'})) {
+            throw new RuntimeException('Manifest vendor-dir must be a string.');
+        }
+        if (isset($object->config->platform)) {
+            foreach (get_object_vars($object->config->platform) as $value) {
+                if (! is_string($value) && $value !== false) {
+                    throw new RuntimeException('Manifest platform versions must be strings or false.');
+                }
+            }
+        }
         $vendor = $manifest->data['config']['vendor-dir'] ?? 'vendor';
         if (! is_string($vendor) || ! preg_match('~\A[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\z~', $vendor)
             || array_intersect(explode('/', $vendor), ['.', '..']) !== []) {
@@ -97,6 +110,9 @@ final class UpgradeAssistant
                     throw new RuntimeException('The lock packages-dev must be an array.');
                 }
                 $locked = $this->packages(array_merge($lock->object->packages, $lock->object->{'packages-dev'} ?? []));
+                if (property_exists($lock->object, 'aliases') && ! is_array($lock->object->aliases)) {
+                    throw new RuntimeException('Lock aliases must be an array.');
+                }
                 if (! empty($lock->data['aliases'])) {
                     $add('lock-aliases', 'blocker', 'The lock contains aliases; select an official stable dependency pair manually.');
                 }
@@ -188,8 +204,10 @@ final class UpgradeAssistant
             $add('ai-missing', 'blocker', 'The lock does not include laravel/ai; verify the existing application dependency graph.');
         }
         $platform = $manifest->data['config']['platform']['php'] ?? null;
-        if (is_string($platform) && version_compare($platform, '8.4.0', '<')) {
-            $add('php-platform', 'blocker', 'Composer platform.php is below PHP 8.4. Review the deployment platform manually.');
+        if ($platform === false) {
+            $add('php-platform-disabled', 'blocker', 'Composer platform.php is disabled. Review the deployment platform manually.');
+        } elseif (is_string($platform) && (! preg_match('/\A\d+\.\d+(?:\.\d+)?\z/', $platform) || version_compare($platform, '8.4.0', '<'))) {
+            $add('php-platform', 'blocker', 'Composer platform.php is below PHP 8.4 or is not a recognized stable version. Review the deployment platform manually.');
         }
         $framework = $locked['laravel/framework']['version'] ?? null;
         if (is_string($framework) && (! preg_match('/\Av?13\.\d+\.\d+\z/', $framework) || version_compare(ltrim($framework, 'v'), '13.16.0', '<'))) {

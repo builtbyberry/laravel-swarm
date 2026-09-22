@@ -166,3 +166,37 @@ test('installed package object masquerading as a list blocks fixes', function ()
     expect($report['can_apply'])->toBeFalse()
         ->and(array_column($report['findings'], 'id'))->toContain('invalid-installed');
 });
+
+test('explicit malformed nested policy values cannot fall through to safe defaults', function (array $extra): void {
+    $manifest = array_replace(json_decode($this->upgradeManifest, true), $extra);
+    file_put_contents($this->upgradeRoot.'/composer.json', json_encode($manifest));
+    expect(fn () => $this->upgradeAssistant->inspect($this->upgradeRoot))->toThrow(RuntimeException::class);
+})->with([
+    [['config' => ['vendor-dir' => null]]],
+    [['repositories' => null]],
+    [['repositories' => false]],
+    [['repositories' => '']],
+    [['config' => ['platform' => ['php' => []]]]],
+    [['config' => ['platform' => ['php' => null]]]],
+    [['config' => ['platform' => ['ext-intl' => null]]]],
+]);
+
+test('valid empty policy and disabled extension metadata stay inspectable', function (): void {
+    $manifest = json_decode($this->upgradeManifest, true);
+    $manifest['repositories'] = (object) [];
+    $manifest['config'] = ['platform' => ['php' => '8.4.0', 'ext-intl' => false]];
+    file_put_contents($this->upgradeRoot.'/composer.json', json_encode($manifest));
+    expect($this->upgradeAssistant->inspect($this->upgradeRoot)['can_apply'])->toBeTrue();
+});
+
+test('disabled or unsupported PHP platform values require manual review', function (mixed $version): void {
+    $manifest = json_decode($this->upgradeManifest, true);
+    $manifest['config'] = ['platform' => ['php' => $version]];
+    file_put_contents($this->upgradeRoot.'/composer.json', json_encode($manifest));
+    expect($this->upgradeAssistant->inspect($this->upgradeRoot)['can_apply'])->toBeFalse();
+})->with([false, '99.invalid']);
+
+test('malformed aliases cannot masquerade as an empty alias list', function (): void {
+    file_put_contents($this->upgradeRoot.'/composer.lock', json_encode(['packages' => $this->upgradePackages, 'aliases' => null]));
+    expect($this->upgradeAssistant->inspect($this->upgradeRoot)['can_apply'])->toBeFalse();
+});

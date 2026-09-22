@@ -16,6 +16,8 @@ Preview and safely apply application upgrade guidance.
 - Reject malformed metadata before permitting edits; stage atomic replacement
   beside the manifest; clarify standalone versus Artisan boot behavior and JSON
   provenance output (review UPG-R1, UPG-R2, UPG-R3, UPG-R4).
+- Validate explicitly present nested policy values before applying defaults,
+  including vendor paths, repository containers and platform versions (review UPG-R1).
 
 Chosen: mechanical dependency edits with manual runtime verification; rejected:
 automatic application rewrites or treating a manifest restore as package/data
