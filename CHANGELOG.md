@@ -11,7 +11,7 @@ _To be filled in during release wrap-up._
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- Development tests use Pest 5, retaining the full coverage suite at a 1 GiB limit and 80% floor. Separate PHP 8.4/8.5 jobs verify the full suite, process concurrency, and static analysis on exact Laravel 13.16.0 with a temporary Pest 4 toolchain. Runtime requirements are unchanged.
 
 ## v0.26.1 - 2026-09-21
 

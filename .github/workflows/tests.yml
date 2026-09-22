@@ -79,3 +79,57 @@ jobs:
       - name: Execute code style check
         if: matrix.dependencies == 'stable-latest'
         run: composer lint
+
+  laravel-13-16:
+    name: PHP ${{ matrix.php }} - Laravel 13.16 compatibility (Pest 4)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer:v2
+          coverage: none
+          ini-values: memory_limit=1G
+
+      # Pest 5's Laravel plugin cannot resolve Laravel 13.16. Keep this
+      # compatibility toolchain local to the job; consumer requirements stay intact.
+      - name: Preserve production manifest
+        run: cp composer.json /tmp/swarm-production-composer.json
+
+      - name: Select compatibility test toolchain
+        run: composer require --no-update --dev "pestphp/pest:^4.7" "pestphp/pest-plugin-laravel:^4.1" "laravel/framework:13.16.0"
+
+      - name: Install compatibility dependencies
+        run: composer update --with laravel/ai:0.11.2 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      - name: Restore production manifest for package contract tests
+        run: cp /tmp/swarm-production-composer.json composer.json
+
+      - name: Verify installed compatibility dependencies
+        run: php .github/workflows/verify-adoption-dependencies.php laravel-13.16
+
+      - name: Prepare testbench vendor symlink
+        run: |
+          if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
+            ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
+          fi
+
+      # Coverage remains mandatory in all four Pest 5 jobs above. Avoid Pest 4's
+      # coverage-report reload overhead while exercising the full older runtime.
+      - name: Execute compatibility tests
+        run: composer test
+
+      - name: Execute process concurrency validation
+        run: composer test:process-concurrency:ci
+
+      - name: Execute static analysis
+        run: composer analyse

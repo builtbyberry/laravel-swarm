@@ -18,12 +18,19 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
     if (($manifest['minimum-stability'] ?? null) !== 'stable' || ($manifest['prefer-stable'] ?? null) !== true || ! empty($manifest['repositories']) || ! empty($manifest['extra']['patches']) || isset($require['cweagans/composer-patches'])) {
         $errors[] = 'Production manifest must retain stable official resolution without repository or patch overrides.';
     }
-    if (! in_array($lane, ['minimum', 'current', 'moving-dev'], true)) {
+    if (! in_array($lane, ['minimum', 'current', 'moving-dev', 'laravel-13.16'], true)) {
         $errors[] = 'Unknown dependency lane.';
     }
     $packages = array_column(array_merge($lock['packages'] ?? [], $lock['packages-dev'] ?? []), null, 'name');
     $runtime = array_column($installed['packages'] ?? [], null, 'name');
-    foreach (['laravel/ai' => 'https://github.com/laravel/ai.git', 'laravel/framework' => 'https://github.com/laravel/framework.git'] as $name => $url) {
+    $sources = ['laravel/ai' => 'https://github.com/laravel/ai.git', 'laravel/framework' => 'https://github.com/laravel/framework.git'];
+    if ($lane === 'laravel-13.16') {
+        if (($manifest['require-dev']['pestphp/pest'] ?? null) !== '^5.2.1' || ($manifest['require-dev']['pestphp/pest-plugin-laravel'] ?? null) !== '^5.0' || isset($manifest['require-dev']['laravel/framework'])) {
+            $errors[] = 'Compatibility lane must restore the normal Pest 5 development manifest.';
+        }
+        $sources += ['pestphp/pest' => 'https://github.com/pestphp/pest.git', 'pestphp/pest-plugin-laravel' => 'https://github.com/pestphp/pest-plugin-laravel.git'];
+    }
+    foreach ($sources as $name => $url) {
         $p = $packages[$name] ?? [];
         $version = $p['version'] ?? '';
         $ref = $p['source']['reference'] ?? '';
@@ -33,7 +40,11 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
         if (($runtime[$name]['version'] ?? null) !== $version || ($runtime[$name]['source']['reference'] ?? null) !== $ref || ($runtime[$name]['source']['url'] ?? null) !== $url) {
             $errors[] = $name.' installed package must match the verified lock.';
         }
-        if ($lane === 'moving-dev') {
+        if (str_starts_with($name, 'pestphp/')) {
+            if (! preg_match('/^v?4\.\d+\.\d+$/D', $version) || version_compare(ltrim($version, 'v'), $name === 'pestphp/pest' ? '4.7.0' : '4.1.0', '<')) {
+                $errors[] = $name.' compatibility lane must execute the supported Pest 4 toolchain.';
+            }
+        } elseif ($lane === 'moving-dev') {
             if ($version !== ($name === 'laravel/ai' ? '0.x-dev' : '13.x-dev')) {
                 $errors[] = $name.' did not resolve the exact compatible moving development branch.';
             }
@@ -41,11 +52,14 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
             if (! preg_match('/^v?0\.11\.\d+$/D', $version) || version_compare(ltrim($version, 'v'), '0.11.2', '<')) {
                 $errors[] = 'Stable AI must be >=0.11.2 and <0.12.0.';
             }
-            if ($lane === 'minimum' && ($version !== 'v0.11.2' || $ref !== 'ee2c5162838d440c4e2e629ea93c8c87e838eaed')) {
+            if (in_array($lane, ['minimum', 'laravel-13.16'], true) && ($version !== 'v0.11.2' || $ref !== 'ee2c5162838d440c4e2e629ea93c8c87e838eaed')) {
                 $errors[] = 'Minimum lane must execute the exact official AI v0.11.2 release.';
             }
         } elseif (! preg_match('/^v?13\.\d+\.\d+$/D', $version)) {
             $errors[] = 'Stable framework must be Laravel 13.';
+        }
+        if ($lane === 'laravel-13.16' && $name === 'laravel/framework' && ($version !== 'v13.16.0' || $ref !== '66d5cdac5afd508dc6519ca59f5cc9b2c93a2b67')) {
+            $errors[] = 'Compatibility lane must execute the exact official Laravel v13.16.0 release.';
         }
     }
 
@@ -61,7 +75,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
         $lock = $read($root.'/composer.lock');
         $errors = adoptionDependencyErrors($read($manifestPath), $lock, $read($root.'/vendor/composer/installed.json'), $lane);
         foreach (array_merge($lock['packages'] ?? [], $lock['packages-dev'] ?? []) as $p) {
-            if (in_array($p['name'], ['laravel/ai', 'laravel/framework', 'orchestra/testbench'], true)) {
+            if (in_array($p['name'], ['laravel/ai', 'laravel/framework', 'orchestra/testbench', 'pestphp/pest', 'pestphp/pest-plugin-laravel'], true)) {
                 echo $p['name'].' '.$p['version'].' '.($p['source']['url'] ?? '').' '.($p['source']['reference'] ?? '').PHP_EOL;
             }
         }
