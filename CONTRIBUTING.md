@@ -44,7 +44,7 @@ composer lint
 composer analyse
 ```
 
-Continuous integration runs the same checks on PHP **8.4** and **8.5**, each on
+Normal development uses **Pest 5**. Continuous integration runs the same checks on PHP **8.4** and **8.5**, each on
 **stable-latest** and **lowest** Composer resolutions:
 `composer test:coverage:ci`, `composer test:process-concurrency:ci`, and
 `composer analyse`; plus `composer lint` and `composer test:compliance` (the
@@ -57,9 +57,23 @@ coverage. If workflow runtime becomes prohibitive, maintainers may split
 **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
 until then, pull requests validate both matrices equally.
 
+**Laravel 13.16 compatibility** — separate PHP **8.4** and **8.5** jobs pin
+Laravel **13.16.0** and Laravel AI **0.11.2**, using temporary Pest `^4.7` and
+Laravel plugin `^4.1` development requirements. The job restores `composer.json`
+before tests and verifies official source commits against both the lock and
+installed packages. These jobs run `composer test`,
+`composer test:process-concurrency:ci`, and `composer analyse` unconditionally.
+Pest 5's Laravel plugin excludes Laravel 13.16, so its lowest resolution alone
+cannot prove that compatibility. Swarm's production requirements remain unchanged.
+
+The four normal Pest 5 jobs retain PCOV, `memory_limit=1G`, the complete source
+filter, and the **80%** coverage floor. The separate compatibility jobs run the
+full suite without coverage reporting to avoid Pest 4's report reload overhead.
+PHPStan retains its separate existing `--memory-limit=2G` setting.
+
 **Dependency advisories** — a separate `audit` workflow runs `composer audit` on
 every push and pull request. Because this package commits no `composer.lock`, CI
-audits both resolutions it tests in `tests.yml`: `--prefer-stable` (latest in-range)
+audits both normal Pest 5 resolutions in `tests.yml`: `--prefer-stable` (latest in-range)
 and `--prefer-lowest` (oldest in-range), so an advisory present only in the lowest
 tree is still caught. The matrix job name shows which resolution flagged a given
 advisory. It is **non-blocking** today (`continue-on-error: true`) so a transient
