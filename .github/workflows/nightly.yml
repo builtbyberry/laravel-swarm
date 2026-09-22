@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -62,6 +64,11 @@ jobs:
           composer show pestphp/pest-plugin-laravel
           composer show phpunit/phpunit
           composer show phpunit/php-code-coverage
+
+      # The suite verifies the real nightly contract. The diagnostic workflow
+      # has already been loaded by Actions; restore its exact baseline test input.
+      - name: Restore original nightly workflow for contract tests
+        run: git show 5a4e9deadd007246865d494650597a85a2341d7d:.github/workflows/nightly.yml > .github/workflows/nightly.yml
 
       - name: Execute tests with coverage
         run: /usr/bin/time -v composer test:coverage:ci

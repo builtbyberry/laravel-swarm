@@ -459,7 +459,10 @@ This branch is an isolated experiment based on the reviewed v0.26.2 citation
 candidate. Its manually dispatched `pest5-validation` workflow temporarily uses
 `nightly.yml` to run the existing four stable/lowest matrix rows. The ordinary
 nightly workflow on the release and citation branches is unchanged. Do not merge
-this diagnostic workflow replacement into the release.
+this diagnostic workflow replacement into the release. Before test execution,
+the job restores the exact original nightly file from the citation baseline so
+workflow-contract tests examine the unchanged production workflow. Actions has
+already loaded the validation job definition at that point.
 
 Coverage still runs the full Feature, Unit, and Installer suites with PCOV,
 `memory_limit=1G`, and `--min=80`. Process concurrency, static analysis, compliance,
@@ -467,8 +470,9 @@ and formatting checks retain their existing commands; PHPStan's existing 2G
 command is separate from the coverage limit. Reported maximum resident set size
 is an operating-system measurement, not PHP allocator usage.
 
-Pest 5's Laravel plugin requires Laravel 13.23 or later. A green candidate
-`lowest` resolution therefore does not prove the earlier supported Laravel
-minimum. Production `require` constraints remain unchanged. Adoption needs a
+The candidate's lowest resolution starts at Laravel 13.23. Pest's Laravel
+plugin 5.0.0 requires Laravel 13.20 or later on the 13.x line; 5.0.1 requires
+13.23 or later. Neither supports the previously tested Laravel 13.16 minimum.
+A green candidate `lowest` run therefore does not prove that earlier minimum. Production `require` constraints remain unchanged. Adoption needs a
 separate decision about preserving that compatibility lane; this branch is not
 release or merge approval.
