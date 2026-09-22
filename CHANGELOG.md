@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.26.2 - unreleased
+
+Preserve native citations on final responses and every originating agent step
+across execution, capture, history, replay, and broadcast.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.26.1 - 2026-09-21
 
 Preview and safely apply application upgrade guidance.
