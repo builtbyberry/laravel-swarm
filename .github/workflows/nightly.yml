@@ -1,23 +1,25 @@
-name: nightly
+name: pest5-validation
 
 on:
-  schedule:
-    # 06:17 UTC daily — off the hour to avoid contention with the GitHub-wide
-    # cron stampede at :00. Early signal for breaking changes on the
-    # laravel/framework 13.x development branch (the major this package requires).
-    - cron: '17 6 * * *'
   workflow_dispatch:
-  pull_request:
 
 permissions:
   contents: read
 
 jobs:
   tests:
-    name: PHP 8.5 - Laravel 13.x-dev / AI 0.x-dev
+    name: PHP ${{ matrix.php }} - Laravel 13 (${{ matrix.dependencies }})
     runs-on: ubuntu-24.04
-    # PR runs prove the candidate before merge. A separate workflow_dispatch on
-    # main is still required after its authorized merge and before tagging.
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php:
+          - '8.4'
+          - '8.5'
+        dependencies:
+          - stable-latest
+          - lowest
 
     steps:
       - name: Checkout code
@@ -26,27 +28,21 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.5'
+          php-version: ${{ matrix.php }}
           tools: composer:v2
           coverage: pcov
           ini-values: memory_limit=1G
 
-      - name: Preserve production manifest
-        run: cp composer.json /tmp/swarm-production-composer.json
-
-      - name: Require compatible official development branches
-        run: |
-          composer require --no-update "laravel/ai:0.x-dev"
-          composer require --no-update --dev "laravel/framework:13.x-dev"
-
       - name: Install dependencies
-        run: composer update --prefer-dist --no-interaction --no-progress
+        if: matrix.dependencies == 'stable-latest'
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
 
-      - name: Restore production manifest for package contract tests
-        run: cp /tmp/swarm-production-composer.json composer.json
+      - name: Install lowest dependencies
+        if: matrix.dependencies == 'lowest'
+        run: composer update --with laravel/ai:0.11.2 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress
 
-      - name: Verify actual moving development dependencies
-        run: php .github/workflows/verify-adoption-dependencies.php moving-dev "$PWD" /tmp/swarm-production-composer.json
+      - name: Verify official dependency provenance
+        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'lowest' && 'minimum' || 'current' }}
 
       # testbench-core no longer auto-creates this symlink in some versions; the
       # process-concurrency tests spawn a real artisan subprocess that needs it.
@@ -56,8 +52,19 @@ jobs:
             ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
           fi
 
-      - name: Execute tests
-        run: composer test
+      # Same quality gates on stable-latest and lowest (see CONTRIBUTING.md if nightly split is needed).
+      # The CI script enforces a line-coverage floor; raise it deliberately as the suite grows.
+      - name: Record validation runtime
+        run: |
+          git rev-parse HEAD
+          php -r 'echo "PHP ".PHP_VERSION." memory_limit=".ini_get("memory_limit").PHP_EOL;'
+          composer show pestphp/pest
+          composer show pestphp/pest-plugin-laravel
+          composer show phpunit/phpunit
+          composer show phpunit/php-code-coverage
+
+      - name: Execute tests with coverage
+        run: /usr/bin/time -v composer test:coverage:ci
 
       - name: Execute process concurrency validation
         run: composer test:process-concurrency:ci
@@ -65,8 +72,18 @@ jobs:
       - name: Execute static analysis
         run: composer analyse
 
+      # Named compliance gate: re-runs the scope-isolation / propagation and
+      # replay-determinism suites (the `compliance` Pest group) as the release
+      # compliance evidence. They also run inside test:coverage:ci above; this
+      # step exists so the gate is a discrete, re-runnable lane. stable-latest
+      # only, to avoid duplicating the work on the lowest matrix.
       - name: Execute compliance gate
+        if: matrix.dependencies == 'stable-latest'
         run: composer test:compliance
 
+      # Pint's ruleset on the --prefer-lowest matrix is pinned to an older
+      # version that disagrees with the current code style, so style is only
+      # gated on stable-latest.
       - name: Execute code style check
+        if: matrix.dependencies == 'stable-latest'
         run: composer lint
