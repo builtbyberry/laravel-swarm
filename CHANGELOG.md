@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.26.1 - unreleased
+## v0.26.1 - 2026-09-21
 
 Preview and safely apply application upgrade guidance.
 
