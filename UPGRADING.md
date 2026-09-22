@@ -280,6 +280,14 @@ with `"prefer-stable": true`. Your application needs no special Composer
 stability settings to install Swarm — see
 [Composer minimum-stability](#composer-minimum-stability).
 
+## Upgrading to v0.26.1
+
+This additive support release introduces `swarm:upgrade` and the standalone
+`swarm-upgrade` entry point. See the [upgrade assistant](docs/upgrade-assistant.md)
+for pre-upgrade archive usage, read-only inspection, selected safe manifest edits,
+backups and guarded restore. No migration, capture default or orchestration
+behavior changes. Runtime and application-specific verification remain manual.
+
 ## Upgrading to v0.26.0
 
 ### Adoption scope and application dependency example

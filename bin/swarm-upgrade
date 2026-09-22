@@ -1,0 +1,22 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Deliberately load only this tool's own files; the target app may not boot yet.
+foreach (['JsonDocument', 'ManifestEditor', 'UpgradeAssistant', 'UpgradeConsole'] as $class) {
+    require_once __DIR__.'/../src/Upgrade/'.$class.'.php';
+}
+
+$console = new BuiltByBerry\LaravelSwarm\Upgrade\UpgradeConsole;
+$write = static function (string $line): void {
+    fwrite(STDOUT, $line.PHP_EOL);
+};
+$arguments = array_slice($argv, 1);
+try {
+    $options = BuiltByBerry\LaravelSwarm\Upgrade\UpgradeConsole::parse($arguments);
+    exit($console->run($options, getcwd() ?: '.', $write));
+} catch (Throwable $error) {
+    $console->error($error, in_array('--json', $arguments, true), $write);
+    exit(2);
+}

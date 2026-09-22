@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.26.1 - unreleased
+
+Preview and safely apply application upgrade guidance.
+
+### Added
+
+- **Upgrade assistant:** `swarm:upgrade` and the standalone `swarm-upgrade` CLI
+  inspect application manifests, locks and installed metadata for the v0.25-to-v0.26
+  recipe. Human and JSON reports show exact dependency edits and the remaining
+  application, Laravel AI and operational verification steps. The standalone
+  entry point runs from the release archive without booting the target application.
+- **Guarded dependency fixes:** explicitly selected edits require the reviewed
+  preview digest and approval. Malformed or conflicting metadata blocks mutation;
+  writes preserve unrelated bytes, ownership and permissions, retain private
+  backups, and support a restore that refuses to overwrite later edits. Temporary
+  replacement files stay beside the manifest to preserve atomic replacement.
+
+See the [upgrade assistant](docs/upgrade-assistant.md) for usage, exit codes and
+backup retention. Chosen: mechanical dependency edits with manual runtime
+verification; rejected: automatic application rewrites or treating a manifest
+restore as package/data rollback. This release changes no orchestration behavior,
+schema or configuration default and introduces no breaking changes.
+
 ## v0.26.0 - 2026-09-21
 
 Selective adoption of official Laravel AI ^0.11.2 while preserving supported
