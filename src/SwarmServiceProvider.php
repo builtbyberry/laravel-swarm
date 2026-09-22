@@ -40,6 +40,7 @@ use BuiltByBerry\LaravelSwarm\Commands\SwarmResumeCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmSignalCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmStatusCommand;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmTraceCommand;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmUpgradeCommand;
 use BuiltByBerry\LaravelSwarm\Compaction\SwarmCompactor;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
@@ -491,6 +492,7 @@ class SwarmServiceProvider extends ServiceProvider
                 MakeSwarmBlueprintCommand::class,
                 MakeMemoryToolCommand::class,
                 SwarmHealthCommand::class,
+                SwarmUpgradeCommand::class,
                 SwarmPruneCommand::class,
                 SwarmMemoryPurgeCommand::class,
                 SwarmStatusCommand::class,

@@ -44,6 +44,7 @@
     "conflict": {
         "guzzlehttp/guzzle": "<7.15.2 || >=8.0.0 <8.0.1"
     },
+    "bin": ["bin/swarm-upgrade"],
     "autoload": {
         "psr-4": {
             "BuiltByBerry\\LaravelSwarm\\": "src/"
