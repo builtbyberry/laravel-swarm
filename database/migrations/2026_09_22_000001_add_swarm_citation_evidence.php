@@ -24,7 +24,7 @@ return new class extends Migration
         foreach ($this->tables() as $key => $default) {
             $name = (string) config('swarm.tables.'.$key, $default);
             if (Schema::hasTable($name) && ! Schema::hasColumn($name, 'citation_evidence')) {
-                Schema::table($name, fn (Blueprint $table) => $table->text('citation_evidence')->nullable());
+                Schema::table($name, fn (Blueprint $table) => $table->longText('citation_evidence')->nullable());
             }
         }
     }

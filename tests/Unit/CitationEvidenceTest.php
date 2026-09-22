@@ -12,8 +12,10 @@ use BuiltByBerry\LaravelSwarm\Runners\NativeCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Citations\Fixtures\CitationStaticSwarm;
+use Illuminate\Config\Repository;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\Data\UrlCitation;
@@ -124,4 +126,50 @@ it('writes exact source fields on citation step-end and stream-end protocol fram
         expect($decoded->citationEvidence->items[0]->startIndex)->toBe(0)
             ->and($decoded->citationEvidence->items[0]->endIndex)->toBe(8);
     }
+});
+
+it('rejects incomplete evidence envelopes without fabricating supplied-empty sources', function (array $payload) {
+    foreach ([CitationEvidence::fromArray($payload), app(CitationEvidenceCodec::class)->decode(json_encode($payload))] as $decoded) {
+        expect($decoded->status)->toBe('unavailable')->and($decoded->reasons)->toBe(['malformed']);
+    }
+    expect(CitationEvidence::fromArray(CitationEvidence::available()->toArray())->status)->toBe('available')
+        ->and(CitationEvidence::fromArray(['citation_status' => 'omitted', 'citation_reasons' => []])->status)->toBe('omitted')
+        ->and(CitationEvidence::fromArray([])->status)->toBe('unknown');
+})->with([
+    [['citation_status' => 'available', 'citation_reasons' => []]],
+    [['citation_status' => 'available', 'citation_reasons' => [], 'citations' => null]],
+]);
+
+it('fills missing supplied provenance on matched stream occurrences without replacing event identity', function () {
+    $mapper = app(NativeCitationEvidence::class);
+    $source = new UrlCitation('https://example.com', 'Title', 1, 8);
+    $event = $mapper->event(new Citation('event', 'message', $source, 123), 'run', 0, 'Agent');
+    $terminal = $mapper->response(new AgentResponse('known-invocation', 'text', new Usage, new Meta(citations: collect([$source]))), 'run', 0, 'Agent', 'node');
+    $result = $mapper->reconcile($event, $terminal);
+    expect($result->items)->toHaveCount(1)->and($result->items[0]->invocationId)->toBe('known-invocation')
+        ->and($result->items[0]->nodeId)->toBe('node')->and($result->items[0]->eventId)->toBe('event')
+        ->and($result->items[0]->messageId)->toBe('message')->and($result->items[0]->timestamp)->toBe(123);
+    $different = $mapper->event((new Citation('other', 'message', $source, 124))->withInvocationId('other-invocation'), 'run', 0, 'Agent');
+    expect($mapper->reconcile($different, $terminal)->items)->toHaveCount(2);
+});
+
+it('uses the injected citation limiter when normalizing response payloads', function () {
+    $limits = new CitationEvidenceLimits(new Repository(['swarm' => ['citations' => ['max_count' => 0]]]));
+    app()->instance(CitationEvidenceLimits::class, $limits);
+    $response = app(SwarmPayloadLimits::class)->response(new SwarmResponse('out', citationEvidence: sourceEvidence()));
+    expect($response->citationEvidence->status)->toBe('partial')->and($response->citations)->toBe([]);
+});
+
+it('counts exact encoded bytes including separators independently for each invocation', function () {
+    $one = sourceEvidence()->items[0];
+    $two = new SwarmCitation('https://example.com/β', 'quoted " Ω', 'run', 0, 'Agent');
+    $other = new SwarmCitation($one->url, $one->title, 'run', 1, 'Agent', 0, 8);
+    $pair = new CitationEvidence([$one, $two], CitationEvidence::AVAILABLE);
+    $budget = strlen(json_encode($pair->toArray(), JSON_THROW_ON_ERROR)) + 32;
+    config()->set('swarm.citations.max_bytes', $budget);
+    $limits = app(CitationEvidenceLimits::class);
+    expect($limits->apply($pair)->toArray())->toBe($pair->toArray());
+    config()->set('swarm.citations.max_bytes', $budget - 1);
+    $result = $limits->apply(new CitationEvidence([$one, $two, $other], CitationEvidence::AVAILABLE));
+    expect($result->status)->toBe('partial')->and($result->items)->toBe([$one, $other])->and($result->reasons)->toBe(['limit']);
 });

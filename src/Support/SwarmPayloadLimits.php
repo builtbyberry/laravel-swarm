@@ -15,9 +15,14 @@ use JsonException;
  */
 class SwarmPayloadLimits
 {
+    private CitationEvidenceLimits $citationLimits;
+
     public function __construct(
         protected ConfigRepository $config,
-    ) {}
+        ?CitationEvidenceLimits $citationLimits = null,
+    ) {
+        $this->citationLimits = $citationLimits ?? new CitationEvidenceLimits($config);
+    }
 
     public function checkInput(string $input): void
     {
@@ -78,7 +83,7 @@ class SwarmPayloadLimits
         return new SwarmResponse(
             output: $output->value,
             steps: $response->steps,
-            citationEvidence: (new CitationEvidenceLimits($this->config))->apply($response->citationEvidence),
+            citationEvidence: $this->citationLimits->apply($response->citationEvidence),
             usage: $response->usage,
             context: $context,
             artifacts: $response->artifacts,

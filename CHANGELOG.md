@@ -14,6 +14,7 @@ across execution, capture, history, replay, and broadcast.
 
 ### Changed
 
+- `swarm:health` verifies active citation columns, including optional stream checkpoint storage. Citation columns use portable `longText` to accommodate accepted evidence plus encryption overhead on MySQL.
 - Completed live streams retain their executed steps. End events include citation evidence; old rows and payloads read as unknown.
 - Citation provenance keeps original source ranges rather than shifting them into combined or truncated output. This avoids claiming support the provider did not supply; deterministic response, range, privacy, durable, HTTP, and replay tests cover that choice. See `docs/citations.md` and `UPGRADING.md` for rollout and evidence-loss rollback limits.
 

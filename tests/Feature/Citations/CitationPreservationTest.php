@@ -15,9 +15,11 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Memory\StreamStepCheckpoint;
+use BuiltByBerry\LaravelSwarm\Persistence\CitationEvidenceCodec;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\NativeCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
@@ -484,3 +486,93 @@ it('prunes retained citation data with its owning history and checkpoints', func
         expect(DB::table($table)->where('run_id', $stream->runId)->count())->toBe(0);
     }
 });
+
+it('checks citation migration readiness through the existing health command', function (string $table, bool $durable, string $component) {
+    Schema::table($table, fn ($blueprint) => $blueprint->dropColumn('citation_evidence'));
+    expect(Artisan::call('swarm:health', ['--json' => true, '--durable' => $durable]))->toBe(1);
+    $checks = collect(json_decode(Artisan::output(), true)['checks']);
+    $check = $checks->firstWhere('component', $component);
+    expect($check['status'])->toBe('failed')->and($check['details'])->toContain($table.'.citation_evidence', 'Run migrations');
+})->with([
+    ['swarm_run_histories', false, 'History'],
+    ['swarm_run_steps', false, 'History'],
+    ['swarm_durable_branches', true, 'Durable runtime'],
+    ['swarm_durable_node_outputs', true, 'Durable runtime'],
+    ['swarm_stream_step_checkpoints', false, 'Stream checkpoints'],
+]);
+
+it('protects raw checkpoint and durable evidence under every capture and sealing policy', function (CaptureDecision $decision, bool $encrypted) {
+    config()->set('swarm.persistence.encrypt_at_rest', $encrypted);
+    config()->set('swarm.memory.replay.mode', 'frozen_view');
+    app()->instance(CapturePolicy::class, new SkippingAuditCapturePolicy(outputs: $decision, activeContext: CaptureDecision::Full));
+    $stream = app(SwarmRunner::class)->sequential([new CitingAgent, new OtherCitingAgent])->stream('task');
+    iterator_to_array($stream);
+    $raw = [DB::table('swarm_stream_step_checkpoints')->where('run_id', $stream->runId)->value('citation_evidence')];
+    Queue::fake();
+    $manager = app(DurableSwarmManager::class);
+    $nodeRun = (new CitationStaticSwarm)->dispatchDurable('task')->runId;
+    for ($attempt = 0; $attempt < 4 && ! DB::table('swarm_durable_node_outputs')->where('run_id', $nodeRun)->exists(); $attempt++) {
+        $run = app(DurableRunStore::class)->find($nodeRun);
+        (new AdvanceDurableSwarm($nodeRun, $run['next_step_index']))->handle($manager);
+    }
+    $raw[] = DB::table('swarm_durable_node_outputs')->where('run_id', $nodeRun)->value('citation_evidence');
+    $branchRun = (new CitationParallelSwarm)->dispatchDurable('task')->runId;
+    (new AdvanceDurableSwarm($branchRun, 0))->handle($manager);
+    $branch = app(DurableRunStore::class)->branchesFor($branchRun)[0];
+    (new AdvanceDurableBranch($branchRun, $branch['branch_id']))->handle($manager);
+    $raw[] = DB::table('swarm_durable_branches')->where('run_id', $branchRun)->where('branch_id', $branch['branch_id'])->value('citation_evidence');
+    $status = match ($decision) {
+        CaptureDecision::Full => 'available', CaptureDecision::Redact => 'redacted', CaptureDecision::Skip => 'omitted',
+    };
+    foreach ($raw as $value) {
+        expect($value)->toBeString()->not->toBeEmpty();
+        if ($encrypted) {
+            expect($value)->toStartWith('sw0:');
+        }
+        if ($encrypted || $decision !== CaptureDecision::Full) {
+            expect($value)->not->toContain('secret.example', 'Title Ω');
+        } else {
+            expect($value)->toContain('secret.example');
+        }
+        $evidence = app(CitationEvidenceCodec::class)->decode($value);
+        expect($evidence->status)->toBe($status);
+        if ($decision === CaptureDecision::Full) {
+            expect($evidence->items)->toHaveCount(1)->and($evidence->items[0]->startIndex)->toBe(1)
+                ->and($evidence->items[0]->url)->toContain('secret.example/CitingAgent/');
+        } else {
+            expect($evidence->items)->toBe([]);
+        }
+    }
+})->with(CaptureDecision::cases())->with([false, true]);
+
+it('protects newly written legacy inline history evidence under every capture and sealing policy', function (CaptureDecision $decision, bool $encrypted) {
+    Schema::drop('swarm_run_steps');
+    config()->set('swarm.persistence.encrypt_at_rest', $encrypted);
+    app()->instance(CapturePolicy::class, new SkippingAuditCapturePolicy(outputs: $decision));
+    $context = RunContext::from('task');
+    $store = app(RunHistoryStore::class);
+    $store->start($context->runId, 'Fixture', 'sequential', $context, [], 3600);
+    $evidence = app(NativeCitationEvidence::class)->response((new CitingAgent)->prompt('task'), $context->runId, 0, CitingAgent::class);
+    $store->recordStepWithContext($context->runId, new SwarmStep('Agent', 'in', 'out', citationEvidence: $evidence), 3600, null, null, $context);
+    $value = DB::table('swarm_run_histories')->where('run_id', $context->runId)->value('steps');
+    expect($value)->toBeString()->not->toBeEmpty();
+    $stored = json_decode($value, true)[0];
+    expect($stored)->toHaveKey('citation_evidence')->not->toHaveKey('citations');
+    if ($encrypted) {
+        expect($stored['citation_evidence'])->toStartWith('sw0:');
+    }
+    if ($encrypted || $decision !== CaptureDecision::Full) {
+        expect($value)->not->toContain('secret.example', 'Title Ω');
+    } else {
+        expect($value)->toContain('secret.example');
+    }
+    $step = app(RunHistoryStore::class)->find($context->runId)['steps'][0];
+    expect($step['citation_status'])->toBe(match ($decision) {
+        CaptureDecision::Full => 'available', CaptureDecision::Redact => 'redacted', CaptureDecision::Skip => 'omitted',
+    });
+    if ($decision === CaptureDecision::Full) {
+        expect($step['citations'][0]['url'])->toBe('https://secret.example/CitingAgent/1');
+    } else {
+        expect(json_encode($step))->not->toContain('secret.example', 'Title Ω');
+    }
+})->with(CaptureDecision::cases())->with([false, true]);

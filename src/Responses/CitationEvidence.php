@@ -78,7 +78,8 @@ final readonly class CitationEvidence implements Arrayable, JsonSerializable
         }
         try {
             if (! is_string($data['citation_status']) || ! is_array($data['citation_reasons'] ?? null)
-                || ! is_array($data['citations'] ?? [])) {
+                || ($data['citation_status'] !== self::OMITTED && ! is_array($data['citations'] ?? null))
+                || (array_key_exists('citations', $data) && ! is_array($data['citations']))) {
                 throw new InvalidArgumentException;
             }
             $items = [];

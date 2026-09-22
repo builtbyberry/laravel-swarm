@@ -65,6 +65,7 @@ final class NativeCitationEvidence
     public function reconcile(CitationEvidence $events, CitationEvidence $terminal): CitationEvidence
     {
         $matched = [];
+        $eventItems = $events->items;
         $extra = [];
         foreach ($terminal->items as $item) {
             foreach ($events->items as $index => $event) {
@@ -73,6 +74,11 @@ final class NativeCitationEvidence
                     && $item->runId === $event->runId && $item->stepIndex === $event->stepIndex
                     && ($item->invocationId === null || $event->invocationId === null || $item->invocationId === $event->invocationId)) {
                     $matched[$index] = true;
+                    $eventItems[$index] = new SwarmCitation($event->url, $event->title, $event->runId,
+                        $event->stepIndex, $event->agentClass, $event->startIndex, $event->endIndex,
+                        $event->nodeId ?? $item->nodeId, $event->invocationId ?? $item->invocationId,
+                        $event->messageId ?? $item->messageId, $event->eventId ?? $item->eventId,
+                        $event->timestamp ?? $item->timestamp);
 
                     continue 2;
                 }
@@ -81,7 +87,8 @@ final class NativeCitationEvidence
         }
 
         return $this->limits->apply(CitationEvidence::combine([
-            $events, new CitationEvidence($extra, $terminal->status, $terminal->reasons),
+            new CitationEvidence(array_values($eventItems), $events->status, $events->reasons),
+            new CitationEvidence($extra, $terminal->status, $terminal->reasons),
         ]));
     }
 

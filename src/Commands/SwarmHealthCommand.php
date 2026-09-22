@@ -8,10 +8,12 @@ use BuiltByBerry\LaravelSwarm\Audit\NoOpSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use Carbon\CarbonInterface;
 use Illuminate\Console\Command;
@@ -47,6 +49,7 @@ class SwarmHealthCommand extends Command
                 ['component' => 'Artifacts', 'abstract' => ArtifactRepository::class, 'config_key' => 'artifacts'],
                 ['component' => 'History', 'abstract' => RunHistoryStore::class, 'config_key' => 'history'],
                 ['component' => 'Stream replay', 'abstract' => StreamEventStore::class, 'config_key' => 'streaming.replay'],
+                ['component' => 'Stream checkpoints', 'abstract' => StreamStepCheckpointStore::class, 'config_key' => null],
             ];
 
             if ($this->option('durable') === true) {
@@ -640,11 +643,20 @@ class SwarmHealthCommand extends Command
             $driver = $this->driverFor($store);
             $storeName = $driver === 'cache' ? $storeName : 'n/a';
 
-            if (! method_exists($store, 'assertReady')) {
+            if (method_exists($store, 'assertReady')) {
+                $store->assertReady();
+            } elseif (! $store instanceof StreamStepCheckpointStore) {
                 throw new \RuntimeException('Readiness check is not available for the resolved store.');
             }
 
-            $store->assertReady();
+            if ($store instanceof ChecksCitationStorage) {
+                $store->assertCitationStorageReady();
+            } elseif ($store instanceof StreamStepCheckpointStore) {
+                return [
+                    'component' => $check['component'], 'driver' => $driver, 'store' => $storeName,
+                    'status' => 'note', 'details' => 'custom checkpoint store does not expose citation readiness checks',
+                ];
+            }
 
             return [
                 'component' => $check['component'],

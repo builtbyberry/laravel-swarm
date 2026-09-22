@@ -19,19 +19,19 @@ final class CitationEvidenceLimits
             return $evidence;
         }
         $items = $groups = [];
+        $baseBytes = strlen(json_encode((new CitationEvidence([], $evidence->status, $evidence->reasons))->toArray(), JSON_THROW_ON_ERROR)) + 32;
         $limited = false;
         foreach ($evidence->items as $item) {
             $key = json_encode([$item->runId, $item->stepIndex, $item->invocationId], JSON_THROW_ON_ERROR);
-            $group = $groups[$key] ?? [];
-            $candidate = new CitationEvidence([...$group, $item], $evidence->status, $evidence->reasons);
-            // Reserve the fixed limit marker so the final per-invocation envelope fits.
-            $size = strlen(json_encode($candidate->toArray(), JSON_THROW_ON_ERROR)) + 32;
-            if (count($group) >= $count || $size > $bytes) {
+            $group = $groups[$key] ?? ['count' => 0, 'bytes' => $baseBytes];
+            // Count encoded records and commas once; reserve the fixed limit marker.
+            $size = $group['bytes'] + strlen(json_encode($item->toArray(), JSON_THROW_ON_ERROR)) + ($group['count'] > 0 ? 1 : 0);
+            if ($group['count'] >= $count || $size > $bytes) {
                 $limited = true;
 
                 continue;
             }
-            $groups[$key] = [...$group, $item];
+            $groups[$key] = ['count' => $group['count'] + 1, 'bytes' => $size];
             $items[] = $item;
         }
 
