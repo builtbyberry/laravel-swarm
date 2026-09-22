@@ -1,5 +1,16 @@
 # Upgrading Laravel Swarm
 
+## v0.26.2 citation evidence
+
+Run migrations before starting v0.26.2 workers, then drain and restart existing workers. Five existing tables gain nullable `citation_evidence` columns; no historical citations are fabricated. Built-in active stores fail before provider invocation if an existing required table lacks the column. Custom table configuration is respected by the migration.
+
+Response constructors add an optional final `citationEvidence` argument. End-event payloads add `citation_status`, `citation_reasons`, and `citations` (absent under Skip). New `swarm_citation` events require consumers with exhaustive event switches to add a case. Older payloads read as unknown evidence. Completed live streams now retain their executed steps in the response.
+
+Citations follow output capture and database encrypt-at-rest. They can contain sensitive URLs and titles. Byte/range provenance belongs to the original agent output, including when Swarm combines or truncates output. Custom stores can adopt the optional citation capabilities described in [citation evidence](docs/citations.md).
+
+Code rollback is not evidence-loss-safe: older workers can discard fields and events. Keep the additive columns and retained replay data; do not drop the migration as a routine code rollback. Existing `swarm:prune` ownership and retention apply.
+
+
 This guide is the action checklist for upgrading applications that use Laravel
 Swarm. Read it when a release asks you to run commands, update published files,
 or change application code.

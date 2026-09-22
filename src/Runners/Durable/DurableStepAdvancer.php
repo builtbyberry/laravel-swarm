@@ -167,7 +167,7 @@ class DurableStepAdvancer
 
         if ($isComplete) {
             try {
-                $this->terminal->completeRun($run, $token, $context, $stepLeaseSeconds, $step ?? null);
+                $this->terminal->completeRun($run, $token, $context, $stepLeaseSeconds, $step ?? null, $hierarchicalResult);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }

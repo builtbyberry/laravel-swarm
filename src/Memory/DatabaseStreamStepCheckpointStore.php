@@ -4,9 +4,14 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
+use BuiltByBerry\LaravelSwarm\Contracts\CitationAwareStreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Persistence\CitationEvidenceCodec;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Encryption\DecryptException;
@@ -37,7 +42,7 @@ use Psr\Log\LoggerInterface;
  *
  * @internal
  */
-final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointStore
+final class DatabaseStreamStepCheckpointStore implements ChecksCitationStorage, CitationAwareStreamStepCheckpointStore
 {
     use InteractsWithJsonColumns;
 
@@ -54,10 +59,26 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
         protected ConfigRepository $config,
         protected SwarmPersistenceCipher $cipher,
         protected LoggerInterface $logger,
+        protected CitationEvidenceCodec $citations,
     ) {}
 
     public function record(string $runId, int $stepIndex, string $output, array $usage): void
     {
+        $this->recordWithCitations($runId, $stepIndex, $output, $usage, new CitationEvidence);
+    }
+
+    public function assertCitationStorageReady(): void
+    {
+        $table = (string) $this->config->get('swarm.tables.stream_step_checkpoints', 'swarm_stream_step_checkpoints');
+        $schema = $this->connection->getSchemaBuilder();
+        if ($schema->hasTable($table) && ! $schema->hasColumn($table, 'citation_evidence')) {
+            throw new SwarmException("Citation storage requires [{$table}.citation_evidence]. Run migrations and restart workers before invoking agents.");
+        }
+    }
+
+    public function recordWithCitations(string $runId, int $stepIndex, string $output, array $usage, CitationEvidence $evidence): void
+    {
+        $this->assertCitationStorageReady();
         if (! $this->ensureTableExists()) {
             return;
         }
@@ -69,12 +90,13 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
                 'run_id' => $runId,
                 'step_index' => $stepIndex,
                 'output' => $this->cipher->seal($output),
+                'citation_evidence' => $this->citations->encode($evidence),
                 'usage' => $this->encodeJson($usage),
                 'created_at' => $now,
                 'updated_at' => $now,
             ]],
             ['run_id', 'step_index'],
-            ['output', 'usage', 'updated_at'],
+            ['output', 'usage', 'citation_evidence', 'updated_at'],
         );
     }
 
@@ -103,8 +125,8 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
             return null;
         }
 
-        // A checkpoint is a best-effort, recomputable resume optimisation — NOT
-        // an evidence surface — so it decrypts with the policy-INDEPENDENT
+        // Operational output is a recomputable resume optimisation and uses the
+        // policy-independent
         // openStrict() rather than open() (which would apply the operator's
         // decrypt-failure display policy and force us to guess success from the
         // plaintext's bytes). If the value can't be decrypted (rotated/wrong
@@ -131,6 +153,7 @@ final class DatabaseStreamStepCheckpointStore implements StreamStepCheckpointSto
         $usage = $this->decodeJson(is_string($record->usage ?? null) ? $record->usage : null, []);
 
         return StreamStepCheckpoint::fromPersisted(
+            citationEvidence: $this->citations->decode($record->citation_evidence ?? null),
             runId: $runId,
             stepIndex: $stepIndex,
             output: $opened,

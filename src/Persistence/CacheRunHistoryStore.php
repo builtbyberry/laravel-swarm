@@ -6,8 +6,10 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\RecordsCitationSteps;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ResolvesSwarmCacheStore;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
@@ -22,7 +24,7 @@ use Throwable;
 /**
  * @internal
  */
-class CacheRunHistoryStore implements ReadableRunHistoryStore, RunHistoryStore
+class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSteps, RunHistoryStore
 {
     use ResolvesSwarmCacheStore;
 
@@ -59,9 +61,19 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RunHistoryStore
 
     public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
+        $this->persistStep($runId, $step, $ttlSeconds, $executionToken, $leaseSeconds);
+    }
+
+    public function recordStepWithContext(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken, ?int $leaseSeconds, RunContext $context): void
+    {
+        $this->persistStep($runId, $step, $ttlSeconds, $executionToken, $leaseSeconds, $context);
+    }
+
+    protected function persistStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken, ?int $leaseSeconds, ?RunContext $context = null): void
+    {
         $history = $this->find($runId) ?? [];
         $history['steps'] ??= [];
-        $history['steps'][] = $this->capture->stepToPersistedArray($step);
+        $history['steps'][] = $this->capture->stepToPersistedArray($step, $context);
         $history['updated_at'] = Carbon::now('UTC')->toIso8601String();
 
         $this->store()->put($this->key($runId), $history, $ttlSeconds);
@@ -71,6 +83,7 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RunHistoryStore
     {
         $history = $this->find($runId) ?? [];
         $history['status'] = 'completed';
+        $history = array_replace($history, $this->capture->citationEvidence($response->citationEvidence, $response->context)->toArray());
         $history['output'] = $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $response->output;
         $history['usage'] = $response->usage;
         $history['context'] = $response->context !== null
@@ -130,6 +143,15 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RunHistoryStore
     {
         /** @var array<string, mixed>|null $history */
         $history = $this->store()->get($this->key($runId));
+
+        if ($history !== null) {
+            $history += CitationEvidence::fromArray($history)->toArray();
+            foreach ($history['steps'] ?? [] as $index => $step) {
+                if (is_array($step)) {
+                    $history['steps'][$index] = $step + CitationEvidence::fromArray($step)->toArray();
+                }
+            }
+        }
 
         return $history;
     }

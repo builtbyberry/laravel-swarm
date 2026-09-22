@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
@@ -15,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalFinishNode;
@@ -74,6 +76,7 @@ class HierarchicalRunner
         protected StreamEventMapper $mapper,
         protected DurableNodeStreamRecorder $nodeStream,
         protected NativeOutcomeValidator $outcomes,
+        protected NativeCitationEvidence $citations,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -151,6 +154,7 @@ class HierarchicalRunner
         return new SwarmResponse(
             output: $finalOutput,
             steps: $steps,
+            citationEvidence: $this->finalCitationEvidence($state, $steps),
             usage: $mergedUsage,
             context: $state->context,
             artifacts: $state->context->artifacts,
@@ -251,6 +255,7 @@ class HierarchicalRunner
         return new SwarmResponse(
             output: $finalOutput,
             steps: $steps,
+            citationEvidence: $this->finalCitationEvidence($state, $steps),
             usage: $mergedUsage,
             context: $state->context,
             artifacts: $state->context->artifacts,
@@ -472,6 +477,7 @@ class HierarchicalRunner
         return new SwarmResponse(
             output: $finalOutput,
             steps: $steps,
+            citationEvidence: $this->finalCitationEvidence($state, $steps),
             usage: $mergedUsage,
             context: $state->context,
             artifacts: $state->context->artifacts,
@@ -790,7 +796,7 @@ class HierarchicalRunner
         return new DurableHierarchicalStepResult(
             step: $step,
             routeCursor: $cursor,
-            nodeOutput: ['node_id' => $node->id, 'output' => $step->output],
+            nodeOutput: ['node_id' => $node->id, 'output' => $step->output, 'citation_evidence' => $this->capture->citationEvidence($step->citationEvidence, $state->context)->toArray()],
             complete: $this->isDurableCursorComplete($cursor),
             clearBranchParentNodeIds: $clearBranchParentNodeIds,
         );
@@ -949,6 +955,8 @@ class HierarchicalRunner
                 } else {
                     $branchDefinitions = [];
                     $callbacks = [];
+                    $citationLimits = ['max_count' => (int) $this->config->get('swarm.citations.max_count', 256),
+                        'max_bytes' => (int) $this->config->get('swarm.citations.max_bytes', 262144)];
 
                     $branchSnapshots = [];
                     foreach ($node->branches as $branchNodeId) {
@@ -979,7 +987,7 @@ class HierarchicalRunner
                         $branchRunId = $state->context->runId;
                         $branchSwarmClass = $state->swarm::class;
                         $branchContextPayload = $state->context->toQueuePayload();
-                        $callbacks[$branchNodeId] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload): array {
+                        $callbacks[$branchNodeId] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchIndex, $branchNodeId, $citationLimits): array {
                             $worker = Container::getInstance()->make($agentClass);
 
                             if (! $worker instanceof Agent) {
@@ -995,6 +1003,7 @@ class HierarchicalRunner
 
                                 return [
                                     'output' => (string) $response,
+                                    'citation_evidence' => NativeCitationEvidence::forConcurrentWorker($citationLimits)->response($response, $branchRunId, $branchIndex, $agentClass, $branchNodeId)->toArray(),
                                     'usage' => $response->usage->toArray(),
                                     'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
                                     'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
@@ -1007,7 +1016,7 @@ class HierarchicalRunner
 
                     $driver = $this->concurrency->driver();
                     $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-                    /** @var array<string, array{output: string, usage: array<string, int>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+                    /** @var array<string, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
                     $results = $this->outcomes->validateConcurrentResults($results);
 
                     foreach ($results as $branchNodeId => $rowData) {
@@ -1094,6 +1103,7 @@ class HierarchicalRunner
                             updateContext: false,
                             storeContext: false,
                             includeUsageInMetadata: false,
+                            citationEvidence: CitationEvidence::fromArray($row['citation_evidence']),
                         );
 
                         $steps[] = $step;
@@ -1114,10 +1124,37 @@ class HierarchicalRunner
             }
 
             /** @var HierarchicalFinishNode $node */
+            $state->context->mergeData(['citation_output_node' => $node->output !== null ? null : $node->outputFrom]);
+
             return $node->output ?? $this->resolveOutputFromNode($node, $nodeOutputs);
         }
 
         return $lastOutput ?? '';
+    }
+
+    /** @param array<int, SwarmStep> $steps */
+    protected function finalCitationEvidence(SwarmExecutionState $state, array $steps): CitationEvidence
+    {
+        if (array_key_exists('citation_output_node', $state->context->data)) {
+            $nodeId = $state->context->data['citation_output_node'];
+            if ($nodeId === null) {
+                return CitationEvidence::available();
+            }
+            if (is_string($nodeId)) {
+                foreach (array_reverse($steps) as $step) {
+                    if (($step->metadata['node_id'] ?? null) === $nodeId) {
+                        return $step->citationEvidence;
+                    }
+                }
+                if ($this->durableRuns instanceof StoresDurableCitationEvidence) {
+                    return $this->durableRuns->hierarchicalNodeCitations($state->context->runId, $nodeId);
+                }
+            }
+
+            return new CitationEvidence;
+        }
+
+        return $steps === [] ? CitationEvidence::available() : $steps[array_key_last($steps)]->citationEvidence;
     }
 
     protected function ensurePlanWithinExecutionBudget(SwarmExecutionState $state, HierarchicalRoutePlan $plan): void
@@ -1288,6 +1325,8 @@ class HierarchicalRunner
             }
 
             if ($node instanceof HierarchicalFinishNode) {
+                $cursor['citation_output_node'] = $node->output !== null ? null : $node->outputFrom;
+                $state->context->mergeData(['citation_output_node' => $cursor['citation_output_node']]);
                 $cursor['final_output'] = $node->output ?? $this->resolveOutputFromNode($node, $nodeOutputs);
                 $state->context->mergeData(['last_output' => $cursor['final_output']]);
             }
@@ -1604,6 +1643,7 @@ class HierarchicalRunner
             metadata: $metadata,
             storeContext: $storeContext,
             storeArtifacts: $storeArtifacts,
+            citationEvidence: $this->citations->response($response, $state->context->runId, $index, $agent::class, is_string($metadata['node_id'] ?? null) ? $metadata['node_id'] : null),
         );
     }
 
@@ -1692,7 +1732,7 @@ class HierarchicalRunner
                     $sink($swarmEvent);
                 }
             }
-            $stream->then($this->outcomes->validateResponse(...));
+            $stream->then(fn ($response) => $this->mapper->complete($response, $state, $index, $agent, $accumulator));
         } catch (Throwable $exception) {
             $nativeStreamFailure = $exception;
             throw $exception;
@@ -1725,6 +1765,7 @@ class HierarchicalRunner
             agentClass: $agent::class,
             input: $input,
             output: $accumulator->output,
+            citationEvidence: is_string($metadata['node_id'] ?? null) ? $accumulator->citationEvidence->withNodeId($metadata['node_id']) : $accumulator->citationEvidence,
             usage: $accumulator->stepUsage,
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             metadata: $metadata,

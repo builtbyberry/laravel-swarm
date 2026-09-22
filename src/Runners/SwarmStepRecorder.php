@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Contracts\RecordsCitationSteps;
+use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Memory\SwarmMemoryKeys;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\PayloadLimitResult;
@@ -26,10 +29,15 @@ class SwarmStepRecorder
         protected SwarmPayloadLimits $limits,
         protected SwarmAuditDispatcher $audit,
         protected ConfigRepository $config,
+        protected CitationStorageReadiness $citationStorage,
     ) {}
 
     public function started(SwarmExecutionState $state, int $index, string $agentClass, string $input): void
     {
+        $this->citationStorage->check(
+            durable: $state->executionMode === ExecutionMode::Durable || $state->queueHierarchicalParallelCoordination === 'multi_worker',
+            checkpoints: $state->executionMode === ExecutionMode::Stream,
+        );
         $state->events->dispatch(new SwarmStepStarted(
             runId: $state->context->runId,
             swarmClass: $state->swarm::class,
@@ -71,6 +79,7 @@ class SwarmStepRecorder
         bool $storeArtifacts = true,
         bool $includeUsageInMetadata = true,
         ?array $contextUsage = null,
+        ?CitationEvidence $citationEvidence = null,
     ): SwarmStep {
         $limitedOutput = $this->capture->capturesOutputs()
             ? $this->limits->output($output)
@@ -99,6 +108,7 @@ class SwarmStepRecorder
             output: $output,
             artifacts: [$artifact],
             metadata: $stepMetadata,
+            citationEvidence: $citationEvidence,
         );
 
         if ($updateContext) {
@@ -141,13 +151,20 @@ class SwarmStepRecorder
         // through SwarmCapture::stepToPersistedArray(), which applies the
         // input/output capture decisions (Skip omits the column entirely).
         $this->verifyOwnership($state);
-        $state->historyStore->recordStep($state->context->runId, new SwarmStep(
+        $historyStep = new SwarmStep(
             agentClass: $agentClass,
             input: $input,
             output: $limitedOutput->value,
             artifacts: [$artifact],
             metadata: $stepMetadata,
-        ), $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
+            citationEvidence: $this->capture->citationEvidence($citationEvidence ?? new CitationEvidence, $state->context),
+        );
+        if ($state->historyStore instanceof RecordsCitationSteps) {
+            $state->historyStore->recordStepWithContext($state->context->runId, $historyStep, $state->ttlSeconds,
+                $state->executionToken, $state->leaseSeconds, $state->context);
+        } else {
+            $state->historyStore->recordStep($state->context->runId, $historyStep, $state->ttlSeconds, $state->executionToken, $state->leaseSeconds);
+        }
 
         if ($storeContext) {
             $this->verifyOwnership($state);

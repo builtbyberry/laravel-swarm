@@ -556,6 +556,7 @@ class SwarmRunner
         return new SwarmResponse(
             output: $response->output,
             steps: $response->steps,
+            citationEvidence: $response->citationEvidence,
             usage: $response->usage,
             context: $context,
             artifacts: $response->artifacts,

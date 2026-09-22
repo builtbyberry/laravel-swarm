@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use JsonException;
@@ -77,6 +78,7 @@ class SwarmPayloadLimits
         return new SwarmResponse(
             output: $output->value,
             steps: $response->steps,
+            citationEvidence: (new CitationEvidenceLimits($this->config))->apply($response->citationEvidence),
             usage: $response->usage,
             context: $context,
             artifacts: $response->artifacts,

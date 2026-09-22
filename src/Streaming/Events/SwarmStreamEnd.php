@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+
 final class SwarmStreamEnd extends SwarmStreamEvent
 {
+    public readonly CitationEvidence $citationEvidence;
+
     /**
      * @param  array<string, mixed>  $usage
      * @param  array<string, mixed>  $metadata
@@ -17,7 +21,10 @@ final class SwarmStreamEnd extends SwarmStreamEvent
         public array $usage,
         public array $metadata,
         public int $timestamp,
-    ) {}
+        ?CitationEvidence $citationEvidence = null,
+    ) {
+        $this->citationEvidence = $citationEvidence ?? new CitationEvidence;
+    }
 
     /**
      * @return array<string, mixed>
@@ -25,6 +32,7 @@ final class SwarmStreamEnd extends SwarmStreamEvent
     public function toArray(): array
     {
         return [
+            ...$this->citationEvidence->toArray(),
             'id' => $this->id,
             'invocation_id' => $this->invocationId,
             'node_id' => $this->nodeId,
@@ -43,6 +51,7 @@ final class SwarmStreamEnd extends SwarmStreamEvent
     public static function fromArray(array $payload): self
     {
         return new self(
+            citationEvidence: CitationEvidence::fromArray($payload),
             id: self::stringValue($payload, 'id', self::newId()),
             runId: self::stringValue($payload, 'run_id'),
             output: self::nullableStringValue($payload, 'output'),

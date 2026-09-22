@@ -72,6 +72,7 @@ class DispatchValidator
         protected DurableRunStore $durableRuns,
         protected CausalLogStore $causalLog,
         protected ConfigRepository $config,
+        protected CitationStorageReadiness $citationStorage,
     ) {}
 
     public function ensureSwarmHasAgents(Swarm $swarm): void
@@ -115,6 +116,7 @@ class DispatchValidator
 
     public function ensureDatabaseDurableInfrastructure(Swarm $swarm): void
     {
+        $this->citationStorage->check(durable: true);
         if (! $this->contextStore instanceof DatabaseContextStore
             || ! $this->artifactRepository instanceof DatabaseArtifactRepository
             || ! $this->historyStore instanceof DatabaseRunHistoryStore
@@ -205,6 +207,7 @@ class DispatchValidator
 
     public function validateForDispatch(Swarm $swarm): void
     {
+        $this->citationStorage->check();
         $topology = $this->resolver->resolveTopology($swarm);
         $this->ensureSwarmHasAgents($swarm);
         $this->resolver->resolveTimeoutSeconds($swarm);

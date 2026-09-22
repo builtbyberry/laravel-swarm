@@ -1,5 +1,8 @@
 # Streaming
 
+For final and per-step sources, capture rules, and migration requirements, see [citation evidence](citations.md).
+
+
 Use `stream()` when a browser, CLI, or other client needs **live typed progress**
 while a swarm runs. The method returns a lazy
 `StreamableSwarmResponse` that yields the same kinds of events whether you

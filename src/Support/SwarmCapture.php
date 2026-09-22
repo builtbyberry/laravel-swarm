@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -251,25 +252,36 @@ class SwarmCapture
         return $this->context($context);
     }
 
+    public function citationEvidence(CitationEvidence $evidence, ?RunContext $context = null): CitationEvidence
+    {
+        return match ($this->outputsDecision($context)) {
+            CaptureDecision::Full => $evidence,
+            CaptureDecision::Redact => $evidence->status === CitationEvidence::OMITTED
+                ? $evidence : new CitationEvidence([], CitationEvidence::REDACTED),
+            CaptureDecision::Skip => new CitationEvidence([], CitationEvidence::OMITTED),
+        };
+    }
+
     public function response(SwarmResponse $response): SwarmResponse
     {
-        if ($this->capturesInputs() && $this->capturesOutputs() && $this->capturesArtifacts()) {
+        if ($this->capturesInputs() && $this->capturesOutputs() && $this->capturesArtifacts() && $this->outputsDecision($response->context) === CaptureDecision::Full) {
             return $response;
         }
 
         return new SwarmResponse(
             output: $this->output($response->output),
-            steps: array_map(fn (SwarmStep $step): SwarmStep => $this->step($step), $response->steps),
+            steps: array_map(fn (SwarmStep $step): SwarmStep => $this->step($step, $response->context), $response->steps),
             usage: $response->usage,
             context: $response->context !== null ? $this->context($response->context) : null,
             artifacts: $this->artifacts($response->artifacts),
             metadata: $response->metadata,
+            citationEvidence: $this->citationEvidence($response->citationEvidence, $response->context),
         );
     }
 
-    public function step(SwarmStep $step): SwarmStep
+    public function step(SwarmStep $step, ?RunContext $context = null): SwarmStep
     {
-        if ($this->capturesInputs() && $this->capturesOutputs() && $this->capturesArtifacts()) {
+        if ($this->capturesInputs() && $this->capturesOutputs() && $this->capturesArtifacts() && $this->outputsDecision($context) === CaptureDecision::Full) {
             return $step;
         }
 
@@ -279,6 +291,7 @@ class SwarmCapture
             output: $this->output($step->output),
             artifacts: $this->artifacts($step->artifacts),
             metadata: $step->metadata,
+            citationEvidence: $this->citationEvidence($step->citationEvidence, $context),
         );
     }
 
@@ -297,6 +310,8 @@ class SwarmCapture
     public function stepToPersistedArray(SwarmStep $step, ?RunContext $context = null): array
     {
         $array = $step->toArray();
+        unset($array['citations'], $array['citation_status'], $array['citation_reasons']);
+        $array += $this->citationEvidence($step->citationEvidence, $context)->toArray();
 
         $this->applyScalarKey($array, 'input', $step->input, $this->inputsDecision($context));
         $this->applyScalarKey($array, 'output', $step->output, $this->outputsDecision($context));

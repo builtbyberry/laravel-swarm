@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
@@ -140,6 +141,16 @@ class QueuedHierarchicalDurableCoordinator
                 totalSteps: $boundary->totalSteps,
                 branches: $branches,
             ));
+
+            if ($this->durableRuns instanceof StoresDurableCitationEvidence) {
+                foreach ($boundary->stepsSoFar as $step) {
+                    $nodeId = $step->metadata['node_id'] ?? null;
+                    if (is_string($nodeId)) {
+                        $this->durableRuns->storeHierarchicalNodeOutputWithCitations($runId, $nodeId, $step->output,
+                            $this->runs->ttlSeconds(), $this->capture->citationEvidence($step->citationEvidence, $context));
+                    }
+                }
+            }
 
             $this->historyStore->syncDurableState(
                 $runId,

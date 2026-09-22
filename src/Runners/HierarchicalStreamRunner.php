@@ -281,6 +281,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
             ActiveRunContext::enter($context->runId, $swarm::class, $context);
 
             try {
+                $this->citationStorage->check();
                 $coordinatorResponse = $coordinator->prompt($context->input);
                 $this->outcomes->validateResponse($coordinatorResponse);
             } finally {
@@ -299,6 +300,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
             );
 
             $coordinatorStep = $this->stepsRecorder->completed(
+                citationEvidence: $this->citations->response($coordinatorResponse, $context->runId, 0, $coordinator::class, static::COORDINATOR_NODE_ID),
                 state: $state,
                 index: 0,
                 agentClass: $coordinator::class,
@@ -312,6 +314,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
             $coordinatorStepOutput = $this->capture->applyOutput((string) ($coordinatorStep->artifacts[0]->content ?? $coordinatorOutput), $context);
 
             $coordinatorStepEndEvent = (new SwarmStepEnd(
+                citationEvidence: $this->capture->citationEvidence($coordinatorStep->citationEvidence, $context),
                 id: SwarmStreamEvent::newId(),
                 runId: $context->runId,
                 stepIndex: 0,
@@ -365,7 +368,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
             // initial parent so the first worker node opens under it.
             // ----------------------------------------------------------------
 
-            ['mergedUsage' => $walkUsage, 'executedNodeIds' => $executedNodeIds, 'executedAgentClasses' => $executedAgentClasses, 'parallelGroups' => $parallelGroups, 'nextIndex' => $nextIndex]
+            ['completedSteps' => $completedSteps, 'finalCitations' => $finalCitations, 'mergedUsage' => $walkUsage, 'executedNodeIds' => $executedNodeIds, 'executedAgentClasses' => $executedAgentClasses, 'parallelGroups' => $parallelGroups, 'nextIndex' => $nextIndex]
                 = yield from $this->drivePlanNodes(
                     state: $state,
                     context: $context,
@@ -393,6 +396,8 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
             ]);
 
             $response = $this->normalizeCompletionResponse(new SwarmResponse(
+                citationEvidence: $finalCitations,
+                steps: [$coordinatorStep, ...$completedSteps],
                 output: (string) ($context->data['last_output'] ?? $context->input),
                 context: $context,
                 artifacts: $context->artifacts,
@@ -432,6 +437,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
             ]);
 
             $streamEndEvent = new SwarmStreamEnd(
+                citationEvidence: $capturedResponse->citationEvidence,
                 id: SwarmStreamEvent::newId(),
                 runId: $context->runId,
                 output: $this->capture->applyOutput($capturedResponse->output, $context),
