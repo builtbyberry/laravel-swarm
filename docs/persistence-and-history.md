@@ -1,5 +1,8 @@
 # Persistence And History
 
+For final and per-step sources, capture rules, and migration requirements, see [citation evidence](citations.md).
+
+
 Laravel Swarm can persist three kinds of run data:
 
 - context

@@ -37,6 +37,7 @@ abstract class SwarmStreamEvent extends StreamEvent
             'swarm_text_end' => SwarmTextEnd::fromArray($payload),
             'swarm_reasoning_delta' => SwarmReasoningDelta::fromArray($payload),
             'swarm_reasoning_end' => SwarmReasoningEnd::fromArray($payload),
+            'swarm_citation' => SwarmCitation::fromArray($payload),
             'swarm_tool_call' => SwarmToolCall::fromArray($payload),
             'swarm_tool_result' => SwarmToolResult::fromArray($payload),
             'swarm_step_end' => SwarmStepEnd::fromArray($payload),

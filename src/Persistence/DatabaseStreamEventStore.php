@@ -25,6 +25,7 @@ class DatabaseStreamEventStore implements StreamEventStore
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
+        protected CitationEvidenceCodec $citations,
     ) {}
 
     public function record(string $runId, SwarmStreamEvent $event, int $ttlSeconds): void
@@ -34,7 +35,7 @@ class DatabaseStreamEventStore implements StreamEventStore
         $this->table()->insert([
             'run_id' => $runId,
             'event_type' => $event->type(),
-            'payload' => $this->encodeJson($event->toArray()),
+            'payload' => $this->encodeJson($this->citations->sealPayload($event->toArray())),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
@@ -49,7 +50,7 @@ class DatabaseStreamEventStore implements StreamEventStore
     public function events(string $runId): iterable
     {
         foreach ($this->table()->where('run_id', $runId)->where('event_type', '!=', 'swarm_causal_seal_barrier')->orderBy('id')->cursor() as $record) {
-            $event = SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+            $event = SwarmStreamEvent::fromArray($this->citations->openPayload($this->decodeJson($record->payload, [])));
             if (! ($event instanceof SwarmUnknownEvent)) {
                 yield $this->withAttemptEpoch($event, $record->attempt_epoch ?? null);
             }
@@ -102,7 +103,7 @@ class DatabaseStreamEventStore implements StreamEventStore
     public function eventsFrom(string $runId, int $fromSequence): iterable
     {
         foreach ($this->table()->where('run_id', $runId)->where('id', '>=', $fromSequence)->orderBy('id')->cursor() as $record) {
-            $event = SwarmStreamEvent::fromArray($this->decodeJson($record->payload, []));
+            $event = SwarmStreamEvent::fromArray($this->citations->openPayload($this->decodeJson($record->payload, [])));
             if (! ($event instanceof SwarmUnknownEvent)) {
                 yield $this->withAttemptEpoch($event, $record->attempt_epoch ?? null);
             }

@@ -8,8 +8,11 @@ use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
+use BuiltByBerry\LaravelSwarm\Runners\NativeCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCitation;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
@@ -21,8 +24,10 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
+use Laravel\Ai\Streaming\Events\Citation;
 use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
 use Laravel\Ai\Streaming\Events\ReasoningDelta;
 use Laravel\Ai\Streaming\Events\ReasoningEnd;
@@ -60,6 +65,7 @@ class StreamEventMapper
         protected SwarmCapture $capture,
         protected SnapshotsMemory $snapshots,
         protected NativeOutcomeValidator $outcomes,
+        protected NativeCitationEvidence $citations,
     ) {}
 
     /**
@@ -80,6 +86,20 @@ class StreamEventMapper
         StreamStepAccumulator $accumulator,
     ): ?SwarmStreamEvent {
         $this->outcomes->validateEvent($event);
+
+        if ($event instanceof Citation) {
+            $part = $this->citations->event($event, $state->context->runId, $index, $agent::class);
+            $accumulator->citationEvidence = $this->citations->append($accumulator->citationEvidence, $part);
+            if (in_array('limit', $accumulator->citationEvidence->reasons, true)) {
+                $part = new CitationEvidence([], CitationEvidence::PARTIAL, ['limit']);
+            }
+            $mapped = new SwarmCitation($event->id, $state->context->runId, $index,
+                $agent::class, $event->messageId, $event->timestamp,
+                $this->capture->citationEvidence($part, $state->context));
+            $this->syncInvocationId($mapped, $event->invocationId);
+
+            return $mapped;
+        }
 
         if ($event instanceof TextDelta) {
             $accumulator->output .= $event->delta;
@@ -214,6 +234,13 @@ class StreamEventMapper
         $accumulator->unknownEventClasses[get_debug_type($event)] = true;
 
         return null;
+    }
+
+    public function complete(AgentResponse $response, SwarmExecutionState $state, int $index, Agent $agent, StreamStepAccumulator $accumulator): void
+    {
+        $this->outcomes->validateResponse($response);
+        $accumulator->citationEvidence = $this->citations->reconcile($accumulator->citationEvidence,
+            $this->citations->response($response, $state->context->runId, $index, $agent::class));
     }
 
     /**

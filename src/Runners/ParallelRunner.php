@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
@@ -53,6 +54,8 @@ class ParallelRunner
         $this->ensureAgentsAreContainerResolvable($agents, $state->swarm::class);
 
         $callbacks = [];
+        $citationLimits = ['max_count' => (int) $this->config->get('swarm.citations.max_count', 256),
+            'max_bytes' => (int) $this->config->get('swarm.citations.max_bytes', 262144)];
         $snapshots = [];
         // Constant for the run; forwarded into each worker closure so the
         // ambient run context is reconstructable even when the concurrency
@@ -69,7 +72,7 @@ class ParallelRunner
                 $this->view->present($state->swarm, $state->context, $agent),
             );
 
-            $callbacks[$index] = function () use ($agentClass, $input, $runId, $swarmClass, $contextPayload): array {
+            $callbacks[$index] = function () use ($agentClass, $input, $runId, $swarmClass, $contextPayload, $index, $citationLimits): array {
                 $agent = Container::getInstance()->make($agentClass);
 
                 if (! $agent instanceof Agent) {
@@ -85,6 +88,7 @@ class ParallelRunner
 
                     return [
                         'output' => (string) $response,
+                        'citation_evidence' => NativeCitationEvidence::forConcurrentWorker($citationLimits)->response($response, $runId, $index, $agentClass)->toArray(),
                         'usage' => $response->usage->toArray(),
                         'class' => $agentClass,
                         'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
@@ -98,7 +102,7 @@ class ParallelRunner
 
         $driver = $this->concurrency->driver();
         $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-        /** @var array<int, array{output: string, usage: array<string, int>, class: string, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+        /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int>, class: string, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
         $results = $this->outcomes->validateConcurrentResults($results);
 
         foreach ($results as $rowIndex => $rowData) {
@@ -167,6 +171,7 @@ class ParallelRunner
                 updateContext: false,
                 storeContext: false,
                 storeArtifacts: false,
+                citationEvidence: CitationEvidence::fromArray($row['citation_evidence']),
             );
 
             $steps[] = $step;
@@ -191,6 +196,7 @@ class ParallelRunner
         return new SwarmResponse(
             output: $combined,
             steps: $steps,
+            citationEvidence: CitationEvidence::combine(array_map(static fn ($step) => $step->citationEvidence, $steps)),
             usage: $mergedUsage,
             context: $state->context,
             artifacts: $state->context->artifacts,

@@ -22,6 +22,7 @@ class StreamedSwarmResponse extends SwarmResponse
         parent::__construct(
             output: $response->output,
             steps: $response->steps,
+            citationEvidence: $response->citationEvidence,
             usage: $response->usage,
             context: $response->context,
             artifacts: $response->artifacts,
@@ -47,9 +48,11 @@ class StreamedSwarmResponse extends SwarmResponse
 
         $response = new SwarmResponse(
             output: $resolvedOutput ?? '',
+            citationEvidence: $streamEnd instanceof SwarmStreamEnd ? $streamEnd->citationEvidence : new CitationEvidence,
             steps: $stepEnds
                 ->map(fn (SwarmStepEnd $event): SwarmStep => new SwarmStep(
                     agentClass: $event->agentClass,
+                    citationEvidence: $event->citationEvidence,
                     input: '',
                     output: $event->output ?? '',
                     metadata: array_merge($event->metadata, [

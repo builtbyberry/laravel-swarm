@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -23,15 +27,38 @@ use Illuminate\Support\Collection;
 /**
  * @internal
  */
-class DatabaseDurableRunStore implements DurableRunStore
+class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore, StoresDurableCitationEvidence
 {
     use InteractsWithJsonColumns;
+
+    protected CitationEvidenceCodec $citations;
 
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
         protected SwarmPersistenceCipher $cipher,
-    ) {}
+        ?CitationEvidenceCodec $citations = null,
+    ) {
+        $this->citations = $citations ?? new CitationEvidenceCodec($cipher, new CitationEvidenceLimits($config));
+    }
+
+    public function assertCitationStorageReady(): void
+    {
+        $schema = $this->connection->getSchemaBuilder();
+        foreach (['durable_branches' => 'swarm_durable_branches', 'durable_node_outputs' => 'swarm_durable_node_outputs'] as $key => $default) {
+            $table = (string) $this->config->get('swarm.tables.'.$key, $default);
+            if (! $schema->hasColumn($table, 'citation_evidence')) {
+                throw new SwarmException("Citation storage requires [{$table}.citation_evidence]. Run migrations and restart workers before invoking agents.");
+            }
+        }
+    }
+
+    public function hierarchicalNodeCitations(string $runId, string $nodeId): CitationEvidence
+    {
+        $record = $this->nodeOutputTable()->where('run_id', $runId)->where('node_id', $nodeId)->first();
+
+        return $this->citations->decode($record->citation_evidence ?? null);
+    }
 
     public function create(array $payload): void
     {
@@ -536,6 +563,11 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function storeHierarchicalNodeOutput(string $runId, string $nodeId, string $output, int $ttlSeconds): void
     {
+        $this->storeHierarchicalNodeOutputWithCitations($runId, $nodeId, $output, $ttlSeconds, new CitationEvidence);
+    }
+
+    public function storeHierarchicalNodeOutputWithCitations(string $runId, string $nodeId, string $output, int $ttlSeconds, CitationEvidence $evidence): void
+    {
         $timestamp = Carbon::now('UTC');
 
         $this->nodeOutputTable()->upsert([
@@ -543,11 +575,12 @@ class DatabaseDurableRunStore implements DurableRunStore
                 'run_id' => $runId,
                 'node_id' => $nodeId,
                 'output' => $this->cipher->seal($output),
+                'citation_evidence' => $this->citations->encode($evidence),
                 'created_at' => $timestamp,
                 'updated_at' => $timestamp,
                 'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
             ],
-        ], ['run_id', 'node_id'], ['output', 'updated_at', 'expires_at']);
+        ], ['run_id', 'node_id'], ['output', 'citation_evidence', 'updated_at', 'expires_at']);
     }
 
     public function checkpointHierarchicalStep(
@@ -582,11 +615,12 @@ class DatabaseDurableRunStore implements DurableRunStore
                         'run_id' => $runId,
                         'node_id' => $nodeOutput['node_id'],
                         'output' => $this->cipher->seal((string) $nodeOutput['output']),
+                        'citation_evidence' => $this->citations->encode(CitationEvidence::fromArray($nodeOutput['citation_evidence'] ?? [])),
                         'created_at' => $timestamp,
                         'updated_at' => $timestamp,
                         'expires_at' => $expiresAt,
                     ],
-                ], ['run_id', 'node_id'], ['output', 'updated_at', 'expires_at']);
+                ], ['run_id', 'node_id'], ['output', 'citation_evidence', 'updated_at', 'expires_at']);
             }
 
             $contextPayload = $context->toArray();
@@ -758,9 +792,15 @@ class DatabaseDurableRunStore implements DurableRunStore
 
     public function markBranchCompleted(string $runId, string $branchId, string $executionToken, string $output, array $usage, int $durationMs): void
     {
+        $this->markBranchCompletedWithCitations($runId, $branchId, $executionToken, $output, $usage, $durationMs, new CitationEvidence);
+    }
+
+    public function markBranchCompletedWithCitations(string $runId, string $branchId, string $executionToken, string $output, array $usage, int $durationMs, CitationEvidence $evidence): void
+    {
         $this->guardedBranchUpdate($runId, $branchId, $executionToken, [
             'status' => 'completed',
             'output' => $this->cipher->seal($output),
+            'citation_evidence' => $this->citations->encode($evidence),
             'usage' => $this->encodeJson($usage),
             'duration_ms' => $durationMs,
             'failure' => null,
@@ -2761,6 +2801,7 @@ class DatabaseDurableRunStore implements DurableRunStore
     private function mapBranchBaseFields(object $record): array
     {
         return [
+            'citation_evidence' => $this->citations->decode($record->citation_evidence ?? null)->toArray(),
             'run_id' => $record->run_id,
             'branch_id' => $record->branch_id,
             'step_index' => (int) $record->step_index,

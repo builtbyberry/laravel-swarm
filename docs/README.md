@@ -164,3 +164,5 @@ Laravel Swarm is designed for production-grade AI workflows with operator contro
 3. [Durable Execution](durable-execution.md) — understand checkpointing, recovery, and operational overhead
 4. [Audit Evidence](audit-evidence-contract.md) — compliance and auditability guarantees
 5. [Maintenance](maintenance.md) — retention, pruning, and long-term operational hygiene
+
+- [Citation evidence](citations.md): final and per-step sources, privacy, replay, and persistence.

@@ -724,7 +724,7 @@ test('database run history store reads legacy inline steps when normalized rows 
         'updated_at' => $now,
     ]);
 
-    expect(app(DatabaseRunHistoryStore::class)->find('legacy-steps-run-id')['steps'])->toBe([$legacyStep]);
+    expect(app(DatabaseRunHistoryStore::class)->find('legacy-steps-run-id')['steps'])->toBe([$legacyStep + ['citation_status' => 'unknown', 'citation_reasons' => [], 'citations' => []]]);
 });
 
 test('database run history store merges legacy inline steps with normalized step rows', function () {
@@ -784,8 +784,8 @@ test('database run history store merges legacy inline steps with normalized step
     ]);
 
     expect(app(DatabaseRunHistoryStore::class)->find('mixed-steps-run-id')['steps'])->toBe([
-        $legacyStep,
-        $normalizedStep,
+        $legacyStep + ['citation_status' => 'unknown', 'citation_reasons' => [], 'citations' => []],
+        array_slice($normalizedStep, 0, 3, true) + ['citation_status' => 'unknown', 'citation_reasons' => [], 'citations' => []] + array_slice($normalizedStep, 3, null, true),
     ]);
 });
 
@@ -900,6 +900,7 @@ test('database persistence repositories honor overridden table names when matchi
     config()->set('swarm.tables.artifacts', 'custom_swarm_artifacts');
     config()->set('swarm.tables.history', 'custom_swarm_histories');
     config()->set('swarm.tables.history_steps', 'custom_swarm_history_steps');
+    (require __DIR__.'/../../database/migrations/2026_09_22_000001_add_swarm_citation_evidence.php')->up();
 
     $contextStore = app(DatabaseContextStore::class);
     $artifactRepository = app(DatabaseArtifactRepository::class);

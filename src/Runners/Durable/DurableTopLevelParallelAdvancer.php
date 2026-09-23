@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -133,6 +134,6 @@ class DurableTopLevelParallelAdvancer
                 'executed_agent_classes' => array_values(array_map(static fn (array $branch): string => (string) $branch['agent_class'], $completed)),
             ]);
 
-        $this->terminal->completeRun(array_merge($run, ['run_id' => $state->context->runId]), $token, $state->context, $stepLeaseSeconds, null);
+        $this->terminal->completeRun(array_merge($run, ['run_id' => $state->context->runId]), $token, $state->context, $stepLeaseSeconds, null, citationEvidence: CitationEvidence::combine(array_map(static fn (array $branch): CitationEvidence => CitationEvidence::fromArray($branch['citation_evidence'] ?? []), $completed)));
     }
 }

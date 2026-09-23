@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
+use BuiltByBerry\LaravelSwarm\Contracts\CitationAwareStreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
@@ -13,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
@@ -52,6 +54,7 @@ class SequentialRunner
         protected StreamEventMapper $mapper,
         protected LoggerInterface $logger,
         protected NativeOutcomeValidator $outcomes,
+        protected NativeCitationEvidence $citations,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -74,6 +77,7 @@ class SequentialRunner
         return new SwarmResponse(
             output: (string) ($state->context->data['last_output'] ?? $state->context->input),
             steps: $steps,
+            citationEvidence: $steps === [] ? CitationEvidence::available() : $steps[array_key_last($steps)]->citationEvidence,
             usage: $mergedUsage,
             context: $state->context,
             artifacts: $state->context->artifacts,
@@ -85,7 +89,7 @@ class SequentialRunner
     }
 
     /**
-     * @return Generator<int, SwarmStreamEvent, mixed, void>
+     * @return Generator<int, SwarmStreamEvent, mixed, array<int, SwarmStep>>
      */
     public function stream(SwarmExecutionState $state): Generator
     {
@@ -104,6 +108,7 @@ class SequentialRunner
         // DB outage would otherwise flood logs with a line per non-final step.
         /** @var array<int, int> $checkpointWriteFailures */
         $checkpointWriteFailures = [];
+        $completedSteps = [];
         $firstCheckpointFailureClass = null;
 
         // Publish the active run so an agent's RemembersRunContext trait can
@@ -154,6 +159,7 @@ class SequentialRunner
                     // [SwarmStepRecorder](SwarmStepRecorder.php).
                     $output = (string) $resumeCheckpoint->output;
                     $stepUsage = $resumeCheckpoint->usage;
+                    $citationEvidence = $resumeCheckpoint->citationEvidence;
 
                     $this->guardrails->validateStep(
                         $state->swarm,
@@ -170,6 +176,7 @@ class SequentialRunner
                         usage: $stepUsage,
                         durationMs: $durationMs = MonotonicTime::elapsedMilliseconds($startedAt),
                         storeArtifacts: false,
+                        citationEvidence: $citationEvidence,
                     );
                 } elseif ($isFinal) {
                     // Fail loud before begin() swaps the memory binding: a
@@ -205,7 +212,7 @@ class SequentialRunner
                                 yield $swarmEvent;
                             }
                         }
-                        $stream->then($this->outcomes->validateResponse(...));
+                        $stream->then(fn ($response) => $this->mapper->complete($response, $state, $index, $agent, $accumulator));
                     } catch (Throwable $exception) {
                         $nativeStreamFailure = $exception;
                         throw $exception;
@@ -237,6 +244,7 @@ class SequentialRunner
                     }
 
                     $output = $accumulator->output;
+                    $citationEvidence = $accumulator->citationEvidence;
                     $stepUsage = $accumulator->stepUsage;
                     $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
                     $this->guardrails->validateStep(
@@ -252,6 +260,7 @@ class SequentialRunner
                         output: $output,
                         usage: $stepUsage,
                         durationMs: $durationMs,
+                        citationEvidence: $citationEvidence,
                     );
                 } else {
                     // Non-final, fresh execution: freeze the agent-visible view
@@ -265,6 +274,7 @@ class SequentialRunner
 
                     $response = $agent->prompt($input);
                     $this->outcomes->validateResponse($response);
+                    $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
                     $output = (string) $response;
                     $stepUsage = $this->usageFromResponse($response);
                     $this->appendResponseToolCalls($snapshot, $response);
@@ -283,6 +293,7 @@ class SequentialRunner
                         output: $output,
                         usage: $stepUsage,
                         durationMs: $durationMs = MonotonicTime::elapsedMilliseconds($startedAt),
+                        citationEvidence: $citationEvidence,
                     );
 
                     // Record the per-step checkpoint AFTER the step fully
@@ -299,7 +310,12 @@ class SequentialRunner
                     // params (the raw output, plaintext when encryption is off).
                     if ($replayEnabled) {
                         try {
-                            $this->checkpoints->record($state->context->runId, $index, $output, $stepUsage);
+                            if ($this->checkpoints instanceof CitationAwareStreamStepCheckpointStore) {
+                                $this->checkpoints->recordWithCitations($state->context->runId, $index, $output, $stepUsage,
+                                    $this->capture->citationEvidence($step->citationEvidence, $state->context));
+                            } else {
+                                $this->checkpoints->record($state->context->runId, $index, $output, $stepUsage);
+                            }
                         } catch (Throwable $exception) {
                             $checkpointWriteFailures[] = $index;
                             $firstCheckpointFailureClass ??= $exception::class;
@@ -310,7 +326,9 @@ class SequentialRunner
                 $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
                 $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $state->context);
 
+                $completedSteps[] = $step;
                 yield new SwarmStepEnd(
+                    citationEvidence: $this->capture->citationEvidence($step->citationEvidence, $state->context),
                     id: SwarmStreamEvent::newId(),
                     runId: $state->context->runId,
                     stepIndex: $index,
@@ -328,6 +346,8 @@ class SequentialRunner
             $state->context->mergeMetadata([
                 'usage' => $mergedUsage,
             ]);
+
+            return $completedSteps;
         } finally {
             // One warning per run for any best-effort checkpoint-write failures
             // (also fires if the generator was abandoned mid-stream). Those steps
@@ -377,6 +397,7 @@ class SequentialRunner
         try {
             $response = $agent->prompt($input);
             $this->outcomes->validateResponse($response);
+            $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
         } finally {
             ActiveRunContext::exit();
         }
@@ -403,6 +424,7 @@ class SequentialRunner
             usage: $usage,
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             contextUsage: $mergedUsage,
+            citationEvidence: $citationEvidence,
         );
     }
 
@@ -463,7 +485,7 @@ class SequentialRunner
                     $sink($swarmEvent);
                 }
             }
-            $stream->then($this->outcomes->validateResponse(...));
+            $stream->then(fn ($response) => $this->mapper->complete($response, $state, $index, $agent, $accumulator));
         } catch (Throwable $exception) {
             $nativeStreamFailure = $exception;
             throw $exception;
@@ -497,6 +519,7 @@ class SequentialRunner
             usage: $accumulator->stepUsage,
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             contextUsage: $mergedUsage,
+            citationEvidence: $accumulator->citationEvidence,
         );
     }
 

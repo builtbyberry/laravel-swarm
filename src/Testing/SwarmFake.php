@@ -20,11 +20,13 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Enums\Topology as TopologyEnum;
 use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
 use BuiltByBerry\LaravelSwarm\Responses\DurableRunDetail;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
@@ -102,7 +104,7 @@ class SwarmFake implements Swarm
 
     /**
      * @param  class-string  $swarmClass
-     * @param  array<int, string>|callable|null  $responses
+     * @param  array<int, string|SwarmResponse>|callable|null  $responses
      */
     public function __construct(
         protected string $swarmClass,
@@ -135,6 +137,9 @@ class SwarmFake implements Swarm
         $this->recorded[] = $task;
 
         $output = $this->resolveResponse($task);
+        if ($output instanceof SwarmResponse) {
+            return $this->boundedCitationFixture($output);
+        }
 
         return new SwarmResponse(
             output: $output,
@@ -324,7 +329,9 @@ class SwarmFake implements Swarm
     {
         return new StreamableSwarmResponse('fake-run-id', function () use ($task): \Generator {
             $this->recordedStreamed[] = $task;
-            $output = $this->resolveResponse($task);
+            $resolved = $this->resolveResponse($task);
+            $fixture = $resolved instanceof SwarmResponse ? $this->boundedCitationFixture($resolved) : new SwarmResponse(output: $resolved);
+            $output = $fixture->output;
 
             yield new SwarmStreamStart(
                 id: SwarmStreamEvent::newId(),
@@ -335,35 +342,41 @@ class SwarmFake implements Swarm
                 metadata: ['run_id' => 'fake-run-id'],
                 timestamp: SwarmStreamEvent::timestamp(),
             );
-            yield new SwarmStepStart(
-                id: SwarmStreamEvent::newId(),
-                runId: 'fake-run-id',
-                stepIndex: 0,
-                agentClass: self::class,
-                agent: 'SwarmFake',
-                input: is_string($task) ? $task : 'structured-task',
-                timestamp: SwarmStreamEvent::timestamp(),
-            );
-            yield new SwarmTextDelta(
-                id: SwarmStreamEvent::newId(),
-                runId: 'fake-run-id',
-                stepIndex: 0,
-                agentClass: self::class,
-                delta: $output,
-                timestamp: SwarmStreamEvent::timestamp(),
-            );
-            yield new SwarmStepEnd(
-                id: SwarmStreamEvent::newId(),
-                runId: 'fake-run-id',
-                stepIndex: 0,
-                agentClass: self::class,
-                agent: 'SwarmFake',
-                output: $output,
-                durationMs: 0,
-                metadata: [],
-                timestamp: SwarmStreamEvent::timestamp(),
-            );
+            $steps = $fixture->steps ?: [new SwarmStep(self::class,
+                is_string($task) ? $task : 'structured-task', $output, citationEvidence: $fixture->citationEvidence)];
+            foreach ($steps as $index => $step) {
+                yield new SwarmStepStart(
+                    id: SwarmStreamEvent::newId(),
+                    runId: 'fake-run-id',
+                    stepIndex: $index,
+                    agentClass: $step->agentClass,
+                    agent: class_basename($step->agentClass),
+                    input: $step->input,
+                    timestamp: SwarmStreamEvent::timestamp(),
+                );
+                yield new SwarmTextDelta(
+                    id: SwarmStreamEvent::newId(),
+                    runId: 'fake-run-id',
+                    stepIndex: $index,
+                    agentClass: $step->agentClass,
+                    delta: $step->output,
+                    timestamp: SwarmStreamEvent::timestamp(),
+                );
+                yield new SwarmStepEnd(
+                    citationEvidence: $step->citationEvidence,
+                    id: SwarmStreamEvent::newId(),
+                    runId: 'fake-run-id',
+                    stepIndex: $index,
+                    agentClass: $step->agentClass,
+                    agent: class_basename($step->agentClass),
+                    output: $step->output,
+                    durationMs: 0,
+                    metadata: $step->metadata,
+                    timestamp: SwarmStreamEvent::timestamp(),
+                );
+            }
             yield new SwarmStreamEnd(
+                citationEvidence: $fixture->citationEvidence,
                 id: SwarmStreamEvent::newId(),
                 runId: 'fake-run-id',
                 output: $output,
@@ -373,6 +386,8 @@ class SwarmFake implements Swarm
             );
 
             return new SwarmResponse(
+                citationEvidence: $fixture->citationEvidence,
+                steps: $fixture->steps,
                 output: $output,
                 metadata: ['run_id' => 'fake-run-id'],
             );
@@ -815,7 +830,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    protected function resolveResponse(string|array|RunContext $task): string
+    protected function resolveResponse(string|array|RunContext $task): string|SwarmResponse
     {
         if (is_callable($this->responses)) {
             return ($this->responses)($task);
@@ -826,6 +841,18 @@ class SwarmFake implements Swarm
         }
 
         return "Fake response for swarm [{$this->swarmClass}].";
+    }
+
+    protected function boundedCitationFixture(SwarmResponse $response): SwarmResponse
+    {
+        $limits = Container::getInstance()->make(CitationEvidenceLimits::class);
+
+        return new SwarmResponse($response->output,
+            array_map(static fn (SwarmStep $step): SwarmStep => new SwarmStep(
+                $step->agentClass, $step->input, $step->output, $step->artifacts, $step->metadata,
+                $limits->apply($step->citationEvidence)), $response->steps),
+            $response->usage, $response->context, $response->artifacts, $response->metadata,
+            $limits->apply($response->citationEvidence));
     }
 
     protected function assertRecordedDurableOperation(string $bucket, string|callable $expected, ?string $key, string $label): void

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCitation;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeOpened;
@@ -50,6 +51,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmUnknownEvent;
  * @var array<class-string<SwarmStreamEvent>>
  */
 const ROUND_TRIP_EVENT_CLASSES = [
+    SwarmCitation::class,
     SwarmCausalSealBarrier::class,
     SwarmCausalVoidEdge::class,
     SwarmNodeChildrenDecided::class,
@@ -555,6 +557,27 @@ function event_payload_cases(): array
         'run_id' => 'run-1',
         'timestamp' => 1_700_000_051,
     ]];
+
+    $cases['citation full'] = [SwarmCitation::class, [
+        'id' => 'citation-id', 'type' => 'swarm_citation', 'run_id' => 'run-1',
+        'step_index' => 0, 'agent_class' => 'Writer', 'invocation_id' => 'inv-1',
+        'message_id' => 'msg-1', 'timestamp' => 1700000000, 'node_id' => null,
+        'citation_status' => 'available', 'citation_reasons' => [], 'citations' => [[
+            'type' => 'url', 'url' => 'https://example.com', 'title' => 'Source',
+            'run_id' => 'run-1', 'step_index' => 0, 'agent_class' => 'Writer', 'node_id' => null,
+            'invocation_id' => 'inv-1', 'message_id' => 'msg-1', 'event_id' => 'citation-id',
+            'timestamp' => 1700000000, 'start_index' => 1, 'end_index' => 7, 'range_domain' => 'original_agent_output',
+        ]],
+    ]];
+    $cases['citation node'] = $cases['citation full'];
+    $cases['citation node'][1]['node_id'] = 'worker';
+    $cases['citation node'][1]['citations'][0]['node_id'] = 'worker';
+    foreach ($cases as &$case) {
+        if (in_array($case[0], [SwarmStepEnd::class, SwarmStreamEnd::class], true)) {
+            $case[1] = ['citation_status' => 'unknown', 'citation_reasons' => [], 'citations' => []] + $case[1];
+        }
+    }
+    unset($case);
 
     return $cases;
 }

@@ -7,10 +7,16 @@ across execution, capture, history, replay, and broadcast.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- Native URL citation evidence on final responses and all originating steps, including completed streams, queued history, durable recovery, replay, and broadcast. Immutable evidence distinguishes available, partial, withheld, unavailable, and legacy unknown data.
+- Citation event identity and original agent-output ranges; final sources follow actual output contributors rather than automatically inheriting earlier sources.
+- Capture-filtered, optionally encrypted citation storage on existing history, branch, node, checkpoint, and replay surfaces; additive migration and pre-invocation schema checks.
+- Per-invocation citation count/byte limits with explicit partial status, and optional capabilities for custom stores.
 
 ### Changed
 
+- `swarm:health` verifies active citation columns, including optional stream checkpoint storage. Citation columns use portable `longText` to accommodate accepted evidence plus encryption overhead on MySQL.
+- Completed live streams retain their executed steps. End events include citation evidence; old rows and payloads read as unknown.
+- Citation provenance keeps original source ranges rather than shifting them into combined or truncated output. This avoids claiming support the provider did not supply; deterministic response, range, privacy, durable, HTTP, and replay tests cover that choice. See `docs/citations.md` and `UPGRADING.md` for rollout and evidence-loss rollback limits.
 - Development tests use Pest 5, retaining the full coverage suite at a 1 GiB limit and 80% floor. Separate PHP 8.4/8.5 jobs verify the full suite, process concurrency, and static analysis on exact Laravel 13.16.0 with a temporary Pest 4 toolchain. Runtime requirements are unchanged.
 
 ## v0.26.1 - 2026-09-21
