@@ -2,22 +2,27 @@
 
 ## v0.26.2 - unreleased
 
-Preserve native citations on final responses and every originating agent step
-across execution, capture, history, replay, and broadcast.
+Preserve native citation evidence throughout a swarm run, and keep the full
+coverage suite within its existing memory limit with Pest 5.
 
 ### Added
 
-- Native URL citation evidence on final responses and all originating steps, including completed streams, queued history, durable recovery, replay, and broadcast. Immutable evidence distinguishes available, partial, withheld, unavailable, and legacy unknown data.
-- Citation event identity and original agent-output ranges; final sources follow actual output contributors rather than automatically inheriting earlier sources.
-- Capture-filtered, optionally encrypted citation storage on existing history, branch, node, checkpoint, and replay surfaces; additive migration and pre-invocation schema checks.
-- Per-invocation citation count/byte limits with explicit partial status, and optional capabilities for custom stores.
+- **Final and per-step citations** preserve native URL/title evidence through ordinary responses, completed streams, queued history, durable recovery, replay, and broadcast. Immutable evidence distinguishes available, partial, withheld, unavailable, and legacy unknown data.
+- **Source attribution** retains native event identity and original agent-output ranges. Final sources follow actual output contributors; earlier-step sources stay separate. Ranges are not shifted onto combined, rewritten, or truncated output, avoiding attribution the provider did not supply.
+- **Capture and persistence** reuse output capture rules and designated database encryption for citation evidence. Five existing tables gain nullable columns without inventing historical sources; optional store capabilities preserve existing custom-store contracts.
+- **Bounded evidence** uses per-invocation count and byte limits, reporting partial availability when a limit is reached.
 
 ### Changed
 
-- `swarm:health` verifies active citation columns, including optional stream checkpoint storage. Citation columns use portable `longText` to accommodate accepted evidence plus encryption overhead on MySQL.
-- Completed live streams retain their executed steps. End events include citation evidence; old rows and payloads read as unknown.
-- Citation provenance keeps original source ranges rather than shifting them into combined or truncated output. This avoids claiming support the provider did not supply; deterministic response, range, privacy, durable, HTTP, and replay tests cover that choice. See `docs/citations.md` and `UPGRADING.md` for rollout and evidence-loss rollback limits.
-- Development tests use Pest 5, retaining the full coverage suite at a 1 GiB limit and 80% floor. Separate PHP 8.4/8.5 jobs verify the full suite, process concurrency, and static analysis on exact Laravel 13.16.0 with a temporary Pest 4 toolchain. Runtime requirements are unchanged.
+- **Storage health checks** verify active citation columns, including optional stream checkpoint storage, before provider invocation and through `swarm:health`. Portable `longText` columns accommodate accepted evidence plus encryption overhead on MySQL.
+- **Completed stream responses** retain their executed steps. Step and stream end events carry citation evidence; older rows and payloads read as unknown.
+- **Pest 5 development tooling** keeps the full coverage suite at a 1 GiB limit and 80% floor. Separate PHP 8.4/8.5 jobs verify the full suite, process concurrency, and static analysis on exact Laravel 13.16.0 with a temporary Pest 4 toolchain. Runtime requirements are unchanged.
+
+Run the additive migration before starting upgraded workers, then drain and restart
+existing workers. Older code can discard citation evidence: retain the new columns
+and replay data during rollback. See [citation evidence](docs/citations.md) and the
+[upgrade instructions](UPGRADING.md#v0262-citation-evidence) for capture, retention,
+rollout, and rollback limits.
 
 ## v0.26.1 - 2026-09-21
 
