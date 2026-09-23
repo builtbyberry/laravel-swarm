@@ -206,8 +206,7 @@ final class CausalLogView
 
             if ($id !== null) {
                 $this->nodeIdByEventId[$id] = is_string($payload['node_id'] ?? null) ? $payload['node_id'] : null;
-                // Epoch is a column-hydrated object property (#298), never a
-                // payload key — read it off the event itself.
+                // Read normalized attempt identity from the event object.
                 $this->epochByEventId[$id] = $event->attemptEpoch;
             }
 

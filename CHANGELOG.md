@@ -16,6 +16,7 @@ replay, and broadcast.
 - Retain durable attempt metadata for cold invalidation anchors while keeping existing event wire shapes. Older readers can skip the new events; rollback must preserve readers/backups for evidence interpretation.
 - Provider payload Redact withholds arbitrary keys as well as values; recursive key retention was rejected because keys may contain sensitive content. Whole payload withholding at limits preserves identity without presenting incomplete JSON as complete evidence.
 - Existing cold archives remain long-term audit records exempt from ordinary TTL pruning; explicit tiered replay deletion removes both hot and cold provider activity.
+- Document the new event/value objects and payload limits in the public/configuration indexes, whole-structure provider redaction in capture references, and provider envelopes in the APP_KEY rotation inventory.
 
 ## v0.26.2 - 2026-09-22
 

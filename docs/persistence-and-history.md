@@ -113,9 +113,10 @@ including final-agent non-text events such as `swarm_text_end`,
 For upstream streamed final-agent events, persisted typed replay preserves the
 upstream event IDs and timestamps so replay records keep source provenance.
 When output capture is disabled, output-bearing fields in text/reasoning/tool
-event payloads are redacted in both live and replayed streams. For tool
+event payloads are redacted in both live and replayed streams. For function-tool
 payloads, redaction preserves argument/result keys while replacing values with
-`[redacted]`.
+`[redacted]`. [Provider-tool data](provider-tool-events.md#capture-and-bounds)
+withholds arbitrary keys and values together, with explicit `redacted` availability.
 
 ## Application Run Inspector
 

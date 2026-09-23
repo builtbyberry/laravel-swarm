@@ -86,11 +86,30 @@ Controls what is persisted into history, context, and response payloads. Default
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.capture.inputs` | bool | `false` | `SWARM_CAPTURE_INPUTS` | Persist the swarm's input prompt/task into run history. |
-| `swarm.capture.outputs` | bool | `false` | `SWARM_CAPTURE_OUTPUTS` | Persist the final agent output into run history. With this off, streamed tool and reasoning payloads redact values to `[redacted]` while preserving keys. |
+| `swarm.capture.outputs` | bool | `false` | `SWARM_CAPTURE_OUTPUTS` | Persist the final agent output into run history. With this off, streamed function-tool and reasoning payloads redact values to `[redacted]` while preserving keys. [Provider-tool payloads](provider-tool-events.md#capture-and-bounds) withhold the entire structure, including keys, as `data_status=redacted` with `data=[]`. |
 | `swarm.capture.artifacts` | bool | `false` | `SWARM_CAPTURE_ARTIFACTS` | Persist step artifacts into the artifact store. |
 | `swarm.capture.active_context` | bool | `false` | `SWARM_CAPTURE_ACTIVE_CONTEXT` | Persist the active `RunContext` data snapshot into run history. |
 
 > See [persistence-and-history.md](persistence-and-history.md) for full capture behavior and redaction rules.
+
+---
+
+## Provider-tool payloads
+
+Native provider-tool activity uses the existing output capture policy. These
+settings bound captured JSON data; event identity envelopes remain ordered even
+when data is withheld. See [availability and bounds](provider-tool-events.md#capture-and-bounds).
+
+| Key | Type | Default | Hard ceiling |
+| --- | --- | --- | --- |
+| `swarm.provider_tools.max_event_bytes` | int | `65536` | 1 MiB per event |
+| `swarm.provider_tools.max_step_bytes` | int | `262144` | 16 MiB per streamed step |
+| `swarm.provider_tools.max_depth` | int | `32` | 64 nested levels |
+
+Negative integer settings clamp to zero, non-integers use defaults, and values
+above the ceilings clamp to those ceilings. Withheld data reports `partial` with
+reason `limit`; these settings do not cap event count. There are no environment
+variable aliases for these keys.
 
 ---
 
