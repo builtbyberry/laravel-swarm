@@ -57,6 +57,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -75,6 +76,7 @@ use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
 use Laravel\Ai\Streaming\Events\Citation;
 use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
+use Laravel\Ai\Streaming\Events\ProviderToolEvent;
 use Laravel\Ai\Streaming\Events\ReasoningDelta;
 use Laravel\Ai\Streaming\Events\ReasoningEnd;
 use Laravel\Ai\Streaming\Events\StreamEnd;
@@ -140,6 +142,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
         protected CitationStorageReadiness $citationStorage,
+        protected ProviderToolEventMapper $providerTools,
     ) {
         parent::__construct(
             $config,
@@ -1071,6 +1074,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
     ): \Generator {
         $this->citationStorage->check();
         $citationEvidence = CitationEvidence::available();
+        $providerToolBytes = 0;
         $output = '';
         $stepUsage = [];
         /** @var array<string, ToolCallData> $pendingToolCalls */
@@ -1202,6 +1206,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
+                    $this->tagNode($swarmEvent, $nodeId);
+                    yield $swarmEvent;
+                    $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
+                } elseif ($event instanceof ProviderToolEvent) {
+                    $swarmEvent = $this->providerTools->map($event, $context, $stepIndex, $agent::class, $providerToolBytes);
                     $this->tagNode($swarmEvent, $nodeId);
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);

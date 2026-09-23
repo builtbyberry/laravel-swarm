@@ -66,6 +66,8 @@ final class StreamStepAccumulator
 
     public CitationEvidence $citationEvidence;
 
+    public int $providerToolBytes = 0;
+
     public function __construct(public MemorySnapshot $snapshot)
     {
         $this->citationEvidence = CitationEvidence::available();

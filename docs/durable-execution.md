@@ -1,5 +1,8 @@
 ## Quick Setup With `swarm:install:durable`
 
+For native provider activity, capture, storage, replay and attempt semantics, see
+[provider-tool events](provider-tool-events.md).
+
 The fastest way to wire a fresh Laravel app for durable execution is the
 package's targeted sub-installer:
 

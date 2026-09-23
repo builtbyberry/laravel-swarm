@@ -463,13 +463,14 @@ test('the operator kill-switch sheds hierarchical worker emission mid-run but th
                 ->where('void_type', CausalVoidEdgeType::NodeReexecuted->value)
                 ->count()
         )->toBe(1)
-        // No epoch-1 stream rows for editor_node — emission was shed; the node was
+        // No epoch-1 content rows for editor_node — emission was shed; the node was
         // sealed via prompt() rather than re-streamed.
         ->and(
             DB::table('swarm_stream_events')
                 ->where('run_id', $runId)
                 ->where('node_id', 'editor_node')
                 ->where('attempt_epoch', 1)
+                ->where('event_type', '!=', 'swarm_provider_tool_attempt_invalidated')
                 ->count()
         )->toBe(0);
 

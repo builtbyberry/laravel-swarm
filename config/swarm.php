@@ -27,6 +27,14 @@ return [
         'max_bytes' => 262144,
     ],
 
+    // Bound arbitrary provider activity data, retaining identity with an explicit
+    // partial/limit marker when data is withheld. Limits do not cap event count.
+    'provider_tools' => [
+        'max_event_bytes' => 65536, // JSON data bytes per event (hard ceiling 1 MiB).
+        'max_step_bytes' => 262144, // Captured data bytes per streamed step (ceiling 16 MiB).
+        'max_depth' => 32, // Nested data depth (hard ceiling 64); objects are unsupported.
+    ],
+
     'topology' => env('SWARM_TOPOLOGY', Topology::Sequential->value),
 
     // Best-effort orchestration deadline checked before and between swarm steps.
