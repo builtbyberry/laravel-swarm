@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.26.2 - unreleased
+## v0.26.2 - 2026-09-22
 
 Preserve native citation evidence throughout a swarm run, and keep the full
 coverage suite within its existing memory limit with Pest 5.
