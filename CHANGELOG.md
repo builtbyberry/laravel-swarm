@@ -7,11 +7,15 @@ replay, and broadcast.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- Preserve native provider-tool event identity, type/status, invocation, workflow attribution and capture-permitted structured data through supported streams, completed event collections, replay and all broadcast helpers.
+- Distinguish empty, withheld, limited and unavailable payloads. Bound arbitrary data before serialization and seal database envelopes without a schema change.
+- Preserve effective durable provider activity across retries, repeated native IDs, late events and hot/cold replay using scoped causal identity and per-node invalidation markers.
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- Retain durable attempt metadata for cold invalidation anchors while keeping existing event wire shapes. Older readers can skip the new events; rollback must preserve readers/backups for evidence interpretation.
+- Provider payload Redact withholds arbitrary keys as well as values; recursive key retention was rejected because keys may contain sensitive content. Whole payload withholding at limits preserves identity without presenting incomplete JSON as complete evidence.
+- Existing cold archives remain long-term audit records exempt from ordinary TTL pruning; explicit tiered replay deletion removes both hot and cold provider activity.
 
 ## v0.26.2 - 2026-09-22
 

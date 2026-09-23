@@ -2,12 +2,15 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Responses\ProviderToolData;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCitation;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeOpened;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolAttemptInvalidated;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
@@ -52,6 +55,8 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmUnknownEvent;
  */
 const ROUND_TRIP_EVENT_CLASSES = [
     SwarmCitation::class,
+    SwarmProviderToolEvent::class,
+    SwarmProviderToolAttemptInvalidated::class,
     SwarmCausalSealBarrier::class,
     SwarmCausalVoidEdge::class,
     SwarmNodeChildrenDecided::class,
@@ -87,6 +92,18 @@ const ROUND_TRIP_EVENT_CLASSES = [
 function event_payload_cases(): array
 {
     $cases = [];
+    foreach ([false, true] as $full) {
+        $provider = new SwarmProviderToolEvent('native', 'run', 1, 'Agent', 'item', 'search_call', 'searching', $full ? 'vendor' : null, 123,
+            $full ? ProviderToolData::capture(['nested' => ['a' => 1]]) : ProviderToolData::withheld('omitted'));
+        if ($full) {
+            $provider->withNodeId('node')->withAttemptEpoch(3)->withInvocationId('invocation');
+        }
+        $cases['provider '.($full ? 'full' : 'null')] = [SwarmProviderToolEvent::class, $provider->toArray()];
+    }
+    $cases['provider invalidation'] = [SwarmProviderToolAttemptInvalidated::class,
+        ['id' => 'marker', 'invocation_id' => null, 'type' => 'swarm_provider_tool_attempt_invalidated', 'run_id' => 'run', 'node_id' => 'node', 'before_epoch' => 2, 'timestamp' => 123]];
+
+    $cases['provider invalidation null'] = [SwarmProviderToolAttemptInvalidated::class, array_replace($cases['provider invalidation'][1], ['node_id' => null])];
 
     // SwarmReasoningDelta — full + null delta/summary.
     $cases['reasoning_delta full'] = [SwarmReasoningDelta::class, [

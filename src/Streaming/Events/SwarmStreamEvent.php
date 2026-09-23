@@ -38,6 +38,8 @@ abstract class SwarmStreamEvent extends StreamEvent
             'swarm_reasoning_delta' => SwarmReasoningDelta::fromArray($payload),
             'swarm_reasoning_end' => SwarmReasoningEnd::fromArray($payload),
             'swarm_citation' => SwarmCitation::fromArray($payload),
+            'swarm_provider_tool_event' => SwarmProviderToolEvent::fromArray($payload),
+            'swarm_provider_tool_attempt_invalidated' => SwarmProviderToolAttemptInvalidated::fromArray($payload),
             'swarm_tool_call' => SwarmToolCall::fromArray($payload),
             'swarm_tool_result' => SwarmToolResult::fromArray($payload),
             'swarm_step_end' => SwarmStepEnd::fromArray($payload),
@@ -59,6 +61,12 @@ abstract class SwarmStreamEvent extends StreamEvent
         // absent key on a pre-grammar log leaves nodeId null — a top-level event.
         if (is_string($payload['node_id'] ?? null)) {
             $event->withNodeId($payload['node_id']);
+        }
+
+        // Storage-only on older event types; preserves durable invalidation
+        // anchors through cold graduation without changing their public wire.
+        if (is_int($payload['attempt_epoch'] ?? null)) {
+            $event->withAttemptEpoch($payload['attempt_epoch']);
         }
 
         return $event;

@@ -20,6 +20,7 @@ use Laravel\Ai\Streaming\Events\StreamEvent;
 /** @var array<int, string> */
 const HANDLED_AI_STREAM_EVENTS = [
     'Citation',
+    'ProviderToolEvent',
     'Error',
     'ReasoningDelta',
     'ReasoningEnd',
@@ -32,7 +33,6 @@ const HANDLED_AI_STREAM_EVENTS = [
 
 /** @var array<int, string> */
 const IGNORED_AI_STREAM_EVENTS = [
-    'ProviderToolEvent',
     'ReasoningStart',
     'StreamStart',
     'TextStart',

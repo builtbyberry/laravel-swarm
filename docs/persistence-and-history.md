@@ -1,5 +1,8 @@
 # Persistence And History
 
+For native provider activity, capture, storage, replay and attempt semantics, see
+[provider-tool events](provider-tool-events.md).
+
 For final and per-step sources, capture rules, and migration requirements, see [citation evidence](citations.md).
 
 

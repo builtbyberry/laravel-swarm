@@ -1,5 +1,8 @@
 # Laravel AI 0.11.2 preservation evidence
 
+For native provider activity, capture, storage, replay and attempt semantics, see
+[provider-tool events](provider-tool-events.md).
+
 C4 executes the retained-workflow portion of approved Audit 225 v8 (Decision 2357)
 after C2 PR #498 and C3 PR #499. The baseline is v0.25.0
 `be7df78e8fde12362cfff9007cfe723d572a5e4f`; C4 starts at

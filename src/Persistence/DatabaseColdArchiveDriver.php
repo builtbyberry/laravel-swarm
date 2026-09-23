@@ -36,7 +36,7 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
-        protected CitationEvidenceCodec $citations,
+        protected StreamEventPayloadCodec $payloads,
     ) {}
 
     /**
@@ -68,7 +68,7 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
             ->orderBy('sequence');
 
         foreach ($query->cursor() as $record) {
-            $event = SwarmStreamEvent::fromArray($this->citations->openPayload($this->decodeJson($record->payload, [])));
+            $event = SwarmStreamEvent::fromArray($this->payloads->openPayload($this->decodeJson($record->payload, [])));
             if (! ($event instanceof SwarmUnknownEvent)) {
                 yield $event;
             }
@@ -216,7 +216,9 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
                     'run_id' => $runId,
                     'archive_type' => 'event',
                     'sequence' => $record->id,
-                    'payload' => $record->payload,
+                    'payload' => $this->encodeJson(array_replace($this->decodeJson($record->payload, []), [
+                        'attempt_epoch' => $record->attempt_epoch === null ? null : (int) $record->attempt_epoch,
+                    ])),
                     'base_pointer' => null,
                     'created_at' => $now,
                     'updated_at' => $now,

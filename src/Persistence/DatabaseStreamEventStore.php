@@ -25,7 +25,7 @@ class DatabaseStreamEventStore implements StreamEventStore
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
-        protected CitationEvidenceCodec $citations,
+        protected StreamEventPayloadCodec $payloads,
     ) {}
 
     public function record(string $runId, SwarmStreamEvent $event, int $ttlSeconds): void
@@ -35,7 +35,7 @@ class DatabaseStreamEventStore implements StreamEventStore
         $this->table()->insert([
             'run_id' => $runId,
             'event_type' => $event->type(),
-            'payload' => $this->encodeJson($this->citations->sealPayload($event->toArray())),
+            'payload' => $this->encodeJson($this->payloads->sealPayload($event->toArray() + ['attempt_epoch' => $event->attemptEpoch])),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
@@ -50,7 +50,7 @@ class DatabaseStreamEventStore implements StreamEventStore
     public function events(string $runId): iterable
     {
         foreach ($this->table()->where('run_id', $runId)->where('event_type', '!=', 'swarm_causal_seal_barrier')->orderBy('id')->cursor() as $record) {
-            $event = SwarmStreamEvent::fromArray($this->citations->openPayload($this->decodeJson($record->payload, [])));
+            $event = SwarmStreamEvent::fromArray($this->payloads->openPayload($this->decodeJson($record->payload, [])));
             if (! ($event instanceof SwarmUnknownEvent)) {
                 yield $this->withAttemptEpoch($event, $record->attempt_epoch ?? null);
             }
@@ -59,9 +59,8 @@ class DatabaseStreamEventStore implements StreamEventStore
 
     /**
      * Restore the durable attempt epoch (#298) from its queryable column onto the
-     * event object — it lives outside the JSON payload so the resume-time void
-     * lookup stays metadata-only, so the fold reads it from the object, not the
-     * payload. A null column is a non-durable-streamed event (left untagged).
+     * event object. The hot column is authoritative over the storage envelope;
+     * null means a non-durable event and clears any payload epoch.
      */
     private function withAttemptEpoch(SwarmStreamEvent $event, mixed $epoch): SwarmStreamEvent
     {
@@ -72,6 +71,8 @@ class DatabaseStreamEventStore implements StreamEventStore
         if (is_string($epoch) && ctype_digit($epoch)) {
             return $event->withAttemptEpoch((int) $epoch);
         }
+
+        $event->attemptEpoch = null;
 
         return $event;
     }
@@ -103,7 +104,7 @@ class DatabaseStreamEventStore implements StreamEventStore
     public function eventsFrom(string $runId, int $fromSequence): iterable
     {
         foreach ($this->table()->where('run_id', $runId)->where('id', '>=', $fromSequence)->orderBy('id')->cursor() as $record) {
-            $event = SwarmStreamEvent::fromArray($this->citations->openPayload($this->decodeJson($record->payload, [])));
+            $event = SwarmStreamEvent::fromArray($this->payloads->openPayload($this->decodeJson($record->payload, [])));
             if (! ($event instanceof SwarmUnknownEvent)) {
                 yield $this->withAttemptEpoch($event, $record->attempt_epoch ?? null);
             }

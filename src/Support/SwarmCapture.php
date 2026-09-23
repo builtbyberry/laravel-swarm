@@ -8,9 +8,11 @@ use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\ProviderToolData;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolDataLimits;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Throwable;
 
@@ -250,6 +252,18 @@ class SwarmCapture
         }
 
         return $this->context($context);
+    }
+
+    /** @param array<array-key, mixed> $data */
+    public function providerToolData(array $data, RunContext $context, ProviderToolDataLimits $limits, int &$stepBytes): ProviderToolData
+    {
+        // Unknown provider keys can themselves contain sensitive data. Withhold
+        // the whole structure before inspecting it under either privacy policy.
+        return match ($this->outputsDecision($context)) {
+            CaptureDecision::Full => $limits->capture($data, $stepBytes),
+            CaptureDecision::Redact => ProviderToolData::withheld('redacted'),
+            CaptureDecision::Skip => ProviderToolData::withheld('omitted'),
+        };
     }
 
     public function citationEvidence(CitationEvidence $evidence, ?RunContext $context = null): CitationEvidence

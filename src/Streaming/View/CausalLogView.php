@@ -6,6 +6,8 @@ namespace BuiltByBerry\LaravelSwarm\Streaming\View;
 
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolAttemptInvalidated;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 
 /**
@@ -79,6 +81,9 @@ final class CausalLogView
      */
     private array $epochByEventId = [];
 
+    /** @var array<string, int> */
+    private array $providerInvalidBefore = [];
+
     /**
      * @param  iterable<SwarmStreamEvent>  $events  Typically `StreamEventStore::events($runId)`.
      */
@@ -129,7 +134,7 @@ final class CausalLogView
         }
 
         return [
-            'events' => array_map(fn (SwarmStreamEvent $e): array => $e->toArray(), $this->events),
+            'events' => array_map(fn (SwarmStreamEvent $e): array => $e->toArray() + ['attempt_epoch' => $e->attemptEpoch], $this->events),
             'voids_by_target' => $voidsByTarget,
             'parent_of' => $this->parentOf,
             'declared_children' => $this->declaredChildren,
@@ -162,6 +167,11 @@ final class CausalLogView
         foreach ($ordered as $event) {
             $id = $this->eventId($event);
             $annotation = $id !== null ? ($annotations[$id] ?? null) : null;
+            if ($event instanceof SwarmProviderToolEvent && $event->nodeId !== null && $event->attemptEpoch !== null
+                && $event->attemptEpoch < ($this->providerInvalidBefore[$event->nodeId] ?? 0)) {
+                $annotation = ['type' => CausalVoidEdgeType::NodeReexecuted,
+                    'reason' => 'durable node re-executed on resume', 'digest_node_id' => null];
+            }
 
             if ($annotation === null) {
                 $folded[] = $event;
@@ -189,7 +199,10 @@ final class CausalLogView
             $payload = $event->toArray();
             $type = is_string($payload['type'] ?? null) ? $payload['type'] : null;
 
-            $id = is_string($payload['id'] ?? null) ? $payload['id'] : null;
+            $id = $this->eventId($event);
+            if ($event instanceof SwarmProviderToolAttemptInvalidated && $event->nodeId !== null) {
+                $this->providerInvalidBefore[$event->nodeId] = max($this->providerInvalidBefore[$event->nodeId] ?? 0, $event->beforeEpoch);
+            }
 
             if ($id !== null) {
                 $this->nodeIdByEventId[$id] = is_string($payload['node_id'] ?? null) ? $payload['node_id'] : null;
@@ -574,6 +587,9 @@ final class CausalLogView
 
     private function eventId(SwarmStreamEvent $event): ?string
     {
+        if ($event instanceof SwarmProviderToolEvent) {
+            return $event->causalId();
+        }
         $id = $event->toArray()['id'] ?? null;
 
         return is_string($id) ? $id : null;

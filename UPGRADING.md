@@ -1,5 +1,22 @@
 # Upgrading Laravel Swarm
 
+## v0.26.3 provider-tool event readers
+
+No new migration or dependency change. Update stream consumers for
+`swarm_provider_tool_event` and the durable control event
+`swarm_provider_tool_attempt_invalidated`. Provider-native type/status are separate
+from the Swarm discriminator and do not assert successful execution. Arbitrary
+payloads follow output capture, with explicit availability and bounded data.
+
+Older readers skipping these types is not evidence-preserving rollback. Upgrade
+workers/readers together; pause and drain streaming work before worker rollback,
+retain backups and v0.26.3 readers for audit, and do not run down migrations.
+Existing cold archives that already lost attempt metadata cannot be repaired by
+this upgrade. Internal database event/cold store constructors now take the composed
+stream payload codec. Custom event-store integrations should preserve the new
+fields and protected envelope; see [storage and compatibility details](docs/provider-tool-events.md).
+
+
 ## v0.26.2 citation evidence
 
 Run migrations before starting v0.26.2 workers, then drain and restart existing workers. Five existing tables gain nullable `citation_evidence` columns; no historical citations are fabricated. Built-in active stores fail before provider invocation if an existing required table lacks the column. Custom table configuration is respected by the migration.

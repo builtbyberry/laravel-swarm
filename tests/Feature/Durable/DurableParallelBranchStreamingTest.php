@@ -57,7 +57,9 @@ function parallelBranchNodeId(object $event): ?string
 
 function parallelBranchEventCount(string $runId, ?string $nodeId = null, ?int $epoch = null): int
 {
-    $query = DB::table('swarm_stream_events')->where('run_id', $runId);
+    // Count emitted content/brackets separately from recovery integrity records.
+    $query = DB::table('swarm_stream_events')->where('run_id', $runId)
+        ->where('event_type', '!=', 'swarm_provider_tool_attempt_invalidated');
 
     if ($nodeId !== null) {
         $query->where('node_id', $nodeId);
