@@ -466,7 +466,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
      * reuse the same loop.
      *
      * @param  array<class-string, Agent>  $workerMap
-     * @return \Generator<int, SwarmStreamEvent, null, array{completedSteps: list<SwarmStep>, finalCitations: CitationEvidence, mergedUsage: array<string, int>, executedNodeIds: list<string>, executedAgentClasses: list<string>, parallelGroups: list<array<string, mixed>>, nextIndex: int}>
+     * @return \Generator<int, SwarmStreamEvent, null, array{completedSteps: list<SwarmStep>, finalCitations: CitationEvidence, mergedUsage: array<string, int|null>, executedNodeIds: list<string>, executedAgentClasses: list<string>, parallelGroups: list<array<string, mixed>>, nextIndex: int}>
      */
     protected function drivePlanNodes(
         SwarmExecutionState $state,
@@ -589,7 +589,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 $completedSteps[] = $step;
                 $executedNodeIds[] = $node->id;
                 $executedAgentClasses[] = $node->agentClass;
-                $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
+                $mergedUsage = $this->mergeUsageReport($mergedUsage, $stepUsage);
                 $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $context);
 
                 $stepEndEvent = (new SwarmStepEnd(
@@ -756,7 +756,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         $completedSteps[] = $step;
                         $executedNodeIds[] = $branch->id;
                         $executedAgentClasses[] = $branch->agentClass;
-                        $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
+                        $mergedUsage = $this->mergeUsageReport($mergedUsage, $stepUsage);
                         $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $context);
 
                         $branchEndEvent = new SwarmStepEnd(
@@ -906,7 +906,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                     $driver = $this->concurrency->driver();
                     $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-                    /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+                    /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
                     $results = $this->outcomes->validateConcurrentResults($results);
 
                     $policy = GuardrailParallelFailurePolicy::tryFrom((string) $this->config->get(
@@ -981,7 +981,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             citationEvidence: CitationEvidence::fromArray($row['citation_evidence'])->withNodeId($branch->id),
                         );
 
-                        $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
+                        $mergedUsage = $this->mergeUsageReport($mergedUsage, $row['usage']);
                         $nodeOutputs[$branch->id] = $step->output;
                         $nodeCitations[$branch->id] = $finalCitations = $step->citationEvidence;
                         $completedSteps[] = $step;
@@ -1059,7 +1059,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
      * Returns the accumulated text output and step usage so the caller can record the step,
      * run guardrails, and emit SwarmStepEnd without duplicating the inner event loop.
      *
-     * @return \Generator<int, SwarmStreamEvent, null, array{output: string, citation_evidence: CitationEvidence, usage: array<string, int>}>
+     * @return \Generator<int, SwarmStreamEvent, null, array{output: string, citation_evidence: CitationEvidence, usage: array<string, int|null>}>
      */
     protected function streamAgentEvents(
         Agent $agent,
@@ -1187,7 +1187,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $matchedCallId = $event->toolResult->id;
                     $matchedCall = $pendingToolCalls[$matchedCallId] ?? null;
 
-                    if ($matchedCall !== null) {
+                    if (! $event->preliminary && $matchedCall !== null) {
                         unset($pendingToolCalls[$matchedCallId]);
                         $snapshot = $this->snapshots->appendToolCall(
                             $snapshot,
@@ -1204,6 +1204,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         successful: $event->successful,
                         error: $this->captureStaticToolError($event->error, $context),
                         timestamp: $event->timestamp,
+                        preliminary: $event->preliminary,
+                        denied: $event->denied,
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
                     $this->tagNode($swarmEvent, $nodeId);

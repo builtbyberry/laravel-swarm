@@ -33,6 +33,15 @@ artifacts attached to the run.
 Persisted run history includes the swarm class, topology, status, steps,
 output, usage, and completion metadata.
 
+Usage reports in individual steps/checkpoints retain the original provider keys
+and values. Run aggregates use native `input_tokens`/`output_tokens` or historical
+`prompt_tokens`/`completion_tokens` without renaming one into the other. Each
+optional category remains `null` when any contributing report leaves it unknown;
+numeric zero remains zero. Mixed or unclassifiable accounting exposes all seven
+supported counter keys as null. This affects accounting availability, not workflow
+completion or persisted outputs. See the exact
+[usage and upgrade rules](../UPGRADING.md#usage-accounting-and-stored-evidence).
+
 Persisted stream replay events are opt-in. When enabled, Laravel Swarm stores
 the exact typed events yielded by `stream()` so the same progress timeline can
 be played back later by run ID.

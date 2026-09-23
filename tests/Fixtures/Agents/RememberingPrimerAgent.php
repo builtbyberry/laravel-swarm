@@ -9,10 +9,12 @@ use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Laravel\Ai\Approvals\Decisions;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
-use Laravel\Ai\Responses\Data\Usage;
+use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\QueuedAgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use Laravel\Ai\Tools\Request;
@@ -47,7 +49,7 @@ class RememberingPrimerAgent implements Agent
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
      */
-    public function prompt(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
+    public function prompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
         self::$invocations++;
 
@@ -60,7 +62,7 @@ class RememberingPrimerAgent implements Agent
         return new AgentResponse(
             invocationId: 'remembering-primer',
             text: 'primed',
-            usage: new Usage,
+            usage: new TextUsage,
             meta: new Meta('fake', 'test'),
         );
     }
@@ -69,7 +71,7 @@ class RememberingPrimerAgent implements Agent
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
      */
-    public function stream(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
+    public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
         throw new RuntimeException('Streaming is not supported in this test fixture.');
     }
@@ -78,7 +80,7 @@ class RememberingPrimerAgent implements Agent
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
      */
-    public function queue(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): QueuedAgentResponse
+    public function queue(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): QueuedAgentResponse
     {
         throw new RuntimeException('Queueing is not supported in this test fixture.');
     }
@@ -88,7 +90,7 @@ class RememberingPrimerAgent implements Agent
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
      */
-    public function broadcast(Decisions|string $prompt, Channel|array $channels, array $attachments = [], bool $now = false, Lab|array|string|null $provider = null, ?string $model = null): StreamableAgentResponse
+    public function broadcast(AgentInput|UserMessage|Decisions|string $prompt, Channel|array $channels, array $attachments = [], bool $now = false, Lab|array|string|null $provider = null, ?string $model = null): StreamableAgentResponse
     {
         throw new RuntimeException('Broadcasting is not supported in this test fixture.');
     }
@@ -98,7 +100,7 @@ class RememberingPrimerAgent implements Agent
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
      */
-    public function broadcastNow(Decisions|string $prompt, Channel|array $channels, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): StreamableAgentResponse
+    public function broadcastNow(AgentInput|UserMessage|Decisions|string $prompt, Channel|array $channels, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): StreamableAgentResponse
     {
         throw new RuntimeException('Broadcasting is not supported in this test fixture.');
     }
@@ -108,7 +110,7 @@ class RememberingPrimerAgent implements Agent
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
      */
-    public function broadcastOnQueue(Decisions|string $prompt, Channel|array $channels, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): QueuedAgentResponse
+    public function broadcastOnQueue(AgentInput|UserMessage|Decisions|string $prompt, Channel|array $channels, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null): QueuedAgentResponse
     {
         throw new RuntimeException('Broadcast queueing is not supported in this test fixture.');
     }

@@ -74,11 +74,33 @@ jobs:
       - name: Preserve production manifest
         run: cp composer.json /tmp/swarm-production-composer.json
 
+      - name: Capture official moving branch references
+        if: matrix.dependencies == 'moving-dev'
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_ref() {
+            local url="$1" branch="$2" variable="$3" ref name
+            local evidence="$RUNNER_TEMP/$variable.refs"
+            git ls-remote --exit-code "$url" "$branch" > "$evidence"
+            test "$(wc -l < "$evidence")" -eq 1
+            read -r ref name < "$evidence"
+            if [[ "$name" != "$branch" || ! "$ref" =~ ^[a-f0-9]{40}$ ]]; then
+              echo "Invalid official branch reference for $url $branch" >&2
+              return 1
+            fi
+            printf '%s=%s\n' "$variable" "$ref" >> "$GITHUB_ENV"
+            printf '%s %s %s\n' "$url" "$branch" "$ref"
+          }
+          date -u '+Official branch refs observed at %Y-%m-%dT%H:%M:%SZ'
+          capture_ref https://github.com/laravel/ai.git refs/heads/1.x SWARM_AI_DEV_REF
+          capture_ref https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF
+
       - name: Require compatible moving development dependencies
         if: matrix.dependencies == 'moving-dev'
         run: |
-          composer require --no-update "laravel/ai:0.x-dev"
-          composer require --no-update --dev "laravel/framework:13.x-dev"
+          composer require --no-update "laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"
+          composer require --no-update --dev "laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"
 
       - name: Install dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
@@ -87,7 +109,7 @@ jobs:
         run: cp /tmp/swarm-production-composer.json composer.json
 
       - name: Verify official dependencies
-        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }}
+        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }} "$PWD" /tmp/swarm-production-composer.json
 
       # testbench-core no longer auto-creates this symlink in some versions; the
       # process-concurrency tests spawn a real artisan subprocess that needs it.
@@ -167,11 +189,33 @@ jobs:
       - name: Preserve production manifest
         run: cp composer.json /tmp/swarm-production-composer.json
 
+      - name: Capture official moving branch references
+        if: matrix.dependencies == 'moving-dev'
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_ref() {
+            local url="$1" branch="$2" variable="$3" ref name
+            local evidence="$RUNNER_TEMP/$variable.refs"
+            git ls-remote --exit-code "$url" "$branch" > "$evidence"
+            test "$(wc -l < "$evidence")" -eq 1
+            read -r ref name < "$evidence"
+            if [[ "$name" != "$branch" || ! "$ref" =~ ^[a-f0-9]{40}$ ]]; then
+              echo "Invalid official branch reference for $url $branch" >&2
+              return 1
+            fi
+            printf '%s=%s\n' "$variable" "$ref" >> "$GITHUB_ENV"
+            printf '%s %s %s\n' "$url" "$branch" "$ref"
+          }
+          date -u '+Official branch refs observed at %Y-%m-%dT%H:%M:%SZ'
+          capture_ref https://github.com/laravel/ai.git refs/heads/1.x SWARM_AI_DEV_REF
+          capture_ref https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF
+
       - name: Require compatible moving development dependencies
         if: matrix.dependencies == 'moving-dev'
         run: |
-          composer require --no-update "laravel/ai:0.x-dev"
-          composer require --no-update --dev "laravel/framework:13.x-dev"
+          composer require --no-update "laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"
+          composer require --no-update --dev "laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"
 
       - name: Install dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
@@ -180,7 +224,7 @@ jobs:
         run: cp /tmp/swarm-production-composer.json composer.json
 
       - name: Verify official dependencies
-        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }}
+        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }} "$PWD" /tmp/swarm-production-composer.json
 
       # testbench-core no longer auto-creates this symlink in some versions; the
       # process-concurrency tests spawn a real artisan subprocess that needs it.

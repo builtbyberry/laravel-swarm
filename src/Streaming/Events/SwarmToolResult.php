@@ -18,6 +18,8 @@ final class SwarmToolResult extends SwarmStreamEvent
         public bool $successful,
         public ?string $error,
         public int $timestamp,
+        public bool $preliminary = false,
+        public bool $denied = false,
     ) {}
 
     /**
@@ -55,6 +57,8 @@ final class SwarmToolResult extends SwarmStreamEvent
             'agent_class' => $this->agentClass,
             'tool_result' => $toolResult,
             'successful' => $this->successful,
+            'preliminary' => $this->preliminary,
+            'denied' => $this->denied,
             'error' => $this->error,
             'timestamp' => $this->timestamp,
         ];
@@ -84,6 +88,10 @@ final class SwarmToolResult extends SwarmStreamEvent
             successful: is_bool($payload['successful'] ?? null) ? $payload['successful'] : false,
             error: is_string($payload['error'] ?? null) ? $payload['error'] : null,
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
+            preliminary: is_bool($payload['preliminary'] ?? null) ? $payload['preliminary'] : false,
+            denied: is_bool($payload['denied'] ?? null)
+                ? $payload['denied']
+                : (is_bool($toolResult['denied'] ?? null) ? $toolResult['denied'] : false),
         );
     }
 }

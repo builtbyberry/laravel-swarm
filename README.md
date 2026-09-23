@@ -57,11 +57,11 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 
 - PHP **^8.4**
 - Laravel **13** (`illuminate/*` **^13.0**)
-- `laravel/ai` **^0.11.2**
+- `laravel/ai` **^1.0**
 
-PHP **^8.4** is supported alongside PHP 8.5. As of **v0.26.0**, the official `laravel/ai` floor is **^0.11.2** and support for **0.10** is dropped. Upgrade the dependency and Swarm together; see [UPGRADING.md](UPGRADING.md#upgrading-to-v0260).
+PHP **^8.4** is supported alongside PHP 8.5. As of **v0.27.0**, the official `laravel/ai` requirement is **^1.0**. Upgrade the dependency and Swarm together; see [UPGRADING.md](UPGRADING.md#upgrading-to-v0270).
 
-**No special stability configuration is required.** `laravel/ai` ships stable tags on the 0.11 line, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
+**No special stability configuration is required.** Laravel AI 1.0 is a stable release, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
 
 Earlier versions of this document asked you to set `"minimum-stability": "dev"` in your application's `composer.json`. That is no longer necessary, and as of **v0.23.0** it is no longer recommended — it loosens the resolution floor for your *entire* dependency tree, not just for Swarm. If you added those keys solely to install this package, you can remove them.
 

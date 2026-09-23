@@ -38,7 +38,7 @@ it('uses native HTTP middleware and options before rejecting pending outcomes', 
         expect(DB::connection()->transactionLevel())->toBe(0)
             ->and($request['model'])->toBe('gpt-4.1-mini')
             ->and($request['max_output_tokens'])->toBe(321)
-            ->and(json_encode($request['input']))->toContain('revised task')
+            ->and($request['input'][1]['content'][0]['text'])->toBe('revised task')
             ->and($request['tools'][0]['name'])->toBe('ApprovalTool');
 
         return Http::response($body, 200);
@@ -66,7 +66,7 @@ it('preserves successful native HTTP output and usage', function () {
     ])]);
     $response = app(SwarmRunner::class)->agent(new NativeHttpAgent)->prompt('task');
     expect($response->output)->toBe('native-output')
-        ->and($response->usage['prompt_tokens'])->toBe(2)
-        ->and($response->usage['completion_tokens'])->toBe(3);
+        ->and($response->usage['input_tokens'])->toBe(2)
+        ->and($response->usage['output_tokens'])->toBe(3);
     Http::assertSentCount(1);
 });

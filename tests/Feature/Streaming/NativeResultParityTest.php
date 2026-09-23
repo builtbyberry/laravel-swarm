@@ -80,7 +80,7 @@ it('preserves native result status and identity through capture and database rep
             ->and($event->toArray())->not->toHaveKeys(['generation_id', 'parent_invocation_id', 'tool_invocation_id']);
     }
     $end = $events->whereInstanceOf(SwarmStreamEnd::class)->sole();
-    expect($end->usage['prompt_tokens'])->toBe(2)->and($end->usage['completion_tokens'])->toBe(3);
+    expect($end->usage['input_tokens'])->toBe(2)->and($end->usage['output_tokens'])->toBe(3);
     $replay = collect(iterator_to_array(app(SwarmHistory::class)->replay($stream->runId)));
     expect($replay->whereInstanceOf(SwarmToolResult::class)->sole()->toArray())->toBe($payload);
     if ($capture !== CaptureDecision::Full) {

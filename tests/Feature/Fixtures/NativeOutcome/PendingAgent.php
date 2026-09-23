@@ -8,12 +8,16 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\PlainStreamEditor;
 use Generator;
 use Laravel\Ai\Approvals\Decisions;
 use Laravel\Ai\Approvals\PendingApproval;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Exceptions\ApprovalNotResumableException;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\AgentResponse;
+use Laravel\Ai\Responses\Data\FinishReason;
 use Laravel\Ai\Responses\Data\Meta;
+use Laravel\Ai\Responses\Data\Step;
+use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
-use Laravel\Ai\Responses\Data\Usage;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use Laravel\Ai\Responses\StreamedAgentResponse;
 use Laravel\Ai\Streaming\Events\StreamEnd;
@@ -33,7 +37,7 @@ class PendingAgent extends PlainStreamEditor
         ]);
     }
 
-    public function prompt(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
+    public function prompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
         self::$calls++;
         if (config('tests.native.throw', false)) {
@@ -43,7 +47,7 @@ class PendingAgent extends PlainStreamEditor
         return self::pending();
     }
 
-    public function stream(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
+    public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
         return (new StreamableAgentResponse('pending-invocation', function (): Generator {
             self::$calls++;
@@ -54,10 +58,21 @@ class PendingAgent extends PlainStreamEditor
                 throw ApprovalNotResumableException::make();
             }
             if (! config('tests.native.final_only', false)) {
-                yield new ToolApprovalRequest('private-event', self::pending()->pendingApprovals, 123, [['secret' => 'provider-secret']]);
+                yield new ToolApprovalRequest('private-event', self::pending()->pendingApprovals, 123, collect([
+                    new Step(
+                        text: '',
+                        toolCalls: [],
+                        toolResults: [],
+                        finishReason: FinishReason::ToolCalls,
+                        usage: new TextUsage,
+                        meta: new Meta('fake', 'test'),
+                        reasoning: '',
+                        replayBlocks: [['secret' => 'provider-secret']],
+                    ),
+                ]));
                 self::$afterApproval++;
             }
-            yield new StreamEnd('end', 'stop', new Usage, 123);
+            yield new StreamEnd('end', 'stop', new TextUsage, 123);
         }, new Meta('fake', 'test')))->then(function (StreamedAgentResponse $response): void {
             $response->withPendingApprovals(self::pending()->pendingApprovals);
         });

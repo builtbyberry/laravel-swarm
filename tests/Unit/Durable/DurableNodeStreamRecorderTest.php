@@ -2,11 +2,22 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
+use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableNodeStreamRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
+use BuiltByBerry\LaravelSwarm\Streaming\View\ViewSupersession;
+use BuiltByBerry\LaravelSwarm\Streaming\View\VoidedEvent;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Laravel\Ai\Responses\Data\ToolCall;
+use Laravel\Ai\Responses\Data\ToolResult;
 
 beforeEach(function () {
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
@@ -186,4 +197,80 @@ test('voidPriorAttempt retracts the prior epoch before a fresh attempt re-emits'
 
     expect($edge)->not->toBeNull()
         ->and($edge->void_target_event_uuid)->toBe('crashed-event');
+});
+
+test('repeated native partial and final IDs stay isolated across durable nodes and attempts', function (string $seam) {
+    seedNodeStreamRun('run-tool-attempts');
+    $recorder = app(DurableNodeStreamRecorder::class);
+    $old = $recorder->sinkFor('run-tool-attempts', 'parallel:0', 1);
+    $sibling = $recorder->sinkFor('run-tool-attempts', 'parallel:1', 1);
+    $result = static fn (string $id, string $value, bool $partial): SwarmToolResult => new SwarmToolResult(
+        $id, 'run-tool-attempts', 0, 'ExampleAgent', new ToolResult('same-call', 'tool', [], $value), true, null, 123,
+        preliminary: $partial,
+    );
+    $old($result('same-partial', 'old partial', true));
+    $sibling($result('same-partial', 'sibling partial', true));
+    $recorder->voidPriorAttempt('run-tool-attempts', 'parallel:0', 2, true);
+    $fresh = $recorder->sinkFor('run-tool-attempts', 'parallel:0', 2);
+    $fresh($result('same-partial', 'fresh partial', true));
+    $old($result('same-final', 'late old final', false));
+    $sibling($result('same-final', 'sibling final', false));
+    $fresh($result('same-final', 'fresh final', false));
+    $recorder->sealNodeBoundary('run-tool-attempts', true);
+    $visible = collect(CausalLogView::forRun(app(StreamEventStore::class), 'run-tool-attempts')->fold())->whereInstanceOf(SwarmToolResult::class)->values();
+    expect($visible->map(fn (SwarmToolResult $event) => $event->toolResult->result)->all())->toBe([
+        'sibling partial', 'fresh partial', 'sibling final', 'fresh final',
+    ])->and($visible->pluck('preliminary')->all())->toBe([true, true, false, false]);
+    $expected = $visible->map(fn (SwarmToolResult $event) => $event->toArray())->all();
+    foreach ($expected as $wire) {
+        expect($wire)->not->toHaveKeys(['storage_event_uuid', 'storageEventId']);
+    }
+    $snapshot = CausalLogView::forRun(app(StreamEventStore::class), 'run-tool-attempts')->snapshot();
+    $restored = new CausalLogView(array_map(fn (array $wire) => SwarmStreamEvent::fromArray($wire), $snapshot['events']));
+    expect(collect($restored->fold())->whereInstanceOf(SwarmToolResult::class)->map(fn ($event) => $event->toArray())->values()->all())->toBe($expected);
+    if ($seam !== 'hot') {
+        $cold = app(DatabaseColdArchiveDriver::class);
+        $rows = DB::table('swarm_stream_events')->where('run_id', 'run-tool-attempts');
+        $boundary = ($seam === 'split' ? $rows->min('id') : $rows->max('id')) + 1;
+        $sealed = app(SwarmPersistenceCipher::class)->seal(json_encode($snapshot, JSON_THROW_ON_ERROR));
+        expect($cold->graduate('run-tool-attempts', 0, $boundary, $sealed))->toBeTrue();
+        $cold->reclaim('run-tool-attempts', $boundary);
+        app()->forgetInstance(StreamEventStore::class);
+        $reloaded = collect(CausalLogView::forRun(app(StreamEventStore::class), 'run-tool-attempts')->fold())->whereInstanceOf(SwarmToolResult::class);
+        expect($reloaded->map(fn ($event) => $event->toArray())->values()->all())->toBe($expected);
+    }
+})->with(['hot', 'cold', 'split']);
+
+test('late function-tool events without prior anchors remain invalid after recovery', function () {
+    seedNodeStreamRun('run-late-tools');
+    $recorder = app(DurableNodeStreamRecorder::class);
+    $recorder->voidPriorAttempt('run-late-tools', 'node', 2, true);
+    foreach ([1, 2] as $epoch) {
+        $sink = $recorder->sinkFor('run-late-tools', 'node', $epoch);
+        $sink(new SwarmToolCall('call', 'run-late-tools', 0, 'Agent', new ToolCall('tool-id', 'tool', []), 123));
+        $sink(new SwarmToolResult('final', 'run-late-tools', 0, 'Agent', new ToolResult('tool-id', 'tool', [], 'epoch-'.$epoch), true, null, 123));
+    }
+    $view = CausalLogView::forRun(app(StreamEventStore::class), 'run-late-tools');
+    $visible = collect($view->fold())->filter(fn ($event) => $event instanceof SwarmToolResult || $event instanceof SwarmToolCall);
+    expect($visible)->toHaveCount(2)->and($visible->pluck('attemptEpoch')->unique()->values()->all())->toBe([2]);
+    $audit = collect($view->fold(supersession: ViewSupersession::Everything));
+    expect($audit->whereInstanceOf(VoidedEvent::class))->toHaveCount(2);
+});
+
+test('legacy raw function-tool identities remain valid void targets through cold storage', function () {
+    seedNodeStreamRun('run-legacy-tool');
+    $recorder = app(DurableNodeStreamRecorder::class);
+    $recorder->sinkFor('run-legacy-tool', 'node', 0)(new SwarmToolResult('legacy-native', 'run-legacy-tool', 0, 'Agent', new ToolResult('call', 'tool', [], 'old'), true, null, 123));
+    $row = DB::table('swarm_stream_events')->where('run_id', 'run-legacy-tool')->first();
+    $payload = json_decode($row->payload, true, flags: JSON_THROW_ON_ERROR);
+    unset($payload['preliminary'], $payload['denied'], $payload['attempt_epoch']);
+    DB::table('swarm_stream_events')->where('id', $row->id)->update(['event_uuid' => 'legacy-native', 'payload' => json_encode($payload, JSON_THROW_ON_ERROR)]);
+    app(CausalLogStore::class)->voidNodeAttempt('run-legacy-tool', 'node', 0, 'legacy retry');
+    $recorder->sinkFor('run-legacy-tool', 'node', 1)(new SwarmToolResult('new-native', 'run-legacy-tool', 0, 'Agent', new ToolResult('call', 'tool', [], 'new'), true, null, 123));
+    $cold = app(DatabaseColdArchiveDriver::class);
+    $boundary = DB::table('swarm_stream_events')->where('run_id', 'run-legacy-tool')->max('id') + 1;
+    expect($cold->graduate('run-legacy-tool', 0, $boundary, '{}'))->toBeTrue();
+    $cold->reclaim('run-legacy-tool', $boundary);
+    $events = collect(CausalLogView::forRun(app(StreamEventStore::class), 'run-legacy-tool')->fold())->whereInstanceOf(SwarmToolResult::class);
+    expect($events->pluck('id')->values()->all())->toBe(['new-native']);
 });

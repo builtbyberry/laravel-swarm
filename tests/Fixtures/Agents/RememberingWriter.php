@@ -8,9 +8,11 @@ use BuiltByBerry\LaravelSwarm\Concerns\RemembersRunContext;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use Illuminate\Support\Facades\Context;
 use Laravel\Ai\Approvals\Decisions;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Messages\Message;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Promptable;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
@@ -53,7 +55,7 @@ class RememberingWriter implements Agent, Conversational
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
      */
-    public function prompt(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
+    public function prompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
         $this->capture();
 
@@ -64,7 +66,7 @@ class RememberingWriter implements Agent, Conversational
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
      */
-    public function stream(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
+    public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
         $this->capture();
 

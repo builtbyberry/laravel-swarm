@@ -12,8 +12,9 @@ use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Ai\Contracts\HasMiddleware;
 use Laravel\Ai\Contracts\HasTools;
+use Laravel\Ai\Messages\UserMessage;
+use Laravel\Ai\PendingStep;
 use Laravel\Ai\Promptable;
-use Laravel\Ai\Prompts\AgentPrompt;
 
 #[Provider('openai')]
 #[Model('gpt-4.1-mini')]
@@ -39,6 +40,17 @@ class NativeHttpAgent implements Agent, Conversational, HasMiddleware, HasTools
 
     public function middleware(): array
     {
-        return [fn (AgentPrompt $prompt, Closure $next) => $next($prompt->revise('revised '.$prompt->prompt))];
+        return [function (PendingStep $step, Closure $next) {
+            $messages = $step->messages;
+            foreach (array_reverse(array_keys($messages)) as $index) {
+                $message = $messages[$index];
+                if ($message instanceof UserMessage) {
+                    $messages[$index] = new UserMessage('revised '.$message->content, $message->attachments);
+                    break;
+                }
+            }
+
+            return $next($step->withMessages($messages));
+        }];
     }
 }

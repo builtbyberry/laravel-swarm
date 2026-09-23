@@ -1,5 +1,93 @@
 # Upgrading Laravel Swarm
 
+## Upgrading to v0.27.0
+
+**Breaking dependency change:** require official `laravel/ai ^1.0` together with
+Swarm `^0.27.0`. PHP remains `^8.4`; Laravel remains `^13.16`. Keep stable
+Composer resolution for applications. Development branch canaries are CI proof,
+not application dependency recommendations.
+
+Review application-owned Laravel AI conversation tables and custom conversation
+stores before upgrading. Swarm's package migrations do not migrate native
+conversation data. Custom stores must implement the installed native
+`ConversationStore` interface, including agent identity and native message/step
+objects. Back up both stores, drain workers, upgrade readers and workers together,
+and exercise the native conversation paths used by your application before
+restarting production work.
+
+### Native agent inputs and test agents
+
+Native agents accept `AgentInput|UserMessage|Decisions|string` on their six prompt,
+queue, stream and broadcast verbs. Update direct implementations and narrower
+overrides to the released native signatures. Text responses use native
+`TextUsage`, not the abstract usage base class. Middleware receives a native
+`PendingStep` and can copy its messages/options for each generation; the original
+prompt event remains the original input. Test outgoing generation messages when
+asserting middleware transformations.
+
+Swarm's `ScriptedAgent` remains a string-only `reply(string)` test helper. It
+accepts the wider native method signature for interface compatibility but rejects
+rich input objects before calling `reply`; it does not stringify away attachments
+or decisions. Its unsupported execution modes remain unsupported. The deprecated
+Swarm `Contracts\Agent` marker remains until Swarm 1.0; Laravel AI 1.0 does not
+remove that compatibility marker.
+
+### Usage accounting and stored evidence
+
+Read the counter names supplied by the original invocation. Native reports use
+`input_tokens` and `output_tokens`; historical reports may use `prompt_tokens`
+and `completion_tokens`. Totals are inclusive: do not add cache or reasoning
+subsets to input/output totals. Raw step/checkpoint reports retain their original
+keys and values.
+
+Swarm aggregates compatible reports category by category. Missing, null or
+malformed counts remain unknown (`null`), including after persistence and joins;
+zero is a known count. A mixed legacy/native aggregate, unclassifiable report, or
+real invocation with an empty report makes all seven supported counter keys null.
+An empty structural subtree contributes no invocation and leaves the aggregate
+unchanged. Displays should show unknown accounting explicitly rather than zero.
+
+A native invocation can already contain a numeric subtotal across multiple model
+generations, even when an optional category was absent in one generation. Swarm
+preserves the supplied subtotal; it cannot infer generation-level completeness.
+Across separate Swarm-visible invocation reports, an unknown category propagates.
+This conservative policy is chosen over relabeling historical counters or treating
+missing accounting as zero. Unknown accounting does not block valid workflow
+outputs or rerun already completed work.
+
+### Preliminary tool results and reader rollback
+
+`swarm_tool_result` adds top-level boolean `preliminary` and `denied` fields.
+Treat cumulative preliminary results as progress updates, not extra completed
+tool calls. Only a final result consumes its pending call and enters the memory
+snapshot. A duplicate final cannot append another snapshot entry. Interleaved
+tool IDs remain independent; ordinary stream cleanup retains unpaired-call
+behavior without fabricating successful results. A hard process kill does not
+guarantee cleanup.
+
+Durable tool-event storage now scopes causal identities by node and attempt while
+retaining native public IDs. The existing attempt watermark also protects
+function-tool calls/results that arrive late. No new schema or retention work is
+required. Cold archives and snapshots carry the existing storage identity as
+metadata. Keep new readers for these records; older readers can misinterpret
+scoped void targets. Old unambiguous raw-ID targets retain their meaning, but old
+collisions that already lost target provenance cannot be reconstructed.
+
+The event-level `denied` flag is independent of nested `tool_result.denied`,
+`failed`, `successful` and error text. New readers accept booleans only. Old or
+malformed `preliminary` defaults to false; absent/malformed event-level `denied`
+falls back to a boolean nested denied value, otherwise false. That fallback is a
+compatibility interpretation, not recovered original event provenance.
+
+Full, Redact and Skip retain the established function-tool capture rules for
+partial and final results. No new payload size budget or retention policy is
+introduced. See [streaming](docs/streaming.md#tool-calls-including-mcp-tools).
+Older readers can drop the new flags and mistake partials for finals. After this
+evidence is written, retain v0.27-capable readers and backups; a parseable older
+reader is not an evidence-preserving rollback. Native approval continuation,
+top-level parallel live streaming and queued whole-workflow callbacks retain
+their existing unsupported boundaries.
+
 ## v0.26.3 provider-tool event readers
 
 No new migration or dependency change. Update stream consumers for

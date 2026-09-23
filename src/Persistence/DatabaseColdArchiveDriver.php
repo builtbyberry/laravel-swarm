@@ -218,6 +218,7 @@ class DatabaseColdArchiveDriver implements ColdArchiveDriver
                     'sequence' => $record->id,
                     'payload' => $this->encodeJson(array_replace($this->decodeJson($record->payload, []), [
                         'attempt_epoch' => $record->attempt_epoch === null ? null : (int) $record->attempt_epoch,
+                        'storage_event_uuid' => $record->event_uuid ?? null,
                     ])),
                     'base_pointer' => null,
                     'created_at' => $now,

@@ -23,7 +23,7 @@ final readonly class StreamStepCheckpoint
     public CitationEvidence $citationEvidence;
 
     /**
-     * @param  array<string, int>  $usage
+     * @param  array<string, int|null>  $usage
      */
     public function __construct(
         public string $runId,
@@ -44,7 +44,7 @@ final readonly class StreamStepCheckpoint
      * strings, surfaced for operator tooling; pass null when the caller has no
      * row timestamps to carry.
      *
-     * @param  array<string, int>  $usage
+     * @param  array<string, int|null>  $usage
      */
     public static function fromPersisted(
         string $runId,

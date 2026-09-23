@@ -9,6 +9,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolAttemptInvalidated;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventIdentity;
 
 /**
  * A read-time policy/fold layer over the append-only causal log (#283).
@@ -134,7 +137,9 @@ final class CausalLogView
         }
 
         return [
-            'events' => array_map(fn (SwarmStreamEvent $e): array => $e->toArray() + ['attempt_epoch' => $e->attemptEpoch], $this->events),
+            'events' => array_map(fn (SwarmStreamEvent $e): array => $e->toArray() + [
+                'attempt_epoch' => $e->attemptEpoch, 'storage_event_uuid' => StreamEventIdentity::forEvent($e),
+            ], $this->events),
             'voids_by_target' => $voidsByTarget,
             'parent_of' => $this->parentOf,
             'declared_children' => $this->declaredChildren,
@@ -167,7 +172,8 @@ final class CausalLogView
         foreach ($ordered as $event) {
             $id = $this->eventId($event);
             $annotation = $id !== null ? ($annotations[$id] ?? null) : null;
-            if ($event instanceof SwarmProviderToolEvent && $event->nodeId !== null && $event->attemptEpoch !== null
+            if (($event instanceof SwarmProviderToolEvent || $event instanceof SwarmToolCall || $event instanceof SwarmToolResult)
+                && $event->nodeId !== null && $event->attemptEpoch !== null
                 && $event->attemptEpoch < ($this->providerInvalidBefore[$event->nodeId] ?? 0)) {
                 $annotation = ['type' => CausalVoidEdgeType::NodeReexecuted,
                     'reason' => 'durable node re-executed on resume', 'digest_node_id' => null];
@@ -586,12 +592,7 @@ final class CausalLogView
 
     private function eventId(SwarmStreamEvent $event): ?string
     {
-        if ($event instanceof SwarmProviderToolEvent) {
-            return $event->causalId();
-        }
-        $id = $event->toArray()['id'] ?? null;
-
-        return is_string($id) ? $id : null;
+        return StreamEventIdentity::forEvent($event);
     }
 
     private function nodeIdOf(SwarmStreamEvent $event): ?string

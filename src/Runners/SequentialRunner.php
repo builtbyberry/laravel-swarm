@@ -71,7 +71,7 @@ class SequentialRunner
             $step = $this->runSingleStep($state, $index);
 
             $steps[] = $step;
-            $mergedUsage = $this->mergeUsage($mergedUsage, is_array($step->metadata['usage'] ?? null) ? $step->metadata['usage'] : []);
+            $mergedUsage = $this->mergeUsageReport($mergedUsage, is_array($step->metadata['usage'] ?? null) ? $step->metadata['usage'] : []);
         }
 
         return new SwarmResponse(
@@ -323,7 +323,7 @@ class SequentialRunner
                     }
                 }
 
-                $mergedUsage = $this->mergeUsage($mergedUsage, $stepUsage);
+                $mergedUsage = $this->mergeUsageReport($mergedUsage, $stepUsage);
                 $stepOutput = $this->capture->applyOutput((string) ($step->artifacts[0]->content ?? $output), $state->context);
 
                 $completedSteps[] = $step;
@@ -404,7 +404,7 @@ class SequentialRunner
         $output = (string) $response;
         $usage = $this->usageFromResponse($response);
         $this->appendResponseToolCalls($snapshot, $response);
-        $mergedUsage = $this->mergeUsage(
+        $mergedUsage = $this->mergeUsageReport(
             is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [],
             $usage,
         );
@@ -505,7 +505,7 @@ class SequentialRunner
             $state->context,
         );
 
-        $mergedUsage = $this->mergeUsage(
+        $mergedUsage = $this->mergeUsageReport(
             is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [],
             $accumulator->stepUsage,
         );

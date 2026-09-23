@@ -156,7 +156,7 @@ class StreamEventMapper
         }
 
         if ($event instanceof ToolCall) {
-            // Hold the call until we see its matching ToolResult so the snapshot
+            // Hold the call until we see its matching final ToolResult so the snapshot
             // row records a paired input/output entry, then a single appendToolCall
             // persists the finalized pair. This keeps the snapshot row write count
             // proportional to tool results, not events.
@@ -179,7 +179,7 @@ class StreamEventMapper
             $matchedCallId = $event->toolResult->id;
             $matchedCall = $accumulator->pendingToolCalls[$matchedCallId] ?? null;
 
-            if ($matchedCall !== null) {
+            if (! $event->preliminary && $matchedCall !== null) {
                 unset($accumulator->pendingToolCalls[$matchedCallId]);
                 $accumulator->snapshot = $this->snapshots->appendToolCall(
                     $accumulator->snapshot,
@@ -196,6 +196,8 @@ class StreamEventMapper
                 successful: $event->successful,
                 error: $this->captureToolError($event->error, $state->context),
                 timestamp: $event->timestamp,
+                preliminary: $event->preliminary,
+                denied: $event->denied,
             );
             $this->syncInvocationId($swarmEvent, $event->invocationId);
 

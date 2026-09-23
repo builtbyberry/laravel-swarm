@@ -6,9 +6,11 @@ namespace BuiltByBerry\LaravelSwarm\Tests\Feature\ProviderTools\Fixtures;
 
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\PlainStreamEditor;
 use Laravel\Ai\Approvals\Decisions;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\Data\Meta;
-use Laravel\Ai\Responses\Data\Usage;
+use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use Laravel\Ai\Streaming\Events\ProviderToolEvent;
 use Laravel\Ai\Streaming\Events\StreamEnd;
@@ -20,7 +22,7 @@ class ProviderAgent extends PlainStreamEditor
 
     public static int $failures = 0;
 
-    public function stream(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
+    public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
         $number = ++self::$calls;
         $invocation = 'invocation-'.$number;
@@ -37,7 +39,7 @@ class ProviderAgent extends PlainStreamEditor
                     throw new \RuntimeException('fixture interruption');
                 }
             }
-            yield (new StreamEnd('end-'.$number, 'stop', new Usage, 1710000002))->withInvocationId($invocation);
+            yield (new StreamEnd('end-'.$number, 'stop', new TextUsage, 1710000002))->withInvocationId($invocation);
         }, new Meta('fixture', 'model'));
     }
 }

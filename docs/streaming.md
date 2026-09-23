@@ -230,6 +230,39 @@ classify an error-looking result string as an exception. In official Laravel AI,
 failed without invoking the tool. Unsupported native approvals still fail at the
 [approval boundary](native-outcome-boundary.md).
 
+Laravel AI 1.0 can emit several cumulative results for the same tool call.
+`swarm_tool_result.preliminary` marks these progress observations. Replace the
+displayed progress for that call rather than concatenating cumulative payloads.
+The matching pending call stays pending until a non-preliminary result arrives;
+only that final result enters the memory snapshot, once. Partial payloads are not
+stored in a separate accumulation buffer. Ordinary abandonment retains the
+existing unpaired-call cleanup; abrupt process termination does not guarantee
+cleanup or a final result. Native nested-agent partials remain observations on
+the parent tool call, not new Swarm child runs.
+
+Top-level `denied` preserves the native event's classification independently of
+`tool_result.denied`, `failed`, `successful` and captured error text. Both new
+top-level fields serialize as booleans. When reading older/malformed rows,
+`preliminary` defaults to false and `denied` falls back only to a boolean nested
+denied value, otherwise false. Truthy strings and numbers do not become true.
+That legacy fallback cannot reconstruct an original event-level classification.
+
+Preliminary and final function-tool results use the same capture policy: Full
+keeps values, Redact keeps the established structure with redacted values, and
+Skip retains event identity/outcome metadata with empty arguments and null
+result/error. Provider-tool whole-payload withholding and size budgets do not
+apply to function-tool events. Event storage and replay still retain the emitted
+sequence; bounded pending-call state is not a global replay-volume limit.
+
+Durable function-tool calls/results use a separate scoped storage identity so
+repeated native IDs across nodes and attempts cannot redirect a void edge. Public
+native IDs stay unchanged. The existing
+`swarm_provider_tool_attempt_invalidated` node/epoch marker also excludes stale
+function-tool events, including late events without a prior anchor. Hot reads,
+cold graduation and snapshots preserve the stored identity. Legacy raw-ID void
+targets remain readable; previously ambiguous historical collisions cannot be
+reconstructed from missing provenance.
+
 A tool's `result` and its `arguments` are both typed `mixed`, so at the edges
 either can be a value JSON cannot represent (for example, a binary-ish MCP result
 with invalid UTF-8). Such a value **degrades safely at the tool boundary**: that
@@ -246,6 +279,12 @@ is the field that realistically carries such a value; arguments share the same
 type and degrade path for safety.)
 
 ## Persisted Replay
+
+The v0.27.0 reader preserves preliminary and event-level denied flags across
+cache, database and tiered replay and the broadcast helpers. An older reader may
+drop them and treat partial progress as final evidence. Retain a compatible
+reader after these events have been written; see
+[v0.27.0 reader rollback](../UPGRADING.md#preliminary-tool-results-and-reader-rollback).
 
 The v0.26.0 reader accepts historical result rows without the additive `denied`
 and `failed` booleans, defaulting each to false. An older reader can parse new

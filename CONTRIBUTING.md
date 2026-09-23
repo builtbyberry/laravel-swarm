@@ -58,7 +58,7 @@ coverage. If workflow runtime becomes prohibitive, maintainers may split
 until then, pull requests validate both matrices equally.
 
 **Laravel 13.16 compatibility** — separate PHP **8.4** and **8.5** jobs pin
-Laravel **13.16.0** and Laravel AI **0.11.2**, using temporary Pest `^4.7` and
+Laravel **13.16.0** and Laravel AI **1.0.0**, using temporary Pest `^4.7` and
 Laravel plugin `^4.1` development requirements. The job restores `composer.json`
 before tests and verifies official source commits against both the lock and
 installed packages. These jobs run `composer test`,
@@ -70,6 +70,13 @@ The four normal Pest 5 jobs retain PCOV, `memory_limit=1G`, the complete source
 filter, and the **80%** coverage floor. The separate compatibility jobs run the
 full suite without coverage reporting to avoid Pest 4's report reload overhead.
 PHPStan retains its separate existing `--memory-limit=2G` setting.
+
+**Moving development proof** — PR/nightly and real-database canaries resolve
+official Laravel AI `1.x-dev` and Laravel `13.x-dev`. Capture official branch
+heads at resolution time, temporarily pin those source refs, and verify installed
+and lock identities against the captured refs. Matching two arbitrary SHAs is not
+official provenance. Restore the production manifest before package-contract
+tests. The separate post-main moving-development run remains a shipping gate.
 
 **Dependency advisories** — a separate `audit` workflow runs `composer audit` on
 every push and pull request. Because this package commits no `composer.lock`, CI

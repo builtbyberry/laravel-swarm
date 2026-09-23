@@ -6,11 +6,13 @@ namespace BuiltByBerry\LaravelSwarm\Tests\Feature\Citations\Fixtures;
 
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RichStreamEditor;
 use Laravel\Ai\Approvals\Decisions;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
+use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\Data\UrlCitation;
-use Laravel\Ai\Responses\Data\Usage;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use Laravel\Ai\Streaming\Events\Citation;
 use Laravel\Ai\Streaming\Events\StreamEnd;
@@ -20,17 +22,17 @@ class CitingAgent extends RichStreamEditor
 {
     public static array $calls = [];
 
-    public function prompt(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
+    public function prompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
         $label = class_basename(static::class);
         $number = self::$calls[$label] = (self::$calls[$label] ?? 0) + 1;
 
         return new AgentResponse('invocation-'.$label.'-'.$number, 'Answer '.$label,
-            new Usage(promptTokens: 2, completionTokens: 3),
+            new TextUsage(inputTokens: 2, outputTokens: 3),
             new Meta('fixture', 'model', collect([new UrlCitation('https://secret.example/'.$label.'/'.$number, 'Title Ω '.$label, 1, 7)])));
     }
 
-    public function stream(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
+    public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
         $response = $this->prompt($prompt);
         $id = $response->invocationId;

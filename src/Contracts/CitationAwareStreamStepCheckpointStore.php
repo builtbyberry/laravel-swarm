@@ -8,6 +8,6 @@ use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 
 interface CitationAwareStreamStepCheckpointStore extends StreamStepCheckpointStore
 {
-    /** @param array<string, int> $usage */
+    /** @param array<string, int|null> $usage */
     public function recordWithCitations(string $runId, int $stepIndex, string $output, array $usage, CitationEvidence $evidence): void;
 }
