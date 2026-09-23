@@ -20,6 +20,7 @@ coverage suite within its existing memory limit with Pest 5.
 
 ### Fixed
 
+- **CI token permissions** explicitly restrict the test and Laravel 13.16 compatibility jobs to repository content reads.
 - **Operational evidence guidance** now inventories nested citation ciphertext for APP_KEY rotation and requires decoded-evidence verification before retiring the old key. Cold archive retention guidance explicitly distinguishes application-owned deletion from hot-row TTL pruning.
 
 Run the additive migration before starting upgraded workers, then drain and restart

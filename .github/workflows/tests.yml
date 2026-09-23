@@ -7,6 +7,9 @@ on:
       - '*.x'
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   tests:
     name: PHP ${{ matrix.php }} - Laravel 13 (${{ matrix.dependencies }})
