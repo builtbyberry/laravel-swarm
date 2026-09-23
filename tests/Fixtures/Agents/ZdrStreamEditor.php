@@ -28,11 +28,8 @@ use RuntimeException;
 use Stringable;
 
 /**
- * Streams a laravel/ai 0.8 OpenAI ZDR (zero-data-retention) shape: reasoning
- * events whose `summary` is null (the provider retains nothing) and a tool call
- * carrying an opaque `reasoningEncryptedContent` blob. Used to prove the runner
- * capture path tolerates the ZDR shape without crashing (F4, issue #255) and
- * never leaks the encrypted blob into swarm's event/snapshot contract.
+ * Emits a synthetic stream with null reasoning summaries and both opaque
+ * continuation fields for serialization-boundary tests.
  *
  * @phpstan-import-type LaravelAiAgentAttachments from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  * @phpstan-import-type LaravelAiAgentProvider from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
@@ -75,6 +72,7 @@ class ZdrStreamEditor implements Agent
                 reasoningId: 'zdr-reason-1',
                 reasoningSummary: null,
                 reasoningEncryptedContent: 'OPAQUE_ENCRYPTED_REASONING',
+                thoughtSignature: 'OPAQUE_THOUGHT_SIGNATURE',
             );
             $toolResult = new ToolResultData(
                 id: 'zdr-call-1',

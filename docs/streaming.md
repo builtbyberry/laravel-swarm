@@ -49,6 +49,11 @@ then stream normally from step index 1 with `__coordinator__` as their initial
 parent. Budget accounting via `#[MaxAgentSteps(N)]` counts the coordinator as
 step 0, so at most `N - 1` worker steps may execute.
 
+Swarm tool-call serialization omits opaque provider continuation fields, including
+`reasoning_encrypted_content` and `thought_signature`. Native conversation replay
+owns those values; persisted Swarm event playback is not a provider continuation
+request. This does not remove values from the original native DTO in memory.
+
 ## Consuming Stream Events
 
 Iterate in PHP:

@@ -13,6 +13,7 @@ Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabiliti
 
 - **Breaking:** require official `laravel/ai ^1.0`. Native implementations accept the released richer input signatures and use `TextUsage`; `ScriptedAgent` keeps its string-only reply contract and deprecated Swarm marker.
 - Usage aggregation preserves unknown categories, raw historical report keys and completed workflow work. Mixed legacy/native accounting is unavailable rather than relabeled or partially summed; empty structural groups remain neutral. Native invocation subtotals are retained without claiming completeness across their internal model generations.
+- The native ToolCall field guard now explicitly recognizes `thoughtSignature`. Swarm keeps its pinned serialized fields instead of exporting the entire native DTO: opaque provider continuation state remains owned by Laravel AI. Direct and both-mapper tests guard that boundary.
 - Native middleware fixtures prove per-generation `PendingStep` transformations while retaining original prompt events, workflow guardrails, side-effect and recovery assertions. Exact Laravel 13.16 and moving official development dependency lanes retain the existing coverage, concurrency, analysis and advisory policies.
 
 Upgrade workers and readers together. Older readers may discard preliminary and
