@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.26.3 - unreleased
+
+Preserve native provider-tool activity with attribution, privacy, durable ordering,
+replay, and broadcast.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.26.2 - 2026-09-22
 
 Preserve native citation evidence throughout a swarm run, and keep the full
