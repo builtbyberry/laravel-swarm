@@ -84,6 +84,7 @@ class StaticHierarchicalRunner extends HierarchicalRunner
         return new SwarmResponse(
             output: $finalOutput,
             steps: $steps,
+            citationEvidence: $this->finalCitationEvidence($state, $steps),
             usage: $mergedUsage,
             context: $state->context,
             artifacts: $state->context->artifacts,

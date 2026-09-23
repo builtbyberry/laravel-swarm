@@ -52,7 +52,7 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
             'node_id' => $event->nodeId,
             'attempt_epoch' => $event->attemptEpoch,
             'event_type' => $event->type(),
-            'payload' => $this->encodeJson($payload),
+            'payload' => $this->encodeJson($this->citations->sealPayload($payload)),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
             'created_at' => $timestamp,
             'updated_at' => $timestamp,

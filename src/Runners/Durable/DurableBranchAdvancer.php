@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
@@ -23,8 +24,10 @@ use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
+use BuiltByBerry\LaravelSwarm\Runners\NativeCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Runners\NativeOutcomeValidator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
@@ -77,6 +80,7 @@ class DurableBranchAdvancer
         protected DurableNodeStreamRecorder $nodeStream,
         protected StreamEventMapper $mapper,
         protected NativeOutcomeValidator $outcomes,
+        protected NativeCitationEvidence $citations,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId): void
@@ -207,9 +211,9 @@ class DurableBranchAdvancer
                             // it runs the unchanged blocking prompt(). The void above already ran for
                             // any pinned run regardless of the kill-switch, so a retraction is never
                             // dropped. Both shapes return [output, usage, snapshot].
-                            [$output, $usage, $snapshot] = $this->nodeStream->streamingActive($durableStreaming)
+                            [$output, $usage, $snapshot, $citationEvidence] = $this->nodeStream->streamingActive($durableStreaming)
                                 ? $this->streamBranchAgent($state, $agent, $branch, $snapshot, $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch))
-                                : $this->promptBranchAgent($agent, $branch, $snapshot);
+                                : $this->promptBranchAgent($state, $agent, $branch, $snapshot);
                         } finally {
                             ActiveRunContext::exit();
                         }
@@ -239,15 +243,25 @@ class DurableBranchAdvancer
                             updateContext: false,
                             storeContext: false,
                             storeArtifacts: false,
+                            citationEvidence: $citationEvidence,
                         );
 
-                        $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step): void {
+                        $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step, $context): void {
+                            $evidence = $this->capture->citationEvidence($step->citationEvidence, $context);
                             if (is_string($branch['node_id'] ?? null)) {
-                                $this->durableRuns->storeHierarchicalNodeOutput($runId, $branch['node_id'], $output, $this->runs->ttlSeconds());
+                                if ($this->durableRuns instanceof StoresDurableCitationEvidence) {
+                                    $this->durableRuns->storeHierarchicalNodeOutputWithCitations($runId, $branch['node_id'], $output, $this->runs->ttlSeconds(), $evidence);
+                                } else {
+                                    $this->durableRuns->storeHierarchicalNodeOutput($runId, $branch['node_id'], $output, $this->runs->ttlSeconds());
+                                }
                             }
 
                             $this->persistBranchStepArtifacts($runId, $step);
-                            $this->durableRuns->markBranchCompleted($runId, $branchId, $token, $output, $usage, $durationMs);
+                            if ($this->durableRuns instanceof StoresDurableCitationEvidence) {
+                                $this->durableRuns->markBranchCompletedWithCitations($runId, $branchId, $token, $output, $usage, $durationMs, $evidence);
+                            } else {
+                                $this->durableRuns->markBranchCompleted($runId, $branchId, $token, $output, $usage, $durationMs);
+                            }
                         });
                     } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                         return false;
@@ -312,9 +326,9 @@ class DurableBranchAdvancer
      * unpinned runs and for the operator kill-switch (pinned but emission paused).
      *
      * @param  array<string, mixed>  $branch
-     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot}
+     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot, 3: CitationEvidence}
      */
-    protected function promptBranchAgent(Agent $agent, array $branch, MemorySnapshot $snapshot): array
+    protected function promptBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot): array
     {
         $response = $agent->prompt($branch['input']);
         $this->outcomes->validateResponse($response);
@@ -323,7 +337,9 @@ class DurableBranchAdvancer
             $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
         }
 
-        return [(string) $response, $response->usage->toArray(), $snapshot];
+        return [(string) $response, $response->usage->toArray(), $snapshot,
+            $this->citations->response($response, $state->context->runId, (int) $branch['step_index'], $agent::class,
+                is_string($branch['node_id'] ?? null) ? $branch['node_id'] : (string) $branch['branch_id'])];
     }
 
     /**
@@ -339,7 +355,7 @@ class DurableBranchAdvancer
      *
      * @param  array<string, mixed>  $branch
      * @param  callable(SwarmStreamEvent): void  $sink
-     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot}
+     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot, 3: CitationEvidence}
      */
     protected function streamBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot, callable $sink): array
     {
@@ -363,7 +379,7 @@ class DurableBranchAdvancer
                     $sink($swarmEvent);
                 }
             }
-            $stream->then($this->outcomes->validateResponse(...));
+            $stream->then(fn ($response) => $this->mapper->complete($response, $state, (int) $branch['step_index'], $agent, $accumulator));
         } catch (Throwable $exception) {
             $nativeStreamFailure = $exception;
             throw $exception;
@@ -393,7 +409,7 @@ class DurableBranchAdvancer
             }
         }
 
-        return [$accumulator->output, $accumulator->stepUsage, $accumulator->snapshot];
+        return [$accumulator->output, $accumulator->stepUsage, $accumulator->snapshot, $accumulator->citationEvidence->withNodeId((string) $branchLabel)];
     }
 
     protected function persistBranchStepArtifacts(string $runId, ?SwarmStep $step): void

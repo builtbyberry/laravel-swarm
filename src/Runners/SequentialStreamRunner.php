@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
@@ -225,7 +226,8 @@ class SequentialStreamRunner
         $growthState = [];
 
         try {
-            foreach ($this->sequential->stream($state) as $streamEvent) {
+            $stepStream = $this->sequential->stream($state);
+            foreach ($stepStream as $streamEvent) {
                 $this->recordStreamTelemetry($swarm, $state, $streamEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
                 yield $streamEvent;
@@ -237,7 +239,10 @@ class SequentialStreamRunner
                 }
             }
 
+            $completedSteps = $stepStream->getReturn();
             $response = $this->normalizeCompletionResponse(new SwarmResponse(
+                steps: $completedSteps,
+                citationEvidence: $completedSteps === [] ? CitationEvidence::available() : $completedSteps[array_key_last($completedSteps)]->citationEvidence,
                 output: (string) ($context->data['last_output'] ?? $context->input),
                 context: $context,
                 artifacts: $context->artifacts,
@@ -271,6 +276,7 @@ class SequentialStreamRunner
             ]);
 
             $streamEndEvent = new SwarmStreamEnd(
+                citationEvidence: $capturedResponse->citationEvidence,
                 id: SwarmStreamEvent::newId(),
                 runId: $context->runId,
                 output: $this->capture->applyOutput($capturedResponse->output, $context),
@@ -436,6 +442,7 @@ class SequentialStreamRunner
         return new SwarmResponse(
             output: $response->output,
             steps: $response->steps,
+            citationEvidence: $response->citationEvidence,
             usage: $response->usage,
             context: $context,
             artifacts: $response->artifacts,

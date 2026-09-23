@@ -20,6 +20,13 @@ $swarmDatabasePersistenceEnabled = in_array('database', [
 ], true);
 
 return [
+    // Bound provider citation evidence per invocation; retain whole sources and
+    // report partial evidence when either limit is reached.
+    'citations' => [
+        'max_count' => 256,
+        'max_bytes' => 262144,
+    ],
+
     'topology' => env('SWARM_TOPOLOGY', Topology::Sequential->value),
 
     // Best-effort orchestration deadline checked before and between swarm steps.

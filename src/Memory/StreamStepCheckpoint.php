@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+
 /**
  * Immutable streamed-step checkpoint carrying output and usage for the
  * `(run_id, step_index)` natural key.
@@ -18,6 +20,8 @@ namespace BuiltByBerry\LaravelSwarm\Memory;
  */
 final readonly class StreamStepCheckpoint
 {
+    public CitationEvidence $citationEvidence;
+
     /**
      * @param  array<string, int>  $usage
      */
@@ -28,7 +32,10 @@ final readonly class StreamStepCheckpoint
         public array $usage = [],
         public ?string $recordedAt = null,
         public ?string $updatedAt = null,
-    ) {}
+        ?CitationEvidence $citationEvidence = null,
+    ) {
+        $this->citationEvidence = $citationEvidence ?? new CitationEvidence;
+    }
 
     /**
      * Rehydrate a checkpoint from the persisted columns.
@@ -46,8 +53,10 @@ final readonly class StreamStepCheckpoint
         array $usage,
         ?string $recordedAt = null,
         ?string $updatedAt = null,
+        ?CitationEvidence $citationEvidence = null,
     ): self {
         return new self(
+            citationEvidence: $citationEvidence,
             runId: $runId,
             stepIndex: $stepIndex,
             output: $output,

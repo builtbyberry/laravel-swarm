@@ -1,5 +1,8 @@
 # Streaming
 
+For final and per-step sources, capture rules, and migration requirements, see [citation evidence](citations.md).
+
+
 Use `stream()` when a browser, CLI, or other client needs **live typed progress**
 while a swarm runs. The method returns a lazy
 `StreamableSwarmResponse` that yields the same kinds of events whether you
@@ -175,8 +178,9 @@ Swarm streams emit typed events, including:
 | `swarm_text_delta` / `swarm_text_end` | Final-agent text chunks and close marker. |
 | `swarm_reasoning_delta` / `swarm_reasoning_end` | Final-agent reasoning stream events. |
 | `swarm_tool_call` / `swarm_tool_result` | Final-agent tool invocation and results. |
-| `swarm_step_end` | Step completion with captured or limited output and usage metadata. |
-| `swarm_stream_end` | Terminal completion with final output and aggregate usage. |
+| `swarm_citation` | Native source occurrence with captured [citation evidence and availability](citations.md). |
+| `swarm_step_end` | Step completion with captured or limited output, usage, and [step citation evidence](citations.md). |
+| `swarm_stream_end` | Terminal completion with final output, aggregate usage, and [final-output citation evidence](citations.md). |
 | `swarm_stream_error` | Terminal failure payload for live failure and persisted replay. |
 | `swarm_node_opened` | A run-structure node opening; self-identifying (`node_id == id`), with its `parent_node_id` and `role`. Recorded before any event tagged with that node id. |
 | `swarm_node_children_decided` | A deciding node declaring its children in chosen order (`child_node_ids`); `node_id` is the deciding node's id. |

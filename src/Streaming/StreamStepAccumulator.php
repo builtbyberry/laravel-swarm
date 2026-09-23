@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Streaming;
 
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 
@@ -63,5 +64,10 @@ final class StreamStepAccumulator
      */
     public array $unknownEventClasses = [];
 
-    public function __construct(public MemorySnapshot $snapshot) {}
+    public CitationEvidence $citationEvidence;
+
+    public function __construct(public MemorySnapshot $snapshot)
+    {
+        $this->citationEvidence = CitationEvidence::available();
+    }
 }

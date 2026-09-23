@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.26.2 - unreleased
+
+Preserve native citation evidence throughout a swarm run, and keep the full
+coverage suite within its existing memory limit with Pest 5.
+
+### Added
+
+- **Final and per-step citations** preserve native URL/title evidence through ordinary responses, completed streams, queued history, durable recovery, replay, and broadcast. Immutable evidence distinguishes available, partial, withheld, unavailable, and legacy unknown data.
+- **Source attribution** retains native event identity and original agent-output ranges. Final sources follow actual output contributors; earlier-step sources stay separate. Ranges are not shifted onto combined, rewritten, or truncated output, avoiding attribution the provider did not supply.
+- **Capture and persistence** reuse output capture rules and designated database encryption for citation evidence. Five existing tables gain nullable columns without inventing historical sources; optional store capabilities preserve existing custom-store contracts.
+- **Bounded evidence** uses per-invocation count and byte limits, reporting partial availability when a limit is reached.
+
+### Changed
+
+- **Storage health checks** verify active citation columns, including optional stream checkpoint storage, before provider invocation and through `swarm:health`. Portable `longText` columns accommodate accepted evidence plus encryption overhead on MySQL.
+- **Completed stream responses** retain their executed steps. Step and stream end events carry citation evidence; older rows and payloads read as unknown.
+- **Pest 5 development tooling** keeps the full coverage suite at a 1 GiB limit and 80% floor. Separate PHP 8.4/8.5 jobs verify the full suite, process concurrency, and static analysis on exact Laravel 13.16.0 with a temporary Pest 4 toolchain. Runtime requirements are unchanged.
+
+### Fixed
+
+- **CI token permissions** explicitly restrict the test and Laravel 13.16 compatibility jobs to repository content reads.
+- **Operational evidence guidance** now inventories nested citation ciphertext for APP_KEY rotation and requires decoded-evidence verification before retiring the old key. Cold archive retention guidance explicitly distinguishes application-owned deletion from hot-row TTL pruning.
+
+Run the additive migration before starting upgraded workers, then drain and restart
+existing workers. Older code can discard citation evidence: retain the new columns
+and replay data during rollback. See [citation evidence](docs/citations.md) and the
+[upgrade instructions](UPGRADING.md#v0262-citation-evidence) for capture, retention,
+rollout, and rollback limits.
+
 ## v0.26.1 - 2026-09-21
 
 Preview and safely apply application upgrade guidance.

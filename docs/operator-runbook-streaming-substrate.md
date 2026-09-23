@@ -132,19 +132,28 @@ came from.
 
 ## 4. The Retention Horizon
 
-Two things age out, on two different clocks:
+Compaction and retention are separate operations:
 
 - **Hot rows graduate to cold** on the **compaction** clock — driven by your
   `swarm:compact` schedule, not by a TTL. A row stays hot until a barrier seals
   it and a compaction cycle graduates it.
-- **Cold rows and hot rows expire** on the **prune** clock — the existing
-  `expires_at` TTL and `swarm:prune` retention. Void-edge rows and the new
+- **Hot rows expire** on the **prune** clock — the existing
+  `expires_at` TTL and `swarm:prune` retention. Void-edge rows and the
   causal-log columns inherit the `swarm_stream_events` TTL; there is no new prune
   hook to wire. See [Maintenance § Pruning](maintenance.md#pruning-expired-records).
 
-So the practical retention horizon for a streamed run is: *live in hot →
-graduated to cold by compaction → pruned by `swarm:prune` at its TTL*. If you
-need a longer audit window, raise the prune retention; if hot is growing faster
+- **Cold rows require an explicit retention policy.** `swarm_cold_archives`
+  has no `expires_at` or history foreign key and is not a `swarm:prune`
+  category. Deleting history or pruning hot rows does not guarantee cold
+  events or snapshots are removed. The tiered stream store's `forget($runId)`
+  deletes both tiers; applications own when to invoke that deletion for runs
+  they no longer need. Do not delete cold snapshots needed by active runs.
+
+The practical path is *live in hot → graduated to cold by compaction →
+explicit cold deletion under the application's retention policy*. Raising
+hot retention does not configure a cold expiry. Include cold events and
+snapshots, including encrypted citation evidence, in retention inventories
+and [key rotation](app-key-rotation.md). If hot is growing faster
 than you like, compact more often (or have authors add
 [rollups](streaming-substrate-author-guide.md#rollup-nodes) to seal windows
 mid-run).

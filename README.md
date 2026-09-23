@@ -719,3 +719,7 @@ vendor/bin/phpstan analyse --memory-limit=2G --no-progress
 ## License
 
 MIT
+
+### Citation evidence
+
+Completed responses and individual steps preserve provider-supplied citations separately. Sources follow output capture in history, replay, and broadcast; legacy, withheld, and unavailable evidence remain distinguishable. See [citation evidence](docs/citations.md) for provenance, ranges, limits, and migration guidance.

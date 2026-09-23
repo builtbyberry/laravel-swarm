@@ -5,14 +5,18 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\RecordsCitationSteps;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
@@ -29,16 +33,21 @@ use Throwable;
 /**
  * @internal
  */
-class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHistoryStore, RunHistoryStore
+class DatabaseRunHistoryStore implements ChecksCitationStorage, ClaimsQueuedRunExecution, ReadableRunHistoryStore, RecordsCitationSteps, RunHistoryStore
 {
     use InteractsWithJsonColumns;
+
+    protected CitationEvidenceCodec $citations;
 
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
         protected SwarmCapture $capture,
         protected SwarmPersistenceCipher $cipher,
-    ) {}
+        ?CitationEvidenceCodec $citations = null,
+    ) {
+        $this->citations = $citations ?? new CitationEvidenceCodec($cipher, new CitationEvidenceLimits($config));
+    }
 
     public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void
     {
@@ -172,8 +181,18 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
 
     public function recordStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
+        $this->persistStep($runId, $step, $ttlSeconds, $executionToken, $leaseSeconds);
+    }
+
+    public function recordStepWithContext(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken, ?int $leaseSeconds, RunContext $context): void
+    {
+        $this->persistStep($runId, $step, $ttlSeconds, $executionToken, $leaseSeconds, $context);
+    }
+
+    protected function persistStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken, ?int $leaseSeconds, ?RunContext $context = null): void
+    {
         if ($this->hasNormalizedStepTable()) {
-            $this->connection->transaction(function () use ($runId, $step, $ttlSeconds, $executionToken, $leaseSeconds): void {
+            $this->connection->transaction(function () use ($runId, $step, $ttlSeconds, $executionToken, $leaseSeconds, $context): void {
                 $updated = $this->update($runId, [
                     'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
                 ], $executionToken, $leaseSeconds);
@@ -182,12 +201,12 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
                     throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
                 }
 
-                $payload = $this->stepPayload($runId, $step, $ttlSeconds);
+                $payload = $this->stepPayload($runId, $step, $ttlSeconds, $context);
 
                 $this->stepTable()->upsert(
                     [$payload],
                     ['run_id', 'step_index'],
-                    ['agent_class', 'input', 'output', 'artifacts', 'metadata', 'expires_at', 'updated_at'],
+                    ['agent_class', 'input', 'output', 'citation_evidence', 'artifacts', 'metadata', 'expires_at', 'updated_at'],
                 );
             });
 
@@ -196,11 +215,11 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
 
         $history = $this->find($runId) ?? [];
         $history['steps'] ??= [];
-        $history['steps'][] = $this->capture->stepToPersistedArray($step);
+        $history['steps'][] = $this->capture->stepToPersistedArray($step, $context);
 
         $updated = $this->update($runId, [
             'steps' => $this->encodeJson(array_map(
-                fn (array $storedStep): array => $this->cipher->sealStepIo($storedStep),
+                fn (array $storedStep): array => $this->citations->sealPayload($this->cipher->sealStepIo($storedStep)),
                 $history['steps'],
             )),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
@@ -215,6 +234,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
     {
         $updated = $this->update($runId, [
             'status' => 'completed',
+            'citation_evidence' => $this->citations->encode($this->capture->citationEvidence($response->citationEvidence, $response->context)),
             'output' => $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $this->cipher->seal($response->output),
             'usage' => $this->encodeJson($response->usage),
             'context' => $this->encodeJson($response->context !== null ? $this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($response->context->toArray(), $response->context)) : null),
@@ -471,6 +491,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
         }
 
         $mapped = [
+            ...$this->citations->decode($record->citation_evidence ?? null)->toArray(),
             'run_id' => $record->run_id,
             'swarm_class' => $record->swarm_class,
             'topology' => $record->topology,
@@ -624,6 +645,20 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
         }
     }
 
+    public function assertCitationStorageReady(): void
+    {
+        $schema = $this->connection->getSchemaBuilder();
+        foreach (['history' => 'swarm_run_histories', 'history_steps' => 'swarm_run_steps'] as $key => $default) {
+            $table = (string) $this->config->get('swarm.tables.'.$key, $default);
+            if (! $schema->hasTable($table)) {
+                continue;
+            }
+            if (! $schema->hasColumn($table, 'citation_evidence')) {
+                throw new SwarmException("Citation storage requires [{$table}.citation_evidence]. Run migrations and restart workers before invoking agents.");
+            }
+        }
+    }
+
     public function assertReady(): void
     {
         $table = (string) $this->config->get('swarm.tables.history', 'swarm_run_histories');
@@ -748,6 +783,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
                     }
                 }
 
+                $step += $this->citations->decode($record->citation_evidence ?? null)->toArray();
                 $step['artifacts'] = $this->decodeJson($record->artifacts, []);
                 $step['metadata'] = $this->decodeJson($record->metadata, []);
 
@@ -759,10 +795,10 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
     /**
      * @return array<string, mixed>
      */
-    protected function stepPayload(string $runId, SwarmStep $step, int $ttlSeconds): array
+    protected function stepPayload(string $runId, SwarmStep $step, int $ttlSeconds, ?RunContext $context = null): array
     {
         $timestamp = Carbon::now('UTC');
-        $payload = $this->cipher->sealStepIo($this->capture->stepToPersistedArray($step));
+        $payload = $this->cipher->sealStepIo($this->capture->stepToPersistedArray($step, $context));
         $stepIndex = $step->metadata['index'] ?? null;
 
         if (! is_int($stepIndex)) {
@@ -776,6 +812,7 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
             // A Skip omission leaves the key absent; persist NULL on the column.
             'input' => $payload['input'] ?? null,
             'output' => $payload['output'] ?? null,
+            'citation_evidence' => $this->citations->encode(CitationEvidence::fromArray($payload)),
             'artifacts' => $this->encodeJson($payload['artifacts']),
             'metadata' => $this->encodeJson($payload['metadata']),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
@@ -817,9 +854,14 @@ class DatabaseRunHistoryStore implements ClaimsQueuedRunExecution, ReadableRunHi
             }
 
             $steps[$this->stepSortIndex($step, count($steps))] = $forDisplay
-                ? $this->cipher->openStepIoForDisplay($step)
-                : $this->cipher->openStepIo($step);
+                ? $this->citations->openPayload($this->cipher->openStepIoForDisplay($step))
+                : $this->citations->openPayload($this->cipher->openStepIo($step));
         }
+
+        foreach ($steps as &$legacyStep) {
+            $legacyStep += CitationEvidence::fromArray($legacyStep)->toArray();
+        }
+        unset($legacyStep);
 
         foreach ($this->normalizedSteps($record->run_id, $forDisplay) as $step) {
             $stepIndex = $step['step_index'];

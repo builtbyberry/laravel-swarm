@@ -5,14 +5,17 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmPaused;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -100,10 +103,24 @@ class DurableRunTerminalHandler
     /**
      * @param  array<string, mixed>  $run
      */
-    public function completeRun(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?SwarmStep $step): void
+    public function completeRun(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?SwarmStep $step, ?DurableHierarchicalStepResult $hierarchicalResult = null, ?CitationEvidence $citationEvidence = null): void
     {
         $runId = (string) $run['run_id'];
+        if ($hierarchicalResult !== null) {
+            $cursor = $hierarchicalResult->routeCursor;
+            $nodeId = $cursor['citation_output_node'] ?? null;
+            if (array_key_exists('citation_output_node', $cursor) && $nodeId === null) {
+                $citationEvidence = CitationEvidence::available();
+            } elseif (is_string($nodeId)) {
+                // The completing step has not checkpointed: prefer its exact result.
+                $citationEvidence = ($hierarchicalResult->nodeOutput['node_id'] ?? null) === $nodeId
+                    ? $hierarchicalResult->step?->citationEvidence
+                    : ($this->durableRuns instanceof StoresDurableCitationEvidence
+                        ? $this->durableRuns->hierarchicalNodeCitations($runId, $nodeId) : new CitationEvidence);
+            }
+        }
         $response = new SwarmResponse(
+            citationEvidence: $citationEvidence ?? $step->citationEvidence ?? new CitationEvidence,
             output: (string) ($context->data['last_output'] ?? $context->input),
             steps: $step !== null ? [$step] : [],
             usage: is_array($context->metadata['usage'] ?? null) ? $context->metadata['usage'] : [],

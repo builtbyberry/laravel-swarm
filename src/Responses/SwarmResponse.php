@@ -13,6 +13,11 @@ use JsonSerializable;
  */
 class SwarmResponse implements Arrayable, JsonSerializable
 {
+    public readonly CitationEvidence $citationEvidence;
+
+    /** @var list<SwarmCitation> */
+    public readonly array $citations;
+
     /**
      * @param  array<int, SwarmStep>  $steps
      * @param  array<string, mixed>  $usage
@@ -26,7 +31,11 @@ class SwarmResponse implements Arrayable, JsonSerializable
         public readonly ?RunContext $context = null,
         public readonly array $artifacts = [],
         public readonly array $metadata = [],
-    ) {}
+        ?CitationEvidence $citationEvidence = null,
+    ) {
+        $this->citationEvidence = $citationEvidence ?? new CitationEvidence;
+        $this->citations = $this->citationEvidence->items;
+    }
 
     /**
      * Cast the response to a string.
@@ -42,6 +51,7 @@ class SwarmResponse implements Arrayable, JsonSerializable
     public function toArray(): array
     {
         return [
+            ...$this->citationEvidence->toArray(),
             'output' => $this->output,
             'steps' => collect($this->steps)->map(fn (SwarmStep $s): array => $s->toArray())->all(),
             'usage' => $this->usage,
