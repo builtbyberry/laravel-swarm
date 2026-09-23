@@ -58,7 +58,11 @@ Run the v0.26.2 migration before using new workers. It adds nullable `citation_e
 
 Database evidence is capture-filtered and sealed with the existing `swarm.persistence.encrypt_at_rest` setting. Citation fields in database stream/causal-log JSON are separately sealed; this is **not** a claim that all legacy event fields are encrypted. Hot and cold readers open those fields; cold graduation copies sealed raw event data and compaction uses the existing sealed snapshots. Display reads return `unavailable` on a wrong key without exposing ciphertext. Cache storage retains captured structured evidence under the cache's existing protection model.
 
+For `APP_KEY` changes, follow the [rotation inventory and verification procedure](app-key-rotation.md#citation-and-replay-inventory). Re-encrypt the direct citation columns and the nested envelopes in legacy inline steps and hot/cold event JSON; rotating only whole columns misses those nested values.
+
 Branch output and evidence commit in the same lease-guarded update. Hierarchical checkpoints commit output, evidence, and cursor together. Completion selects current-result evidence before terminal node cleanup, or the explicitly selected committed node; final output and evidence commit together in history. Failed or stale branch attempts cannot supply successful final evidence. Existing parent-row retention, cascade, and `swarm:prune` cover the added columns. Existing history/replay JSON inspection exposes the evidence states; no new daemon or operational command is needed.
+
+Cold event and snapshot rows can outlive history and hot replay: they have no automatic `swarm:prune` expiry. Apply an explicit cold archive retention/deletion policy, including retained citation evidence. See the [streaming retention horizon](operator-runbook-streaming-substrate.md#4-the-retention-horizon).
 
 Custom stores keep their existing base interfaces. Optional capabilities provide parity:
 
