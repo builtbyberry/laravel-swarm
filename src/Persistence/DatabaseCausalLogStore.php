@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\UnknownCausalTargetException;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use Illuminate\Support\Carbon;
@@ -38,12 +39,12 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
      */
     public function record(string $runId, SwarmStreamEvent $event, int $ttlSeconds): void
     {
-        $payload = $event->toArray();
+        $payload = $event->toArray() + ['attempt_epoch' => $event->attemptEpoch];
         $timestamp = Carbon::now('UTC');
 
         $this->table()->insert([
             'run_id' => $runId,
-            'event_uuid' => is_string($payload['id'] ?? null) ? $payload['id'] : null,
+            'event_uuid' => $event instanceof SwarmProviderToolEvent ? $event->causalId() : (is_string($payload['id'] ?? null) ? $payload['id'] : null),
             // Promoted from the JSON payload (#284) / event object (#298) into
             // queryable columns so the durable resume-time void lookup can select a
             // node's prior-attempt events without unpacking JSON. node_id is null
@@ -52,7 +53,7 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
             'node_id' => $event->nodeId,
             'attempt_epoch' => $event->attemptEpoch,
             'event_type' => $event->type(),
-            'payload' => $this->encodeJson($this->citations->sealPayload($payload)),
+            'payload' => $this->encodeJson($this->payloads->sealPayload($payload)),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
             'created_at' => $timestamp,
             'updated_at' => $timestamp,

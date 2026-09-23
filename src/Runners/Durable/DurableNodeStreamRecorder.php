@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolAttemptInvalidated;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 
@@ -87,15 +88,25 @@ class DurableNodeStreamRecorder
      *
      * Finds the highest attempt epoch below `$epoch` for the node — the prior
      * (crashed) attempt, since the fresh attempt has not emitted yet — and appends
-     * one idempotent `node_reexecuted` void-edge against its first event. A no-op on
-     * a first attempt (no earlier epoch), when the prior attempt streamed nothing,
-     * or when streaming is off. Must run under the step lease the caller already
-     * holds, before any fresh event is written (#298 F5).
+     * one idempotent `node_reexecuted` void-edge against its first event. Epochs
+     * above zero also append a provider invalidation watermark even when no prior
+     * event exists. Both operations remain active when emission is paused. Must
+     * run under the caller's step lease before fresh emission (#298 F5).
      */
     public function voidPriorAttempt(string $runId, string $nodeId, int $epoch, bool $pinned): void
     {
         if (! $this->enabled($pinned)) {
             return;
+        }
+
+        // Integrity marker is independent of prior event presence: a stale
+        // provider stream may emit its first event after recovery. The caller's
+        // step lease orders this append before fresh emission; duplicate markers
+        // have the same monotonic meaning. Keep this active under the kill-switch.
+        if ($epoch > 0) {
+            $this->causalLog->record($runId, new SwarmProviderToolAttemptInvalidated(
+                SwarmStreamEvent::newId(), $runId, $nodeId, $epoch, SwarmStreamEvent::timestamp(),
+            ), $this->ttlSeconds());
         }
 
         $priorEpoch = $this->causalLog->latestAttemptEpochBelow($runId, $nodeId, $epoch);

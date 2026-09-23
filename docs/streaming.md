@@ -1,5 +1,8 @@
 # Streaming
 
+For provider-native search/fetch activity, privacy and durable attempt behavior, see
+[provider-tool events](provider-tool-events.md).
+
 For final and per-step sources, capture rules, and migration requirements, see [citation evidence](citations.md).
 
 
@@ -31,7 +34,8 @@ needs background or checkpointed execution.
 Streaming is supported for **sequential**, **static-hierarchical**, and
 **hierarchical** (dynamic, coordinator-generated plan) swarms.
 
-Sequential and static-hierarchical swarms stream all agent steps live.
+Sequential swarms emit step lifecycle events for every agent and stream native
+progress from the final agent. Static-hierarchical swarms stream worker nodes.
 Static-hierarchical fans parallel groups out in `concurrent` or `sequential`
 mode and honors [bounded loops](static-hierarchical-topology.md#bounded-loops).
 
@@ -178,6 +182,8 @@ Swarm streams emit typed events, including:
 | `swarm_text_delta` / `swarm_text_end` | Final-agent text chunks and close marker. |
 | `swarm_reasoning_delta` / `swarm_reasoning_end` | Final-agent reasoning stream events. |
 | `swarm_tool_call` / `swarm_tool_result` | Final-agent tool invocation and results. |
+| `swarm_provider_tool_event` | Captured native [provider-tool activity](provider-tool-events.md) with identity and explicit data availability. |
+| `swarm_provider_tool_attempt_invalidated` | Durable control marker invalidating older provider activity for one node. |
 | `swarm_citation` | Native source occurrence with captured [citation evidence and availability](citations.md). |
 | `swarm_step_end` | Step completion with captured or limited output, usage, and [step citation evidence](citations.md). |
 | `swarm_stream_end` | Terminal completion with final output, aggregate usage, and [final-output citation evidence](citations.md). |

@@ -29,6 +29,7 @@ use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
 use Laravel\Ai\Streaming\Events\Citation;
 use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
+use Laravel\Ai\Streaming\Events\ProviderToolEvent;
 use Laravel\Ai\Streaming\Events\ReasoningDelta;
 use Laravel\Ai\Streaming\Events\ReasoningEnd;
 use Laravel\Ai\Streaming\Events\StreamEnd;
@@ -38,24 +39,12 @@ use Laravel\Ai\Streaming\Events\ToolCall;
 use Laravel\Ai\Streaming\Events\ToolResult;
 
 /**
- * The single vendor → swarm stream-event fold, shared by every runner that maps a
- * provider stream into swarm events: the live {@see SequentialRunner::stream()}
- * loop, the durable per-node stream ({@see SequentialRunner::streamSingleStep()}),
- * and — from #311/#312 — the durable hierarchical and parallel-branch advancers.
+ * Maps native events and folds caller-owned step accumulators without retaining
+ * per-run state on the mapper.
  *
- * One copy is what keeps the folds from drifting (the #288 enumerate-every-emit-site
- * lesson, lifted one level up so a new provider event type is mapped identically
- * across every topology rather than handled in one runner and dropped in another).
- *
- * The mapper is deliberately **identity-agnostic**: it never stamps a node id or
- * attempt epoch on the events it produces. Per-node / per-branch identity is the
- * sink's job ({@see DurableNodeStreamRecorder::sinkFor()}),
- * so the durable parallel-branch path can stamp `node_id ?? branch_id` and
- * `epoch = attempts` without forking this fold.
- *
- * It holds no per-run state — only the shared capture/snapshots collaborators — and
- * mutates only the caller-owned {@see StreamStepAccumulator} passed to {@see map()},
- * so two concurrent runs in one Octane worker never share a step's buffer.
+ * @see ProviderToolEventMapper
+ * @see StreamStepAccumulator
+ * @see DurableNodeStreamRecorder
  *
  * @internal
  */
@@ -66,6 +55,7 @@ class StreamEventMapper
         protected SnapshotsMemory $snapshots,
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
+        protected ProviderToolEventMapper $providerTools,
     ) {}
 
     /**
@@ -86,6 +76,10 @@ class StreamEventMapper
         StreamStepAccumulator $accumulator,
     ): ?SwarmStreamEvent {
         $this->outcomes->validateEvent($event);
+
+        if ($event instanceof ProviderToolEvent) {
+            return $this->providerTools->map($event, $state->context, $index, $agent::class, $accumulator->providerToolBytes);
+        }
 
         if ($event instanceof Citation) {
             $part = $this->citations->event($event, $state->context->runId, $index, $agent::class);

@@ -45,16 +45,16 @@ follow `swarm.persistence.decrypt_failure_policy`:
 | `throw`          | Decrypt exception bubbles up. Reads fail loudly.               |
 
 The default is `null_with_log`, but not every reader follows that display
-policy. Citation reads use display-safe decoding and return `unavailable` with
-reason `decrypt_failed` when their key is missing, without returning ciphertext
+policy. Citation and provider-tool envelope reads use display-safe decoding and
+return `unavailable` with reason `decrypt_failed` when their key is missing, without returning ciphertext
 or throwing under the `legacy` or `throw` policies. Operational checkpoint and
 cold-snapshot readers use strict decryption; losing their key can prevent reuse
 of retained work. Do not treat successful commands or an absence of log warnings
 as proof that rotation preserved all evidence.
 
 JSON containers are not encrypted wholesale. Designated nested values **are**
-sealed, including persisted context input, legacy step I/O, and citation
-envelopes. Preserve unrelated JSON fields while rotating these values. Arbitrary
+sealed, including persisted context input, legacy step I/O, and citation and
+provider-tool envelopes. Preserve unrelated JSON fields while rotating these values. Arbitrary
 `data`, `metadata`, or artifact content is not automatically sealed; any
 application-owned encryption has its own rotation requirements.
 
@@ -68,8 +68,8 @@ History](persistence-and-history.md) with these locations:
 | --- | --- |
 | `swarm_run_histories`, `swarm_run_steps`, `swarm_durable_branches`, `swarm_durable_node_outputs`, `swarm_stream_step_checkpoints` | The direct `citation_evidence` column, when its value starts with `sw0:`. |
 | `swarm_run_histories.steps` legacy inline JSON | Each step's `citation_evidence`, alongside its existing sealed I/O fields. |
-| `swarm_stream_events.payload` JSON, including causal-log events | The nested `citation_evidence` string. The entire JSON column does not start with `sw0:`. |
-| `swarm_cold_archives.payload`, where `archive_type = event` | The same nested `citation_evidence` copied from the hot event. |
+| `swarm_stream_events.payload` JSON, including causal-log events | The nested `citation_evidence` and `provider_tool_evidence` strings, when present. The entire JSON column does not start with `sw0:`. |
+| `swarm_cold_archives.payload`, where `archive_type = event` | The nested `citation_evidence` and `provider_tool_evidence` strings copied from the hot event. |
 | `swarm_cold_archives.payload`, where `archive_type = snapshot` | The existing whole sealed snapshot string; do not treat it as an event JSON object. |
 
 Only transform values written in the package's sealing format. Leave null,
@@ -136,8 +136,10 @@ that case re-encrypt the sealed values in place during a maintenance window:
    **only the new key**. Compare representative final and per-step history,
    legacy inline steps, checkpoint evidence, hot replay, cold event replay,
    and cold snapshots with their pre-rotation values. Include every location
-   actually present in your installation. Any new `unavailable` /
-   `decrypt_failed` citation, missing source, changed attribution, or strict
+   actually present in your installation. Compare decoded provider payloads and
+   their availability in hot/causal replay and cold event replay as well as
+   citations. Any new `unavailable` / `decrypt_failed` provider payload or
+   citation, missing source, changed attribution, or strict
    snapshot decryption failure means verification failed: keep writers stopped,
    preserve both keys and the backup, and correct the missed data.
 6. Once the inventory and verification pass, promote the new key to `APP_KEY`,
@@ -146,8 +148,8 @@ that case re-encrypt the sealed values in place during a maintenance window:
 
 Test the script against a staging copy of the production database before
 running it for real. Log inspection is supplementary: verify decoded evidence
-and its availability states directly. Do not recover missed citations by
-rerunning providers or replace unreadable evidence with an empty source list.
+and its availability states directly. Do not recover missed citation or provider
+evidence by rerunning providers, or replace unreadable evidence with empty data.
 
 ## Interaction With Retention Windows
 

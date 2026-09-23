@@ -1,5 +1,8 @@
 ![](https://banners.beyondco.de/Laravel%20Swarm.png?theme=light&packageManager=composer+require&packageName=builtbyberry%2Flaravel-swarm&pattern=aztec&style=style_1&description=Lightweight+orchestration+package+for+coordinating+AI+agents%2C+workflows%2C+and+distributed+task+execution+within+Laravel+applications+built+on+Laravel+AI&md=1&showWatermark=1&fontSize=100px&images=cog) 
 
+Native provider activity is preserved on supported streaming paths; see
+[provider-tool events](docs/provider-tool-events.md) for capture, replay and durable-attempt semantics.
+
 # Laravel Swarm
 
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/builtbyberry/laravel-swarm.svg)](https://packagist.org/packages/builtbyberry/laravel-swarm)

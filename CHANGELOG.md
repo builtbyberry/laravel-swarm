@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.26.3 - unreleased
+
+Preserve native provider-tool activity across streaming, replay, and broadcast,
+with workflow attribution, bounded capture, and durable attempt history.
+
+### Added
+
+- **Provider-tool activity** preserves native event and item identifiers, type/status, provider, timestamps, invocation, and workflow attribution through supported streams, completed event collections, replay, and all broadcast helpers. These are observations of provider activity, not fabricated function-tool results or approval continuation.
+- **Bounded, private payloads** apply output capture rules to structured data, distinguish empty, withheld, limited, and unavailable payloads, and seal database envelopes without a schema change. Event, step, and nesting limits bound arbitrary data before serialization.
+- **Durable attempt evidence** keeps repeated native IDs and interleaved activity distinct across nodes and attempts. Invalidation markers exclude superseded activity from effective evidence, including late events, while retaining audit history through hot and cold replay.
+
+### Changed
+
+- **Replay compatibility** retains durable attempt metadata for cold invalidation anchors without changing existing event wire shapes. Older readers can skip the new event types; that does not preserve their evidence during rollback. Existing archives that already lost attempt metadata cannot be repaired by this upgrade.
+- **Provider payload redaction** withholds arbitrary keys as well as values, since keys can contain sensitive content. Payloads that exceed limits are withheld whole instead of presenting incomplete JSON as complete evidence; identity and availability remain visible.
+- **Operational guidance** documents capture, payload limits, supported execution modes, broadcast, mixed readers, and the new provider envelopes in the APP_KEY rotation inventory. Agent guidance now distinguishes provider payload withholding from function-tool/reasoning redaction. Existing cold archives remain exempt from ordinary TTL pruning; explicit tiered replay deletion removes both hot and cold activity.
+
+No new migration or dependency change is required. Upgrade workers and event readers
+together, and retain readers and backups that can interpret the new evidence before
+rolling back. See [provider-tool events](docs/provider-tool-events.md) and the
+[upgrade instructions](UPGRADING.md#v0263-provider-tool-event-readers).
+
 ## v0.26.2 - 2026-09-22
 
 Preserve native citation evidence throughout a swarm run, and keep the full
