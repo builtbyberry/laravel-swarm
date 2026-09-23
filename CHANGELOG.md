@@ -15,7 +15,7 @@ with workflow attribution, bounded capture, and durable attempt history.
 
 - **Replay compatibility** retains durable attempt metadata for cold invalidation anchors without changing existing event wire shapes. Older readers can skip the new event types; that does not preserve their evidence during rollback. Existing archives that already lost attempt metadata cannot be repaired by this upgrade.
 - **Provider payload redaction** withholds arbitrary keys as well as values, since keys can contain sensitive content. Payloads that exceed limits are withheld whole instead of presenting incomplete JSON as complete evidence; identity and availability remain visible.
-- **Operational guidance** documents capture, payload limits, supported execution modes, broadcast, mixed readers, and the new provider envelopes in the APP_KEY rotation inventory. Existing cold archives remain exempt from ordinary TTL pruning; explicit tiered replay deletion removes both hot and cold activity.
+- **Operational guidance** documents capture, payload limits, supported execution modes, broadcast, mixed readers, and the new provider envelopes in the APP_KEY rotation inventory. Agent guidance now distinguishes provider payload withholding from function-tool/reasoning redaction. Existing cold archives remain exempt from ordinary TTL pruning; explicit tiered replay deletion removes both hot and cold activity.
 
 No new migration or dependency change is required. Upgrade workers and event readers
 together, and retain readers and backups that can interpret the new evidence before
