@@ -18,6 +18,10 @@ coverage suite within its existing memory limit with Pest 5.
 - **Completed stream responses** retain their executed steps. Step and stream end events carry citation evidence; older rows and payloads read as unknown.
 - **Pest 5 development tooling** keeps the full coverage suite at a 1 GiB limit and 80% floor. Separate PHP 8.4/8.5 jobs verify the full suite, process concurrency, and static analysis on exact Laravel 13.16.0 with a temporary Pest 4 toolchain. Runtime requirements are unchanged.
 
+### Fixed
+
+- **Operational evidence guidance** now inventories nested citation ciphertext for APP_KEY rotation and requires decoded-evidence verification before retiring the old key. Cold archive retention guidance explicitly distinguishes application-owned deletion from hot-row TTL pruning.
+
 Run the additive migration before starting upgraded workers, then drain and restart
 existing workers. Older code can discard citation evidence: retain the new columns
 and replay data during rollback. See [citation evidence](docs/citations.md) and the
