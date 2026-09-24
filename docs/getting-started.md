@@ -15,17 +15,17 @@ the manual equivalent of every step the installer performs.
 ## Prerequisites
 
 - PHP **^8.4**
-- Laravel **13** (`illuminate/*` **^13.0**)
-- `laravel/ai` **^0.11.2** (a transitive dependency, installed by Composer)
+- Laravel **^13.16** (requires `illuminate/json-schema` **^13.16**)
+- `laravel/ai` **^1.0** (a transitive dependency, installed by Composer)
 
-PHP **^8.4** is supported alongside PHP 8.5. As of **v0.26.0**, the official
-`laravel/ai` floor is **^0.11.2** and support for **0.10** is dropped.
-Update the dependency and Swarm together; see the
-[upgrade instructions](../UPGRADING.md#upgrading-to-v0260).
+PHP **^8.4** is supported alongside PHP 8.5. As of **v0.27.0**, the official
+`laravel/ai` requirement is **^1.0**. Update the dependency and Swarm together;
+see the [upgrade instructions](../UPGRADING.md#upgrading-to-v0270). Retest the
+application's workflow paths after resolving Laravel or Laravel AI updates.
 
-**No special stability configuration is required.** `laravel/ai` ships stable
-tags on the 0.11 line, so this package declares `"minimum-stability": "stable"`
-and installs cleanly into an application that does the same.
+**No special stability configuration is required.** Laravel AI 1.0 is a stable
+release, so this package declares `"minimum-stability": "stable"` and installs
+into an application that does the same.
 
 Before **v0.23.0** this page asked you to set `"minimum-stability": "dev"` in
 your application's `composer.json`. That is no longer necessary, and is no

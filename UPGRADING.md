@@ -20,7 +20,7 @@ restarting production work.
 Native agents accept `AgentInput|UserMessage|Decisions|string` on their six prompt,
 queue, stream and broadcast verbs. Update direct implementations and narrower
 overrides to the released native signatures. Text responses use native
-`TextUsage`, not the abstract usage base class. Middleware receives a native
+`TextUsage`, rather than the general `Usage` base class. Middleware receives a native
 `PendingStep` and can copy its messages/options for each generation; the original
 prompt event remains the original input. Test outgoing generation messages when
 asserting middleware transformations.

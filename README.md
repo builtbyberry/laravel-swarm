@@ -56,7 +56,7 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 ## Requirements
 
 - PHP **^8.4**
-- Laravel **13** (`illuminate/*` **^13.0**)
+- Laravel **^13.16** (requires `illuminate/json-schema` **^13.16**)
 - `laravel/ai` **^1.0**
 
 PHP **^8.4** is supported alongside PHP 8.5. As of **v0.27.0**, the official `laravel/ai` requirement is **^1.0**. Upgrade the dependency and Swarm together; see [UPGRADING.md](UPGRADING.md#upgrading-to-v0270).
@@ -67,12 +67,10 @@ Earlier versions of this document asked you to set `"minimum-stability": "dev"` 
 
 Laravel Swarm orchestrates the same Laravel AI agents, providers, and streams as your application. Treat Composer updates to Laravel or `laravel/ai` as integration-test events: run your test suite and any queued, streamed, or durable swarm smoke paths after dependency changes. This package's [changelog](CHANGELOG.md) covers Swarm-owned changes; it does not replace verification against upstream Laravel or Laravel AI releases.
 
-Because Laravel AI is pre-1.0, Laravel Swarm intentionally validates and
-supports one Laravel AI minor line at a time. A patch within the declared range
-still needs integration testing; a new minor is unsupported until a later Swarm
-release explicitly adopts it after validation. Application test results do not
-expand the Composer range declared by the package. See the
-[Laravel AI compatibility policy](UPGRADING.md#laravel-ai-compatibility-policy).
+The declared `laravel/ai ^1.0` range permits compatible 1.x releases. Treat minor
+and patch updates as integration-test events; a successful Composer resolution
+alone does not verify an application's workflow behavior. See the
+[Laravel AI 1.0 upgrade guidance](UPGRADING.md#upgrading-to-v0270).
 
 ## Installation
 
