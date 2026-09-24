@@ -72,6 +72,9 @@ and patch updates as integration-test events; a successful Composer resolution
 alone does not verify an application's workflow behavior. See the
 [Laravel AI 1.0 upgrade guidance](UPGRADING.md#upgrading-to-v0270).
 
+For the Laravel AI 1.0 transition, follow the [native conversation upgrade](docs/native-conversation-upgrade.md)
+and explicitly select the [new upgrade recipe](docs/upgrade-assistant.md#laravel-ai-10-recipe).
+
 ## Installation
 
 Require the package with Composer, then run the interactive installer:

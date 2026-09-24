@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Upgrade\ManifestEditor;
+use BuiltByBerry\LaravelSwarm\Upgrade\UpgradeRecipe;
 
 beforeEach(function () {
     $this->upgradeRoot = sys_get_temp_dir().'/swarm-manifest-editor-'.bin2hex(random_bytes(8));
@@ -29,6 +30,46 @@ afterEach(function () {
     };
     $remove($this->upgradeRoot);
 });
+
+it('new recipe backups preserve bytes permissions and require matching restore identity', function () {
+    $editor = new ManifestEditor(new UpgradeRecipe(UpgradeRecipe::NATIVE_ONE));
+    $result = $editor->apply($this->upgradeRoot, $this->prepareManifest);
+    $path = $this->upgradeRoot.'/.swarm-upgrade/'.$result['backup_id'].'.json';
+    $backup = json_decode(file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
+    expect($backup)->toMatchArray(['schema_version' => 1, 'recipe' => '0.26-to-0.27', 'target' => '0.27.0', 'mode' => 0640])
+        ->and($backup['before_sha256'])->toBe(hash('sha256', $this->beforeManifest))
+        ->and($backup['after_sha256'])->toBe(hash('sha256', $this->afterManifest))
+        ->and(fileperms($path) & 0777)->toBe(0600)
+        ->and(fileperms($this->upgradeRoot.'/composer.json') & 0777)->toBe(0640);
+    expect(fn () => (new ManifestEditor)->restore($this->upgradeRoot, $result['backup_id']))->toThrow(RuntimeException::class, 'recipe')
+        ->and(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->afterManifest);
+    expect($editor->restore($this->upgradeRoot, $result['backup_id']))->toBe($result)
+        ->and(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->beforeManifest);
+});
+
+it('existing old backups remain restorable with an explicit old recipe and refuse the new recipe', function () {
+    $result = (new ManifestEditor)->apply($this->upgradeRoot, $this->prepareManifest);
+    expect(fn () => (new ManifestEditor(new UpgradeRecipe(UpgradeRecipe::NATIVE_ONE)))->restore($this->upgradeRoot, $result['backup_id']))->toThrow(RuntimeException::class, 'recipe')
+        ->and(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->afterManifest);
+    (new ManifestEditor(new UpgradeRecipe(UpgradeRecipe::DEFAULT)))->restore($this->upgradeRoot, $result['backup_id']);
+    expect(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->beforeManifest);
+});
+
+it('new backup restore rejects changed target identity and later manifest bytes', function (string $case) {
+    $editor = new ManifestEditor(new UpgradeRecipe(UpgradeRecipe::NATIVE_ONE));
+    $result = $editor->apply($this->upgradeRoot, $this->prepareManifest);
+    if ($case === 'target') {
+        $path = $this->upgradeRoot.'/.swarm-upgrade/'.$result['backup_id'].'.json';
+        $backup = json_decode(file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
+        $backup['target'] = '0.27.1';
+        file_put_contents($path, json_encode($backup, JSON_THROW_ON_ERROR));
+    } else {
+        file_put_contents($this->upgradeRoot.'/composer.json', "\n", FILE_APPEND);
+    }
+    $before = file_get_contents($this->upgradeRoot.'/composer.json');
+    expect(fn () => $editor->restore($this->upgradeRoot, $result['backup_id']))->toThrow(RuntimeException::class)
+        ->and(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($before);
+})->with(['target', 'later-edit']);
 
 it('atomically applies exact bytes and privately backs up both images and original ownership', function () {
     $path = $this->upgradeRoot.'/composer.json';

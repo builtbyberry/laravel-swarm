@@ -15,6 +15,20 @@ objects. Back up both stores, drain workers, upgrade readers and workers togethe
 and exercise the native conversation paths used by your application before
 restarting production work.
 
+### Explicit recipe and native conversation conversion
+
+The [upgrade assistant](docs/upgrade-assistant.md#laravel-ai-10-recipe) retains
+its old default. Select `--recipe=0.26-to-0.27` explicitly for this transition.
+Its static report cannot certify native database safety. Candidate companion
+targets remain blocked until the compatibility map is complete.
+
+Follow the [native conversation upgrade procedure](docs/native-conversation-upgrade.md)
+for the application-owned executable migration, pending-turn disposition,
+configured connection/tables, custom-store signatures, authorization and tested
+backup/restore boundary. Stop all writers and stage the new autoload environment
+before running the migration; restart only after semantic verification. Do not
+run the migration on real data merely because dependency checks are green.
+
 ### Native agent inputs and test agents
 
 Native agents accept `AgentInput|UserMessage|Decisions|string` on their six prompt,

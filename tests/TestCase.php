@@ -60,9 +60,8 @@ abstract class TestCase extends Orchestra
      * Build the testbench `testing` connection config.
      *
      * Defaults to in-memory SQLite — the right choice for 99% of the suite.
-     * CI lanes that need a real MySQL/Postgres backend (currently only
-     * `tests/ProcessConcurrency/AuditOutboxConcurrencyTest.php`, which exercises
-     * `FOR UPDATE SKIP LOCKED`) set `DB_CONNECTION=mysql` or `pgsql` along with
+     * The real database workflow (.github/workflows/tests-real-db.yml) supplies
+     * `DB_CONNECTION=mysql` or `pgsql` along with
      * the usual `DB_HOST`/`DB_PORT`/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`
      * env vars; this method honors them so the same TestCase boots cleanly
      * against either backend.

@@ -11,14 +11,17 @@ use Throwable;
 final class UpgradeConsole
 {
     public const HELP = <<<'TEXT'
-Preview the Swarm v0.25 to v0.26.1 upgrade recipe (also inspects v0.26 apps).
+Preview a Swarm upgrade recipe. Default: 0.25-to-0.26, target v0.26.1.
+Explicit 0.26-to-0.27 targets planned v0.27.0 / Laravel AI 1.x.
+Candidate targets are not published-install proof; unresolved companions block apply.
 
-  swarm-upgrade [--path=APP] [--json]
-  swarm-upgrade --path=APP --apply=ID[,ID] --expect=DIGEST --yes [--json]
-  swarm-upgrade --path=APP --restore=BACKUP_ID --yes [--json]
+  swarm-upgrade [--path=APP] [--recipe=RECIPE] [--json]
+  swarm-upgrade --path=APP [--recipe=RECIPE] --apply=ID[,ID] --expect=DIGEST --yes [--json]
+  swarm-upgrade --path=APP [--recipe=RECIPE] --restore=BACKUP_ID --yes [--json]
 
 Options:
   --path=APP       Application directory; defaults to the current directory.
+  --recipe=NAME   Select 0.25-to-0.26 (default) or 0.26-to-0.27 explicitly.
   --json          Print a machine-readable report.
   --apply=IDS     Apply only these comma-separated action IDs from a preview.
   --expect=HASH   Require this exact preview SHA-256 before applying.
@@ -28,6 +31,8 @@ Options:
 
 Default: read-only preview. No Composer execution or lock edits.
 Standalone does not boot the target app; Artisan boots Laravel normally.
+Standalone refuses repeated options; Artisan uses Symfony's option parsing.
+Use the same recipe for preview, apply and restore of its manifest backup.
 Exit codes: 0 file operation completed; 1 report requires manual verification;
 2 invalid input, unsafe state, or I/O failure. No result certifies runtime readiness.
 Backups: .swarm-upgrade/ in the application; retain privately and remove manually.
@@ -57,7 +62,7 @@ TEXT;
                     throw new RuntimeException('--'.$key.' does not take a value.');
                 }
                 $options[$key] = true;
-            } elseif (in_array($key, ['path', 'apply', 'expect', 'restore'], true)) {
+            } elseif (in_array($key, ['path', 'recipe', 'apply', 'expect', 'restore'], true)) {
                 $value = $parts[1] ?? ($arguments[++$index] ?? '');
                 if ($value === '' || str_starts_with($value, '--')) {
                     throw new RuntimeException('--'.$key.' requires a value.');
@@ -71,12 +76,35 @@ TEXT;
         return $options;
     }
 
+    /** Identify a standalone selector for error reporting only, never for execution.
+     * @param  list<string>  $arguments
+     */
+    public static function errorRecipe(array $arguments): ?string
+    {
+        $values = [];
+        foreach ($arguments as $index => $argument) {
+            if (str_starts_with($argument, '--recipe=')) {
+                $values[] = substr($argument, strlen('--recipe='));
+            } elseif ($argument === '--recipe') {
+                $value = $arguments[$index + 1] ?? '';
+                $values[] = str_starts_with($value, '--') ? '' : $value;
+            }
+        }
+
+        return count($values) > 1 ? null : ($values[0] ?? UpgradeRecipe::DEFAULT);
+    }
+
     /** @param array<string, mixed> $options
      * @param  callable(string): void  $write
      */
     public function run(array $options, string $defaultPath, callable $write): int
     {
+        $selected = array_key_exists('recipe', $options) ? $options['recipe'] : UpgradeRecipe::DEFAULT;
         try {
+            if (! is_string($selected) || $selected === '') {
+                throw new RuntimeException('--recipe requires a nonempty recipe name.');
+            }
+            $recipe = new UpgradeRecipe($selected);
             if ($options['help'] ?? false) {
                 $write(self::HELP);
 
@@ -98,7 +126,7 @@ TEXT;
             if ($apply === null && $restore === null && $approved) {
                 throw new RuntimeException('--yes requires an explicit --apply or --restore operation.');
             }
-            $assistant = new UpgradeAssistant;
+            $assistant = new UpgradeAssistant($recipe);
             $path = $options['path'] ?? $defaultPath;
             if (! is_string($path) || $path === '') {
                 throw new RuntimeException('The application path must be a nonempty string.');
@@ -120,16 +148,24 @@ TEXT;
 
             return $report['status'] === 'preview' ? 1 : 0;
         } catch (Throwable $e) {
-            $this->error($e, (bool) ($options['json'] ?? false), $write);
+            $this->error($e, (bool) ($options['json'] ?? false), $write, $selected);
 
             return 2;
         }
     }
 
     /** @param callable(string): void $write */
-    public function error(Throwable $error, bool $json, callable $write): void
+    public function error(Throwable $error, bool $json, callable $write, mixed $selected = UpgradeRecipe::DEFAULT): void
     {
-        $this->render(['schema_version' => 1, 'recipe' => UpgradeAssistant::RECIPE, 'target' => UpgradeAssistant::TARGET, 'status' => 'error', 'runtime_verified' => false, 'message' => $error->getMessage()], $json, $write);
+        $recipe = null;
+        if (is_string($selected)) {
+            try {
+                $recipe = new UpgradeRecipe($selected);
+            } catch (RuntimeException) {
+                // An invalid selection has no valid target identity.
+            }
+        }
+        $this->render(['schema_version' => 1, 'recipe' => is_string($selected) ? $selected : null, 'target' => $recipe?->target, 'status' => 'error', 'runtime_verified' => false, 'message' => $error->getMessage()], $json, $write);
     }
 
     /** @param array<string, mixed> $report
@@ -142,7 +178,7 @@ TEXT;
 
             return;
         }
-        $write('Swarm upgrade '.$report['status'].' — target '.UpgradeAssistant::TARGET);
+        $write('Swarm upgrade '.$report['status'].' — recipe '.($report['recipe'] ?? '(invalid)').' — target '.($report['target'] ?? '(unavailable)'));
         if (isset($report['message'])) {
             $write($report['message']);
         }
