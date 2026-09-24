@@ -240,9 +240,9 @@ class SwarmFake implements Swarm
     }
 
     /**
-     * @param  SwarmTaskInput  $task
+     * @param  array<string, mixed>|RunContext|string  $task
      */
-    public function recordDurableChildSwarm(string $childSwarmClass, string|array|RunContext|UserMessage $task): self
+    public function recordDurableChildSwarm(string $childSwarmClass, string|array|RunContext $task): self
     {
         $this->recordedDurableOperations['children'][] = compact('childSwarmClass', 'task');
 
@@ -339,12 +339,12 @@ class SwarmFake implements Swarm
                 runId: 'fake-run-id',
                 swarmClass: $this->swarmClass,
                 topology: $this->fakeTopology,
-                input: is_string($task) ? $task : 'structured-task',
+                input: $this->taskPrompt($task),
                 metadata: ['run_id' => 'fake-run-id'],
                 timestamp: SwarmStreamEvent::timestamp(),
             );
             $steps = $fixture->steps ?: [new SwarmStep(self::class,
-                is_string($task) ? $task : 'structured-task', $output, citationEvidence: $fixture->citationEvidence)];
+                $this->taskPrompt($task), $output, citationEvidence: $fixture->citationEvidence)];
             foreach ($steps as $index => $step) {
                 yield new SwarmStepStart(
                     id: SwarmStreamEvent::newId(),
@@ -466,7 +466,7 @@ class SwarmFake implements Swarm
             return;
         }
 
-        PHPUnit::assertContains($task, $this->recorded, "The swarm [{$this->swarmClass}] was not run with task: [{$this->assertTaskDescription($task)}].");
+        PHPUnit::assertTrue($this->containsTask($this->recorded, $task), "The swarm [{$this->swarmClass}] was not run with task: [{$this->assertTaskDescription($task)}].");
     }
 
     /**
@@ -513,7 +513,7 @@ class SwarmFake implements Swarm
             return;
         }
 
-        PHPUnit::assertContains($task, $this->recordedQueued, "The swarm [{$this->swarmClass}] was not queued with task: [{$this->assertTaskDescription($task)}].");
+        PHPUnit::assertTrue($this->containsTask($this->recordedQueued, $task), "The swarm [{$this->swarmClass}] was not queued with task: [{$this->assertTaskDescription($task)}].");
     }
 
     /**
@@ -550,7 +550,7 @@ class SwarmFake implements Swarm
             return;
         }
 
-        PHPUnit::assertContains($task, $this->recordedDurable, "The swarm [{$this->swarmClass}] was not durably dispatched with task: [{$this->assertTaskDescription($task)}].");
+        PHPUnit::assertTrue($this->containsTask($this->recordedDurable, $task), "The swarm [{$this->swarmClass}] was not durably dispatched with task: [{$this->assertTaskDescription($task)}].");
     }
 
     public function assertNeverDispatchedDurably(): void
@@ -642,7 +642,7 @@ class SwarmFake implements Swarm
             return;
         }
 
-        PHPUnit::assertContains($task, $this->recordedStreamed, "The swarm [{$this->swarmClass}] was not streamed with task: [{$this->assertTaskDescription($task)}].");
+        PHPUnit::assertTrue($this->containsTask($this->recordedStreamed, $task), "The swarm [{$this->swarmClass}] was not streamed with task: [{$this->assertTaskDescription($task)}].");
     }
 
     /**
@@ -847,6 +847,37 @@ class SwarmFake implements Swarm
     protected function assertTaskDescription(string|UserMessage $task): string
     {
         return $task instanceof UserMessage ? $task->content : $task;
+    }
+
+    /**
+     * @param  array<int, string|array<string, mixed>|RunContext|UserMessage>  $recorded
+     */
+    protected function containsTask(array $recorded, string|UserMessage $expected): bool
+    {
+        foreach ($recorded as $actual) {
+            if (is_string($expected) && $actual === $expected) {
+                return true;
+            }
+
+            if ($expected instanceof UserMessage && $actual instanceof UserMessage
+                && $expected->content === $actual->content
+                && $expected->attachments->map->toArray()->all() === $actual->attachments->map->toArray()->all()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @param string|array<string, mixed>|RunContext|UserMessage $task */
+    protected function taskPrompt(string|array|RunContext|UserMessage $task): string
+    {
+        return match (true) {
+            is_string($task) => $task,
+            $task instanceof UserMessage => $task->content,
+            $task instanceof RunContext => $task->input,
+            default => 'structured-task',
+        };
     }
 
     protected function boundedCitationFixture(SwarmResponse $response): SwarmResponse

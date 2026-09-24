@@ -61,6 +61,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -206,7 +207,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         ]);
 
         $plan = $this->planner->fromStaticPlan($agents, $swarm->plan(), $swarm::class);
-        $context->assertNativeNodeRecipients('static:', array_keys($plan->nodes));
+        $context->assertNativeNodeRecipients('static:', $plan->workerNodeIds());
 
         // Enforce execution budget before any LLM call
         $required = $plan->reachableWorkerCount();
@@ -831,6 +832,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         $branchSwarmClass = $state->swarm::class;
                         $branchContextPayload = $state->context->toQueuePayload();
                         $branchStepIndex = $nextIndex + $ordinal;
+                        $nativeRecipientPrefix = $this->nativeRecipientPrefix();
                         // A `static` closure that resolves every collaborator
                         // from the container — it MUST NOT bind `$this`. The
                         // real ProcessDriver serializes this callback with
@@ -841,7 +843,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         // MemoryReplayCoordinator are both re-resolved from the
                         // child's container instead, mirroring how the worker
                         // agent is resolved below.
-                        $callbacks[$ordinal] = static function () use ($agentClass, $input, $branchNodeId, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchStepIndex, $citationLimits): array {
+                        $callbacks[$ordinal] = static function () use ($agentClass, $input, $branchNodeId, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchStepIndex, $citationLimits, $nativeRecipientPrefix): array {
                             $container = Container::getInstance();
                             $worker = $container->make($agentClass);
 
@@ -888,8 +890,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             try {
                                 $branchStartedAt = MonotonicTime::now();
                                 $branchContext = RunContext::fromPayload($branchContextPayload, $branchRunId);
-                                $invocation = $branchContext->nativeInvocation('static:'.$branchNodeId, $input);
-                                $response = $worker->prompt($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
+                                $invocation = $branchContext->nativeInvocation($nativeRecipientPrefix.$branchNodeId, $input);
+                                $response = NativeAgentInvoker::prompt($worker, $invocation);
                                 Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
@@ -1113,8 +1115,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
         $nativeStreamFailure = null;
         try {
-            $invocation = $context->nativeInvocation('static:'.($nodeId ?? $stepIndex), $input);
-            $stream = $agent->stream($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
+            $invocation = $context->nativeInvocation($this->nativeRecipientPrefix().($nodeId ?? $stepIndex), $input);
+            $stream = NativeAgentInvoker::stream($agent, $invocation);
             foreach ($stream as $event) {
                 $this->outcomes->validateEvent($event);
                 if ($event instanceof TextDelta) {
@@ -1299,6 +1301,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
         }
+    }
+
+    protected function nativeRecipientPrefix(): string
+    {
+        return 'static:';
     }
 
     /**

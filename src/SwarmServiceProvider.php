@@ -45,6 +45,7 @@ use BuiltByBerry\LaravelSwarm\Compaction\SwarmCompactor;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\AuthorizesNativeInputAttachment;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ColdArchiveDriver;
@@ -139,6 +140,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\DenyExternalNativeInputAttachments;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
@@ -247,6 +249,7 @@ class SwarmServiceProvider extends ServiceProvider
             logger: $app->make(LoggerInterface::class),
         ));
         $this->app->singleton(SwarmAttributeResolver::class);
+        $this->app->singleton(AuthorizesNativeInputAttachment::class, DenyExternalNativeInputAttachments::class);
         $this->app->singleton(NativeInputStore::class, DatabaseNativeInputStore::class);
         $this->app->singleton(NativeInputManager::class);
         $this->app->singleton(ContextGrowthGovernor::class);

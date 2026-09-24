@@ -121,11 +121,11 @@ test('swarm health json output is structured', function (): void {
 
     $payload = json_decode(Artisan::output(), true);
 
-    // 5 persistence checks + 3 governed-by-default checks (Guardrails, Audit sink, Capture policy).
+    // 5 persistence checks + native-input readiness + 3 governed-by-default checks.
     expect($payload)
         ->toBeArray()
         ->and($payload['ok'])->toBeTrue()
-        ->and($payload['checks'])->toHaveCount(8)
+        ->and($payload['checks'])->toHaveCount(9)
         ->and($payload['checks'][0])->toHaveKeys(['component', 'driver', 'store', 'status', 'details']);
 
     // Every check — including the new governance checks — carries the same shape.

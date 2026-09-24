@@ -112,7 +112,7 @@ class EditorAgent implements Agent
 
 When you call `prompt()` (or any execution mode), here is what happens step by step:
 
-1. Your task — a string, array, or `RunContext` — becomes the prompt for the first agent (`ResearchAgent`).
+1. Your task — a string, array, `RunContext`, or native `UserMessage` — becomes the prompt for the first agent (`ResearchAgent`). Native attachments default only to this entry slot; later slots require [explicit recipients](native-inputs.md#explicit-recipients).
 2. `ResearchAgent` runs and returns a text response. That text becomes the prompt for `WriterAgent`.
 3. `WriterAgent` runs and returns its response. That text becomes the prompt for `EditorAgent`.
 4. `EditorAgent` runs and returns the final text.

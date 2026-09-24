@@ -40,7 +40,6 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
-use Laravel\Ai\Messages\UserMessage;
 
 // DurableSignalHandler, DurableRetryHandler, DurableRunInspector, and DurableRunRecorder are
 // intentionally NOT constructor-injected. They are built by DurableManagerCollaboratorFactory
@@ -203,9 +202,9 @@ class DurableSwarmManager
     }
 
     /**
-     * @param  SwarmTaskInput  $task
+     * @param  string|array<string, mixed>|RunContext  $task
      */
-    public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext|UserMessage $task, ?string $dedupeKey = null): DurableChildRun
+    public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null): DurableChildRun
     {
         return $this->children->dispatchChildSwarm($parentRunId, $childSwarmClass, $task, $dedupeKey);
     }

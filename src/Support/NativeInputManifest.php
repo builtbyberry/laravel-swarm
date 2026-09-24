@@ -6,7 +6,16 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use Illuminate\Contracts\Support\Arrayable;
+use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Files\Audio;
+use Laravel\Ai\Files\Base64Audio;
+use Laravel\Ai\Files\Base64Document;
+use Laravel\Ai\Files\Base64Image;
+use Laravel\Ai\Files\Base64Video;
+use Laravel\Ai\Files\Document;
 use Laravel\Ai\Files\File;
+use Laravel\Ai\Files\Image;
+use Laravel\Ai\Files\Video;
 use Laravel\Ai\Messages\UserMessage;
 
 final class NativeInputManifest
@@ -51,21 +60,27 @@ final class NativeInputManifest
             ? $this->attachments
             : array_values(array_intersect_key($this->attachments, array_flip($selection->attachments)));
 
+        $verified = [];
         foreach ($attachments as $attachment) {
             $index = array_search($attachment, $this->attachments, true);
             $expected = is_int($index) ? ($this->attachmentHashes[$index] ?? null) : null;
             if (is_string($expected) && method_exists($attachment, 'content')) {
-                $actual = hash('sha256', (string) $attachment->content());
+                $content = (string) $attachment->content();
+                $actual = hash('sha256', $content);
                 if (! hash_equals($expected, $actual)) {
                     throw new SwarmException("Native attachment [{$index}] failed its content identity check.");
                 }
+
+                $attachment = $this->materializeVerifiedAttachment($attachment, $content, $selection);
             }
+
+            $verified[] = $attachment;
         }
 
         return new NativeAgentInvocation(
             prompt: new UserMessage(
                 $selection->textSource === 'original' ? $this->text : $topologyText,
-                $attachments,
+                $verified,
             ),
             provider: $selection->provider,
             model: $selection->model,
@@ -85,6 +100,9 @@ final class NativeInputManifest
                 }
 
                 $payload = $file->toArray();
+                if (is_string($file->mimeType()) && $file->mimeType() !== '') {
+                    $payload['swarm_mime'] = $file->mimeType();
+                }
                 if (isset($this->attachmentHashes[$index])) {
                     $payload['swarm_content_sha256'] = $this->attachmentHashes[$index];
                 }
@@ -110,6 +128,9 @@ final class NativeInputManifest
             }
 
             $index = count($attachments);
+            if (is_string($attachment['swarm_mime'] ?? null) && $attachment['swarm_mime'] !== '') {
+                $file->withMimeType($attachment['swarm_mime']);
+            }
             $attachments[] = $file;
             if (is_string($attachment['swarm_content_sha256'] ?? null)) {
                 $hashes[$index] = $attachment['swarm_content_sha256'];
@@ -135,5 +156,29 @@ final class NativeInputManifest
             attachmentHashes: $hashes,
             ownedAttachmentIndexes: $owned,
         );
+    }
+
+    protected function materializeVerifiedAttachment(File $attachment, string $content, NativeInputRecipient $selection): File
+    {
+        $mime = $attachment->mimeType();
+        $materialized = match (true) {
+            $attachment instanceof Image => new Base64Image(base64_encode($content), $mime),
+            $attachment instanceof Document => new Base64Document(base64_encode($content), $mime),
+            $attachment instanceof Audio => new Base64Audio(base64_encode($content), $mime),
+            $attachment instanceof Video => new Base64Video(base64_encode($content), $mime),
+            default => $attachment,
+        };
+
+        if ($materialized === $attachment) {
+            return $attachment;
+        }
+
+        $materialized->as($attachment->name());
+        if ($selection->provider instanceof Lab || is_string($selection->provider)) {
+            $materialized->withHeaders($attachment->headers($selection->provider));
+            $materialized->withProviderOptions($attachment->providerOptions($selection->provider));
+        }
+
+        return $materialized;
     }
 }

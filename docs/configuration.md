@@ -58,6 +58,28 @@ Controls the primary persistence driver and at-rest encryption behavior. Changin
 
 ---
 
+## Native Inputs
+
+Native Laravel AI `UserMessage` admission is default-off. Existing admitted
+references remain readable when the writer flag is disabled so workers can drain
+before rollback.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.native_inputs.enabled` | bool | `false` | `SWARM_NATIVE_INPUTS_ENABLED` | Admit new native message input. Enable only after migrations and v1 readers are present on every worker. |
+| `swarm.native_inputs.disk` | string\|null | `null` | `SWARM_NATIVE_INPUTS_DISK` | Private disk used for Swarm-promoted local/base64 files and approved stored references. Required for recoverable attachments. |
+| `swarm.native_inputs.retention_seconds` | int | `86400` | `SWARM_NATIVE_INPUTS_RETENTION_SECONDS` | Envelope retention and execution deadline. Size beyond the longest queue plus durable recovery window. |
+| `swarm.native_inputs.max_attachments` | int | `8` | `SWARM_NATIVE_INPUTS_MAX_ATTACHMENTS` | Maximum attachment count admitted for one native message. |
+| `swarm.native_inputs.max_attachment_bytes` | int | `10485760` | `SWARM_NATIVE_INPUTS_MAX_ATTACHMENT_BYTES` | Maximum bytes admitted for each locally readable or configured-disk attachment. |
+| `swarm.tables.native_inputs` | string | `swarm_native_inputs` | `SWARM_NATIVE_INPUTS_TABLE` | Operational envelope table. A custom name requires a matching published migration. |
+
+Recoverable native input also requires database persistence and
+`swarm.persistence.encrypt_at_rest=true`. Ownership authorization, explicit
+recipient selection, rollout, and rollback are documented in
+[Native messages and attachments](native-inputs.md).
+
+---
+
 ## Context, Artifacts, and History Stores
 
 Sub-driver overrides for individual stores. By default each store inherits from `swarm.persistence.driver`. Set a specific env var to route that store to a different driver.

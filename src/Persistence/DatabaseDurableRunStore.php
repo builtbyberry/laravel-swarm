@@ -442,7 +442,7 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
             $this->contextTable()->upsert(
                 [$contextRow],
                 ['run_id'],
-                $this->contextUpdateColumns(),
+                $this->contextUpdateColumns(array_key_exists('native_input_ref', $contextRow)),
             );
 
             $run = $this->find($runId);
@@ -640,7 +640,7 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
             $this->contextTable()->upsert(
                 [$contextRow],
                 ['run_id'],
-                $this->contextUpdateColumns(),
+                $this->contextUpdateColumns(array_key_exists('native_input_ref', $contextRow)),
             );
 
             $values = [
@@ -2701,25 +2701,23 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
      */
     protected function contextRowWithNativeInputReference(array $row, array $contextPayload): array
     {
-        if ($this->contextHasNativeInputReferenceColumn()) {
-            $row['native_input_ref'] = $contextPayload['native_input_ref'] ?? null;
-
-            return $row;
-        }
-
         if (isset($contextPayload['native_input_ref'])) {
-            throw new SwarmException('Native input persistence requires the [native_input_ref] context column. Run migrations before enabling native inputs.');
+            if (! $this->contextHasNativeInputReferenceColumn()) {
+                throw new SwarmException('Native input persistence requires the [native_input_ref] context column. Run migrations before enabling native inputs.');
+            }
+
+            $row['native_input_ref'] = $contextPayload['native_input_ref'];
         }
 
         return $row;
     }
 
     /** @return list<string> */
-    protected function contextUpdateColumns(): array
+    protected function contextUpdateColumns(bool $withNativeInputReference): array
     {
         $columns = ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at'];
 
-        if ($this->contextHasNativeInputReferenceColumn()) {
+        if ($withNativeInputReference) {
             $columns[] = 'native_input_ref';
         }
 

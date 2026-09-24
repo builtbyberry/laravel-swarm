@@ -99,10 +99,21 @@ SWARM_NATIVE_INPUTS_DISK=private
 The named disk is application-owned and must be private. Local and base64
 image/document/audio/video attachments are copied there before dispatch. Existing
 stored files must already use that disk. Provider file references remain bound to
-the provider account selected by the application. Remote URLs are request-local;
-recoverable dispatch refuses them rather than adding an unbounded server-side
-fetch. Provider support for each modality still controls what the final native
-request may contain.
+the provider account selected by the application. Both are denied by default:
+bind `AuthorizesNativeInputAttachment` to an application policy that verifies the
+file belongs to the run's actor and tenant before opting them in. Swarm-created
+promoted files are already run-scoped and do not call that policy.
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\AuthorizesNativeInputAttachment;
+
+$this->app->bind(AuthorizesNativeInputAttachment::class, App\Ai\NativeFilePolicy::class);
+```
+
+The policy is re-evaluated in every worker before the attachment is released to
+an agent. Remote URLs are request-local; recoverable dispatch refuses them rather
+than adding an unbounded server-side fetch. Provider support for each modality
+still controls what the final native request may contain.
 
 Each envelope binds its run, actor/tenant projection, recipient, expiry and
 content hash. Missing, revoked, expired, wrong-run, wrong-actor/tenant, unknown
@@ -110,14 +121,25 @@ version and mutated-file reads fail before the agent call. `swarm:prune` removes
 expired envelopes and only the temporary files Swarm itself promoted; it never
 deletes application-owned stored files.
 
+`SWARM_NATIVE_INPUTS_RETENTION_SECONDS` is an execution deadline as well as a
+retention setting. Size it beyond the longest queue delay plus the longest
+durable workflow/recovery window. Schedule `swarm:prune`; rows whose owned-file
+cleanup fails are retained for a later retry instead of losing the retry locator.
+`swarm:health` reports whether native readers are ready and, while admission is
+disabled, whether active envelopes still need to drain.
+
 ## Deployment and rollback
 
 1. Deploy the additive migration and v1 readers to every worker.
 2. Configure the protected database store/private disk and leave the feature off.
 3. Restart workers, then enable `SWARM_NATIVE_INPUTS_ENABLED=true`.
-4. Before rollback, disable new admission and drain or explicitly reconcile every
-   active native-input run. Old readers treat rows without a native reference as
-   version 0; they must not consume v1 references by silently dropping them.
+4. Before rollback, disable new admission. Existing opaque references remain
+   readable while the flag is off; confirm `swarm:health` reports zero active
+   envelopes before removing readers or rolling back the migration.
+
+Native marker jobs dispatch after the surrounding database transaction commits by
+default. A caller may still opt into Laravel's explicit `beforeCommit()` behavior
+on the returned pending dispatch when that tradeoff is intentional.
 
 Database sealing does not encrypt an application's filesystem, cache, or queue
 transport. Protect those systems independently and size attachment limits and

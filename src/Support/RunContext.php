@@ -268,7 +268,7 @@ class RunContext implements ArrayAccess
             }
 
             $nodeId = substr($recipient->recipient, strlen($prefix));
-            if ($nodeId === 'coordinator') {
+            if ($prefix === 'generated:' && $nodeId === 'coordinator') {
                 continue;
             }
 
@@ -729,6 +729,11 @@ class RunContext implements ArrayAccess
 
         if (! is_array($payload['artifacts'])) {
             throw new SwarmException('RunContext::fromPayload() expects [artifacts] to be an array.');
+        }
+
+        if (array_key_exists('native_input_ref', $payload)
+            && (! is_string($payload['native_input_ref']) || $payload['native_input_ref'] === '')) {
+            throw new SwarmException('RunContext::fromPayload() expects [native_input_ref] to be a non-empty string when present.');
         }
 
         self::validateSerializedPayload($payload, 'RunContext payload');

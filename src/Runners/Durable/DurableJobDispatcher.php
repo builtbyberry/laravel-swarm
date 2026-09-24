@@ -61,6 +61,10 @@ class DurableJobDispatcher
             ? new AdvanceNativeInputDurableSwarm($runId, $stepIndex)
             : new AdvanceDurableSwarm($runId, $stepIndex);
 
+        if ($job instanceof AdvanceNativeInputDurableSwarm) {
+            $job->afterCommit();
+        }
+
         if ($connection) {
             $job->onConnection($connection);
         }
@@ -78,6 +82,10 @@ class DurableJobDispatcher
             ? new AdvanceNativeInputDurableBranch($runId, $branchId)
             : new AdvanceDurableBranch($runId, $branchId);
 
+        if ($job instanceof AdvanceNativeInputDurableBranch) {
+            $job->afterCommit();
+        }
+
         if ($connection) {
             $job->onConnection($connection);
         }
@@ -94,6 +102,10 @@ class DurableJobDispatcher
         $job = $this->requiresNativeInputReader($runId)
             ? new ResumeNativeInputQueuedHierarchicalSwarm($runId)
             : new ResumeQueuedHierarchicalSwarm($runId);
+
+        if ($job instanceof ResumeNativeInputQueuedHierarchicalSwarm) {
+            $job->afterCommit();
+        }
 
         if ($connection) {
             $job->onConnection($connection);

@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
@@ -201,7 +202,7 @@ class SequentialRunner
                         );
 
                     $invocation = $state->context->nativeInvocation("sequential:{$index}", $input);
-                    $stream = $agent->stream($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
+                    $stream = NativeAgentInvoker::stream($agent, $invocation);
                     $accumulator = new StreamStepAccumulator($snapshot);
 
                     $nativeStreamFailure = null;
@@ -274,7 +275,7 @@ class SequentialRunner
                     );
 
                     $invocation = $state->context->nativeInvocation("sequential:{$index}", $input);
-                    $response = $agent->prompt($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
+                    $response = NativeAgentInvoker::prompt($agent, $invocation);
                     $this->outcomes->validateResponse($response);
                     $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
                     $output = (string) $response;
@@ -398,7 +399,7 @@ class SequentialRunner
 
         try {
             $invocation = $state->context->nativeInvocation("sequential:{$index}", $input);
-            $response = $agent->prompt($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
+            $response = NativeAgentInvoker::prompt($agent, $invocation);
             $this->outcomes->validateResponse($response);
             $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
         } finally {
@@ -481,7 +482,7 @@ class SequentialRunner
         $nativeStreamFailure = null;
         try {
             $invocation = $state->context->nativeInvocation("sequential:{$index}", $input);
-            $stream = $agent->stream($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
+            $stream = NativeAgentInvoker::stream($agent, $invocation);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 

@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use Carbon\CarbonInterface;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Filesystem\Factory;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -60,6 +61,7 @@ class SwarmHealthCommand extends Command
                 fn (array $check): array => $this->runCheck($app, $config, $check),
                 $checks,
             );
+            $results[] = $this->runNativeInputCheck($app, $config, $connection);
 
             if ($this->option('durable') === true) {
                 $results[] = $this->runActiveContextCaptureCheck($config);
@@ -113,6 +115,69 @@ class SwarmHealthCommand extends Command
         return $hasFailure
             ? self::FAILURE
             : self::SUCCESS;
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runNativeInputCheck(Application $app, ConfigRepository $config, Connection $connection): array
+    {
+        $enabled = (bool) $config->get('swarm.native_inputs.enabled', false);
+        $table = (string) $config->get('swarm.tables.native_inputs', 'swarm_native_inputs');
+        $contextTable = (string) $config->get('swarm.tables.contexts', 'swarm_contexts');
+        $schema = $connection->getSchemaBuilder();
+
+        if (! $enabled) {
+            $active = $schema->hasTable($table)
+                ? (int) $connection->table($table)->where('state', 'active')->count()
+                : 0;
+
+            return [
+                'component' => 'Native inputs',
+                'driver' => 'disabled',
+                'store' => $table,
+                'status' => 'note',
+                'details' => $active === 0
+                    ? 'writer disabled; no active native input envelopes remain'
+                    : "writer disabled; {$active} active native input envelope(s) must drain before removing readers",
+            ];
+        }
+
+        $problems = [];
+        if ($config->get('swarm.persistence.driver') !== 'database') {
+            $problems[] = 'swarm.persistence.driver must be database';
+        }
+        if (! (bool) $config->get('swarm.persistence.encrypt_at_rest', false)) {
+            $problems[] = 'swarm.persistence.encrypt_at_rest must be enabled';
+        }
+        if (! $schema->hasTable($table)
+            || ! $schema->hasColumns($table, ['id', 'run_id', 'format_version', 'state', 'payload', 'payload_hash', 'expires_at'])) {
+            $problems[] = "native input table [{$table}] is missing required columns";
+        }
+        if (! $schema->hasTable($contextTable) || ! $schema->hasColumn($contextTable, 'native_input_ref')) {
+            $problems[] = "context table [{$contextTable}] is missing native_input_ref";
+        }
+
+        $disk = $config->get('swarm.native_inputs.disk');
+        if (! is_string($disk) || $disk === '') {
+            $problems[] = 'swarm.native_inputs.disk is not configured';
+        } else {
+            try {
+                $app->make(Factory::class)->disk($disk);
+            } catch (Throwable $exception) {
+                $problems[] = "native input disk [{$disk}] cannot be resolved: {$exception->getMessage()}";
+            }
+        }
+
+        return [
+            'component' => 'Native inputs',
+            'driver' => 'database',
+            'store' => $table,
+            'status' => $problems === [] ? 'ok' : 'failed',
+            'details' => $problems === []
+                ? "sealed v1 envelope table and private disk [{$disk}] are ready"
+                : implode('; ', $problems),
+        ];
     }
 
     /**

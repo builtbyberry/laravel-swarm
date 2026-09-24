@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingActorException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeInputSwarm;
@@ -438,6 +439,10 @@ class SwarmRunner
             : new InvokeNativeInputSwarm($swarm::class, $context->toQueuePayload());
         $pendingDispatch = new PendingDispatch($job);
 
+        if ($job instanceof InvokeNativeInputSwarm) {
+            $pendingDispatch->afterCommit();
+        }
+
         if ($connection = $this->config->get('swarm.queue.connection')) {
             $pendingDispatch->onConnection($connection);
         }
@@ -478,6 +483,10 @@ class SwarmRunner
             ? new BroadcastSwarm($swarm::class, $context->toQueuePayload(), $channels)
             : new BroadcastNativeInputSwarm($swarm::class, $context->toQueuePayload(), $channels);
         $pendingDispatch = new PendingDispatch($job);
+
+        if ($job instanceof BroadcastNativeInputSwarm) {
+            $pendingDispatch->afterCommit();
+        }
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
             $pendingDispatch->onConnection($connection);
@@ -536,7 +545,12 @@ class SwarmRunner
 
         $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $this->resolver->resolveDurableParallelFailurePolicy($swarm));
 
-        return new DurableSwarmResponse(new PendingDispatch($start->job), $this->durable, $start->runId);
+        $pendingDispatch = new PendingDispatch($start->job);
+        if ($start->job instanceof AdvanceNativeInputDurableSwarm) {
+            $pendingDispatch->afterCommit();
+        }
+
+        return new DurableSwarmResponse($pendingDispatch, $this->durable, $start->runId);
     }
 
     protected function assertNativeRecipientsExist(Swarm $swarm, Topology $topology, RunContext $context): void

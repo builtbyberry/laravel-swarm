@@ -71,6 +71,10 @@ final readonly class NativeInputRecipient
     {
         self::assertNodeId($nodeId);
 
+        if (in_array($nodeId, ['coordinator', 'finish', 'parallel'], true)) {
+            throw new SwarmException("Native input generated node id [{$nodeId}] is reserved for route control.");
+        }
+
         return new self("generated:{$nodeId}", $textSource, $attachments);
     }
 

@@ -15,7 +15,8 @@ rotation in different ways:
 
 - **Operational rows** stored in `swarm_*` database tables (context input,
   run history step I/O, durable branch input and output, hierarchical node
-  outputs, child durable run outputs). When `encrypt_at_rest` is on, the
+  outputs, child durable run outputs, and native-input operational envelopes).
+  When `encrypt_at_rest` is on, the
   sealed values are prefixed `sw0:` and decrypt with the configured encrypter.
   This includes designated fields nested inside otherwise unsealed JSON and
   package-owned cold replay archives; see the inventory below.
@@ -66,6 +67,7 @@ History](persistence-and-history.md) with these locations:
 
 | Location | Value to re-encrypt |
 | --- | --- |
+| `swarm_native_inputs.payload` | The whole strict operational envelope. Every active row must remain `sw0:` sealed; do not convert it to legacy plaintext. |
 | `swarm_run_histories`, `swarm_run_steps`, `swarm_durable_branches`, `swarm_durable_node_outputs`, `swarm_stream_step_checkpoints` | The direct `citation_evidence` column, when its value starts with `sw0:`. |
 | `swarm_run_histories.steps` legacy inline JSON | Each step's `citation_evidence`, alongside its existing sealed I/O fields. |
 | `swarm_stream_events.payload` JSON, including causal-log events | The nested `citation_evidence` and `provider_tool_evidence` strings, when present. The entire JSON column does not start with `sw0:`. |

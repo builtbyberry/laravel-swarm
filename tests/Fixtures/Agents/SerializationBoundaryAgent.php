@@ -44,7 +44,17 @@ class SerializationBoundaryAgent implements Agent
      */
     public function prompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
-        $prompt = is_string($prompt) ? $prompt : '';
+        $attachmentContent = '';
+        if ($prompt instanceof UserMessage) {
+            $attachmentContent = $prompt->attachments->map(
+                static fn ($attachment): string => is_object($attachment) && method_exists($attachment, 'content')
+                    ? (string) $attachment->content()
+                    : '',
+            )->implode('|');
+            $prompt = $prompt->content.($attachmentContent === '' ? '' : ':'.$attachmentContent);
+        } elseif (! is_string($prompt)) {
+            $prompt = '';
+        }
 
         return new AgentResponse(
             invocationId: 'serialization-boundary-agent',

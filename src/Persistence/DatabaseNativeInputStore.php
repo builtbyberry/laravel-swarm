@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Contracts\NativeInputStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputManifest;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use JsonException;
 
@@ -15,6 +16,7 @@ final class DatabaseNativeInputStore implements NativeInputStore
     public function __construct(
         protected Connection $connection,
         protected SwarmPersistenceCipher $cipher,
+        protected ConfigRepository $config,
     ) {}
 
     public function put(string $id, string $runId, array $payload, string $hash, int $expiresAt): void
@@ -25,14 +27,19 @@ final class DatabaseNativeInputStore implements NativeInputStore
             throw new SwarmException('The native input operational envelope could not be encoded.', previous: $exception);
         }
 
+        $sealed = $this->cipher->seal($encoded);
+        if (! is_string($sealed) || ! str_starts_with($sealed, SwarmPersistenceCipher::PREFIX)) {
+            throw new SwarmException('Native input operational envelopes must be sealed before persistence.');
+        }
+
         $now = now();
-        $this->connection->table(config('swarm.tables.native_inputs', 'swarm_native_inputs'))->insert([
+        $this->connection->table($this->table())->insert([
             'id' => $id,
             'run_id' => $runId,
             'format_version' => NativeInputManifest::VERSION,
             'state' => 'staged',
-            'payload' => $this->cipher->seal($encoded),
-            'payload_hash' => $hash,
+            'payload' => $sealed,
+            'payload_hash' => hash('sha256', $sealed),
             'expires_at' => date('Y-m-d H:i:s', $expiresAt),
             'created_at' => $now,
             'updated_at' => $now,
@@ -41,17 +48,23 @@ final class DatabaseNativeInputStore implements NativeInputStore
 
     public function find(string $id): ?array
     {
-        $row = $this->connection->table(config('swarm.tables.native_inputs', 'swarm_native_inputs'))->where('id', $id)->first();
+        $row = $this->connection->table($this->table())->where('id', $id)->first();
         if ($row === null) {
             return null;
         }
 
-        $decoded = json_decode((string) $this->cipher->openStrict((string) $row->payload), true, 512, JSON_THROW_ON_ERROR);
+        $sealed = (string) $row->payload;
+        if (! str_starts_with($sealed, SwarmPersistenceCipher::PREFIX)
+            || ! hash_equals((string) $row->payload_hash, hash('sha256', $sealed))) {
+            throw new SwarmException("Native input envelope [{$id}] failed its sealed content identity check.");
+        }
+
+        $decoded = json_decode((string) $this->cipher->openStrict($sealed), true, 512, JSON_THROW_ON_ERROR);
 
         return [
             'run_id' => (string) $row->run_id,
             'payload' => is_array($decoded) ? $decoded : [],
-            'hash' => (string) $row->payload_hash,
+            'hash' => hash('sha256', json_encode($decoded, JSON_THROW_ON_ERROR)),
             'state' => (string) $row->state,
             'expires_at' => strtotime((string) $row->expires_at) ?: 0,
         ];
@@ -69,12 +82,17 @@ final class DatabaseNativeInputStore implements NativeInputStore
 
     protected function transition(string $id, string $runId, string $state): void
     {
-        $updated = $this->connection->table(config('swarm.tables.native_inputs', 'swarm_native_inputs'))
+        $updated = $this->connection->table($this->table())
             ->where('id', $id)->where('run_id', $runId)
             ->update(['state' => $state, 'updated_at' => now()]);
 
         if ($updated !== 1) {
             throw new SwarmException("Native input envelope [{$id}] is unavailable for run [{$runId}].");
         }
+    }
+
+    protected function table(): string
+    {
+        return (string) $this->config->get('swarm.tables.native_inputs', 'swarm_native_inputs');
     }
 }

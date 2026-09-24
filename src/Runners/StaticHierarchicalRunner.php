@@ -36,7 +36,7 @@ class StaticHierarchicalRunner extends HierarchicalRunner
         $workerMap = $this->workerMap($agents);
 
         $plan = $this->planner->fromStaticPlan($agents, $swarm->plan(), $swarm::class);
-        $state->context->assertNativeNodeRecipients('static:', array_keys($plan->nodes));
+        $state->context->assertNativeNodeRecipients('static:', $plan->workerNodeIds());
         $this->ensureStaticPlanWithinExecutionBudget($state, $plan);
 
         $steps = [];
@@ -151,7 +151,7 @@ class StaticHierarchicalRunner extends HierarchicalRunner
         $agents = $state->swarm->agents();
         $this->ensureUniqueWorkerClasses($state->swarm::class, $agents);
         $plan = $this->planner->fromStaticPlan($agents, $state->swarm->plan(), $state->swarm::class);
-        $state->context->assertNativeNodeRecipients('static:', array_keys($plan->nodes));
+        $state->context->assertNativeNodeRecipients('static:', $plan->workerNodeIds());
         $this->ensureStaticPlanWithinExecutionBudget($state, $plan);
         $cursor = $this->buildStaticDurableCursor($plan);
         $nodeOutputs = [];

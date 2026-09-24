@@ -16,6 +16,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalSingle
 use Illuminate\Broadcasting\AnonymousEvent;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Support\Facades\Event;
+use Laravel\Ai\Files\Base64Image;
+use Laravel\Ai\Messages\UserMessage;
 use PHPUnit\Framework\AssertionFailedError;
 
 test('fake intercepts run and queue calls', function () {
@@ -31,6 +33,23 @@ test('fake intercepts run and queue calls', function () {
     EmptyRunnableSwarm::assertRan('alpha');
     EmptyRunnableSwarm::assertQueued('beta');
     EmptyRunnableSwarm::assertDispatchedDurably('gamma');
+});
+
+test('fake assertions compare native messages by value across every input surface', function () {
+    EmptyRunnableSwarm::fake(['prompt-output', 'stream-output']);
+
+    $message = new UserMessage('inspect', [new Base64Image(base64_encode('pixels'), 'image/png')]);
+    $equivalent = fn (): UserMessage => new UserMessage('inspect', [new Base64Image(base64_encode('pixels'), 'image/png')]);
+
+    EmptyRunnableSwarm::make()->prompt($message);
+    EmptyRunnableSwarm::make()->queue($message);
+    EmptyRunnableSwarm::make()->dispatchDurable($message);
+    iterator_to_array(EmptyRunnableSwarm::make()->stream($message));
+
+    EmptyRunnableSwarm::assertRan($equivalent());
+    EmptyRunnableSwarm::assertQueued($equivalent());
+    EmptyRunnableSwarm::assertDispatchedDurably($equivalent());
+    EmptyRunnableSwarm::assertStreamed($equivalent());
 });
 
 test('make without arguments resolves the swarm through the container', function () {

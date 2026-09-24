@@ -11,7 +11,6 @@ use BuiltByBerry\LaravelSwarm\Contracts\RoutesDurableWaits;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\DurableChildRun;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
-use Laravel\Ai\Messages\UserMessage;
 use ReflectionClass;
 
 /**
@@ -95,9 +94,9 @@ class DurableBoundaryCoordinator
     }
 
     /**
-     * @param  SwarmTaskInput  $task
+     * @param  string|array<string, mixed>|RunContext  $task
      */
-    protected function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext|UserMessage $task, ?string $dedupeKey): DurableChildRun
+    protected function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey): DurableChildRun
     {
         return $this->children->dispatchChildSwarm($parentRunId, $childSwarmClass, $task, $dedupeKey);
     }

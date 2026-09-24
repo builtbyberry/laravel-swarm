@@ -13,6 +13,7 @@ use Illuminate\Contracts\Filesystem\Factory as FilesystemFactory;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Symfony\Component\Console\Attribute\AsCommand;
+use Throwable;
 
 #[AsCommand(name: 'swarm:prune')]
 class SwarmPruneCommand extends Command
@@ -23,8 +24,12 @@ class SwarmPruneCommand extends Command
 
     protected const CHUNK_SIZE = 1000;
 
-    public function handle(Connection $connection, ConfigRepository $config, SwarmAuditDispatcher $audit, SwarmPersistenceCipher $cipher, FilesystemFactory $filesystems): int
+    public function handle(Connection $connection, ConfigRepository $config, SwarmAuditDispatcher $audit): int
     {
+        /** @var SwarmPersistenceCipher $cipher */
+        $cipher = $this->laravel->make(SwarmPersistenceCipher::class);
+        /** @var FilesystemFactory $filesystems */
+        $filesystems = $this->laravel->make(FilesystemFactory::class);
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
         $preventPrune = $config->get('swarm.retention.prevent_prune', false) === true;
 
@@ -278,31 +283,60 @@ class SwarmPruneCommand extends Command
     protected function pruneNativeInputs(Connection $connection, ConfigRepository $config, string $table, string $historyTable, SwarmPersistenceCipher $cipher, FilesystemFactory $filesystems): int
     {
         $deleted = 0;
+        $lastId = null;
 
         while (true) {
-            $rows = $this->pruneQuery($connection, $config, 'native_inputs', $table, $historyTable)
-                ->limit(self::CHUNK_SIZE)
-                ->get(['id', 'payload']);
+            $query = $this->pruneQuery($connection, $config, 'native_inputs', $table, $historyTable);
+            if (is_string($lastId)) {
+                $query->where('id', '>', $lastId);
+            }
+
+            $rows = $query->orderBy('id')->limit(self::CHUNK_SIZE)
+                ->get(['id', 'run_id', 'payload']);
 
             if ($rows->isEmpty()) {
                 return $deleted;
             }
 
+            $lastId = (string) $rows->last()->id;
+
             $ids = [];
             foreach ($rows as $row) {
-                $payload = json_decode((string) $cipher->openStrict((string) $row->payload), true, 512, JSON_THROW_ON_ERROR);
-                foreach ($payload['attachments'] ?? [] as $attachment) {
-                    if (! is_array($attachment) || ($attachment['swarm_owned'] ?? false) !== true) {
-                        continue;
+                try {
+                    $sealed = (string) $row->payload;
+                    if (! str_starts_with($sealed, SwarmPersistenceCipher::PREFIX)) {
+                        throw new \RuntimeException('payload is not sealed');
                     }
-                    if (is_string($attachment['disk'] ?? null) && is_string($attachment['path'] ?? null)) {
-                        $filesystems->disk($attachment['disk'])->delete($attachment['path']);
+
+                    $payload = json_decode((string) $cipher->openStrict($sealed), true, 512, JSON_THROW_ON_ERROR);
+                    $allDeleted = true;
+                    foreach ($payload['attachments'] ?? [] as $attachment) {
+                        if (! is_array($attachment) || ($attachment['swarm_owned'] ?? false) !== true) {
+                            continue;
+                        }
+
+                        $disk = $attachment['disk'] ?? null;
+                        $path = $attachment['path'] ?? null;
+                        if (! is_string($disk) || ! is_string($path)
+                            || ! str_starts_with($path, 'swarm/native-inputs/'.(string) $row->run_id.'/')
+                            || ! $filesystems->disk($disk)->delete($path)) {
+                            $allDeleted = false;
+                        }
                     }
+
+                    if ($allDeleted) {
+                        $ids[] = $row->id;
+                    } else {
+                        $this->components->warn("Retaining native input envelope [{$row->id}] because one or more owned files could not be deleted.");
+                    }
+                } catch (Throwable $exception) {
+                    $this->components->warn("Retaining native input envelope [{$row->id}] because cleanup failed: {$exception->getMessage()}");
                 }
-                $ids[] = $row->id;
             }
 
-            $deleted += $connection->table($table)->whereIn('id', $ids)->delete();
+            if ($ids !== []) {
+                $deleted += $connection->table($table)->whereIn('id', $ids)->delete();
+            }
         }
     }
 }

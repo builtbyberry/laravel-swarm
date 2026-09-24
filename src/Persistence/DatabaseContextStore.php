@@ -46,11 +46,13 @@ class DatabaseContextStore implements ContextStore
         ];
 
         $updateColumns = ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at'];
-        if ($this->hasNativeInputReferenceColumn()) {
-            $payload['native_input_ref'] = $contextPayload['native_input_ref'] ?? null;
+        if (isset($contextPayload['native_input_ref'])) {
+            if (! $this->hasNativeInputReferenceColumn()) {
+                throw new SwarmException('Native input persistence requires the [native_input_ref] context column. Run migrations before enabling native inputs.');
+            }
+
+            $payload['native_input_ref'] = $contextPayload['native_input_ref'];
             $updateColumns[] = 'native_input_ref';
-        } elseif (isset($contextPayload['native_input_ref'])) {
-            throw new SwarmException('Native input persistence requires the [native_input_ref] context column. Run migrations before enabling native inputs.');
         }
 
         $this->table()->upsert(
