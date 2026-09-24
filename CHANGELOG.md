@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.27.0 - unreleased
+## v0.27.0 - 2026-09-24
 
 Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabilities.
 
