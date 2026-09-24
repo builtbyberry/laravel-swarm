@@ -1,6 +1,7 @@
 <?php
 
 use App\Ai\Agents\SmokeAgent;
+use App\Ai\Swarms\SmokeSwarm;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
@@ -31,6 +32,10 @@ use Symfony\Component\HttpFoundation\Response;
 require __DIR__.'/vendor/autoload.php';
 $app = require __DIR__.'/bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
+set_exception_handler(static function (Throwable $error): never {
+    fwrite(STDERR, $error::class.': '.$error->getMessage().PHP_EOL);
+    exit(1);
+});
 
 function check(bool $ok, string $message): void
 {
@@ -188,7 +193,7 @@ check($exposed['usage']['input_tokens'] === 4 && $exposed['usage']['output_token
 
 $runId = 'c5-vector-'.Str::uuid();
 $context = new RunContext($runId, 'recall');
-app(RunHistoryStore::class)->start($runId, SmokeAgent::class, 'sequential', $context, [], 3600);
+app(RunHistoryStore::class)->start($runId, SmokeSwarm::class, 'sequential', $context, [], 3600);
 $memory = app(SwarmMemory::class);
 $beforeVector = $calls['embeddings'];
 $memory->put(MemoryScope::Run, $runId, 'c5-rocket', 'rocket launch');
@@ -196,7 +201,7 @@ $memory->put(MemoryScope::Run, $runId, 'c5-lunch', 'taco lunch');
 foreach (['swarm_memories', 'swarm_memory_vectors'] as $table) {
     check(DB::table($table)->where('scope_id', $runId)->count() === 2, 'vector persisted '.$table);
 }
-ActiveRunContext::enter($runId, SmokeAgent::class, $context);
+ActiveRunContext::enter($runId, SmokeSwarm::class, $context);
 try {
     $reader = app(VectorMemoryReader::class);
     check($reader->search(MemoryScope::Run, 'query the launch', 2) === "c5-rocket: rocket launch\nc5-lunch: taco lunch", 'vector exact ranking');
