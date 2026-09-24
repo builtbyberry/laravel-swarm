@@ -58,7 +58,7 @@ class DurableChildSwarmCoordinator
     }
 
     /**
-     * @param  SwarmTaskInput  $task
+     * @param  string|array<string, mixed>|RunContext  $task
      */
     public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null): DurableChildRun
     {

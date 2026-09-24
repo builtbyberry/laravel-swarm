@@ -109,6 +109,30 @@ return [
     ],
 
     /*
+     * Native Laravel AI UserMessage input is an additive, default-off rollout.
+     * Enable only after this package's migration and v1 readers are present on
+     * every worker. Recoverable/cross-process input requires database persistence,
+     * encrypt_at_rest, and a private disk named below. Swarm-owned promoted files
+     * use the same retention window as their sealed operational envelope.
+     */
+    'native_inputs' => [
+        // Admit new UserMessage workflow input. Readers continue draining existing references when false.
+        'enabled' => filter_var(env('SWARM_NATIVE_INPUTS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+
+        // Private disk for Swarm-promoted local/base64 files and approved stored references.
+        'disk' => env('SWARM_NATIVE_INPUTS_DISK'),
+
+        // Reader deadline for queued/durable work; keep longer than the maximum workflow lifetime.
+        'retention_seconds' => (int) env('SWARM_NATIVE_INPUTS_RETENTION_SECONDS', 86400),
+
+        // Admission ceiling across every attachment modality in one UserMessage.
+        'max_attachments' => (int) env('SWARM_NATIVE_INPUTS_MAX_ATTACHMENTS', 8),
+
+        // Per-file admission ceiling for locally readable and configured-disk files.
+        'max_attachment_bytes' => (int) env('SWARM_NATIVE_INPUTS_MAX_ATTACHMENT_BYTES', 10485760),
+    ],
+
+    /*
      * Capture controls what is persisted into history, context, and response payloads.
      * Defaults are conservative: opt in when you want full prompts and outputs stored.
      */
@@ -839,5 +863,7 @@ return [
         'memory_snapshots' => env('SWARM_MEMORY_SNAPSHOTS_TABLE', 'swarm_memory_snapshots'),
         'stream_step_checkpoints' => env('SWARM_STREAM_STEP_CHECKPOINTS_TABLE', 'swarm_stream_step_checkpoints'),
         'cold_archives' => env('SWARM_COLD_ARCHIVES_TABLE', 'swarm_cold_archives'),
+        // Operational native-input envelopes; changing this requires the matching migration/table.
+        'native_inputs' => env('SWARM_NATIVE_INPUTS_TABLE', 'swarm_native_inputs'),
     ],
 ];

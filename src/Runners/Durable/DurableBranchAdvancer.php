@@ -37,6 +37,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -330,7 +331,11 @@ class DurableBranchAdvancer
      */
     protected function promptBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot): array
     {
-        $response = $agent->prompt($branch['input']);
+        $recipient = is_string($branch['node_id'] ?? null)
+            ? ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branch['node_id']
+            : 'parallel:'.(int) $branch['step_index'];
+        $invocation = $state->context->nativeInvocation($recipient, (string) $branch['input']);
+        $response = NativeAgentInvoker::prompt($agent, $invocation);
         $this->outcomes->validateResponse($response);
 
         foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
@@ -371,7 +376,11 @@ class DurableBranchAdvancer
 
         $nativeStreamFailure = null;
         try {
-            $stream = $agent->stream($branch['input']);
+            $recipient = is_string($branch['node_id'] ?? null)
+                ? ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branch['node_id']
+                : 'parallel:'.(int) $branch['step_index'];
+            $invocation = $state->context->nativeInvocation($recipient, (string) $branch['input']);
+            $stream = NativeAgentInvoker::stream($agent, $invocation);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, (int) $branch['step_index'], $agent, $accumulator);
 

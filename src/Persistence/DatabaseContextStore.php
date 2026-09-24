@@ -45,10 +45,20 @@ class DatabaseContextStore implements ContextStore
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
         ];
 
+        $updateColumns = ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at'];
+        if (isset($contextPayload['native_input_ref'])) {
+            if (! $this->hasNativeInputReferenceColumn()) {
+                throw new SwarmException('Native input persistence requires the [native_input_ref] context column. Run migrations before enabling native inputs.');
+            }
+
+            $payload['native_input_ref'] = $contextPayload['native_input_ref'];
+            $updateColumns[] = 'native_input_ref';
+        }
+
         $this->table()->upsert(
             [array_merge($payload, ['created_at' => $payload['updated_at']])],
             ['run_id'],
-            ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at'],
+            $updateColumns,
         );
     }
 
@@ -77,6 +87,7 @@ class DatabaseContextStore implements ContextStore
             'data' => $this->decodeJson($record->data, []),
             'metadata' => $this->decodeJson($record->metadata, []),
             'artifacts' => $this->decodeJson($record->artifacts, []),
+            ...(property_exists($record, 'native_input_ref') && $record->native_input_ref !== null ? ['native_input_ref' => (string) $record->native_input_ref] : []),
         ];
     }
 
@@ -107,7 +118,12 @@ class DatabaseContextStore implements ContextStore
             throw new SwarmException("Database-backed durable swarms require the [{$table}] table.");
         }
 
-        if (! $schema->hasColumns($table, ['run_id', 'input', 'data', 'metadata', 'artifacts', 'created_at', 'updated_at', 'expires_at'])) {
+        $required = ['run_id', 'input', 'data', 'metadata', 'artifacts', 'created_at', 'updated_at', 'expires_at'];
+        if ((bool) $this->config->get('swarm.native_inputs.enabled', false)) {
+            $required[] = 'native_input_ref';
+        }
+
+        if (! $schema->hasColumns($table, $required)) {
             throw new SwarmException("Database-backed durable swarms require runtime columns on [{$table}] for persisted context state.");
         }
     }
@@ -115,5 +131,13 @@ class DatabaseContextStore implements ContextStore
     protected function table(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.contexts', 'swarm_contexts'));
+    }
+
+    protected function hasNativeInputReferenceColumn(): bool
+    {
+        return $this->connection->getSchemaBuilder()->hasColumn(
+            (string) $this->config->get('swarm.tables.contexts', 'swarm_contexts'),
+            'native_input_ref',
+        );
     }
 }

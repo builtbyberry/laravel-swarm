@@ -6,6 +6,9 @@ Native feature access through Laravel Swarm workflows.
 
 ### Added
 
+- Default-off native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input, with decisions-first approval rejection, explicit topology-stable attachment recipients, original-versus-predecessor text selection, and optional per-recipient provider/model/timeout overrides.
+- Versioned, cipher-sealed native-input operational envelopes for queue, concurrency and durable recovery. Queue payloads carry opaque references; staged envelopes record planned paths before private local/base64 attachments are promoted to an application-selected disk, recoverable headers/provider options are preserved as plain resolved values, content identity and authorization are rechecked, and `swarm:prune` owns only Swarm-created temporary files.
+- Deterministic direct-native versus through-Swarm wire parity coverage using Laravel AI's real mocked HTTP request construction, plus legacy payload, capture-independent reconstruction, mixed-version, expiry/revocation/mutation and confidentiality guards.
 - Executable proof of Laravel AI's public native approval pause, inspection,
   ownership, decision, and continuation contracts, including exact controlled
   provider wire, approve/reject/edit behavior, repeated pauses, and fresh-process
@@ -17,7 +20,7 @@ Native feature access through Laravel Swarm workflows.
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- Native input preserves the v0.27.0 topology/mode envelope: it does not add top-level parallel live streaming or background support to inline swarms. Approval `Decisions` remain outside fresh-run input and fail with continuation guidance.
 
 ## v0.27.0 - 2026-09-24
 

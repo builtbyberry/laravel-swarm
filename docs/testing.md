@@ -103,6 +103,13 @@ ArticlePipeline::assertStreamed('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertDispatchedDurably('Draft a blog outline about Laravel queues.');
 ```
 
+These assertions normalize a message-bearing Laravel AI `AgentInput`, then compare
+native `UserMessage` values by message content and
+attachment values rather than PHP object identity. Native messages are recorded
+consistently in prompt, queue, durable, and consumed stream/broadcast buckets.
+Fakes still prove dispatch intent only; use mocked provider HTTP for wire-shape
+parity and the process-concurrency lane for cross-process reconstruction.
+
 Durable operator features should be tested through the manager or response
 helpers:
 

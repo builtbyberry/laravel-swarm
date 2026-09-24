@@ -66,6 +66,10 @@ Prefer a full `Swarm` class when the same topology is reused across your app, be
 
 The table describes default dispatch behavior. Generated hierarchical `multi_worker` queueing adds branch/join coordination and recovery, not a checkpoint after every routed step. Non-durable streams have [bounded snapshot/checkpoint resume](streaming.md#crash-replay-durability); durable per-node streaming records causal evidence rather than returning a live `StreamableSwarmResponse`.
 
+Laravel AI `UserMessage` input follows this same matrix. Attachments do not make
+unsupported combinations available and are delivered only to explicitly selected
+slots/nodes; see [Native messages and attachments](native-inputs.md).
+
 **Streaming** column means typed token events are emitted while the run progresses. **Checkpointing** means per-step state is persisted so the run can be resumed after a worker death. **Recovery** means a crashed or stalled run can be automatically advanced by `swarm:recover` without re-running completed steps.
 
 ## Decision Tree

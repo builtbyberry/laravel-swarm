@@ -429,18 +429,21 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
             $expiresAt = DatabaseTtl::expiresAt($ttlSeconds);
             $contextPayload = $payload->context->toArray();
 
-            $this->contextTable()->upsert([
-                [
-                    'run_id' => $contextPayload['run_id'],
-                    'input' => $this->cipher->seal($contextPayload['input']),
-                    'data' => $this->encodeJson($contextPayload['data']),
-                    'metadata' => $this->encodeJson($contextPayload['metadata']),
-                    'artifacts' => $this->encodeJson($contextPayload['artifacts']),
-                    'created_at' => $timestamp,
-                    'updated_at' => $timestamp,
-                    'expires_at' => $expiresAt,
-                ],
-            ], ['run_id'], ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at']);
+            $contextRow = $this->contextRowWithNativeInputReference([
+                'run_id' => $contextPayload['run_id'],
+                'input' => $this->cipher->seal($contextPayload['input']),
+                'data' => $this->encodeJson($contextPayload['data']),
+                'metadata' => $this->encodeJson($contextPayload['metadata']),
+                'artifacts' => $this->encodeJson($contextPayload['artifacts']),
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+                'expires_at' => $expiresAt,
+            ], $contextPayload);
+            $this->contextTable()->upsert(
+                [$contextRow],
+                ['run_id'],
+                $this->contextUpdateColumns(array_key_exists('native_input_ref', $contextRow)),
+            );
 
             $run = $this->find($runId);
             $values = [
@@ -624,18 +627,21 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
             }
 
             $contextPayload = $context->toArray();
-            $this->contextTable()->upsert([
-                [
-                    'run_id' => $contextPayload['run_id'],
-                    'input' => $this->cipher->seal($contextPayload['input']),
-                    'data' => $this->encodeJson($contextPayload['data']),
-                    'metadata' => $this->encodeJson($contextPayload['metadata']),
-                    'artifacts' => $this->encodeJson($contextPayload['artifacts']),
-                    'created_at' => $timestamp,
-                    'updated_at' => $timestamp,
-                    'expires_at' => $expiresAt,
-                ],
-            ], ['run_id'], ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at']);
+            $contextRow = $this->contextRowWithNativeInputReference([
+                'run_id' => $contextPayload['run_id'],
+                'input' => $this->cipher->seal($contextPayload['input']),
+                'data' => $this->encodeJson($contextPayload['data']),
+                'metadata' => $this->encodeJson($contextPayload['metadata']),
+                'artifacts' => $this->encodeJson($contextPayload['artifacts']),
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+                'expires_at' => $expiresAt,
+            ], $contextPayload);
+            $this->contextTable()->upsert(
+                [$contextRow],
+                ['run_id'],
+                $this->contextUpdateColumns(array_key_exists('native_input_ref', $contextRow)),
+            );
 
             $values = [
                 'status' => 'pending',
@@ -2686,6 +2692,44 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
     protected function contextTable(): Builder
     {
         return $this->connection->table((string) $this->config->get('swarm.tables.contexts', 'swarm_contexts'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     * @param  array<string, mixed>  $contextPayload
+     * @return array<string, mixed>
+     */
+    protected function contextRowWithNativeInputReference(array $row, array $contextPayload): array
+    {
+        if (isset($contextPayload['native_input_ref'])) {
+            if (! $this->contextHasNativeInputReferenceColumn()) {
+                throw new SwarmException('Native input persistence requires the [native_input_ref] context column. Run migrations before enabling native inputs.');
+            }
+
+            $row['native_input_ref'] = $contextPayload['native_input_ref'];
+        }
+
+        return $row;
+    }
+
+    /** @return list<string> */
+    protected function contextUpdateColumns(bool $withNativeInputReference): array
+    {
+        $columns = ['input', 'data', 'metadata', 'artifacts', 'updated_at', 'expires_at'];
+
+        if ($withNativeInputReference) {
+            $columns[] = 'native_input_ref';
+        }
+
+        return $columns;
+    }
+
+    protected function contextHasNativeInputReferenceColumn(): bool
+    {
+        return $this->connection->getSchemaBuilder()->hasColumn(
+            (string) $this->config->get('swarm.tables.contexts', 'swarm_contexts'),
+            'native_input_ref',
+        );
     }
 
     protected function nodeOutputTable(): Builder

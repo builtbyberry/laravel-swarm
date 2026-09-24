@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
@@ -200,7 +201,8 @@ class SequentialRunner
                             $this->view->present($state->swarm, $state->context, $agent),
                         );
 
-                    $stream = $agent->stream($input);
+                    $invocation = $state->context->nativeInvocation("sequential:{$index}", $input);
+                    $stream = NativeAgentInvoker::stream($agent, $invocation);
                     $accumulator = new StreamStepAccumulator($snapshot);
 
                     $nativeStreamFailure = null;
@@ -272,7 +274,8 @@ class SequentialRunner
                         $this->view->present($state->swarm, $state->context, $agent),
                     );
 
-                    $response = $agent->prompt($input);
+                    $invocation = $state->context->nativeInvocation("sequential:{$index}", $input);
+                    $response = NativeAgentInvoker::prompt($agent, $invocation);
                     $this->outcomes->validateResponse($response);
                     $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
                     $output = (string) $response;
@@ -395,7 +398,8 @@ class SequentialRunner
         ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
 
         try {
-            $response = $agent->prompt($input);
+            $invocation = $state->context->nativeInvocation("sequential:{$index}", $input);
+            $response = NativeAgentInvoker::prompt($agent, $invocation);
             $this->outcomes->validateResponse($response);
             $citationEvidence = $this->citations->response($response, $state->context->runId, $index, $agent::class);
         } finally {
@@ -477,7 +481,8 @@ class SequentialRunner
 
         $nativeStreamFailure = null;
         try {
-            $stream = $agent->stream($input);
+            $invocation = $state->context->nativeInvocation("sequential:{$index}", $input);
+            $stream = NativeAgentInvoker::stream($agent, $invocation);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 
