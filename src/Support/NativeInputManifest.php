@@ -17,6 +17,8 @@ use Laravel\Ai\Files\File;
 use Laravel\Ai\Files\Image;
 use Laravel\Ai\Files\Video;
 use Laravel\Ai\Messages\UserMessage;
+use Laravel\SerializableClosure\SerializableClosure;
+use ReflectionProperty;
 
 final class NativeInputManifest
 {
@@ -27,6 +29,7 @@ final class NativeInputManifest
      * @param  list<NativeInputRecipient>  $recipients
      * @param  array<int, string>  $attachmentHashes
      * @param  list<int>  $ownedAttachmentIndexes
+     * @param  array<int, array<string, array{headers: array<string, string>, provider_options: array<string, mixed>}>>  $attachmentInvocationOptions
      */
     public function __construct(
         public string $text,
@@ -34,6 +37,7 @@ final class NativeInputManifest
         public array $recipients,
         public array $attachmentHashes = [],
         public array $ownedAttachmentIndexes = [],
+        public array $attachmentInvocationOptions = [],
     ) {}
 
     public function messageFor(string $recipient, string $topologyText): string|UserMessage
@@ -71,8 +75,10 @@ final class NativeInputManifest
                     throw new SwarmException("Native attachment [{$index}] failed its content identity check.");
                 }
 
-                $attachment = $this->materializeVerifiedAttachment($attachment, $content, $selection);
+                $attachment = $this->materializeVerifiedAttachment($attachment, $content);
             }
+
+            $attachment = $this->applyInvocationOptions($attachment, $index, $selection);
 
             $verified[] = $attachment;
         }
@@ -109,6 +115,9 @@ final class NativeInputManifest
                 if (in_array($index, $this->ownedAttachmentIndexes, true)) {
                     $payload['swarm_owned'] = true;
                 }
+                if (isset($this->attachmentInvocationOptions[$index])) {
+                    $payload['swarm_invocation_options'] = $this->attachmentInvocationOptions[$index];
+                }
 
                 return $payload;
             }, $this->attachments, array_keys($this->attachments)),
@@ -122,6 +131,7 @@ final class NativeInputManifest
         $attachments = [];
         $hashes = [];
         $owned = [];
+        $invocationOptions = [];
         foreach ($payload['attachments'] ?? [] as $attachment) {
             if (! is_array($attachment) || ($file = File::fromArray($attachment)) === null) {
                 throw new SwarmException('Native input envelope contains an unsupported attachment descriptor.');
@@ -137,6 +147,26 @@ final class NativeInputManifest
             }
             if (($attachment['swarm_owned'] ?? false) === true) {
                 $owned[] = $index;
+            }
+            if (array_key_exists('swarm_invocation_options', $attachment)) {
+                if (! is_array($attachment['swarm_invocation_options'])) {
+                    throw new SwarmException('Native input envelope contains invalid attachment invocation options.');
+                }
+                $profiles = [];
+                foreach ($attachment['swarm_invocation_options'] as $provider => $profile) {
+                    if (! is_string($provider) || $provider === '' || ! is_array($profile)
+                        || ! is_array($profile['headers'] ?? null)
+                        || ! is_array($profile['provider_options'] ?? null)
+                        || array_filter($profile['headers'], static fn (mixed $value, mixed $key): bool => ! is_string($key) || ! is_string($value), ARRAY_FILTER_USE_BOTH) !== []) {
+                        throw new SwarmException('Native input envelope contains invalid attachment invocation options.');
+                    }
+
+                    $profiles[$provider] = [
+                        'headers' => $profile['headers'],
+                        'provider_options' => PlainData::array($profile['provider_options'], 'native attachment provider options'),
+                    ];
+                }
+                $invocationOptions[$index] = $profiles;
             }
         }
 
@@ -155,10 +185,53 @@ final class NativeInputManifest
             ),
             attachmentHashes: $hashes,
             ownedAttachmentIndexes: $owned,
+            attachmentInvocationOptions: $invocationOptions,
         );
     }
 
-    protected function materializeVerifiedAttachment(File $attachment, string $content, NativeInputRecipient $selection): File
+    public function captureRecoverableInvocationOptions(): void
+    {
+        foreach ($this->attachments as $index => $attachment) {
+            $headers = self::rawSetting($attachment, 'headers');
+            $providerOptions = self::rawSetting($attachment, 'providerOptions');
+            $dynamic = $headers instanceof SerializableClosure || $providerOptions instanceof SerializableClosure;
+
+            $providers = [];
+            foreach ($this->recipients as $recipient) {
+                if ($recipient->attachments !== null && ! in_array($index, $recipient->attachments, true)) {
+                    continue;
+                }
+
+                if (! $dynamic) {
+                    $providers['*'] = 'static';
+
+                    continue;
+                }
+
+                if (! ($recipient->provider instanceof Lab) && ! is_string($recipient->provider)) {
+                    throw new SwarmException("Recoverable native attachment [{$index}] uses provider-dependent headers or options, so every recipient must declare one provider explicitly.");
+                }
+
+                $providers[self::providerKey($recipient->provider)] = $recipient->provider;
+            }
+
+            foreach ($providers as $key => $provider) {
+                $resolvedHeaders = $dynamic
+                    ? $attachment->headers($provider)
+                    : $headers;
+                $resolvedOptions = $dynamic
+                    ? $attachment->providerOptions($provider)
+                    : $providerOptions;
+
+                $this->attachmentInvocationOptions[$index][$key] = [
+                    'headers' => PlainData::array($resolvedHeaders, 'native attachment headers'),
+                    'provider_options' => PlainData::array($resolvedOptions, 'native attachment provider options'),
+                ];
+            }
+        }
+    }
+
+    protected function materializeVerifiedAttachment(File $attachment, string $content): File
     {
         $mime = $attachment->mimeType();
         $materialized = match (true) {
@@ -174,11 +247,43 @@ final class NativeInputManifest
         }
 
         $materialized->as($attachment->name());
-        if ($selection->provider instanceof Lab || is_string($selection->provider)) {
-            $materialized->withHeaders($attachment->headers($selection->provider));
-            $materialized->withProviderOptions($attachment->providerOptions($selection->provider));
-        }
 
         return $materialized;
+    }
+
+    protected function applyInvocationOptions(File $attachment, int|false $index, NativeInputRecipient $selection): File
+    {
+        if (! is_int($index)) {
+            return $attachment;
+        }
+
+        $profiles = $this->attachmentInvocationOptions[$index] ?? [];
+        $profile = $profiles['*'] ?? null;
+        if ($selection->provider instanceof Lab || is_string($selection->provider)) {
+            $profile = $profiles[self::providerKey($selection->provider)] ?? $profile;
+        }
+
+        if (is_array($profile)) {
+            $attachment->withHeaders($profile['headers'] ?? []);
+            $attachment->withProviderOptions($profile['provider_options'] ?? []);
+        }
+
+        return $attachment;
+    }
+
+    /** @return array<string, mixed>|SerializableClosure */
+    protected static function rawSetting(File $attachment, string $property): array|SerializableClosure
+    {
+        $reflection = new ReflectionProperty(File::class, $property);
+
+        /** @var array<string, mixed>|SerializableClosure $value */
+        $value = $reflection->getValue($attachment);
+
+        return $value;
+    }
+
+    protected static function providerKey(Lab|string $provider): string
+    {
+        return $provider instanceof Lab ? $provider->value : $provider;
     }
 }

@@ -2,7 +2,9 @@
 
 ## Upgrading to v0.28.0
 
-Native Laravel AI `UserMessage` workflow input is additive and default-off. Run
+Native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input is
+additive and default-off. An `AgentInput` carrying approval decisions is rejected
+before its message is read; approval continuation remains a separate workflow. Run
 the package migration and deploy v0.28 readers to every queue and durable worker
 before setting `SWARM_NATIVE_INPUTS_ENABLED=true`. Configure database persistence,
 application-layer sealing, and a private `SWARM_NATIVE_INPUTS_DISK`; bind
@@ -10,12 +12,16 @@ application-layer sealing, and a private `SWARM_NATIVE_INPUTS_DISK`; bind
 provider-file references. See [Native messages and attachments](docs/native-inputs.md)
 for the complete deployment and drain-before-rollback procedure.
 
-The `Runnable` and inline pending-run execution verbs now accept `UserMessage` in
+The `Runnable` and inline pending-run execution verbs now accept `AgentInput|UserMessage` in
 addition to string, array, and `RunContext`. Applications that override
 `prompt()`, `run()`, `queue()`, `stream()`, broadcast helpers, or
-`dispatchDurable()` with the old narrower parameter union must add `UserMessage`
+`dispatchDurable()` with the old narrower parameter union must add both types
 to remain PHP-signature-compatible. `SwarmPruneCommand::handle()` retains its
 existing public signature so command subclasses are not forced to change.
+
+Recoverable native input must be admitted outside an open database transaction.
+The staged sealed envelope is the failure-recovery locator for promoted files;
+an outer rollback after a filesystem write would destroy that invariant.
 
 Before rotating `APP_KEY`, drain or re-encrypt active `swarm_native_inputs.payload`
 values along with the existing sealed operational inventory. These envelopes use

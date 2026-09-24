@@ -127,22 +127,6 @@ class SwarmHealthCommand extends Command
         $contextTable = (string) $config->get('swarm.tables.contexts', 'swarm_contexts');
         $schema = $connection->getSchemaBuilder();
 
-        if (! $enabled) {
-            $active = $schema->hasTable($table)
-                ? (int) $connection->table($table)->where('state', 'active')->count()
-                : 0;
-
-            return [
-                'component' => 'Native inputs',
-                'driver' => 'disabled',
-                'store' => $table,
-                'status' => 'note',
-                'details' => $active === 0
-                    ? 'writer disabled; no active native input envelopes remain'
-                    : "writer disabled; {$active} active native input envelope(s) must drain before removing readers",
-            ];
-        }
-
         $problems = [];
         if ($config->get('swarm.persistence.driver') !== 'database') {
             $problems[] = 'swarm.persistence.driver must be database';
@@ -167,6 +151,28 @@ class SwarmHealthCommand extends Command
             } catch (Throwable $exception) {
                 $problems[] = "native input disk [{$disk}] cannot be resolved: {$exception->getMessage()}";
             }
+        }
+
+        if (! $enabled) {
+            $active = $schema->hasTable($table)
+                ? (int) $connection->table($table)->where('state', 'active')->count()
+                : null;
+            $drain = $active === null
+                ? 'active envelope drain cannot be verified because the table is absent'
+                : ($active === 0
+                    ? 'no active native input envelopes remain'
+                    : "{$active} active native input envelope(s) must drain before removing readers");
+            $preflight = $problems === []
+                ? "sealed v1 envelope table and private disk [{$disk}] are ready"
+                : 'pre-enable readiness: '.implode('; ', $problems);
+
+            return [
+                'component' => 'Native inputs',
+                'driver' => 'disabled',
+                'store' => $table,
+                'status' => is_string($disk) && $disk !== '' && $problems !== [] ? 'failed' : 'note',
+                'details' => "writer disabled; {$drain}; {$preflight}",
+            ];
         }
 
         return [

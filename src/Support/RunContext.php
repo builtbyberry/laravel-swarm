@@ -14,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Auth\Authenticatable;
 use JsonException;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Files\File;
 use Laravel\Ai\Messages\UserMessage;
 
@@ -55,12 +56,16 @@ class RunContext implements ArrayAccess
     ) {}
 
     /**
-     * @param  string|array<string, mixed>|self|UserMessage  $input
+     * @param  string|array<string, mixed>|self|AgentInput|UserMessage  $input
      */
-    public static function from(string|array|self|UserMessage $input, ?string $runId = null): self
+    public static function from(string|array|self|AgentInput|UserMessage $input, ?string $runId = null): self
     {
         if ($input instanceof self) {
             return $input;
+        }
+
+        if ($input instanceof AgentInput) {
+            $input = NativeAgentInput::message($input);
         }
 
         if ($input instanceof UserMessage) {
@@ -80,12 +85,16 @@ class RunContext implements ArrayAccess
     }
 
     /**
-     * @param  string|array<string, mixed>|self|UserMessage  $task
+     * @param  string|array<string, mixed>|self|AgentInput|UserMessage  $task
      */
-    public static function fromTask(string|array|self|UserMessage $task): self
+    public static function fromTask(string|array|self|AgentInput|UserMessage $task): self
     {
         if ($task instanceof self) {
             return $task;
+        }
+
+        if ($task instanceof AgentInput) {
+            $task = NativeAgentInput::message($task);
         }
 
         if ($task instanceof UserMessage) {
@@ -180,8 +189,12 @@ class RunContext implements ArrayAccess
      *
      * @param  list<NativeInputRecipient>  $recipients
      */
-    public function withAgentInput(UserMessage $input, array $recipients = []): self
+    public function withAgentInput(AgentInput|UserMessage $input, array $recipients = []): self
     {
+        if ($input instanceof AgentInput) {
+            $input = NativeAgentInput::message($input);
+        }
+
         foreach ($recipients as $recipient) {
             if (! $recipient instanceof NativeInputRecipient) {
                 throw new SwarmException('Native input recipients must be NativeInputRecipient instances.');
@@ -226,6 +239,10 @@ class RunContext implements ArrayAccess
 
     public function setNativeInputReference(?string $reference): self
     {
+        if ($reference !== null && trim($reference) === '') {
+            throw new SwarmException('Native input references must be non-empty strings.');
+        }
+
         $this->nativeInputReference = $reference;
 
         return $this;
@@ -658,7 +675,7 @@ class RunContext implements ArrayAccess
             data: is_array($payload['data'] ?? null) ? PlainData::array($payload['data'], 'data') : [],
             metadata: is_array($payload['metadata'] ?? null) ? PlainData::array($payload['metadata'], 'metadata') : [],
             artifacts: self::hydrateArtifacts($payload['artifacts'] ?? []),
-            nativeInputReference: is_string($payload['native_input_ref'] ?? null) ? $payload['native_input_ref'] : null,
+            nativeInputReference: self::nativeInputReferenceFrom($payload),
         );
     }
 
@@ -686,6 +703,8 @@ class RunContext implements ArrayAccess
         if (array_key_exists('artifacts', $payload) && ! is_array($payload['artifacts'])) {
             throw new SwarmException('RunContext::from() expects [artifacts] to be an array.');
         }
+
+        self::nativeInputReferenceFrom($payload, 'RunContext::from()');
 
         if (array_key_exists('data', $payload)) {
             PlainData::array($payload['data'], 'data');
@@ -731,12 +750,24 @@ class RunContext implements ArrayAccess
             throw new SwarmException('RunContext::fromPayload() expects [artifacts] to be an array.');
         }
 
-        if (array_key_exists('native_input_ref', $payload)
-            && (! is_string($payload['native_input_ref']) || $payload['native_input_ref'] === '')) {
-            throw new SwarmException('RunContext::fromPayload() expects [native_input_ref] to be a non-empty string when present.');
-        }
+        self::nativeInputReferenceFrom($payload, 'RunContext::fromPayload()');
 
         self::validateSerializedPayload($payload, 'RunContext payload');
+    }
+
+    /** @param array<string, mixed> $payload */
+    protected static function nativeInputReferenceFrom(array $payload, string $source = 'RunContext payload'): ?string
+    {
+        if (! array_key_exists('native_input_ref', $payload)) {
+            return null;
+        }
+
+        $reference = $payload['native_input_ref'];
+        if (! is_string($reference) || trim($reference) === '') {
+            throw new SwarmException("{$source} expects [native_input_ref] to be a non-empty string when present.");
+        }
+
+        return $reference;
     }
 
     /**

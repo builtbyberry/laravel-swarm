@@ -318,8 +318,14 @@ class SwarmPruneCommand extends Command
                         $disk = $attachment['disk'] ?? null;
                         $path = $attachment['path'] ?? null;
                         if (! is_string($disk) || ! is_string($path)
-                            || ! str_starts_with($path, 'swarm/native-inputs/'.(string) $row->run_id.'/')
-                            || ! $filesystems->disk($disk)->delete($path)) {
+                            || ! str_starts_with($path, 'swarm/native-inputs/'.(string) $row->run_id.'/')) {
+                            $allDeleted = false;
+
+                            continue;
+                        }
+
+                        $filesystem = $filesystems->disk($disk);
+                        if ($filesystem->exists($path) && ! $filesystem->delete($path)) {
                             $allDeleted = false;
                         }
                     }

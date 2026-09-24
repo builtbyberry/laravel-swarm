@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\NativeInputStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
+use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableSwarm;
@@ -18,13 +19,18 @@ use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeInputQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputRecipient;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksInputWhenMatches;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\GuardrailContainer;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Contracts\Filesystem\Factory as FilesystemFactory;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
@@ -267,6 +273,104 @@ test('promotion preserves attachment identity across reconstruction', function (
         ->and($restored->content())->toBe('pdf-bytes');
 });
 
+test('recoverable reconstruction preserves plain and provider-resolved attachment invocation options', function () {
+    $attachment = (new Base64Document(base64_encode('pdf-bytes'), 'application/pdf'))
+        ->as('contract.pdf')
+        ->withHeaders(fn (string $provider): array => ['X-Provider' => $provider])
+        ->withProviderOptions(fn (string $provider): array => ['provider' => $provider, 'quality' => 'high']);
+    $message = new UserMessage('inspect', [$attachment]);
+    $context = RunContext::fromTask($message)->withAgentInput(
+        $message,
+        [NativeInputRecipient::parallel(0)->withInvocation('openai')],
+    );
+
+    app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue);
+    $restored = RunContext::fromPayload($context->toQueuePayload())
+        ->nativeInvocation('parallel:0', 'topology')->prompt->attachments->first();
+
+    expect($restored->headers('openai'))->toBe(['X-Provider' => 'openai'])
+        ->and($restored->providerOptions('openai'))->toBe(['provider' => 'openai', 'quality' => 'high']);
+});
+
+test('provider-dependent attachment options require an explicit recoverable recipient provider', function () {
+    $attachment = (new Base64Document(base64_encode('pdf-bytes')))
+        ->withProviderOptions(fn (string $provider): array => ['provider' => $provider]);
+    $message = new UserMessage('inspect', [$attachment]);
+    $context = RunContext::fromTask($message)->withAgentInput($message, [NativeInputRecipient::parallel(0)]);
+
+    expect(fn () => app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue))
+        ->toThrow(SwarmException::class, 'must declare one provider explicitly');
+});
+
+test('recoverable admission refuses an outer database transaction before file promotion', function () {
+    $message = new UserMessage('inspect', [new Base64Document(base64_encode('secret'))]);
+    $context = RunContext::fromTask($message)->withAgentInput($message, [NativeInputRecipient::parallel(0)]);
+
+    DB::beginTransaction();
+    try {
+        expect(fn () => app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue))
+            ->toThrow(SwarmException::class, 'outside an open database transaction');
+    } finally {
+        DB::rollBack();
+    }
+
+    expect(Storage::disk('native-inputs-test')->allFiles('swarm/native-inputs/'.$context->runId))->toBeEmpty();
+});
+
+test('the sealed staged envelope exists before the first promoted byte is written', function () {
+    $disk = Mockery::mock(Filesystem::class);
+    $disk->shouldReceive('put')->once()->andReturnUsing(function (): bool {
+        $row = DB::table('swarm_native_inputs')->first();
+
+        expect($row)->not->toBeNull()
+            ->and($row->state)->toBe('staged')
+            ->and($row->payload)->toStartWith(SwarmPersistenceCipher::PREFIX);
+
+        return true;
+    });
+    $filesystems = Mockery::mock(FilesystemFactory::class);
+    $filesystems->shouldReceive('disk')->with('native-inputs-test')->andReturn($disk);
+    $manager = new NativeInputManager(
+        config(),
+        app(NativeInputStore::class),
+        $filesystems,
+        app(AuthorizesNativeInputAttachment::class),
+        app(SwarmAuditDispatcher::class),
+    );
+    $message = new UserMessage('inspect', [new Base64Document(base64_encode('secret'))]);
+    $context = RunContext::fromTask($message)->withAgentInput($message, [NativeInputRecipient::parallel(0)]);
+
+    $manager->admit($context, Topology::Parallel, ExecutionMode::Queue);
+
+    expect(DB::table('swarm_native_inputs')->where('id', $context->nativeInputReference())->value('state'))->toBe('active');
+});
+
+test('failed promotion retains a revoked sealed locator for prune recovery', function () {
+    $disk = Mockery::mock(Filesystem::class);
+    $disk->shouldReceive('put')->once()->andReturnFalse();
+    $disk->shouldReceive('exists')->once()->andReturnFalse();
+    $filesystems = Mockery::mock(FilesystemFactory::class);
+    $filesystems->shouldReceive('disk')->with('native-inputs-test')->andReturn($disk);
+    $manager = new NativeInputManager(
+        config(),
+        app(NativeInputStore::class),
+        $filesystems,
+        app(AuthorizesNativeInputAttachment::class),
+        app(SwarmAuditDispatcher::class),
+    );
+    $message = new UserMessage('inspect', [new Base64Document(base64_encode('secret'))]);
+    $context = RunContext::fromTask($message)->withAgentInput($message, [NativeInputRecipient::parallel(0)]);
+
+    expect(fn () => $manager->admit($context, Topology::Parallel, ExecutionMode::Queue))
+        ->toThrow(SwarmException::class, 'could not be promoted');
+
+    $row = DB::table('swarm_native_inputs')->first();
+    $payload = json_decode((string) app(SwarmPersistenceCipher::class)->openStrict($row->payload), true, 512, JSON_THROW_ON_ERROR);
+    expect($row->state)->toBe('revoked')
+        ->and($payload['attachments'][0]['swarm_owned'])->toBeTrue()
+        ->and($payload['attachments'][0]['path'])->toStartWith('swarm/native-inputs/'.$context->runId.'/');
+});
+
 test('native capability marker jobs default to dispatch after commit', function () {
     Bus::fake();
     $queued = FakeSequentialSwarm::make()->queue(new UserMessage('queue'));
@@ -458,7 +562,50 @@ test('native attachment release emits capture-safe audit evidence', function () 
         'provider_override' => true,
         'model_override' => true,
         'timeout_override' => true,
-    ])->and(json_encode($record))->not->toContain('never audit this', 'nor this');
+    ])->and($record)->not->toHaveKey('native_input_ref')
+        ->and(json_encode($record))->not->toContain('never audit this', 'nor this');
+});
+
+test('prune removes an expired envelope whose planned owned file was never written', function () {
+    $context = RunContext::fromTask(new UserMessage('inspect', [new Base64Document(base64_encode('original'))]))
+        ->withAgentInput(
+            new UserMessage('inspect', [new Base64Document(base64_encode('original'))]),
+            [NativeInputRecipient::parallel(0)],
+        );
+    app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue);
+    $reference = (string) $context->nativeInputReference();
+    $path = Storage::disk('native-inputs-test')->allFiles('swarm/native-inputs/'.$context->runId)[0];
+    Storage::disk('native-inputs-test')->delete($path);
+    DB::table('swarm_native_inputs')->where('id', $reference)->update(['expires_at' => now()->subMinute()]);
+
+    Artisan::call('swarm:prune');
+
+    expect(DB::table('swarm_native_inputs')->where('id', $reference)->exists())->toBeFalse();
+});
+
+test('native queue guardrail rejection revokes its envelope and removes promoted files', function () {
+    config()->set('swarm.guardrails.input', [BlocksInputWhenMatches::class]);
+    app()->bind(BlocksInputWhenMatches::class, fn () => new BlocksInputWhenMatches('reject-native'));
+    GuardrailContainer::refresh(app());
+    app()->forgetInstance(SwarmRunner::class);
+
+    $message = new UserMessage('reject-native', [new Base64Document(base64_encode('secret'))]);
+
+    expect(fn () => FakeSequentialSwarm::make()->queue($message))
+        ->toThrow(GuardrailViolation::class);
+
+    expect(DB::table('swarm_native_inputs')->where('state', 'active')->count())->toBe(0)
+        ->and(Storage::disk('native-inputs-test')->allFiles('swarm/native-inputs'))->toBeEmpty();
+});
+
+test('unsupported live parallel streaming rejects before native admission', function () {
+    $message = new UserMessage('inspect', [new Base64Document(base64_encode('secret'))]);
+
+    expect(fn () => FakeParallelSwarm::make()->stream($message))
+        ->toThrow(SwarmException::class, 'cannot yield a single ordered live token stream');
+
+    expect(DB::table('swarm_native_inputs')->count())->toBe(0)
+        ->and(Storage::disk('native-inputs-test')->allFiles('swarm/native-inputs'))->toBeEmpty();
 });
 
 test('native prune isolates poisoned envelopes and keeps processing later rows', function () {

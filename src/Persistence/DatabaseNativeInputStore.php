@@ -21,6 +21,10 @@ final class DatabaseNativeInputStore implements NativeInputStore
 
     public function put(string $id, string $runId, array $payload, string $hash, int $expiresAt): void
     {
+        if ($this->connection->transactionLevel() > 0) {
+            throw new SwarmException('Recoverable native input must be dispatched outside an open database transaction so its cleanup locator cannot be rolled back after file promotion.');
+        }
+
         try {
             $encoded = json_encode($payload, JSON_THROW_ON_ERROR);
         } catch (JsonException $exception) {
@@ -77,7 +81,13 @@ final class DatabaseNativeInputStore implements NativeInputStore
 
     public function revoke(string $id, string $runId): void
     {
-        $this->transition($id, $runId, 'revoked');
+        $updated = $this->connection->table($this->table())
+            ->where('id', $id)->where('run_id', $runId)
+            ->update(['state' => 'revoked', 'expires_at' => now(), 'updated_at' => now()]);
+
+        if ($updated !== 1) {
+            throw new SwarmException("Native input envelope [{$id}] is unavailable for run [{$runId}].");
+        }
     }
 
     protected function transition(string $id, string $runId, string $state): void

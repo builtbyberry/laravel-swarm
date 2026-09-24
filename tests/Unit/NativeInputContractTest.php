@@ -31,6 +31,76 @@ test('legacy run context payloads retain their exact wire shape', function () {
         ->and($payload['input'])->toBe('{"topic":"Laravel"}');
 });
 
+test('Laravel AI AgentInput messages enter the native message path', function () {
+    $input = new class implements AgentInput
+    {
+        public function message(): ?UserMessage
+        {
+            return new UserMessage('native contract', [new Base64Image(base64_encode('pixels'), 'image/png')]);
+        }
+
+        public function decisions(): ?Decisions
+        {
+            return null;
+        }
+    };
+
+    $context = RunContext::fromTask($input);
+
+    expect($context->input)->toBe('native contract')
+        ->and($context->nativeInput()?->attachments)->toHaveCount(1);
+});
+
+test('Laravel AI approval decisions are rejected before an AgentInput message is read', function () {
+    $input = new class implements AgentInput
+    {
+        public bool $messageRead = false;
+
+        public function message(): ?UserMessage
+        {
+            $this->messageRead = true;
+
+            throw new RuntimeException('message must not be read first');
+        }
+
+        public function decisions(): ?Decisions
+        {
+            return Decisions::from(['tool-call' => true]);
+        }
+    };
+
+    expect(fn () => RunContext::fromTask($input))
+        ->toThrow(SwarmException::class, 'Continue the owning agent approval interaction')
+        ->and($input->messageRead)->toBeFalse();
+});
+
+test('empty Laravel AI AgentInput fails closed', function () {
+    $input = new class implements AgentInput
+    {
+        public function message(): ?UserMessage
+        {
+            return null;
+        }
+
+        public function decisions(): ?Decisions
+        {
+            return null;
+        }
+    };
+
+    expect(fn () => RunContext::fromTask($input))
+        ->toThrow(SwarmException::class, 'must contain a user message');
+});
+
+test('all RunContext reference entry points reject malformed or empty locators', function () {
+    expect(fn () => RunContext::from(['input' => 'legacy', 'native_input_ref' => ['bad']]))
+        ->toThrow(SwarmException::class, 'non-empty string when present')
+        ->and(fn () => RunContext::from(['input' => 'legacy', 'native_input_ref' => '  ']))
+        ->toThrow(SwarmException::class, 'non-empty string when present')
+        ->and(fn () => RunContext::fromTask('legacy')->setNativeInputReference(''))
+        ->toThrow(SwarmException::class, 'non-empty strings');
+});
+
 test('native cleanup preserves the established prune command extension signature', function () {
     $parameters = (new ReflectionMethod(SwarmPruneCommand::class, 'handle'))->getParameters();
 
@@ -131,6 +201,13 @@ test('operational manifests reject malformed attachment and recipient descriptor
 })->with([
     'attachment' => [['attachments' => [['type' => 'invented']]], 'unsupported attachment descriptor'],
     'recipient' => [['recipients' => ['invented']], 'invalid recipient descriptor'],
+    'invocation options' => [[
+        'attachments' => [[
+            'type' => 'base64-image',
+            'base64' => base64_encode('image'),
+            'swarm_invocation_options' => ['openai' => ['headers' => ['X-Test' => ['not-a-string']], 'provider_options' => []]],
+        ]],
+    ], 'invalid attachment invocation options'],
 ]);
 
 test('native invocation preserves legacy positional omission for renamed agent parameters', function () {

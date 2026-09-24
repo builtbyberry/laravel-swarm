@@ -134,6 +134,32 @@ test('swarm health json output is structured', function (): void {
     }
 });
 
+test('disabled native-input health reports an absent table as unverifiable instead of an empty drain', function (): void {
+    config()->set('swarm.native_inputs.enabled', false);
+    config()->set('swarm.tables.native_inputs', 'missing_native_input_envelopes');
+
+    Artisan::call('swarm:health', ['--json' => true]);
+    $checks = collect(json_decode(Artisan::output(), true)['checks']);
+    $native = $checks->firstWhere('component', 'Native inputs');
+
+    expect($native['details'])->toContain('drain cannot be verified because the table is absent')
+        ->and($native['details'])->toContain('pre-enable readiness');
+});
+
+test('configured pre-enable native-input rollout fails health when migrations are not ready', function (): void {
+    config()->set('swarm.native_inputs.enabled', false);
+    config()->set('swarm.native_inputs.disk', 'local');
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.tables.native_inputs', 'missing_native_input_envelopes');
+
+    expect(Artisan::call('swarm:health'))->toBe(1);
+    expect(Artisan::output())
+        ->toContain('Native inputs')
+        ->toContain('pre-enable readiness')
+        ->toContain('missing required columns');
+});
+
 test('swarm health identifies failing cache component', function (): void {
     config()->set('swarm.context.store', 'swarm-health-failing');
     app()->forgetInstance(ContextStore::class);

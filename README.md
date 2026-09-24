@@ -53,8 +53,9 @@ echo $response->output;
 
 For background execution, streaming, and durable workflows, see [Choosing an Execution Mode](#choosing-an-execution-mode).
 
-Laravel AI `UserMessage` input and explicitly routed image/document/audio/video
-attachments are available behind the default-off v0.28 rollout controls. See
+Laravel AI `UserMessage` or message-bearing `AgentInput` input and explicitly
+routed image/document/audio/video attachments are available behind the default-off
+v0.28 rollout controls. Approval decisions remain outside this input surface. See
 [Native messages and attachments](docs/native-inputs.md).
 
 ## Requirements

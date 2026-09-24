@@ -34,6 +34,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInput;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingSinkFailureHandler;
@@ -44,6 +45,7 @@ use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Messages\UserMessage;
 
 /**
@@ -133,8 +135,9 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    public function prompt(string|array|RunContext|UserMessage $task): SwarmResponse
+    public function prompt(string|array|RunContext|AgentInput|UserMessage $task): SwarmResponse
     {
+        $task = $this->normalizeAgentInput($task);
         $this->recorded[] = $task;
 
         $output = $this->resolveResponse($task);
@@ -153,7 +156,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    public function run(string|array|RunContext|UserMessage $task): SwarmResponse
+    public function run(string|array|RunContext|AgentInput|UserMessage $task): SwarmResponse
     {
         return $this->prompt($task);
     }
@@ -163,8 +166,9 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    public function queue(string|array|RunContext|UserMessage $task): QueuedSwarmResponse
+    public function queue(string|array|RunContext|AgentInput|UserMessage $task): QueuedSwarmResponse
     {
+        $task = $this->normalizeAgentInput($task);
         $this->recordedQueued[] = $task;
 
         return new QueuedSwarmResponse(new FakePendingDispatch, 'fake-run-id');
@@ -173,8 +177,9 @@ class SwarmFake implements Swarm
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function dispatchDurable(string|array|RunContext|UserMessage $task): DurableSwarmResponse
+    public function dispatchDurable(string|array|RunContext|AgentInput|UserMessage $task): DurableSwarmResponse
     {
+        $task = $this->normalizeAgentInput($task);
         $this->recordedDurable[] = $task;
 
         return new DurableSwarmResponse(
@@ -326,8 +331,10 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    public function stream(string|array|RunContext|UserMessage $task): StreamableSwarmResponse
+    public function stream(string|array|RunContext|AgentInput|UserMessage $task): StreamableSwarmResponse
     {
+        $task = $this->normalizeAgentInput($task);
+
         return new StreamableSwarmResponse('fake-run-id', function () use ($task): \Generator {
             $this->recordedStreamed[] = $task;
             $resolved = $this->resolveResponse($task);
@@ -401,7 +408,7 @@ class SwarmFake implements Swarm
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcast(string|array|RunContext|UserMessage $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
+    public function broadcast(string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
     {
         return $this->stream($task)
             ->each(function (SwarmStreamEvent $event) use ($channels, $now): void {
@@ -415,7 +422,7 @@ class SwarmFake implements Swarm
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcastNow(string|array|RunContext|UserMessage $task, Channel|array $channels): StreamableSwarmResponse
+    public function broadcastNow(string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels): StreamableSwarmResponse
     {
         return $this->broadcast($task, $channels, now: true);
     }
@@ -426,7 +433,7 @@ class SwarmFake implements Swarm
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcastOnQueue(string|array|RunContext|UserMessage $task, Channel|array $channels): QueuedSwarmResponse
+    public function broadcastOnQueue(string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels): QueuedSwarmResponse
     {
         return $this->queue($task);
     }
@@ -436,7 +443,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmAssertTask  $task
      */
-    public function assertPrompted(string|array|UserMessage|callable $task): void
+    public function assertPrompted(string|array|AgentInput|UserMessage|callable $task): void
     {
         $this->assertRan($task);
     }
@@ -446,7 +453,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmAssertTask  $task
      */
-    public function assertRan(string|array|UserMessage|callable $task): void
+    public function assertRan(string|array|AgentInput|UserMessage|callable $task): void
     {
         if (is_callable($task)) {
             PHPUnit::assertTrue(
@@ -455,6 +462,10 @@ class SwarmFake implements Swarm
             );
 
             return;
+        }
+
+        if ($task instanceof AgentInput) {
+            $task = NativeAgentInput::message($task);
         }
 
         if (is_array($task)) {
@@ -493,7 +504,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmAssertTask  $task
      */
-    public function assertQueued(string|array|UserMessage|callable $task): void
+    public function assertQueued(string|array|AgentInput|UserMessage|callable $task): void
     {
         if (is_callable($task)) {
             PHPUnit::assertTrue(
@@ -502,6 +513,10 @@ class SwarmFake implements Swarm
             );
 
             return;
+        }
+
+        if ($task instanceof AgentInput) {
+            $task = NativeAgentInput::message($task);
         }
 
         if (is_array($task)) {
@@ -530,7 +545,7 @@ class SwarmFake implements Swarm
     /**
      * @param  SwarmAssertTask  $task
      */
-    public function assertDispatchedDurably(string|array|UserMessage|callable $task): void
+    public function assertDispatchedDurably(string|array|AgentInput|UserMessage|callable $task): void
     {
         if (is_callable($task)) {
             PHPUnit::assertTrue(
@@ -539,6 +554,10 @@ class SwarmFake implements Swarm
             );
 
             return;
+        }
+
+        if ($task instanceof AgentInput) {
+            $task = NativeAgentInput::message($task);
         }
 
         if (is_array($task)) {
@@ -622,7 +641,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmAssertTask  $task
      */
-    public function assertStreamed(string|array|UserMessage|callable $task): void
+    public function assertStreamed(string|array|AgentInput|UserMessage|callable $task): void
     {
         if (is_callable($task)) {
             PHPUnit::assertTrue(
@@ -631,6 +650,10 @@ class SwarmFake implements Swarm
             );
 
             return;
+        }
+
+        if ($task instanceof AgentInput) {
+            $task = NativeAgentInput::message($task);
         }
 
         if (is_array($task)) {
@@ -829,7 +852,7 @@ class SwarmFake implements Swarm
     /**
      * Resolve the fake response for the given task.
      *
-     * @param  SwarmTaskInput  $task
+     * @param  string|array<string, mixed>|RunContext|UserMessage  $task
      */
     protected function resolveResponse(string|array|RunContext|UserMessage $task): string|SwarmResponse
     {
@@ -842,6 +865,15 @@ class SwarmFake implements Swarm
         }
 
         return "Fake response for swarm [{$this->swarmClass}].";
+    }
+
+    /**
+     * @param  string|array<string, mixed>|RunContext|AgentInput|UserMessage  $task
+     * @return string|array<string, mixed>|RunContext|UserMessage
+     */
+    protected function normalizeAgentInput(string|array|RunContext|AgentInput|UserMessage $task): string|array|RunContext|UserMessage
+    {
+        return $task instanceof AgentInput ? NativeAgentInput::message($task) : $task;
     }
 
     protected function assertTaskDescription(string|UserMessage $task): string

@@ -75,7 +75,8 @@ final class NativeInputManager
             throw new SwarmException('Recoverable native swarm input requires database persistence with [swarm.persistence.encrypt_at_rest] enabled.');
         }
 
-        [$manifest->attachments, $manifest->attachmentHashes, $manifest->ownedAttachmentIndexes, $ownedLocations] = $this->makeRecoverable($manifest->attachments, $context->runId);
+        $manifest->captureRecoverableInvocationOptions();
+        [$manifest->attachments, $manifest->attachmentHashes, $manifest->ownedAttachmentIndexes, $promotions] = $this->planRecoverable($manifest->attachments, $context->runId);
         $payload = $manifest->toArray();
         $payload['authorization'] = [
             'actor' => $context->metadata['actor'] ?? null,
@@ -89,16 +90,17 @@ final class NativeInputManager
         try {
             $this->store->put($id, $context->runId, $payload, $hash, $expiresAt);
             $stored = true;
+            $this->promote($promotions);
             $this->store->activate($id, $context->runId);
             $context->setNativeInputReference($id);
         } catch (Throwable $exception) {
-            $this->deleteOwnedLocations($ownedLocations);
             if ($stored) {
                 try {
                     $this->store->revoke($id, $context->runId);
+                    $this->deleteOwnedLocations($promotions);
                 } catch (Throwable) {
-                    // The original admission failure remains authoritative. A
-                    // staged row is intentionally retained for prune/recovery.
+                    // Revoke-before-delete is deliberate: if the durable
+                    // locator cannot be retained, leave the bytes in place.
                 }
             }
 
@@ -147,7 +149,6 @@ final class NativeInputManager
         if ($invocation->prompt instanceof UserMessage) {
             $this->audit->emit('native_input.released', [
                 'run_id' => $context->runId,
-                'native_input_ref' => $context->nativeInputReference(),
                 'recipient' => $recipient,
                 'attachment_count' => $invocation->prompt->attachments->count(),
                 'provider_override' => $invocation->provider !== null,
@@ -161,9 +162,9 @@ final class NativeInputManager
 
     /**
      * @param  list<File>  $attachments
-     * @return array{list<File>, array<int, string>, list<int>, list<array{disk: string, path: string}>}
+     * @return array{list<File>, array<int, string>, list<int>, list<array{disk: string, path: string, content: string, options: array<string, string>}>}
      */
-    protected function makeRecoverable(array $attachments, string $runId): array
+    protected function planRecoverable(array $attachments, string $runId): array
     {
         if ($attachments === []) {
             return [[], [], [], []];
@@ -175,93 +176,83 @@ final class NativeInputManager
         $recoverable = [];
         $hashes = [];
         $owned = [];
-        $ownedLocations = [];
-        try {
-            foreach ($attachments as $index => $attachment) {
-                if (! $attachment instanceof Arrayable) {
-                    throw new SwarmException('Native attachments must provide Laravel AI array serialization.');
-                }
-
-                $descriptor = $attachment->toArray();
-                $type = (string) ($descriptor['type'] ?? '');
-
-                if (str_starts_with($type, 'provider-')) {
-                    $recoverable[] = $attachment;
-
-                    continue;
-                }
-
-                if (str_starts_with($type, 'stored-')) {
-                    if (! is_string($diskName) || $diskName === '' || ($descriptor['disk'] ?? null) !== $diskName) {
-                        throw new SwarmException('Recoverable native attachments must use the explicitly configured [swarm.native_inputs.disk].');
-                    }
-                    if ($attachment instanceof StorableFile) {
-                        $size = $this->filesystems->disk($diskName)->size((string) ($descriptor['path'] ?? ''));
-                        if ($size > $maxBytes) {
-                            throw new SwarmException("Native attachment [{$index}] exceeds the configured [{$maxBytes}] byte limit.");
-                        }
-                        $hashes[count($recoverable)] = hash('sha256', $attachment->content());
-                    }
-                    $recoverable[] = $attachment;
-
-                    continue;
-                }
-
-                if (str_starts_with($type, 'remote-')) {
-                    throw new SwarmException('Remote native attachments are request-local only; recoverable dispatch does not fetch arbitrary remote URLs. Store the file on the configured private disk first.');
-                }
-
-                if (! is_string($diskName) || $diskName === '') {
-                    throw new SwarmException('Inline and local native attachments require [swarm.native_inputs.disk] so Swarm can promote them before background or cross-process execution.');
-                }
-
-                if (! $attachment instanceof StorableFile) {
-                    throw new SwarmException("Native attachment type [{$type}] cannot be promoted for recoverable execution.");
-                }
-
-                $content = $attachment->content();
-                if (strlen($content) > $maxBytes) {
-                    throw new SwarmException("Native attachment [{$index}] exceeds the configured [{$maxBytes}] byte limit.");
-                }
-
-                $name = $attachment->name();
-                $mime = $attachment->mimeType();
-                $extension = is_string($name) && pathinfo($name, PATHINFO_EXTENSION) !== ''
-                    ? '.'.preg_replace('/[^A-Za-z0-9]+/', '', pathinfo($name, PATHINFO_EXTENSION))
-                    : '';
-                $path = 'swarm/native-inputs/'.$runId.'/'.Str::uuid().$extension;
-                $options = ['visibility' => 'private'];
-                if (is_string($mime) && $mime !== '') {
-                    $options['mimetype'] = $mime;
-                }
-                if (! $this->filesystems->disk($diskName)->put($path, $content, $options)) {
-                    throw new SwarmException("Native attachment [{$index}] could not be promoted to the configured private disk.");
-                }
-
-                $ownedLocations[] = ['disk' => $diskName, 'path' => $path];
-
-                $stored = match (true) {
-                    str_ends_with($type, '-image') => new StoredImage($path, $diskName),
-                    str_ends_with($type, '-document') => new StoredDocument($path, $diskName),
-                    str_ends_with($type, '-audio') => new StoredAudio($path, $diskName),
-                    str_ends_with($type, '-video') => new StoredVideo($path, $diskName),
-                    default => throw new SwarmException("Native attachment type [{$type}] is not supported for recoverable execution."),
-                };
-                $stored->as($name);
-                if (is_string($mime) && $mime !== '') {
-                    $stored->withMimeType($mime);
-                }
-                $recoverable[] = $stored;
-                $hashes[count($recoverable) - 1] = hash('sha256', $content);
-                $owned[] = count($recoverable) - 1;
+        $promotions = [];
+        foreach ($attachments as $index => $attachment) {
+            if (! $attachment instanceof Arrayable) {
+                throw new SwarmException('Native attachments must provide Laravel AI array serialization.');
             }
-        } catch (Throwable $exception) {
-            $this->deleteOwnedLocations($ownedLocations);
 
-            throw $exception;
+            $descriptor = $attachment->toArray();
+            $type = (string) ($descriptor['type'] ?? '');
+
+            if (str_starts_with($type, 'provider-')) {
+                $recoverable[] = $attachment;
+
+                continue;
+            }
+
+            if (str_starts_with($type, 'stored-')) {
+                if (! is_string($diskName) || $diskName === '' || ($descriptor['disk'] ?? null) !== $diskName) {
+                    throw new SwarmException('Recoverable native attachments must use the explicitly configured [swarm.native_inputs.disk].');
+                }
+                if ($attachment instanceof StorableFile) {
+                    $size = $this->filesystems->disk($diskName)->size((string) ($descriptor['path'] ?? ''));
+                    if ($size > $maxBytes) {
+                        throw new SwarmException("Native attachment [{$index}] exceeds the configured [{$maxBytes}] byte limit.");
+                    }
+                    $hashes[count($recoverable)] = hash('sha256', $attachment->content());
+                }
+                $recoverable[] = $attachment;
+
+                continue;
+            }
+
+            if (str_starts_with($type, 'remote-')) {
+                throw new SwarmException('Remote native attachments are request-local only; recoverable dispatch does not fetch arbitrary remote URLs. Store the file on the configured private disk first.');
+            }
+
+            if (! is_string($diskName) || $diskName === '') {
+                throw new SwarmException('Inline and local native attachments require [swarm.native_inputs.disk] so Swarm can promote them before background or cross-process execution.');
+            }
+
+            if (! $attachment instanceof StorableFile) {
+                throw new SwarmException("Native attachment type [{$type}] cannot be promoted for recoverable execution.");
+            }
+
+            $content = $attachment->content();
+            if (strlen($content) > $maxBytes) {
+                throw new SwarmException("Native attachment [{$index}] exceeds the configured [{$maxBytes}] byte limit.");
+            }
+
+            $name = $attachment->name();
+            $mime = $attachment->mimeType();
+            $extension = is_string($name) && pathinfo($name, PATHINFO_EXTENSION) !== ''
+                ? '.'.preg_replace('/[^A-Za-z0-9]+/', '', pathinfo($name, PATHINFO_EXTENSION))
+                : '';
+            $path = 'swarm/native-inputs/'.$runId.'/'.Str::uuid().$extension;
+            $options = ['visibility' => 'private'];
+            if (is_string($mime) && $mime !== '') {
+                $options['mimetype'] = $mime;
+            }
+            $promotions[] = ['disk' => $diskName, 'path' => $path, 'content' => $content, 'options' => $options];
+
+            $stored = match (true) {
+                str_ends_with($type, '-image') => new StoredImage($path, $diskName),
+                str_ends_with($type, '-document') => new StoredDocument($path, $diskName),
+                str_ends_with($type, '-audio') => new StoredAudio($path, $diskName),
+                str_ends_with($type, '-video') => new StoredVideo($path, $diskName),
+                default => throw new SwarmException("Native attachment type [{$type}] is not supported for recoverable execution."),
+            };
+            $stored->as($name);
+            if (is_string($mime) && $mime !== '') {
+                $stored->withMimeType($mime);
+            }
+            $recoverable[] = $stored;
+            $hashes[count($recoverable) - 1] = hash('sha256', $content);
+            $owned[] = count($recoverable) - 1;
         }
 
-        return [$recoverable, $hashes, $owned, $ownedLocations];
+        return [$recoverable, $hashes, $owned, $promotions];
     }
 
     /** @param list<File> $attachments */
@@ -376,16 +367,63 @@ final class NativeInputManager
         }
     }
 
+    /** @param list<array{disk: string, path: string, content: string, options: array<string, string>}> $promotions */
+    protected function promote(array $promotions): void
+    {
+        foreach ($promotions as $index => $promotion) {
+            if (! $this->filesystems->disk($promotion['disk'])->put($promotion['path'], $promotion['content'], $promotion['options'])) {
+                throw new SwarmException("Native attachment [{$index}] could not be promoted to the configured private disk.");
+            }
+        }
+    }
+
     /** @param list<array{disk: string, path: string}> $locations */
     protected function deleteOwnedLocations(array $locations): void
     {
         foreach (array_reverse($locations) as $location) {
             try {
-                $this->filesystems->disk($location['disk'])->delete($location['path']);
+                $disk = $this->filesystems->disk($location['disk']);
+                if ($disk->exists($location['path'])) {
+                    $disk->delete($location['path']);
+                }
             } catch (Throwable) {
-                // Best-effort admission compensation. A successful envelope
-                // write remains as the durable retry locator for prune.
+                // Best effort. The revoked envelope is retained as the
+                // authoritative prune locator for any bytes that remain.
             }
+        }
+    }
+
+    public function abandon(RunContext $context): void
+    {
+        $reference = $context->nativeInputReference();
+        if ($reference === null) {
+            return;
+        }
+
+        try {
+            $row = $this->store->find($reference);
+            if ($row === null || $row['run_id'] !== $context->runId) {
+                return;
+            }
+
+            $this->store->revoke($reference, $context->runId);
+            $locations = [];
+            foreach ($row['payload']['attachments'] ?? [] as $attachment) {
+                if (! is_array($attachment) || ($attachment['swarm_owned'] ?? false) !== true) {
+                    continue;
+                }
+
+                $disk = $attachment['disk'] ?? null;
+                $path = $attachment['path'] ?? null;
+                if (is_string($disk) && is_string($path)
+                    && $disk === $this->config->get('swarm.native_inputs.disk')
+                    && str_starts_with($path, 'swarm/native-inputs/'.$context->runId.'/')) {
+                    $locations[] = ['disk' => $disk, 'path' => $path];
+                }
+            }
+            $this->deleteOwnedLocations($locations);
+        } catch (Throwable) {
+            // Pre-dispatch cleanup must never replace the original failure.
         }
     }
 

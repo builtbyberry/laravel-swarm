@@ -30,6 +30,7 @@ use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Messages\UserMessage;
 use Throwable;
 
@@ -62,7 +63,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function stream(Swarm $swarm, string|array|RunContext|UserMessage $task): StreamableSwarmResponse
+    public function stream(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task): StreamableSwarmResponse
     {
         $agents = $swarm->agents();
 

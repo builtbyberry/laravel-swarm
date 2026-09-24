@@ -1,6 +1,7 @@
 # Native messages and attachments
 
-Laravel Swarm can pass Laravel AI `UserMessage` input through a workflow without
+Laravel Swarm can pass Laravel AI `UserMessage` input—and an `AgentInput` whose
+current value is a user message—through a workflow without
 inventing a second message grammar. This v0.28 surface is default-off while a
 mixed worker fleet is being upgraded:
 
@@ -21,8 +22,9 @@ $response = DocumentReview::make()->prompt(new UserMessage(
 
 Strings, structured arrays and existing `RunContext` payloads keep their existing
 wire shape and routing. A text-only `UserMessage` follows those same topology
-rules. Native approval continuation is a separate component and is not introduced
-by this input surface.
+rules. Swarm checks `AgentInput::decisions()` before reading its message and fails
+with continuation guidance when decisions are present; native approval continuation
+is a separate component and is not introduced by this input surface.
 
 ## Execution matrix
 
@@ -87,6 +89,9 @@ versioned operational envelope in `swarm_native_inputs`. Queue payloads contain
 only an opaque reference. The message, attachment locators, recipient bindings
 and invocation options are sealed with the package persistence cipher; this is
 independent of capture, so capture-off recovery never consumes `[redacted]`.
+Plain attachment headers and provider options are reconstructed. Provider-dependent
+closures require every receiving route to name one scalar provider so Swarm can
+seal the resolved plain values; ambiguous or non-plain values fail before dispatch.
 
 Recoverable input requires:
 
@@ -137,9 +142,11 @@ disabled, whether active envelopes still need to drain.
    readable while the flag is off; confirm `swarm:health` reports zero active
    envelopes before removing readers or rolling back the migration.
 
-Native marker jobs dispatch after the surrounding database transaction commits by
-default. A caller may still opt into Laravel's explicit `beforeCommit()` behavior
-on the returned pending dispatch when that tradeoff is intentional.
+Recoverable native admission must begin outside an open database transaction.
+Swarm stages the sealed cleanup locator before promoting file bytes, then activates
+it only after every write succeeds; allowing an outer rollback could erase that
+locator after the filesystem write. Native marker jobs still default to Laravel's
+after-commit dispatch behavior once admission succeeds.
 
 Database sealing does not encrypt an application's filesystem, cache, or queue
 transport. Protect those systems independently and size attachment limits and
