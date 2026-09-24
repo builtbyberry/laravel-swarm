@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -77,11 +78,30 @@ def verify(app, expected):
     return result
 
 
-def run(command, app, env, logs, name, accepted=(0,)):
-    result = subprocess.run(command, cwd=app, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    (logs / (name + '.log')).write_text('$ ' + ' '.join(command) + '\n' + result.stdout + f'\nexit={result.returncode}\n')
-    check(result.returncode in accepted, f'{name} failed ({result.returncode}); see {logs / (name + ".log")}')
-    return result
+def run(command, app, env, logs, name, accepted=(0,), timeout=300):
+    process = subprocess.Popen(
+        command,
+        cwd=app,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    try:
+        output, _ = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            output, _ = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            output, _ = process.communicate()
+        (logs / (name + '.log')).write_text('$ ' + ' '.join(command) + '\n' + output + f'\ntimeout={timeout}\n')
+        raise RuntimeError(f'{name} timed out after {timeout}s; see {logs / (name + ".log")}') from error
+    (logs / (name + '.log')).write_text('$ ' + ' '.join(command) + '\n' + output + f'\nexit={process.returncode}\n')
+    check(process.returncode in accepted, f'{name} failed ({process.returncode}); see {logs / (name + ".log")}')
+    return subprocess.CompletedProcess(command, process.returncode, output)
 
 
 def assistant(app, env, logs, mode):
@@ -154,7 +174,7 @@ def main():
     save(output / 'overrides.json', overrides)
     check(not (app / 'vendor').exists() and not (app / 'composer.lock').exists(), 'App must begin without vendor and lock')
     save(output / 'freshness.json', {'app': str(app), 'vendor_absent': True, 'lock_absent': True, 'composer_home_absent': not Path(env['COMPOSER_HOME']).exists(), 'composer_cache_absent': not Path(env['COMPOSER_CACHE_DIR']).exists()})
-    run(['composer', 'update', '--prefer-dist', '--no-progress', '--no-interaction', '--no-scripts'], app, env, logs, 'composer')
+    run(['composer', 'update', '--prefer-dist', '--no-progress', '--no-interaction', '--no-scripts'], app, env, logs, 'composer', timeout=900)
     identities = verify(app, expected)
     for name in VERSIONS:
         installed_manifest = app / 'vendor' / name / 'composer.json'

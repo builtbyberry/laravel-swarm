@@ -41,7 +41,7 @@ it('new recipe backups preserve bytes permissions and require matching restore i
         ->and($backup['after_sha256'])->toBe(hash('sha256', $this->afterManifest))
         ->and(fileperms($path) & 0777)->toBe(0600)
         ->and(fileperms($this->upgradeRoot.'/composer.json') & 0777)->toBe(0640);
-    expect(fn () => (new ManifestEditor)->restore($this->upgradeRoot, $result['backup_id']))->toThrow(RuntimeException::class, 'recipe')
+    expect(fn () => (new ManifestEditor)->restore($this->upgradeRoot, $result['backup_id']))->toThrow(RuntimeException::class, 'Backup recipe 0.26-to-0.27 targets v0.27.0; selected recipe 0.25-to-0.26 targets v0.26.1.')
         ->and(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->afterManifest);
     expect($editor->restore($this->upgradeRoot, $result['backup_id']))->toBe($result)
         ->and(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->beforeManifest);
@@ -49,7 +49,7 @@ it('new recipe backups preserve bytes permissions and require matching restore i
 
 it('existing old backups remain restorable with an explicit old recipe and refuse the new recipe', function () {
     $result = (new ManifestEditor)->apply($this->upgradeRoot, $this->prepareManifest);
-    expect(fn () => (new ManifestEditor(new UpgradeRecipe(UpgradeRecipe::NATIVE_ONE)))->restore($this->upgradeRoot, $result['backup_id']))->toThrow(RuntimeException::class, 'recipe')
+    expect(fn () => (new ManifestEditor(new UpgradeRecipe(UpgradeRecipe::NATIVE_ONE)))->restore($this->upgradeRoot, $result['backup_id']))->toThrow(RuntimeException::class, 'Backup recipe 0.25-to-0.26 targets v0.26.1; selected recipe 0.26-to-0.27 targets v0.27.0.')
         ->and(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->afterManifest);
     (new ManifestEditor(new UpgradeRecipe(UpgradeRecipe::DEFAULT)))->restore($this->upgradeRoot, $result['backup_id']);
     expect(file_get_contents($this->upgradeRoot.'/composer.json'))->toBe($this->beforeManifest);

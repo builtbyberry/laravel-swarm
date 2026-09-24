@@ -2,8 +2,9 @@
 
 C4 completed four independently governed compatibility components. Each topic PR
 merged into its own release branch after its configured independent change review,
-fresh verification and exact-head hosted checks. The release PRs remain draft.
-These are frozen **candidate sources**, not tagged releases or Packagist proof.
+fresh verification and exact-head hosted checks. At the 2026-09-24 handoff the
+release PRs remained draft. These frozen **candidate sources** are evidence of the
+pre-publication review, not by themselves tagged releases or Packagist proof.
 
 ## Frozen source map
 
@@ -89,8 +90,8 @@ live Bedrock/provider qualification.
 The [C5 procedure](ai-1-ecosystem-evidence.md) proves combined fresh candidate
 installation and the final assistant target map. Its completed run and final
 source identities are in the [release evidence index](ai-1-release-evidence.md).
-Separate wrap/readiness and later publication remain required. Publish and observe
-core first, then compatible companions; only a fresh default-Packagist five-package
-installation after all five releases can establish published ecosystem delivery.
+The handoff required separate wrap/readiness and later publication. Publish and
+observe core first, then compatible companions; only a fresh default-Packagist
+five-package installation after all five releases can establish published ecosystem delivery.
 If publication is partial, retain that state explicitly; do not retag or claim
 completion from this candidate evidence.

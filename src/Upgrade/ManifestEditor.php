@@ -76,8 +76,12 @@ class ManifestEditor
             } catch (Throwable $exception) {
                 throw new RuntimeException('Invalid backup JSON.', 0, $exception);
             }
-            if (! is_array($record) || ($record['schema_version'] ?? null) !== 1 || ($record['recipe'] ?? null) !== $this->recipe->id || ($record['target'] ?? null) !== $this->recipe->target) {
-                throw new RuntimeException('Unsupported backup schema or recipe.');
+            if (! is_array($record) || ($record['schema_version'] ?? null) !== 1
+                || ! is_string($record['recipe'] ?? null) || ! is_string($record['target'] ?? null)) {
+                throw new RuntimeException('Unsupported backup schema.');
+            }
+            if ($record['recipe'] !== $this->recipe->id || $record['target'] !== $this->recipe->target) {
+                throw new RuntimeException("Backup recipe {$record['recipe']} targets v{$record['target']}; selected recipe {$this->recipe->id} targets v{$this->recipe->target}.");
             }
             foreach (['mode', 'uid', 'gid'] as $field) {
                 if (! isset($record[$field]) || ! is_int($record[$field]) || $record[$field] < 0 || ($field === 'mode' && $record[$field] > 07777)) {
