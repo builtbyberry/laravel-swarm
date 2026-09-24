@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.28.0 - unreleased
+
+Native feature access through Laravel Swarm workflows.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.27.0 - 2026-09-24
 
 Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabilities.
