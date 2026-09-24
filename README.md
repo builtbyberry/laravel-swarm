@@ -662,7 +662,7 @@ See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full refe
 
 ## Documentation
 
-For the unreleased v0.26.0 adoption, see the [44-row contracts and evidence index](docs/ai-0112-release-evidence.md) and [upgrade instructions](UPGRADING.md#upgrading-to-v0260). Companion installability and the post-main moving-dev gate remain separate release requirements.
+For the v0.27.0 adoption, see the [54-row preservation ledger](docs/ai-1-preservation-evidence.md), [persisted-state upgrade evidence](docs/ai-1-upgrade-evidence.md), and [upgrade instructions](UPGRADING.md#upgrading-to-v0270). Companion candidate and published-install proof remain separate phases. The [v0.26.0 evidence index](docs/ai-0112-release-evidence.md) remains a historical record.
 
 The full documentation site is at **[swarm.builtbyberry.com](https://swarm.builtbyberry.com)** — searchable, versioned, and the recommended starting point.
 

@@ -71,6 +71,7 @@ it('does not relabel or combine the shared subsets of legacy and native reports'
 
 it('keeps normalized combination associative and permutation invariant after reload', function () {
     $fold = usageAccountingFold();
+    $durable = app(DurableBranchCoordinator::class);
     $reports = [
         ['input_tokens' => 7, 'output_tokens' => 2, 'cache_read_input_tokens' => 3, 'cache_write_input_tokens' => 0, 'reasoning_tokens' => 1],
         ['input_tokens' => 0, 'output_tokens' => 0, 'cache_read_input_tokens' => 0, 'cache_write_input_tokens' => 0, 'reasoning_tokens' => 0],
@@ -85,6 +86,9 @@ it('keeps normalized combination associative and permutation invariant after rel
                 $normalized = array_map(fn (array $r): array => json_decode(json_encode($fold->report([], $r), JSON_THROW_ON_ERROR), true, flags: JSON_THROW_ON_ERROR), [$a, $b, $c]);
                 [$x, $y, $z] = $normalized;
                 $expected = $fold->combine($fold->combine($x, $y), $z);
+                foreach ([[$a, $b, $c], [$a, $c, $b], [$b, $a, $c], [$b, $c, $a], [$c, $a, $b], [$c, $b, $a]] as $ordered) {
+                    expect($durable->mergeBranchUsage(array_map(fn (array $report): array => ['usage' => $report], $ordered)))->toBe($expected);
+                }
                 foreach ([[$x, $y, $z], [$x, $z, $y], [$y, $x, $z], [$y, $z, $x], [$z, $x, $y], [$z, $y, $x]] as [$l, $m, $r]) {
                     expect($fold->combine($fold->combine($l, $m), $r))->toBe($expected)
                         ->and($fold->combine($l, $fold->combine($m, $r)))->toBe($expected);
@@ -102,7 +106,9 @@ it('uses the same conservative fold for durable branch reports', function () {
         ->and($coordinator->mergeBranchUsage([['usage' => $known], ['usage' => $unknownSubset]]))->toBe([
             'input_tokens' => 14, 'output_tokens' => 6, 'cache_read_input_tokens' => null, 'cache_write_input_tokens' => null, 'reasoning_tokens' => null,
         ])
-        ->and($coordinator->mergeBranchUsage([['usage' => $known], ['usage' => []]]))->toBe(unavailableUsageAccounting());
+        ->and($coordinator->mergeBranchUsage([['usage' => $known], ['usage' => []]]))->toBe(unavailableUsageAccounting())
+        ->and($coordinator->mergeBranchUsage([['usage' => $known], []]))->toBe(unavailableUsageAccounting())
+        ->and($coordinator->mergeBranchUsage([['usage' => ['input_tokens' => null, 'output_tokens' => null]]]))->toBe(array_fill_keys(['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_write_input_tokens', 'reasoning_tokens'], null));
 });
 
 it('preserves a native invocation subtotal without claiming generation completeness', function () {

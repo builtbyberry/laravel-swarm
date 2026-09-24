@@ -1,0 +1,2790 @@
+{
+    "swarm": "38b3b649f3416a31c8d1f39ecefd77446e676a3c",
+    "php": "8.5.8",
+    "manifest_sha256": "36861b580d7eed33a8486b946610f3ef2bd1be355d95e87d1d06faa69f236ee4",
+    "lock_sha256": "6a61302fcde29102943661112af82142417a54a57da08bc1e234616afcdec559",
+    "generator_sha256": "14ed1ff103bf7c85f4fce0d919835542764aa82ae4c26e0c9103bd7a0684f8f8",
+    "dependencies": {
+        "laravel/ai": {
+            "version": "v0.11.2",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/laravel/ai.git",
+                "reference": "ee2c5162838d440c4e2e629ea93c8c87e838eaed"
+            }
+        },
+        "laravel/framework": {
+            "version": "v13.33.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/laravel/framework.git",
+                "reference": "91188a17ceaa3dbace6e8a5f7abd0d042e466359"
+            }
+        },
+        "orchestra/testbench": {
+            "version": "v11.2.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/orchestral/testbench.git",
+                "reference": "a326be05fc2375b6240b4ab5279a796e05b6d535"
+            }
+        }
+    },
+    "jobs": {
+        "pending": "Tzo1MDoiQnVpbHRCeUJlcnJ5XExhcmF2ZWxTd2FybVxKb2JzXEFkdmFuY2VEdXJhYmxlU3dhcm0iOjQ6e3M6NToicnVuSWQiO3M6MTM6InYwMjYzLXBlbmRpbmciO3M6OToic3RlcEluZGV4IjtpOjE7czo3OiJ0aW1lb3V0IjtpOjM2MDtzOjEyOiJlbnF1ZXVlZEF0TXMiO2k6MTc5MDEyMTYwMDAwMDt9",
+        "waiting": "Tzo1MDoiQnVpbHRCeUJlcnJ5XExhcmF2ZWxTd2FybVxKb2JzXEFkdmFuY2VEdXJhYmxlU3dhcm0iOjQ6e3M6NToicnVuSWQiO3M6MTM6InYwMjYzLXdhaXRpbmciO3M6OToic3RlcEluZGV4IjtpOjE7czo3OiJ0aW1lb3V0IjtpOjM2MDtzOjEyOiJlbnF1ZXVlZEF0TXMiO2k6MTc5MDEyMTYwMDAwMDt9",
+        "running": "Tzo1MDoiQnVpbHRCeUJlcnJ5XExhcmF2ZWxTd2FybVxKb2JzXEFkdmFuY2VEdXJhYmxlU3dhcm0iOjQ6e3M6NToicnVuSWQiO3M6MTM6InYwMjYzLXJ1bm5pbmciO3M6OToic3RlcEluZGV4IjtpOjE7czo3OiJ0aW1lb3V0IjtpOjM2MDtzOjEyOiJlbnF1ZXVlZEF0TXMiO2k6MTc5MDEyMTYwMDAwMDt9",
+        "invoke": "Tzo0MjoiQnVpbHRCeUJlcnJ5XExhcmF2ZWxTd2FybVxKb2JzXEludm9rZVN3YXJtIjo1OntzOjEwOiJzd2FybUNsYXNzIjtzOjY3OiJCdWlsdEJ5QmVycnlcTGFyYXZlbFN3YXJtXFRlc3RzXEZpeHR1cmVzXFN3YXJtc1xGYWtlU2VxdWVudGlhbFN3YXJtIjtzOjQ6InRhc2siO2E6NTp7czo2OiJydW5faWQiO3M6MTE6InYwMjYzLXF1ZXVlIjtzOjU6ImlucHV0IjtzOjE1OiJvbGQgcXVldWUgaW5wdXQiO3M6NDoiZGF0YSI7YTowOnt9czo4OiJtZXRhZGF0YSI7YTowOnt9czo5OiJhcnRpZmFjdHMiO2E6MDp7fX1zOjEyOiJlbnF1ZXVlZEF0TXMiO2k6MTc5MDEyMTYwMDAwMDtzOjEwOiJjb25uZWN0aW9uIjtzOjEyOiJkdXJhYmxlLXRlc3QiO3M6NToicXVldWUiO3M6NzoidXBncmFkZSI7fQ==",
+        "broadcast": "Tzo0NToiQnVpbHRCeUJlcnJ5XExhcmF2ZWxTd2FybVxKb2JzXEJyb2FkY2FzdFN3YXJtIjo0OntzOjEwOiJzd2FybUNsYXNzIjtzOjY3OiJCdWlsdEJ5QmVycnlcTGFyYXZlbFN3YXJtXFRlc3RzXEZpeHR1cmVzXFN3YXJtc1xGYWtlU2VxdWVudGlhbFN3YXJtIjtzOjQ6InRhc2siO2E6NTp7czo2OiJydW5faWQiO3M6MTU6InYwMjYzLWJyb2FkY2FzdCI7czo1OiJpbnB1dCI7czoxOToib2xkIGJyb2FkY2FzdCBpbnB1dCI7czo0OiJkYXRhIjthOjA6e31zOjg6Im1ldGFkYXRhIjthOjA6e31zOjk6ImFydGlmYWN0cyI7YTowOnt9fXM6ODoiY2hhbm5lbHMiO086MzE6IklsbHVtaW5hdGVcQnJvYWRjYXN0aW5nXENoYW5uZWwiOjE6e3M6NDoibmFtZSI7czo3OiJ1cGdyYWRlIjt9czoxMjoiZW5xdWV1ZWRBdE1zIjtpOjE3OTAxMjE2MDAwMDA7fQ==",
+        "parallel_branch": "Tzo1MToiQnVpbHRCeUJlcnJ5XExhcmF2ZWxTd2FybVxKb2JzXEFkdmFuY2VEdXJhYmxlQnJhbmNoIjo0OntzOjU6InJ1bklkIjtzOjE0OiJ2MDI2My1wYXJhbGxlbCI7czo4OiJicmFuY2hJZCI7czoxMDoicGFyYWxsZWw6MSI7czo3OiJ0aW1lb3V0IjtpOjM2MDtzOjEyOiJlbnF1ZXVlZEF0TXMiO2k6MTc5MDEyMTYwMDAwMDt9",
+        "parallel_join": "Tzo1MDoiQnVpbHRCeUJlcnJ5XExhcmF2ZWxTd2FybVxKb2JzXEFkdmFuY2VEdXJhYmxlU3dhcm0iOjQ6e3M6NToicnVuSWQiO3M6MTQ6InYwMjYzLXBhcmFsbGVsIjtzOjk6InN0ZXBJbmRleCI7aTozO3M6NzoidGltZW91dCI7aTozNjA7czoxMjoiZW5xdWV1ZWRBdE1zIjtpOjE3OTAxMjE2MDAwMDA7fQ==",
+        "branch": "Tzo1MToiQnVpbHRCeUJlcnJ5XExhcmF2ZWxTd2FybVxKb2JzXEFkdmFuY2VEdXJhYmxlQnJhbmNoIjo0OntzOjU6InJ1bklkIjtzOjEwOiJ2MDI2My1qb2luIjtzOjg6ImJyYW5jaElkIjtzOjE1OiJwYXJhbGxlbDplZGl0b3IiO3M6NzoidGltZW91dCI7aTozNjA7czoxMjoiZW5xdWV1ZWRBdE1zIjtpOjE3OTAxMjE2MDAwMDA7fQ==",
+        "resume": "Tzo2MDoiQnVpbHRCeUJlcnJ5XExhcmF2ZWxTd2FybVxKb2JzXFJlc3VtZVF1ZXVlZEhpZXJhcmNoaWNhbFN3YXJtIjozOntzOjU6InJ1bklkIjtzOjEwOiJ2MDI2My1qb2luIjtzOjc6InRpbWVvdXQiO2k6MzYwO3M6MTI6ImVucXVldWVkQXRNcyI7aToxNzkwMTIxNjAwMDAwO30="
+    },
+    "tables": {
+        "swarm_artifacts": [
+            {
+                "id": 1,
+                "run_id": "v0263-completed",
+                "name": "agent_output",
+                "content": "\"old-researched\"",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 2,
+                "run_id": "v0263-completed",
+                "name": "agent_output",
+                "content": "\"old-written\"",
+                "metadata": "{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 3,
+                "run_id": "v0263-completed",
+                "name": "agent_output",
+                "content": "\"old-edited\"",
+                "metadata": "{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 4,
+                "run_id": "v0263-pending",
+                "name": "agent_output",
+                "content": "\"old-researched\"",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 5,
+                "run_id": "v0263-waiting",
+                "name": "agent_output",
+                "content": "\"old-researched\"",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 6,
+                "run_id": "v0263-running",
+                "name": "agent_output",
+                "content": "\"old-researched\"",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 7,
+                "run_id": "v0263-parallel",
+                "name": "agent_output",
+                "content": "\"old-researched\"",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1},\"parallel_branch_index\":0}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 8,
+                "run_id": "v0263-join",
+                "name": "agent_output",
+                "content": "\"{\\\"start_at\\\":\\\"parallel\\\",\\\"nodes\\\":{\\\"parallel\\\":{\\\"type\\\":\\\"parallel\\\",\\\"branches\\\":[\\\"writer\\\",\\\"editor\\\"],\\\"next\\\":\\\"finish\\\"},\\\"writer\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeWriter\\\",\\\"prompt\\\":\\\"old branch writer\\\"},\\\"editor\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeEditor\\\",\\\"prompt\\\":\\\"old branch editor\\\"},\\\"finish\\\":{\\\"type\\\":\\\"finish\\\",\\\"output_from\\\":\\\"editor\\\"}}}\"",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":11,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":3,\"reasoning_tokens\":1},\"node_role\":\"coordinator\"}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 9,
+                "run_id": "v0263-join",
+                "name": "agent_output",
+                "content": "\"old-written\"",
+                "metadata": "{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1},\"node_id\":\"writer\",\"parent_parallel_node_id\":\"parallel\"}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 10,
+                "run_id": "v0263-stream",
+                "name": "agent_output",
+                "content": "\"old-researched\"",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 11,
+                "run_id": "v0263-stream",
+                "name": "agent_output",
+                "content": "\"old-written\"",
+                "metadata": "{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "id": 12,
+                "run_id": "v0263-stream",
+                "name": "agent_output",
+                "content": "\"old-edited\"",
+                "metadata": "{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}}",
+                "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            }
+        ],
+        "swarm_contexts": [
+            {
+                "run_id": "v0263-completed",
+                "input": "sw0:eyJpdiI6ImhiWVJLTURUMjAyV0hYQ1FFTmkwTmc9PSIsInZhbHVlIjoiaVV3MDdrT0ZQajVXeVZJbFJJTFpVclh3eE1OVHJKUFVUTGZWY2xqZmNUTT0iLCJtYWMiOiI2YTVlMzg2NjliMjc5NWE3OWM2MDU5YWI1ZWJjZTkwNDljODgwY2I1OWUzNjk5NGMxM2RiNDlhYWVlNGY1MjU0IiwidGFnIjoiIn0=",
+                "data": "{\"last_output\":\"old-edited\",\"steps\":3}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4}}",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"},{\"name\":\"agent_output\",\"content\":\"old-written\",\"metadata\":{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\"},{\"name\":\"agent_output\",\"content\":\"old-edited\",\"metadata\":{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "run_id": "v0263-pending",
+                "input": "sw0:eyJpdiI6ImsvcFptMXFSbnlPSDFCZXZvd1FsaFE9PSIsInZhbHVlIjoiYllTYVZlVnBRdlRITFRhMkE1cjJlNExqdFlNaWV2bHRySy9kejFJRk9mST0iLCJtYWMiOiJlNzQ3OWUyZDcwODY1M2NmMjliNjcxY2VlODE0YzgyN2E4ZTM2ODA0OWNjMDhlMmM0NDNkNjNkMGNlYWQwYjQ2IiwidGFnIjoiIn0=",
+                "data": "{\"last_output\":\"old-researched\",\"steps\":1}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"execution_mode\":\"durable\",\"completed_steps\":0,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "run_id": "v0263-waiting",
+                "input": "sw0:eyJpdiI6Im5rK1F4MCtXMEltZUNkbTB3aGxCQXc9PSIsInZhbHVlIjoia1NxQUtzUEtIdHpzQU90ZHVUMDJOaWV6UjM5MERGUjJzRnpRM1VKWkQ0QT0iLCJtYWMiOiJhMmU2Yzg2MTJiYWRiM2FjNGU1ZTZkYTY4ODU2YmZiOTBlMDk1Yjc0Y2Q5MzJlNmNhYjc3NDI0MjlmNWY1MjU4IiwidGFnIjoiIn0=",
+                "data": "{\"last_output\":\"old-researched\",\"steps\":1}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"execution_mode\":\"durable\",\"completed_steps\":0,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "run_id": "v0263-running",
+                "input": "sw0:eyJpdiI6Im8welpSdkhtcTRFSmZOdTNJVUNRaVE9PSIsInZhbHVlIjoidTd4N3BoOFB4WGdMVk5UVjNBN2ZjektrQkt5S2lYb0wzUFdETVpaSWdWTT0iLCJtYWMiOiIzYjIwNDAzN2M1MDlhN2UwZDMzY2IzMzBjOWQxZjJmNzE3MzkzMDRjMDA2ZDhmNjVmYTA0YWFlZDljZGUzNmU4IiwidGFnIjoiIn0=",
+                "data": "{\"last_output\":\"old-researched\",\"steps\":1}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"execution_mode\":\"durable\",\"completed_steps\":0,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "run_id": "v0263-parallel",
+                "input": "sw0:eyJpdiI6InVLNHJmNXhsVjdNQ09FZFFQWU5pSHc9PSIsInZhbHVlIjoibzNGMVR2bTluUk4rVHRiMEhweXcwL2RGS1c3eVZmTEZnaVJpa0gwcUhXVT0iLCJtYWMiOiIyMmZjN2I0OGI0ZWVjZGI5NWFkMDQ3OGQ4YjUwYTg1NGYwZGY1OTdiNzBkZDdmMThhZWUxMjU4MjcxMDg3ZDNmIiwidGFnIjoiIn0=",
+                "data": "[]",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeParallelSwarm\",\"topology\":\"parallel\",\"execution_mode\":\"durable\",\"completed_steps\":0,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\"}",
+                "artifacts": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "run_id": "v0263-join",
+                "input": "sw0:eyJpdiI6ImxXbTB6MHA3NDRWc3p5VjhiR0NyV3c9PSIsInZhbHVlIjoiVGZLMWlDQmVYRVRrZ0hXQXdQOXdtQT09IiwibWFjIjoiN2RiYjMxMGY1NjcyMDkzNzJjMTRhZTcxZTIzODdhZmMzNDA2YjQ5Y2RkMDViOTBiNDg4Y2RiMzEyZjVjMTFlMiIsInRhZyI6IiJ9",
+                "data": "{\"last_output\":\"{\\\"start_at\\\":\\\"parallel\\\",\\\"nodes\\\":{\\\"parallel\\\":{\\\"type\\\":\\\"parallel\\\",\\\"branches\\\":[\\\"writer\\\",\\\"editor\\\"],\\\"next\\\":\\\"finish\\\"},\\\"writer\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeWriter\\\",\\\"prompt\\\":\\\"old branch writer\\\"},\\\"editor\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeEditor\\\",\\\"prompt\\\":\\\"old branch editor\\\"},\\\"finish\\\":{\\\"type\\\":\\\"finish\\\",\\\"output_from\\\":\\\"editor\\\"}}}\",\"steps\":1,\"hierarchical_node_outputs\":[]}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeHierarchicalFullSwarm\",\"topology\":\"hierarchical\",\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\",\"coordinator_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\",\"route_plan_start\":\"parallel\",\"current_node_id\":\"parallel\",\"completed_node_ids\":[],\"executed_node_ids\":[\"parallel\"],\"executed_agent_classes\":[],\"parallel_groups\":[{\"node_id\":\"parallel\",\"branches\":[\"writer\",\"editor\"]}],\"executed_steps\":1,\"total_steps\":3,\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":11,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":3,\"reasoning_tokens\":1},\"execution_mode\":\"queue\",\"queue_hierarchical_waiting_parallel\":true}",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"{\\\"start_at\\\":\\\"parallel\\\",\\\"nodes\\\":{\\\"parallel\\\":{\\\"type\\\":\\\"parallel\\\",\\\"branches\\\":[\\\"writer\\\",\\\"editor\\\"],\\\"next\\\":\\\"finish\\\"},\\\"writer\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeWriter\\\",\\\"prompt\\\":\\\"old branch writer\\\"},\\\"editor\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeEditor\\\",\\\"prompt\\\":\\\"old branch editor\\\"},\\\"finish\\\":{\\\"type\\\":\\\"finish\\\",\\\"output_from\\\":\\\"editor\\\"}}}\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":11,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":3,\"reasoning_tokens\":1},\"node_role\":\"coordinator\"},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            },
+            {
+                "run_id": "v0263-stream",
+                "input": "sw0:eyJpdiI6ImJkMEpiMzl2NXN0K3NKbmdlYzNaV3c9PSIsInZhbHVlIjoieExsQWkyNjN6cUU2RmIyQ2FYTlkwZHB4SnFhZERWOVlvc0xZcXRoa01PYz0iLCJtYWMiOiI5YTI0NzRjZDI4ZTNmMDdmMmY3YzkyOTkzMzhiYzQwOGY1ZDFjMmUwMWEwNjRiZWJjZWM3MTYzMmEwNmVkN2E0IiwidGFnIjoiIn0=",
+                "data": "{\"last_output\":\"old-edited\",\"steps\":3}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4}}",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"},{\"name\":\"agent_output\",\"content\":\"old-written\",\"metadata\":{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\"},{\"name\":\"agent_output\",\"content\":\"old-edited\",\"metadata\":{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00"
+            }
+        ],
+        "swarm_durable_branches": [
+            {
+                "id": 1,
+                "run_id": "v0263-parallel",
+                "branch_id": "parallel:0",
+                "step_index": 0,
+                "node_id": null,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "parent_node_id": "parallel",
+                "status": "completed",
+                "input": "sw0:eyJpdiI6IkI5Tzc2NVVXRm9YOGx4OGpzbC9rdkE9PSIsInZhbHVlIjoic2VKVXlCb2tSNHBVU3M3d3Ayd1VNWHdkcC9sb2lZaFFTdEY0MWdyNGszND0iLCJtYWMiOiI5OTViNGI4Y2Y5N2E2OTI5OTg3MDMxMWJiYTk5NDNjYjg1MjgwMjRiZjYxZDRlNGIxYzZlZWFlNzYwYTgxYjQ5IiwidGFnIjoiIn0=",
+                "output": "sw0:eyJpdiI6IkkzOFJLRE5pZUFZTkFybjFkVkhyMEE9PSIsInZhbHVlIjoiTDdDUEMwRys5Wk42V0pxMjVML2gzQT09IiwibWFjIjoiMzMyM2EwN2JhZmRhM2VkNmRkZTQxMTk0OTA2MDVjNzhhMWU1ZjQ3ODBlYTdmOTRiYmU2NzYxMjRlMmFjNDgzNyIsInRhZyI6IiJ9",
+                "usage": "{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}",
+                "metadata": "{\"parallel_branch_index\":0}",
+                "failure": null,
+                "duration_ms": 1,
+                "execution_token": null,
+                "lease_acquired_at": "2026-09-23 00:00:00",
+                "leased_until": null,
+                "attempts": 1,
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "started_at": "2026-09-23 00:00:00",
+                "finished_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "last_progress_at": null,
+                "retry_policy": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "citation_evidence": "sw0:eyJpdiI6ImtjNjNzaEd3L2g0K1B0UGNiQ2gzN3c9PSIsInZhbHVlIjoiVnRURTJTK0c4b1NndVBUWk02T2xYSFRvRmdiR1R5cnJyRGJkcnJJMlVaTTg4QlA3ckYzNUhxSU9nVFRxVU92WmlOckF4cHhhVWtPbFp1WUJXbzNtc0lWSUtYMjRnYUJWZzBsd1RPZTJUQkk9IiwibWFjIjoiNjEyZjY1Y2M3ZWJlMDE2NGRjNmJjMTMzZjNiNDgyYWJlNGZiMTU5OWU3ZTU4OGU0Y2E0MjQ3ZjgyMGVmNDI4ZCIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 2,
+                "run_id": "v0263-parallel",
+                "branch_id": "parallel:1",
+                "step_index": 1,
+                "node_id": null,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                "parent_node_id": "parallel",
+                "status": "pending",
+                "input": "sw0:eyJpdiI6InpZWUdGLzhta0Z1M0lGZG16N1YybUE9PSIsInZhbHVlIjoiZUZRbHJoUGM4Szc3YmF1NFlUQ0lmeDdTQTZ0MU5PSkNHZDdaWnJHM2tsMD0iLCJtYWMiOiJhODE1ZmMzOGRmOGVkY2IzZmI5MGU2MmJjZjEwZGY1ODA3OTBlZThjN2JlZmRjZmZjMTkyYzc2OGZkZmRlMjllIiwidGFnIjoiIn0=",
+                "output": null,
+                "usage": null,
+                "metadata": "{\"parallel_branch_index\":1}",
+                "failure": null,
+                "duration_ms": null,
+                "execution_token": null,
+                "lease_acquired_at": null,
+                "leased_until": null,
+                "attempts": 0,
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "started_at": null,
+                "finished_at": null,
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "last_progress_at": null,
+                "retry_policy": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "citation_evidence": null
+            },
+            {
+                "id": 3,
+                "run_id": "v0263-parallel",
+                "branch_id": "parallel:2",
+                "step_index": 2,
+                "node_id": null,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                "parent_node_id": "parallel",
+                "status": "pending",
+                "input": "sw0:eyJpdiI6IlYwM1ZTMUpqV0RlV3VLNWtkNTV3c0E9PSIsInZhbHVlIjoidEFWa2oxdmszOEV2bXRMUUpRWXY4aFVJNzRXbUp4UXN2MkZzdVFmS1B1VT0iLCJtYWMiOiI4MWEzMjhkM2YwOTNhODNiZjE1OGQxOTM4Mjk4OWZmZGZlZWU4ODEzYjUxMDE2YTMwM2JkMTNlYmMxNDgzZTc4IiwidGFnIjoiIn0=",
+                "output": null,
+                "usage": null,
+                "metadata": "{\"parallel_branch_index\":2}",
+                "failure": null,
+                "duration_ms": null,
+                "execution_token": null,
+                "lease_acquired_at": null,
+                "leased_until": null,
+                "attempts": 0,
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "started_at": null,
+                "finished_at": null,
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "last_progress_at": null,
+                "retry_policy": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "citation_evidence": null
+            },
+            {
+                "id": 4,
+                "run_id": "v0263-join",
+                "branch_id": "parallel:writer",
+                "step_index": 1,
+                "node_id": "writer",
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                "parent_node_id": "parallel",
+                "status": "completed",
+                "input": "sw0:eyJpdiI6IkdLelZsVlRiUEdnM0dpa2trM04rVEE9PSIsInZhbHVlIjoia3pSZmorRE03Um5KUUxXL3l6RHpPNDRZWU0raHI1VE1GaEIxTzlYZFNibz0iLCJtYWMiOiI4NDY4OWZmODY3YTgzYzA0NDdhZTMxNDVlMzFlYTkyZjEwZDkyNDc5ZWJkYmE3YjBiNWI1YzJkYTk1YWNiNmUyIiwidGFnIjoiIn0=",
+                "output": "sw0:eyJpdiI6ImRVaFJDcWJIR0hJTnB2a0cwSmxtb3c9PSIsInZhbHVlIjoiWGlOQ2pBbTYrRnl6ZUxiKy9LcTV1dz09IiwibWFjIjoiNjM4NTdmYTAzMTQzMzI5ZjhhM2QzYzNjM2IzZjQ5M2VhOTA5MTIyYzlkNmIyY2MyNjk0ODM4MTM1NmZlZGU5NyIsInRhZyI6IiJ9",
+                "usage": "{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}",
+                "metadata": "{\"node_id\":\"writer\",\"parent_parallel_node_id\":\"parallel\"}",
+                "failure": null,
+                "duration_ms": 1,
+                "execution_token": null,
+                "lease_acquired_at": "2026-09-23 00:00:00",
+                "leased_until": null,
+                "attempts": 1,
+                "queue_connection": null,
+                "queue_name": null,
+                "started_at": "2026-09-23 00:00:00",
+                "finished_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "last_progress_at": null,
+                "retry_policy": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "citation_evidence": "sw0:eyJpdiI6Ik4rWFlMYlZPaDFndHQ3R0UwdFIzdUE9PSIsInZhbHVlIjoiNTBibElYY3BOVjZZVytIZjZrMDNTQS9VMks1RE1QOWxUcXJOK3lsY0hTU0R6VTlFeFkxZDBFeGtaQjZBUzk2dU5tbEs4SUc3eWZNRmhzQ2tKK2lMRm9NU1NSYmFqb09rc08vbFRzQ2JOY3c9IiwibWFjIjoiYjBkYTBhMGFmZDUyYWQwM2U5YmU2OGEyNWE1ZmY2ODRmMGIzOWRjMzk3ZjIzODhiOGYwODkwY2Y5NGQ5YTg1YSIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 5,
+                "run_id": "v0263-join",
+                "branch_id": "parallel:editor",
+                "step_index": 2,
+                "node_id": "editor",
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                "parent_node_id": "parallel",
+                "status": "pending",
+                "input": "sw0:eyJpdiI6IkpUOUk1Rnl6Z1hldWZ4alI5Ky9oTEE9PSIsInZhbHVlIjoiT3lHQXdHeWN6a2k1REI2c3pTY1RFTmEwM0FIVzA5d0FSdk8wVWwxT3U1OD0iLCJtYWMiOiI3NGJmMDRlOTk2NzFkOGRiNjQ1NzE5MWEwZDE4YThkOTY0N2NkOTBmMDJmYmNkZGFlMjY3YmVkOTVmODExNzViIiwidGFnIjoiIn0=",
+                "output": null,
+                "usage": null,
+                "metadata": "{\"node_id\":\"editor\",\"parent_parallel_node_id\":\"parallel\"}",
+                "failure": null,
+                "duration_ms": null,
+                "execution_token": null,
+                "lease_acquired_at": null,
+                "leased_until": null,
+                "attempts": 0,
+                "queue_connection": null,
+                "queue_name": null,
+                "started_at": null,
+                "finished_at": null,
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "last_progress_at": null,
+                "retry_policy": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "citation_evidence": null
+            }
+        ],
+        "swarm_durable_node_outputs": [
+            {
+                "id": 1,
+                "run_id": "v0263-join",
+                "node_id": "writer",
+                "output": "sw0:eyJpdiI6IkxWTkwrSWNCNXRQK1U0UlUzRGpFbUE9PSIsInZhbHVlIjoiZ3BxRkU5UkdkL0RMeUxCc1BaemRJQT09IiwibWFjIjoiYzM1ZmU5ZDk0NWVhOWY1ZTE3YjRkOTA4YjcyOWY5ZWI5MTgxMGNkYTk0ZWJjNGQ5MWM3ZjEwNDBiODQ5YTFhOSIsInRhZyI6IiJ9",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6Ijdxc2twNWVuWE5ySHpwSFRLVktiMkE9PSIsInZhbHVlIjoiaXUzU0NmYXVPU1Eycm9BcTRCQkwvc3U4V0M2REtrdlBSb3pOMWZhVEducmpuYi8zcXNpam9zU0xZeXdOQjdlVHBEMUhNWXIxbmdET1hWTW1LNVA1S1AyVGhHM1hqeWlHaFFqdExqUEU4YTg9IiwibWFjIjoiYmQ2Yzk3NTc5ZDM3MThjOTA3MzRlMjcxMzBmZDhiMWJmODlhN2NlMDgxNDVlMzIyYWUyYjJkM2Q5M2FkNTRkOCIsInRhZyI6IiJ9"
+            }
+        ],
+        "swarm_durable_node_states": [
+            {
+                "id": 1,
+                "run_id": "v0263-pending",
+                "node_id": "step:0",
+                "state": "{\"node_id\":\"step:0\",\"step_index\":0,\"status\":\"completed\",\"attempts\":1,\"lease_acquired_at\":\"2026-09-23T00:00:00.000000Z\",\"leased_until\":\"2026-09-23T00:05:00.000000Z\",\"started_at\":\"2026-09-23T00:00:00.000000Z\",\"finished_at\":\"2026-09-23T00:00:00.000000Z\"}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 4,
+                "run_id": "v0263-waiting",
+                "node_id": "step:0",
+                "state": "{\"node_id\":\"step:0\",\"step_index\":0,\"status\":\"completed\",\"attempts\":1,\"lease_acquired_at\":\"2026-09-23T00:00:00.000000Z\",\"leased_until\":\"2026-09-23T00:05:00.000000Z\",\"started_at\":\"2026-09-23T00:00:00.000000Z\",\"finished_at\":\"2026-09-23T00:00:00.000000Z\"}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 7,
+                "run_id": "v0263-running",
+                "node_id": "step:0",
+                "state": "{\"node_id\":\"step:0\",\"step_index\":0,\"status\":\"completed\",\"attempts\":1,\"lease_acquired_at\":\"2026-09-23T00:00:00.000000Z\",\"leased_until\":\"2026-09-23T00:05:00.000000Z\",\"started_at\":\"2026-09-23T00:00:00.000000Z\",\"finished_at\":\"2026-09-23T00:00:00.000000Z\"}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 10,
+                "run_id": "v0263-running",
+                "node_id": "step:1",
+                "state": "{\"node_id\":\"step:1\",\"step_index\":1,\"status\":\"running\",\"attempts\":2,\"lease_acquired_at\":\"2026-09-23T00:00:00.000000Z\",\"leased_until\":\"2026-09-23T00:00:30.000000Z\",\"started_at\":\"2026-09-23T00:00:00.000000Z\"}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 12,
+                "run_id": "v0263-parallel",
+                "node_id": "step:0",
+                "state": "{\"node_id\":\"step:0\",\"step_index\":0,\"status\":\"running\",\"attempts\":1,\"lease_acquired_at\":\"2026-09-23T00:00:00.000000Z\",\"leased_until\":\"2026-09-23T00:05:00.000000Z\",\"started_at\":\"2026-09-23T00:00:00.000000Z\"}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 14,
+                "run_id": "v0263-parallel",
+                "node_id": "parallel",
+                "state": "{\"node_id\":\"parallel\",\"status\":\"waiting\",\"step_index\":3,\"started_at\":\"2026-09-23T00:00:00.000000Z\"}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 15,
+                "run_id": "v0263-join",
+                "node_id": "coordinator",
+                "state": "{\"node_id\":\"coordinator\",\"step_index\":0,\"status\":\"leased\",\"attempts\":1,\"lease_acquired_at\":\"2026-09-23T00:00:00.000000Z\",\"leased_until\":\"2026-09-23T00:05:00.000000Z\"}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 16,
+                "run_id": "v0263-join",
+                "node_id": "parallel",
+                "state": "{\"node_id\":\"parallel\",\"status\":\"waiting\",\"step_index\":3,\"started_at\":\"2026-09-23T00:00:00.000000Z\"}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            }
+        ],
+        "swarm_durable_outbox": [
+            {
+                "id": 1,
+                "run_id": "v0263-pending",
+                "dispatch_type": "step",
+                "payload": "{\"step_index\":1}",
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "available_at": "2026-09-23 00:00:00",
+                "reserved_at": null,
+                "created_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 2,
+                "run_id": "v0263-waiting",
+                "dispatch_type": "step",
+                "payload": "{\"step_index\":1}",
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "available_at": "2026-09-23 00:00:00",
+                "reserved_at": null,
+                "created_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 3,
+                "run_id": "v0263-running",
+                "dispatch_type": "step",
+                "payload": "{\"step_index\":1}",
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "available_at": "2026-09-23 00:00:00",
+                "reserved_at": null,
+                "created_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 4,
+                "run_id": "v0263-parallel",
+                "dispatch_type": "branch",
+                "payload": "{\"branch_id\":\"parallel:0\"}",
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "available_at": "2026-09-23 00:00:00",
+                "reserved_at": null,
+                "created_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 5,
+                "run_id": "v0263-parallel",
+                "dispatch_type": "branch",
+                "payload": "{\"branch_id\":\"parallel:1\"}",
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "available_at": "2026-09-23 00:00:00",
+                "reserved_at": null,
+                "created_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 6,
+                "run_id": "v0263-parallel",
+                "dispatch_type": "branch",
+                "payload": "{\"branch_id\":\"parallel:2\"}",
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "available_at": "2026-09-23 00:00:00",
+                "reserved_at": null,
+                "created_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 7,
+                "run_id": "v0263-join",
+                "dispatch_type": "branch",
+                "payload": "{\"branch_id\":\"parallel:writer\"}",
+                "queue_connection": null,
+                "queue_name": null,
+                "available_at": "2026-09-23 00:00:00",
+                "reserved_at": null,
+                "created_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 8,
+                "run_id": "v0263-join",
+                "dispatch_type": "branch",
+                "payload": "{\"branch_id\":\"parallel:editor\"}",
+                "queue_connection": null,
+                "queue_name": null,
+                "available_at": "2026-09-23 00:00:00",
+                "reserved_at": null,
+                "created_at": "2026-09-23 00:00:00"
+            }
+        ],
+        "swarm_durable_run_state": [
+            {
+                "run_id": "v0263-join",
+                "route_plan": "{\"start_at\":\"parallel\",\"nodes\":{\"parallel\":{\"type\":\"parallel\",\"branches\":[\"writer\",\"editor\"],\"next\":\"finish\"},\"writer\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\",\"prompt\":\"old branch writer\"},\"editor\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"prompt\":\"old branch editor\"},\"finish\":{\"type\":\"finish\",\"output_from\":\"editor\"}}}",
+                "route_plan_projected": 0,
+                "failure": null,
+                "retry_policy": null,
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            }
+        ],
+        "swarm_durable_runs": [
+            {
+                "run_id": "v0263-pending",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "status": "pending",
+                "next_step_index": 1,
+                "current_step_index": 0,
+                "total_steps": 3,
+                "timeout_at": "2026-09-23 00:05:00",
+                "step_timeout_seconds": 300,
+                "execution_token": null,
+                "leased_until": null,
+                "pause_requested_at": null,
+                "cancel_requested_at": null,
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "finished_at": null,
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "route_cursor": null,
+                "execution_mode": "durable",
+                "route_start_node_id": null,
+                "current_node_id": "step:0",
+                "completed_node_ids": "[\"step:0\"]",
+                "attempts": 1,
+                "lease_acquired_at": "2026-09-23 00:00:00",
+                "recovery_count": 0,
+                "last_recovered_at": null,
+                "paused_at": null,
+                "resumed_at": null,
+                "cancelled_at": null,
+                "timed_out_at": null,
+                "coordination_profile": "step_durable",
+                "wait_reason": null,
+                "waiting_since": null,
+                "wait_timeout_at": null,
+                "last_progress_at": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "parent_run_id": null,
+                "compaction_token": null,
+                "compaction_leased_until": null,
+                "compaction_quarantined_at": null,
+                "durable_streaming": 0
+            },
+            {
+                "run_id": "v0263-waiting",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "status": "waiting",
+                "next_step_index": 1,
+                "current_step_index": 0,
+                "total_steps": 3,
+                "timeout_at": "2026-09-23 00:05:00",
+                "step_timeout_seconds": 300,
+                "execution_token": null,
+                "leased_until": null,
+                "pause_requested_at": null,
+                "cancel_requested_at": null,
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "finished_at": null,
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "route_cursor": null,
+                "execution_mode": "durable",
+                "route_start_node_id": null,
+                "current_node_id": "step:0",
+                "completed_node_ids": "[\"step:0\"]",
+                "attempts": 1,
+                "lease_acquired_at": "2026-09-23 00:00:00",
+                "recovery_count": 0,
+                "last_recovered_at": null,
+                "paused_at": null,
+                "resumed_at": null,
+                "cancelled_at": null,
+                "timed_out_at": null,
+                "coordination_profile": "step_durable",
+                "wait_reason": null,
+                "waiting_since": "2026-09-23 00:00:00",
+                "wait_timeout_at": null,
+                "last_progress_at": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "parent_run_id": null,
+                "compaction_token": null,
+                "compaction_leased_until": null,
+                "compaction_quarantined_at": null,
+                "durable_streaming": 0
+            },
+            {
+                "run_id": "v0263-running",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "status": "running",
+                "next_step_index": 1,
+                "current_step_index": 1,
+                "total_steps": 3,
+                "timeout_at": "2026-09-23 00:05:00",
+                "step_timeout_seconds": 300,
+                "execution_token": "7b85c50d-1c69-436e-ab97-e3887b781ff7",
+                "leased_until": "2026-09-23 00:00:30",
+                "pause_requested_at": null,
+                "cancel_requested_at": null,
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "finished_at": null,
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "route_cursor": null,
+                "execution_mode": "durable",
+                "route_start_node_id": null,
+                "current_node_id": "step:1",
+                "completed_node_ids": "[\"step:0\"]",
+                "attempts": 2,
+                "lease_acquired_at": "2026-09-23 00:00:00",
+                "recovery_count": 0,
+                "last_recovered_at": null,
+                "paused_at": null,
+                "resumed_at": null,
+                "cancelled_at": null,
+                "timed_out_at": null,
+                "coordination_profile": "step_durable",
+                "wait_reason": null,
+                "waiting_since": null,
+                "wait_timeout_at": null,
+                "last_progress_at": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "parent_run_id": null,
+                "compaction_token": null,
+                "compaction_leased_until": null,
+                "compaction_quarantined_at": null,
+                "durable_streaming": 0
+            },
+            {
+                "run_id": "v0263-parallel",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeParallelSwarm",
+                "topology": "parallel",
+                "status": "waiting",
+                "next_step_index": 3,
+                "current_step_index": null,
+                "total_steps": 3,
+                "timeout_at": "2026-09-23 00:05:00",
+                "step_timeout_seconds": 300,
+                "execution_token": null,
+                "leased_until": null,
+                "pause_requested_at": null,
+                "cancel_requested_at": null,
+                "queue_connection": "durable-test",
+                "queue_name": null,
+                "finished_at": null,
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "route_cursor": null,
+                "execution_mode": "durable",
+                "route_start_node_id": null,
+                "current_node_id": "parallel",
+                "completed_node_ids": null,
+                "attempts": 1,
+                "lease_acquired_at": "2026-09-23 00:00:00",
+                "recovery_count": 0,
+                "last_recovered_at": null,
+                "paused_at": null,
+                "resumed_at": null,
+                "cancelled_at": null,
+                "timed_out_at": null,
+                "coordination_profile": "step_durable",
+                "wait_reason": null,
+                "waiting_since": null,
+                "wait_timeout_at": null,
+                "last_progress_at": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "parent_run_id": null,
+                "compaction_token": null,
+                "compaction_leased_until": null,
+                "compaction_quarantined_at": null,
+                "durable_streaming": 0
+            },
+            {
+                "run_id": "v0263-join",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeHierarchicalFullSwarm",
+                "topology": "hierarchical",
+                "status": "waiting",
+                "next_step_index": 3,
+                "current_step_index": null,
+                "total_steps": 3,
+                "timeout_at": "2026-09-23 00:05:00",
+                "step_timeout_seconds": 300,
+                "execution_token": null,
+                "leased_until": null,
+                "pause_requested_at": null,
+                "cancel_requested_at": null,
+                "queue_connection": null,
+                "queue_name": null,
+                "finished_at": null,
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "route_cursor": "{\"entries\":[{\"type\":\"parallel\",\"node_id\":\"parallel\"},{\"type\":\"worker\",\"node_id\":\"writer\",\"parent_parallel_node_id\":\"parallel\"},{\"type\":\"worker\",\"node_id\":\"editor\",\"parent_parallel_node_id\":\"parallel\"},{\"type\":\"finish\",\"node_id\":\"finish\"}],\"offset\":0,\"current_node_id\":\"parallel\",\"completed_node_ids\":[],\"executed_node_ids\":[],\"executed_agent_classes\":[],\"parallel_groups\":[],\"loop_iterations\":[],\"final_output\":null,\"coordinator_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\",\"route_plan_start\":\"parallel\",\"total_steps\":3}",
+                "execution_mode": "queue",
+                "route_start_node_id": "parallel",
+                "current_node_id": "parallel",
+                "completed_node_ids": "[]",
+                "attempts": 1,
+                "lease_acquired_at": "2026-09-23 00:00:00",
+                "recovery_count": 0,
+                "last_recovered_at": null,
+                "paused_at": null,
+                "resumed_at": null,
+                "cancelled_at": null,
+                "timed_out_at": null,
+                "coordination_profile": "queue_hierarchical_parallel",
+                "wait_reason": null,
+                "waiting_since": null,
+                "wait_timeout_at": null,
+                "last_progress_at": null,
+                "retry_attempt": 0,
+                "next_retry_at": null,
+                "parent_run_id": null,
+                "compaction_token": null,
+                "compaction_leased_until": null,
+                "compaction_quarantined_at": null,
+                "durable_streaming": 0
+            }
+        ],
+        "swarm_durable_waits": [
+            {
+                "id": 1,
+                "run_id": "v0263-waiting",
+                "name": "operator-release",
+                "status": "waiting",
+                "reason": null,
+                "timeout_at": null,
+                "signal_id": null,
+                "outcome": null,
+                "metadata": "[]",
+                "finished_at": null,
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            }
+        ],
+        "swarm_memories": [
+            {
+                "id": 1,
+                "scope": "run",
+                "scope_id": "v0263-completed",
+                "key": "last_output",
+                "value": "\"old-edited\"",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-completed"
+            },
+            {
+                "id": 2,
+                "scope": "run",
+                "scope_id": "v0263-completed",
+                "key": "steps",
+                "value": "3",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-completed"
+            },
+            {
+                "id": 7,
+                "scope": "run",
+                "scope_id": "v0263-pending",
+                "key": "last_output",
+                "value": "\"old-researched\"",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-pending"
+            },
+            {
+                "id": 8,
+                "scope": "run",
+                "scope_id": "v0263-pending",
+                "key": "steps",
+                "value": "1",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-pending"
+            },
+            {
+                "id": 9,
+                "scope": "run",
+                "scope_id": "v0263-waiting",
+                "key": "last_output",
+                "value": "\"old-researched\"",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-waiting"
+            },
+            {
+                "id": 10,
+                "scope": "run",
+                "scope_id": "v0263-waiting",
+                "key": "steps",
+                "value": "1",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-waiting"
+            },
+            {
+                "id": 11,
+                "scope": "run",
+                "scope_id": "v0263-running",
+                "key": "last_output",
+                "value": "\"old-researched\"",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-running"
+            },
+            {
+                "id": 12,
+                "scope": "run",
+                "scope_id": "v0263-running",
+                "key": "steps",
+                "value": "1",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-running"
+            },
+            {
+                "id": 13,
+                "scope": "run",
+                "scope_id": "v0263-join",
+                "key": "last_output",
+                "value": "\"{\\\"start_at\\\":\\\"parallel\\\",\\\"nodes\\\":{\\\"parallel\\\":{\\\"type\\\":\\\"parallel\\\",\\\"branches\\\":[\\\"writer\\\",\\\"editor\\\"],\\\"next\\\":\\\"finish\\\"},\\\"writer\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeWriter\\\",\\\"prompt\\\":\\\"old branch writer\\\"},\\\"editor\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeEditor\\\",\\\"prompt\\\":\\\"old branch editor\\\"},\\\"finish\\\":{\\\"type\\\":\\\"finish\\\",\\\"output_from\\\":\\\"editor\\\"}}}\"",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-join"
+            },
+            {
+                "id": 14,
+                "scope": "run",
+                "scope_id": "v0263-join",
+                "key": "steps",
+                "value": "1",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-join"
+            },
+            {
+                "id": 16,
+                "scope": "run",
+                "scope_id": "v0263-join",
+                "key": "hierarchical_node_outputs",
+                "value": "[]",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-join"
+            },
+            {
+                "id": 17,
+                "scope": "run",
+                "scope_id": "v0263-stream",
+                "key": "last_output",
+                "value": "\"old-edited\"",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-stream"
+            },
+            {
+                "id": 18,
+                "scope": "run",
+                "scope_id": "v0263-stream",
+                "key": "steps",
+                "value": "3",
+                "metadata": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "run_id": "v0263-stream"
+            }
+        ],
+        "swarm_memory_snapshots": [
+            {
+                "id": 1,
+                "run_id": "v0263-completed",
+                "step_index": 0,
+                "payload": "{\"run_id\":\"v0263-completed\",\"step_index\":0,\"entries\":[]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 2,
+                "run_id": "v0263-completed",
+                "step_index": 1,
+                "payload": "{\"run_id\":\"v0263-completed\",\"step_index\":1,\"entries\":[{\"scope\":\"run\",\"scope_id\":\"v0263-completed\",\"key\":\"last_output\",\"value\":\"old-researched\",\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"},{\"scope\":\"run\",\"scope_id\":\"v0263-completed\",\"key\":\"steps\",\"value\":1,\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"}]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 3,
+                "run_id": "v0263-completed",
+                "step_index": 2,
+                "payload": "{\"run_id\":\"v0263-completed\",\"step_index\":2,\"entries\":[{\"scope\":\"run\",\"scope_id\":\"v0263-completed\",\"key\":\"last_output\",\"value\":\"old-written\",\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"},{\"scope\":\"run\",\"scope_id\":\"v0263-completed\",\"key\":\"steps\",\"value\":2,\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"}]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 4,
+                "run_id": "v0263-pending",
+                "step_index": 0,
+                "payload": "{\"run_id\":\"v0263-pending\",\"step_index\":0,\"entries\":[]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 5,
+                "run_id": "v0263-waiting",
+                "step_index": 0,
+                "payload": "{\"run_id\":\"v0263-waiting\",\"step_index\":0,\"entries\":[]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 6,
+                "run_id": "v0263-running",
+                "step_index": 0,
+                "payload": "{\"run_id\":\"v0263-running\",\"step_index\":0,\"entries\":[]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 7,
+                "run_id": "v0263-parallel",
+                "step_index": 0,
+                "payload": "{\"run_id\":\"v0263-parallel\",\"step_index\":0,\"entries\":[]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 8,
+                "run_id": "v0263-join",
+                "step_index": 0,
+                "payload": "{\"run_id\":\"v0263-join\",\"step_index\":0,\"entries\":[]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 9,
+                "run_id": "v0263-join",
+                "step_index": 1,
+                "payload": "{\"run_id\":\"v0263-join\",\"step_index\":1,\"entries\":[{\"scope\":\"run\",\"scope_id\":\"v0263-join\",\"key\":\"hierarchical_node_outputs\",\"value\":[],\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"},{\"scope\":\"run\",\"scope_id\":\"v0263-join\",\"key\":\"last_output\",\"value\":\"{\\\"start_at\\\":\\\"parallel\\\",\\\"nodes\\\":{\\\"parallel\\\":{\\\"type\\\":\\\"parallel\\\",\\\"branches\\\":[\\\"writer\\\",\\\"editor\\\"],\\\"next\\\":\\\"finish\\\"},\\\"writer\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeWriter\\\",\\\"prompt\\\":\\\"old branch writer\\\"},\\\"editor\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeEditor\\\",\\\"prompt\\\":\\\"old branch editor\\\"},\\\"finish\\\":{\\\"type\\\":\\\"finish\\\",\\\"output_from\\\":\\\"editor\\\"}}}\",\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"},{\"scope\":\"run\",\"scope_id\":\"v0263-join\",\"key\":\"steps\",\"value\":1,\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"}]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 10,
+                "run_id": "v0263-stream",
+                "step_index": 0,
+                "payload": "{\"run_id\":\"v0263-stream\",\"step_index\":0,\"entries\":[]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 11,
+                "run_id": "v0263-stream",
+                "step_index": 1,
+                "payload": "{\"run_id\":\"v0263-stream\",\"step_index\":1,\"entries\":[{\"scope\":\"run\",\"scope_id\":\"v0263-stream\",\"key\":\"last_output\",\"value\":\"old-researched\",\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"},{\"scope\":\"run\",\"scope_id\":\"v0263-stream\",\"key\":\"steps\",\"value\":1,\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"}]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            },
+            {
+                "id": 12,
+                "run_id": "v0263-stream",
+                "step_index": 2,
+                "payload": "{\"run_id\":\"v0263-stream\",\"step_index\":2,\"entries\":[{\"scope\":\"run\",\"scope_id\":\"v0263-stream\",\"key\":\"last_output\",\"value\":\"old-written\",\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"},{\"scope\":\"run\",\"scope_id\":\"v0263-stream\",\"key\":\"steps\",\"value\":2,\"metadata\":[],\"created_at\":\"2026-09-23T00:00:00+00:00\",\"updated_at\":\"2026-09-23T00:00:00+00:00\"}]}",
+                "tool_calls": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00"
+            }
+        ],
+        "swarm_run_histories": [
+            {
+                "run_id": "v0263-completed",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "status": "completed",
+                "context": "{\"run_id\":\"v0263-completed\",\"input\":\"sw0:eyJpdiI6InplZ3YvZUFFcldpbEo5djdXRGMzYUE9PSIsInZhbHVlIjoibmk3WWhsOWt2Qk93M0YvUDJJZCtKd3BCN3FoQXAxSGhWcDd2SWpKb09Ydz0iLCJtYWMiOiIyMGQ4ZDc0NmE5MDQzODAxZjlhYjgzNGI4YzI4ZjJiODE4NWE4OWEzNzExYWZjZWFjOWU1Zjc3NGU5ZDU5NGZhIiwidGFnIjoiIn0=\",\"data\":{\"last_output\":\"old-edited\",\"steps\":3},\"metadata\":{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4}},\"artifacts\":[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"},{\"name\":\"agent_output\",\"content\":\"old-written\",\"metadata\":{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\"},{\"name\":\"agent_output\",\"content\":\"old-edited\",\"metadata\":{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\"}]}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4},\"run_id\":\"v0263-completed\"}",
+                "steps": "[]",
+                "output": "sw0:eyJpdiI6IjFCeFdyUzd2MndZdzhNVDJWVFpRc2c9PSIsInZhbHVlIjoiM3hQYnNRcVJKdnlRQjdGbm1rd3dlZz09IiwibWFjIjoiZDFjMDFjZWJlYTQwOWVmN2E0YTBiYTUwOTE1ODJmMWI3ZTQyZjgyOTFkYmQ5Y2M5YmViOTViMDYzODg1N2M2NiIsInRhZyI6IiJ9",
+                "usage": "{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4}",
+                "error": null,
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"},{\"name\":\"agent_output\",\"content\":\"old-written\",\"metadata\":{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\"},{\"name\":\"agent_output\",\"content\":\"old-edited\",\"metadata\":{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "finished_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00",
+                "execution_token": null,
+                "leased_until": null,
+                "citation_evidence": "sw0:eyJpdiI6IlBTeFVOOVE0WWpMMzJ1NzVGRktWYlE9PSIsInZhbHVlIjoidkxDSThJbmZFNWtyTkk3VDdseERqRkdaZy9TYXlKWG9nRWdheFFhS3lIRU1EM21qM3ZMcUN0RG0wOEFxQWhtSVA1d20wQVcxUkpOcjRWMXl6SXZxekVhOHptd2ZqRnZlYnJLWmNod1BXTG89IiwibWFjIjoiZmRhZWVkNTQ3YmUxN2E2ODE2NTJiMzJkMWM3NDEwMDc4MDc1OTJiNmU5YWFmZmNlMTJlNTc4YWYxOWRkMjIxMSIsInRhZyI6IiJ9"
+            },
+            {
+                "run_id": "v0263-pending",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "status": "pending",
+                "context": "{\"run_id\":\"v0263-pending\",\"input\":\"sw0:eyJpdiI6IkVnRCtpSzMrWndIb3A0RlVqcjRyT2c9PSIsInZhbHVlIjoiODJLS2NKZXl3QU5obUd0QmZhVGpKNWxDMGFXVlNSTzF6a0FvRE9rb04wYz0iLCJtYWMiOiI4ZGE0MTNiZjhmNDU0NjY3MjA3NTkzMmI3OTRkZWUyNWM2Zjg2NTA3MjcxMjMwM2I1YjgzNjA2NTcxMmVhNzY5IiwidGFnIjoiIn0=\",\"data\":{\"last_output\":\"old-researched\",\"steps\":1},\"metadata\":{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"execution_mode\":\"durable\",\"completed_steps\":1,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"artifacts\":[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"execution_mode\":\"durable\",\"completed_steps\":1,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "steps": "[]",
+                "output": null,
+                "usage": "[]",
+                "error": null,
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "finished_at": null,
+                "expires_at": "2026-09-23 01:00:00",
+                "execution_token": null,
+                "leased_until": "2026-09-23 00:05:00",
+                "citation_evidence": null
+            },
+            {
+                "run_id": "v0263-waiting",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "status": "waiting",
+                "context": "{\"run_id\":\"v0263-waiting\",\"input\":\"sw0:eyJpdiI6IkNZVTVhVWJSeVlCblowVjlmMVYyNXc9PSIsInZhbHVlIjoidlZFM1hZdnQ5M1pjZzNreHF6TVEvZlRsdDJTUlhETnhtdW1sRFphekpEND0iLCJtYWMiOiIyNmYzMzcxNTI1MzA3YzkzZWVmZDNjNjFhMzRhZTg1MTlmMjYyZmI0M2E4Mjg0ZjkxMjdlYzVlZWFkMGI1MTk1IiwidGFnIjoiIn0=\",\"data\":{\"last_output\":\"old-researched\",\"steps\":1},\"metadata\":{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"execution_mode\":\"durable\",\"completed_steps\":0,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"artifacts\":[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"execution_mode\":\"durable\",\"completed_steps\":0,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "steps": "[]",
+                "output": null,
+                "usage": "[]",
+                "error": null,
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "finished_at": null,
+                "expires_at": "2026-09-23 01:00:00",
+                "execution_token": null,
+                "leased_until": null,
+                "citation_evidence": null
+            },
+            {
+                "run_id": "v0263-running",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "status": "pending",
+                "context": "{\"run_id\":\"v0263-running\",\"input\":\"sw0:eyJpdiI6ImQvQTFHTkltb0p1VlFzbGhUbTVkc3c9PSIsInZhbHVlIjoiVWZYZG0wVW5XbGg0UGg3US9rZWNaZ3NTLzk1eUtVTEs5REdiZCthUnV0OD0iLCJtYWMiOiI2OWM1MzllMTRkOTRmZjU2MzAyNzMyYTNmZmQ2ZGE4YWMzZjZhOTBhZWFmYWNmY2EzZWYzYmI4OTdlYzk0NjFkIiwidGFnIjoiIn0=\",\"data\":{\"last_output\":\"old-researched\",\"steps\":1},\"metadata\":{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"execution_mode\":\"durable\",\"completed_steps\":1,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"artifacts\":[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"execution_mode\":\"durable\",\"completed_steps\":1,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "steps": "[]",
+                "output": null,
+                "usage": "[]",
+                "error": null,
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "finished_at": null,
+                "expires_at": "2026-09-23 01:00:00",
+                "execution_token": null,
+                "leased_until": "2026-09-23 00:05:00",
+                "citation_evidence": null
+            },
+            {
+                "run_id": "v0263-parallel",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeParallelSwarm",
+                "topology": "parallel",
+                "status": "running",
+                "context": "{\"run_id\":\"v0263-parallel\",\"input\":\"sw0:eyJpdiI6ImxoKzVzY2laZVpNNG93aFlRZmtsTFE9PSIsInZhbHVlIjoiNmE5aTFEaUhvd1BUY0hZN2h1L1IzQ2kra2RnZ2hQU3VselU5T2NWWTg4ND0iLCJtYWMiOiIwZGEwNDlmMzIwM2MwNzRjMGRkODljODEzYjk4MDhiNjVkZDY5MGEzMTJkM2NkMzRlMTVmNjE4YjU4MDU0Njg0IiwidGFnIjoiIn0=\",\"data\":[],\"metadata\":{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeParallelSwarm\",\"topology\":\"parallel\",\"execution_mode\":\"durable\",\"completed_steps\":0,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\"},\"artifacts\":[]}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeParallelSwarm\",\"topology\":\"parallel\",\"execution_mode\":\"durable\",\"completed_steps\":0,\"total_steps\":3,\"durable_parallel_failure_policy\":\"collect_failures\"}",
+                "steps": "[]",
+                "output": null,
+                "usage": "[]",
+                "error": null,
+                "artifacts": "[]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "finished_at": null,
+                "expires_at": "2026-09-23 01:00:00",
+                "execution_token": "f02f4924-6485-47bf-9a69-4cc95429855b",
+                "leased_until": "2026-09-23 00:05:00",
+                "citation_evidence": null
+            },
+            {
+                "run_id": "v0263-join",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeHierarchicalFullSwarm",
+                "topology": "hierarchical",
+                "status": "waiting",
+                "context": "{\"run_id\":\"v0263-join\",\"input\":\"sw0:eyJpdiI6IjROQ1ExbEJ3d2NKS25pSi9Id0l1RkE9PSIsInZhbHVlIjoiSHA3OEUwc0JoRjEwazg0U2t2S0JNQT09IiwibWFjIjoiNjdiZTg5ODk0MDA4NmM0YjFmNjc5MjZlMzM0ODc3ZGQ5MzU1YWFmOWViY2NjNjhkNTAxNjRiYzFlNjY5YzVkYyIsInRhZyI6IiJ9\",\"data\":{\"last_output\":\"{\\\"start_at\\\":\\\"parallel\\\",\\\"nodes\\\":{\\\"parallel\\\":{\\\"type\\\":\\\"parallel\\\",\\\"branches\\\":[\\\"writer\\\",\\\"editor\\\"],\\\"next\\\":\\\"finish\\\"},\\\"writer\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeWriter\\\",\\\"prompt\\\":\\\"old branch writer\\\"},\\\"editor\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeEditor\\\",\\\"prompt\\\":\\\"old branch editor\\\"},\\\"finish\\\":{\\\"type\\\":\\\"finish\\\",\\\"output_from\\\":\\\"editor\\\"}}}\",\"steps\":1,\"hierarchical_node_outputs\":[]},\"metadata\":{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeHierarchicalFullSwarm\",\"topology\":\"hierarchical\",\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\",\"coordinator_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\",\"route_plan_start\":\"parallel\",\"current_node_id\":\"parallel\",\"completed_node_ids\":[],\"executed_node_ids\":[\"parallel\"],\"executed_agent_classes\":[],\"parallel_groups\":[{\"node_id\":\"parallel\",\"branches\":[\"writer\",\"editor\"]}],\"executed_steps\":1,\"total_steps\":3,\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":11,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":3,\"reasoning_tokens\":1},\"execution_mode\":\"queue\",\"queue_hierarchical_waiting_parallel\":true},\"artifacts\":[{\"name\":\"agent_output\",\"content\":\"{\\\"start_at\\\":\\\"parallel\\\",\\\"nodes\\\":{\\\"parallel\\\":{\\\"type\\\":\\\"parallel\\\",\\\"branches\\\":[\\\"writer\\\",\\\"editor\\\"],\\\"next\\\":\\\"finish\\\"},\\\"writer\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeWriter\\\",\\\"prompt\\\":\\\"old branch writer\\\"},\\\"editor\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeEditor\\\",\\\"prompt\\\":\\\"old branch editor\\\"},\\\"finish\\\":{\\\"type\\\":\\\"finish\\\",\\\"output_from\\\":\\\"editor\\\"}}}\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":11,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":3,\"reasoning_tokens\":1},\"node_role\":\"coordinator\"},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\"}]}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeHierarchicalFullSwarm\",\"topology\":\"hierarchical\",\"durable_parallel_failure_policy\":\"collect_failures\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\",\"coordinator_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\",\"route_plan_start\":\"parallel\",\"current_node_id\":\"parallel\",\"completed_node_ids\":[],\"executed_node_ids\":[\"parallel\"],\"executed_agent_classes\":[],\"parallel_groups\":[{\"node_id\":\"parallel\",\"branches\":[\"writer\",\"editor\"]}],\"executed_steps\":1,\"total_steps\":3,\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":11,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":3,\"reasoning_tokens\":1},\"execution_mode\":\"queue\",\"queue_hierarchical_waiting_parallel\":true}",
+                "steps": "[]",
+                "output": null,
+                "usage": "[]",
+                "error": null,
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"{\\\"start_at\\\":\\\"parallel\\\",\\\"nodes\\\":{\\\"parallel\\\":{\\\"type\\\":\\\"parallel\\\",\\\"branches\\\":[\\\"writer\\\",\\\"editor\\\"],\\\"next\\\":\\\"finish\\\"},\\\"writer\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeWriter\\\",\\\"prompt\\\":\\\"old branch writer\\\"},\\\"editor\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeEditor\\\",\\\"prompt\\\":\\\"old branch editor\\\"},\\\"finish\\\":{\\\"type\\\":\\\"finish\\\",\\\"output_from\\\":\\\"editor\\\"}}}\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":11,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":3,\"reasoning_tokens\":1},\"node_role\":\"coordinator\"},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "finished_at": null,
+                "expires_at": "2026-09-23 01:00:00",
+                "execution_token": null,
+                "leased_until": "2026-09-23 00:10:00",
+                "citation_evidence": null
+            },
+            {
+                "run_id": "v0263-stream",
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "status": "completed",
+                "context": "{\"run_id\":\"v0263-stream\",\"input\":\"sw0:eyJpdiI6IlRzeERLbEtFSGZqQjVUeWtNemZpcHc9PSIsInZhbHVlIjoib09PdlA3TWFKRVlCek9NVDQ5bzJOcjJMOWtCR0FacFd1d1hvb0NRWnd3MD0iLCJtYWMiOiI1NTg2MGUzMzVlNzU4MzAyZWUwMGIwMTc5OTdlYWRhODllNDNiNzc2YTgyMTM2YzA5ZmNlMTYyMzBlZTA0N2M4IiwidGFnIjoiIn0=\",\"data\":{\"last_output\":\"old-edited\",\"steps\":3},\"metadata\":{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4}},\"artifacts\":[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"},{\"name\":\"agent_output\",\"content\":\"old-written\",\"metadata\":{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\"},{\"name\":\"agent_output\",\"content\":\"old-edited\",\"metadata\":{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\"}]}",
+                "metadata": "{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4},\"run_id\":\"v0263-stream\"}",
+                "steps": "[]",
+                "output": "sw0:eyJpdiI6InhpZlVCL0dyNFd6S0dUU3dvd0FKYVE9PSIsInZhbHVlIjoiQUx0em8rRWNaUTJ5cklEMVlsQXl3dz09IiwibWFjIjoiMWZmMTg2ZGQzNDFmOTg2NzlmMTg5ZDdiYzM4NmVhZTJlZWNlYjMwMGY2ZTU2NTMxMmQ4NDJlOTQxZGNhMWU1YiIsInRhZyI6IiJ9",
+                "usage": "{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4}",
+                "error": null,
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"},{\"name\":\"agent_output\",\"content\":\"old-written\",\"metadata\":{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\"},{\"name\":\"agent_output\",\"content\":\"old-edited\",\"metadata\":{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\"}]",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "finished_at": "2026-09-23 00:00:00",
+                "expires_at": "2026-09-23 01:00:00",
+                "execution_token": null,
+                "leased_until": null,
+                "citation_evidence": "sw0:eyJpdiI6IkdwL2VNc3pReXNwRmxnY2tiQXpRZ0E9PSIsInZhbHVlIjoidjYwYjZXdzEvM2RoQzFrMktLVVdveGdRMmNWMHRmY1RzRklUa2VwYlc1SDNGZUNGdFJpYTMzSk9VOWxuZWwrcHBQKy8zRTVERDNkVXI2SUF6c1NnQk5KM2NOemhsMTVtWUFsbk8zU0ZaUVk9IiwibWFjIjoiYzczYTFmNzU2MWE3OGQxOGJjNWY2NDk0ZjAyZTE1OWJlNjFkZDE0YWM2ZTA0NDliZWM5NjBlZjdlN2YwODZmMyIsInRhZyI6IiJ9"
+            }
+        ],
+        "swarm_run_steps": [
+            {
+                "id": 1,
+                "run_id": "v0263-completed",
+                "step_index": 0,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "input": "sw0:eyJpdiI6Im0rMjhCM09TcUs3cnBpa0t5ZmJqeFE9PSIsInZhbHVlIjoiaDJnUjB0eWp4N1o2TTZyeUF0VmIwcFlycHl0L1UwaUthcFJMb0RVZVYxcz0iLCJtYWMiOiI2MWJhYjQ4YzhjMjczZWI0OTRmMDM1ZDI3OTgxNzc5OTFlZTEwMjhlNGQ4NDgzNDhjZGQyZDY1NzI0Y2ZiYzI5IiwidGFnIjoiIn0=",
+                "output": "sw0:eyJpdiI6Ik5RRXc1RlBlL0FDemhUV0piUEFYSnc9PSIsInZhbHVlIjoiTUtReGYydjRabVU2dnNYU2lDbk8rUT09IiwibWFjIjoiNjRmNjlmMzYzOTYyNjJjNjdiMDQwYzgzNGQ5NDljNmJiMDBjOWRjMjBhZDBhN2EyZGRiNjBkZjk1NTdlNzU4NiIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6Ikh5RFg0am1vbG9CRVF2QjZRVmd4RUE9PSIsInZhbHVlIjoiYUE5SmFUUXJSWmlGVlJka1F0R1JaSkFEejhOZzlTZkEzWEJObkhEMVBkMkJqdHNpeE5Wc2xNL2dMOHZDYmFkTWhJcWhGNDd1Kzdmbm92blU2bjJwcmJUZDlHNjY4aFRXM3JUaUViaFNUNnM9IiwibWFjIjoiMDU2Y2ZiNGQ3YjYxNmViNTZlYzhlN2RkM2MxMTFhMzU4YWJhMDNmOWFhNTNmMTIwZTkxMmYxZjgyZTkyZWI4ZiIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 2,
+                "run_id": "v0263-completed",
+                "step_index": 1,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                "input": "sw0:eyJpdiI6IjBUb0NOcHVSSFFLUnp6YURLTE0wblE9PSIsInZhbHVlIjoiaTM4SSsvbmdodUNvUUFhMTM0a0RVdz09IiwibWFjIjoiZThhNjhhNDk0YmI3ODZmNjhjYWVmOGNlMmE0MTc5Njc1Yzc0YjViNTBjOTcxYzI2ZjFjNjExZTYyMDE5MWFhZiIsInRhZyI6IiJ9",
+                "output": "sw0:eyJpdiI6InQ2d3pKdXQ5Q0lrUmphZE5XbU4xOGc9PSIsInZhbHVlIjoiNnFWaENFYlAzSi81SUhVSktZTnNHUT09IiwibWFjIjoiYjY3ODgzMjIwNTNlOGI4ZjM1Zjc2NjRiNjNjNWFkMzdjMmE0ZDg4MmZlZmQ2OWE1MDNkOGRlMWJhNjdjNjFjZiIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-written\",\"metadata\":{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\"}]",
+                "metadata": "{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6ImU5eS9uQ1JKVlExUCtNTzJQUXJCcHc9PSIsInZhbHVlIjoiOHptcyszZ0I3WTZFYmNrcWEvcVNTWGQ5RXBYMnE1TWthMm42TlNFTjZUdk0vSUJoN3lsbkpwN3VtNzZ1S2RKTWJuNWIyZTJNNjRjbW0zbEhiclpkalJ1a0RhNC9xSUdBWnpMcFAxeUw3eGM9IiwibWFjIjoiODYzN2JjNmRmYWY0ZmYzOGEwZjhjYTc2MmQ3NDU5YjdkZWY3YmEzMzExNzAxMDQyODBiMTY1MWEyN2U2NTFlNiIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 3,
+                "run_id": "v0263-completed",
+                "step_index": 2,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                "input": "sw0:eyJpdiI6IjY3akZJY3A1bTdTUm9sN0xoUm5Hc1E9PSIsInZhbHVlIjoiTnBzSTBXb3AveEZNdFdlUldSQ210dz09IiwibWFjIjoiYTQ0NjRhNGE2OTNlMmYyZTEzNDhiMjhkMTBhYWJjNWMyZTZmZDdmNzNmNTJlYTEwOTJiNmJjYzEzY2FiOTY1MCIsInRhZyI6IiJ9",
+                "output": "sw0:eyJpdiI6ImU1bTJJb24xYXloRGZqam1QeXQ1ZEE9PSIsInZhbHVlIjoiTVhlWXF3VXl0MlNHTnJPby9MaTg2UT09IiwibWFjIjoiMzU5NmNlZmJhNTQxYzEwY2Q5NjM3NTRiMzBjOTU2MWUxMjA3YjFlYzNjZmNjNTIwMDNhZTUxNTBmZjVmMjdiYyIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-edited\",\"metadata\":{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\"}]",
+                "metadata": "{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6IkFQaUF0YnZDS2dBM1VpLzJJdnZienc9PSIsInZhbHVlIjoiWWRzVzJRY0w0cm1FTkw1YWtFQjNucmxyRGZMRVlScVJWQ3VSalVqbjA1YURvdko1RzFpMUJTSnpFY0h3MXhSaUhWTGVzU1RyMzU2NXlYSGJENlNsb1c0ZjFWR2ViY0VyZXFQUmpQOElXeGM9IiwibWFjIjoiNWRlNTk4YTUzNjBlYTM5YTZmZGJlNDU1Y2FhNjY5OWIxMmY1MjY1ZTIyNjlkMWUzYjRkNjY1MzkwMDFkZDkyMiIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 4,
+                "run_id": "v0263-pending",
+                "step_index": 0,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "input": "sw0:eyJpdiI6InJBOFlaODd6V2xFM1BVWFBlUWZoZ3c9PSIsInZhbHVlIjoielY0emJKL083VkJiQzVLdFU0clE1bG1ER3dIUkZOaVZjSEhldHhHYzAxQT0iLCJtYWMiOiJiZDU5NmExZDA1NmVjMzY5N2YxZTE5NTI5ZjcyYTcxNDUwZDg2MzE0ZDY1MWE1YWU3YmIwYWQ4Zjg1ZjQ1Mzc1IiwidGFnIjoiIn0=",
+                "output": "sw0:eyJpdiI6IjRSTHJPK3prd00xSklnV2JTQURWWkE9PSIsInZhbHVlIjoiUUxaZFlRRlBxcjlPdGQ2aU5wNXUxUT09IiwibWFjIjoiMjgyODlkMDZkMzcyMTg5NTBlZjliZjY5MjNmMmQ0NGJlNjFiZDVhYzFkYjRhNDc4OTI1MmRmZGQ0NTZjOTg0MSIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6IklVTTZzdTR4d3RlbnRvbktaSW15clE9PSIsInZhbHVlIjoiUmROUnhnVGQwM3F1R25TM1lHVFlrOUVkMCs0VHg3bVhDek1YYUdrWkFyYjkrSS90bWhtREtJL3ByOU9OZUNxV3Axd1VicXpaTHhtTFRhdkkwZTFuL3dLZ0ZSSmIyVWgxUFdORkZhejdEa0E9IiwibWFjIjoiMWQwMTcwYTg1ZmJjZTBjNTVkMGRlYWMxY2E5YjFjMzVjNjA5MjU0MjgxZTYxMTA0M2ZjYmQ3MmI5ZGU4YWI1ZCIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 5,
+                "run_id": "v0263-waiting",
+                "step_index": 0,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "input": "sw0:eyJpdiI6IldSK1hreWg5VW9ucFVxbFhSbG1Qenc9PSIsInZhbHVlIjoiWVVVNEYxWTFmdnRvT3ovOEk4REpnYW1FV1AzTlJra21NWVpMM21vZ240cz0iLCJtYWMiOiI1YzIzMTk5ZmQ3ODA1MTcxODQ4ZTFkNTA1ZjMyYmFmZTUxOGQ5NDZlODg1MGRlZDE0YjEzZGQ5ZWJmYzdlOGNhIiwidGFnIjoiIn0=",
+                "output": "sw0:eyJpdiI6IjFmTGZ5T25ER0FzOXYvemxibGdldnc9PSIsInZhbHVlIjoiVzF2dlpJMDZnUENwRG9zUEZGZUlIQT09IiwibWFjIjoiMGE5MzQ2NGE3ODBjMTE1YzY2ZThjNzNmNDE2YmYzNjMzZDRlNDExZmI5NmEyMWFkOTZjZWIwY2QyYjRkMmM0MyIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6IkR1dGI0YTBJYjVDL2xXQzRFQy81cHc9PSIsInZhbHVlIjoidDdLOTlDYndkcE04KzUwRjByZHMwWmhWbWdWM25MMGpTbFFBb29QTmV0SGREWlZUTTVjb0M3alhuM0lZQVNmMnJuVlV0elN5aHV1aHd4d2dHd2M4TFl4THNKNXlaSEpNZllFbzVYZnZLQmc9IiwibWFjIjoiYzAwMWY5YTQ4NzJhOWJmM2Y1ZDM5ZDkwYmI3ZjRkM2NkMWQzMWY3MTg0NDQ1ZmEzNzI1YTUwN2I2ZjhiNmI1MSIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 6,
+                "run_id": "v0263-running",
+                "step_index": 0,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "input": "sw0:eyJpdiI6Ijd6WUowbUlZc0dGZDRKQk5TS0o4N0E9PSIsInZhbHVlIjoiMEFCVTRmbW9tZy9HN1dJWk5wOHVSaWprbUpsS1NXKzVyYTUzMWUzMTVhQT0iLCJtYWMiOiI3MzdlMmYzZTZiOGRkNDg1ZDQwNzNhZDhlMGViOTMyYzRiOGYzZTliZTJjYWVhYjdkODQ3ZDVjNDdkMTc3NWM5IiwidGFnIjoiIn0=",
+                "output": "sw0:eyJpdiI6ImFtcVR4UWF3eE9UZjRvZFBFNTg2N3c9PSIsInZhbHVlIjoid1Jwak4zOUorYkcrbzcrRHZXK1BVQT09IiwibWFjIjoiMjNlMDQzZjc1N2JiMTQwMmU1N2Y2OTY5ZGI0N2JlZWQ5MTMzYWQ1N2M1NmJhNDBjYTNhNzYwNmFlNjZiOGM5YSIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6ImdpcnlteDNiN3phYmo4TUdzRWkzY1E9PSIsInZhbHVlIjoiYnNORU9tMmdVVG8zQmhndTB6OUI1d1MyeXFqa281YXVEWDFqNDZpL0wxMWY2cTVaZ3NsbzRjQ0pXazBtMjR2VUpjajgzTXQ5b1dOV0hTV3ZTVGVzT0QxZXlrZC92RG5hbUJMYjdDdkZNMGs9IiwibWFjIjoiZGI2M2RlNTE3YzlhMzg2MTY0NDZhMGY2YTYwZTczYjQ4NmI5MjBkOTgwMmMxN2I4ZDA1ZWQzNmQxNmNkZmZjMSIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 7,
+                "run_id": "v0263-parallel",
+                "step_index": 0,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "input": "sw0:eyJpdiI6IjVaN2RnWU95RG5SelpnWUhZemFqbGc9PSIsInZhbHVlIjoidDh3SGVjc1ZxVXZUT25VS1Yxc0hXT0tmRk4yWG9oMW9DUWFSVks0Tks5UT0iLCJtYWMiOiIzYjEwYjE4MDVkZWRmODU3ZmIzN2ZhMWE4MTU0MDgwMGZiNzBiYmZjOWE3NTJhODJmODc2ZjA3MTIwZmExZTU4IiwidGFnIjoiIn0=",
+                "output": "sw0:eyJpdiI6IkJFTE9SUHVSRDBDYm1rQzltdlVDdkE9PSIsInZhbHVlIjoid3pnemc0S3JoT1Q4RGxKS3N5dmJkdz09IiwibWFjIjoiZGQ4MmIyZDc1NGRmNjU4ZTQzZmNjOGEwNTgyZTYyMDFhYjEwNGFiNDhjYjMzZWRhZjIzYzk2NmIyOGUwM2ZlZSIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1},\"parallel_branch_index\":0},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1},\"parallel_branch_index\":0}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6ImdqM3ZWQVZhY1IvWXNNOUNpaU9vMUE9PSIsInZhbHVlIjoib0pCRURmelozak1wQnhTL0wyZ1BiTXBGeUt6cEV2M3pmLzZwNG1iWEtCNHh2ZmdJUVRVZVV2dFg4c3MzRG1VNGlPeGVqNnFuNTVUQWF1THAvYklxSzNBbFVvbXVEcWNsaEU4bE9OL0w3RlE9IiwibWFjIjoiY2QyMDdlNzA3MGZhNTBiZTAwZDg0ZjUxNWJmNjdhYzA3ZjFlODc5NjY5YmQwODBiNmQ0OGM3MzRhZWVmODZlNCIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 8,
+                "run_id": "v0263-join",
+                "step_index": 0,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator",
+                "input": "sw0:eyJpdiI6IlR1cHJ5L0lWY0JvZnJzSml1ZG90Q0E9PSIsInZhbHVlIjoieHdQTU9hU0N5V1k0NFduYXgyZm93dz09IiwibWFjIjoiNmY1OTMyNDlkYTE1NWQ0MjI1MjdjYzhiM2UyNDRkNGI3MGFhZTRhNDBiOTQ3MTc4ZWU1YTU3N2M1NzY5MTNkMyIsInRhZyI6IiJ9",
+                "output": "sw0:eyJpdiI6IjBjZmJ5bnZSQ2puRklUZ1h5ck82ZFE9PSIsInZhbHVlIjoibXdhRUpmQUJFaGRrQ0FpZ3NGRGNpRmZaN0c1Mnp5aHoybEhZa3paZGtIYlVJRlpjZndFR3pkaFU0WUU5U1VLVUY0UFFienZocU9uM0NRdm4yZ0w1bnBCWFVSbnkwSDRPa3J1N3lzdGkxNlJ6QVZDZTdwTW5HblZ1RmtaODkwWjlPR1hUakhBMld2emlaZzBGSzE4Unl5REljL3FFVTdKM3FyRE5HMTd5b1J3Rks5TW9qOU4yVjA5Tkd2UHAwdjlJZjZpdkI3c3g3Q3N4QkhZK282MksreDR6Rk1jK2dmQmNxMW1yNU96UnUyMnJ1QlRQN0o0V0JrUGRoN2dIai93L0tDU3VKTXVDcjFmS1ZsdWU5QzZFdkV1UjVCSUVFUVpnaHczdm1Wc0x6T2xOZ0FxMFc5TTlEZ1p3SXpoTmFjTys3STlDaXlWNzBPeGVvNTF2VHRYSWpwL1JLdDNlVHBvdVJIOE4vNzlXZFZydHRRallJdndVT2hJUU9PYXZqVk5OaWRtT1RhaWJsZ0FIeFdtRXA5aFlsMTdTbHYrUWJtUnNzVHgvUU9hZ016NmNvTlpjV2RSdGZrVjZEU3hFeWJWS1luZkQyZnpEUTVsUjMxcmRmMlNtUkZtZm9HdHFBcXNFSUlDRSsya3VQczVVcjh4clVORGVWTmZqVUFPR2p4YmpWd1J6S3Q3bmYyRFlQbmZMSGwvUkxDZXB4dXBQLzZ0THJMc1VUWVFLMXVjZkJ0azlrU2x4bkxGNnJDNm1GU0ZUIiwibWFjIjoiMzU1YmViNGFiYmU0OWUyYzlkMjE0OTBkZTAyNDg3ZWUzM2Y2MWM0MjhmNzI4N2JiMWEzNzVmZDNjYzg3Y2MxNyIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"{\\\"start_at\\\":\\\"parallel\\\",\\\"nodes\\\":{\\\"parallel\\\":{\\\"type\\\":\\\"parallel\\\",\\\"branches\\\":[\\\"writer\\\",\\\"editor\\\"],\\\"next\\\":\\\"finish\\\"},\\\"writer\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeWriter\\\",\\\"prompt\\\":\\\"old branch writer\\\"},\\\"editor\\\":{\\\"type\\\":\\\"worker\\\",\\\"agent\\\":\\\"BuiltByBerry\\\\\\\\LaravelSwarm\\\\\\\\Tests\\\\\\\\Fixtures\\\\\\\\Agents\\\\\\\\FakeEditor\\\",\\\"prompt\\\":\\\"old branch editor\\\"},\\\"finish\\\":{\\\"type\\\":\\\"finish\\\",\\\"output_from\\\":\\\"editor\\\"}}}\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":11,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":3,\"reasoning_tokens\":1},\"node_role\":\"coordinator\"},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeHierarchicalCoordinator\"}]",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":11,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":3,\"reasoning_tokens\":1},\"node_role\":\"coordinator\"}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6IjBGSWgrUEYwbERRNnp4ZFdRZ1g1N0E9PSIsInZhbHVlIjoiUUlERFdoZ2hJNTlYSSsvUzJzYlVyNlBTUllaRDVsancycEg4cUVvU2ZKQlh2ZWYzbjJmU1JKczM0TXJ4Zis5TWJ1T05wTFFmUXVGOG5wRk9VdHVNWlBjQ3NsSTRHUGlEZGpFMlY4YzA2a0U9IiwibWFjIjoiZGJkN2QyYTQxYmFlMzE2YzkxNjY1MGM5NTQxMDE0NTZkNmUzZjk3YjRkMjg4MzdjYWE4MzRhNGQyNGMxZWM1OSIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 9,
+                "run_id": "v0263-join",
+                "step_index": 1,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                "input": "sw0:eyJpdiI6InEvdXovZGt0bnZSZERvaHFvYTRLeFE9PSIsInZhbHVlIjoiMVJuaUtLK2M5ZE04M3RBVWp5SkkzT0pnNWJ2Z0xXWDVObytuclhmOXpPaz0iLCJtYWMiOiJlNDIzYTZmY2NlZmMwZjU2MDg0NWIzNDQxNDZlN2RlZDhiYzE0OTU5YTBiMjk2NWZkYzg1NmFiZjcxNDU0NTVlIiwidGFnIjoiIn0=",
+                "output": "sw0:eyJpdiI6ImxDNWdQaDVLUjNlSE1ORlByQU5GalE9PSIsInZhbHVlIjoiYkpmdVVWeEMzL3lzYUJkeWREWm9PUT09IiwibWFjIjoiZTdjNDkyZGMzNTVlZTNhMjllZWUxMWNhOTc5MDI4ZGU0MDIzZmI0MjczZWYzNmEwOTcxZDMyZDRiZjU3NGZhNCIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-written\",\"metadata\":{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1},\"node_id\":\"writer\",\"parent_parallel_node_id\":\"parallel\"},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\"}]",
+                "metadata": "{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1},\"node_id\":\"writer\",\"parent_parallel_node_id\":\"parallel\"}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6IlUrZWYra2phRUFSNFB6VkdQcHdVU3c9PSIsInZhbHVlIjoiNm5iUWNtbCtUbjNIVStVZmYvRlZ4RHhHVytHSExpeXYzS3RReGZ6NHBKNFpZT2pEcHdmSjc1ajAyVXlHTE1jRnljNWhmdkJreXZWZzd2RDdyaWh6WjUxTFg0Qm5VaW4reS8zNHAvNncrcTA9IiwibWFjIjoiYzBlZjM3Y2I1Y2MwODE2NGQxZWQxYTQ3ZDU3MmI3ZjUyZmI4N2ViYjllYTFiYTY1MTdhOGMyMzZhM2EzZjcyOSIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 10,
+                "run_id": "v0263-stream",
+                "step_index": 0,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "input": "sw0:eyJpdiI6ImtaeGRYOHh5Y3E1TzF6WHVnRENtVWc9PSIsInZhbHVlIjoiSGxlU1hRZm1CSWV2amtwaDdURk4ycHZIMVNyMVNHaWh4T25lWmo1dEVFdz0iLCJtYWMiOiJlNjQyNDc0ZjZkYzc5MjU4NWU4NzA2NWVhODQ1ZDhjZDQ2Mzc2Yjg3ZmExYjM2MjRkNWZlODc3NzNmNjcwNzIyIiwidGFnIjoiIn0=",
+                "output": "sw0:eyJpdiI6Ik9tNmVZOWplaHpYN2hqZnFINlFmc2c9PSIsInZhbHVlIjoiOTNaSnVnUWJYQlN0RUJYbE5wTlQvQT09IiwibWFjIjoiYWI5ZjUwYmMyODhhNTFmN2VhMzFlOTkxNWEyOTI5NDk5MmJjODAzNGUwNTg5NWY1NDk0YTA4MzU0Yzk4ZThlMCIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-researched\",\"metadata\":{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\"}]",
+                "metadata": "{\"index\":0,\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6IlpJSTJhSjNKVExydHpqUWZzZDlvUXc9PSIsInZhbHVlIjoiNjRPYmRwZnJqbE1BR2w3U0kvWmV4ZHFaOU1YbExidUIvaFFOSW1jb3lSaGFRRzJ0QnZkR1VjZmpkdlNIdFZGaUlQTHFrR2FkR3RMRTNDcHFRbnE0R1k2SldadTNBdTZQcXRTU0IxTGxOL2s9IiwibWFjIjoiYjRlYzZiMjUyYWJkZWRiZGMzYjZiMThlMzUyYTNlMGY5YjFkZDc4NzdkOGYwMjUwMjY1NmVhZDMyM2FmYTg4ZCIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 11,
+                "run_id": "v0263-stream",
+                "step_index": 1,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                "input": "sw0:eyJpdiI6InJVbHBYb0F0ZHJrR2xHS1ZyaFVpbEE9PSIsInZhbHVlIjoiYlRUY1dJeEN3M2NmSnJpWG1EQ1U4QT09IiwibWFjIjoiNWFmZmQ2MjIyYTc0OGYwNDE1Y2Q4YTcyMzc4ZmM5ODFiNjU0ZWJjOTAxZTY1ZDk5MTEyMjk5YmU2MTRiMzBmNCIsInRhZyI6IiJ9",
+                "output": "sw0:eyJpdiI6IlYrVGpZT3RPMzUybVBGQ0V2NEkva2c9PSIsInZhbHVlIjoiUm9GS0gvWTZ0NUlVelU1djNxeldnUT09IiwibWFjIjoiOWVhY2I3ODIzOGNiODA5MTlhOWJlZDcwODlmZThmMmJhM2UwMDQ1OTdhYjQyZDc4ZWYzZTFjMzk1ZmNjYWFlOCIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-written\",\"metadata\":{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\"}]",
+                "metadata": "{\"index\":1,\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6ImtYUlluZ1lHQzVUdTJielRvWXlxWWc9PSIsInZhbHVlIjoiQ0RzczEyNU1KVXVSYkdaUGVxMkZ3dFdRbmNvcTRLVnYxYURDVExtMk5BQy83aHN3dU5HSnBRazdXaXZTL1NNWkdqOEViMElwdlhTOG5Bc2pHQmFOZys2eWN1N0lmbmxNQXJDNWxMd3I5Y1E9IiwibWFjIjoiNzg1N2I2NWJmMzY3MzY5Y2U0MzhhMWY0YTdmMGU5NzhlZjc0MjVjOGNkYzI1OTk3MDkxYTk2M2RiODVkY2FlZCIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 12,
+                "run_id": "v0263-stream",
+                "step_index": 2,
+                "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                "input": "sw0:eyJpdiI6Img4dnNKV2pQUUg0OWMydkhubzJ5ZUE9PSIsInZhbHVlIjoiQVJsbEo2OXpYK1N1ZnRuTWU1dXNWZz09IiwibWFjIjoiNDU3YWY4NzgxOTMxNGQ4OGE5MmUwYjRhY2EyMmIzZGJlN2JmYWExYTM4MWYwNzlmYzAzNWJhMWU2NTkyNGE1ZSIsInRhZyI6IiJ9",
+                "output": "sw0:eyJpdiI6IitsLy9IZFQ4eWNCeFJmWENUeloyZ2c9PSIsInZhbHVlIjoibXJwZmV1ZUE1a1h3N2hkUnhSanVqdz09IiwibWFjIjoiMmIzMjc0OTMwZGQwYzgyYWNhMTkzNDQ3MmM3NDg3ZmJjNzI2MmY0MWEzZGZiNzRmODU3ZmMwNTBkNjY2NGQyZiIsInRhZyI6IiJ9",
+                "artifacts": "[{\"name\":\"agent_output\",\"content\":\"old-edited\",\"metadata\":{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}},\"step_agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\"}]",
+                "metadata": "{\"index\":2,\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6IlVCSVJQZ1ZsVXR3VjBXSHY2aEl4RXc9PSIsInZhbHVlIjoiQ0JxMjVjcXhZVDN5aURpazNRaWZmbExlNi9LUWc2eUJ2R09EdGhtckNIRm4zenhKYTFpakJWcVVnOGxkVjRxTGhNNzNXbkRPQ3hFWm03TDJUUlE1OGI2cTVnZDZZQkx5eENKaEZJY2UvdGc9IiwibWFjIjoiYWE2YmRmNDg4YjFhOGU1NjFhZWFhYzA1MmM5ZWEyMTQ3OTA4MWI3MDQ1YzZmZDQ0ZDQ4NWRhZWNhNzQzNWFkMCIsInRhZyI6IiJ9"
+            }
+        ],
+        "swarm_stream_events": [
+            {
+                "id": 1,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_stream_start",
+                "payload": "{\"id\":\"8af01f37-56ae-421a-8dd5-9b866ce87646\",\"invocation_id\":null,\"node_id\":null,\"type\":\"swarm_stream_start\",\"run_id\":\"v0263-stream\",\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"input\":\"old stream input\",\"metadata\":{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\"},\"timestamp\":1790217402,\"attempt_epoch\":null}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "8af01f37-56ae-421a-8dd5-9b866ce87646",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 2,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_step_start",
+                "payload": "{\"id\":\"fa2f6537-a7b1-4944-a63e-843600fbfd55\",\"invocation_id\":null,\"node_id\":null,\"type\":\"swarm_step_start\",\"run_id\":\"v0263-stream\",\"step_index\":0,\"agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"agent\":\"FakeResearcher\",\"input\":\"old stream input\",\"timestamp\":1790217402,\"attempt_epoch\":null}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "fa2f6537-a7b1-4944-a63e-843600fbfd55",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 3,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_step_end",
+                "payload": "{\"id\":\"913aedc4-069d-45ea-bd92-28abb4b82893\",\"invocation_id\":null,\"node_id\":null,\"type\":\"swarm_step_end\",\"run_id\":\"v0263-stream\",\"step_index\":0,\"agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeResearcher\",\"agent\":\"FakeResearcher\",\"output\":\"old-researched\",\"duration_ms\":1,\"metadata\":{\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}},\"timestamp\":1790217402,\"attempt_epoch\":null,\"citation_evidence\":\"sw0:eyJpdiI6IlFZaVd4d2lZUkFpS3RQUjIrSUxHdFE9PSIsInZhbHVlIjoiSjZ0NHcvaEF4c0VUOUo2eGdrN01wVmJDbzdYL041TjNkRWtpN3ZsZEJxaktkQ3pLVHJnL3h6Q2doRmJiZVlTVS90cWw1UVJsYm1ia0ZKVWxXTEhaQ1RsbHBlNVBZdmNsN2pLdU02ZDUwRkk9IiwibWFjIjoiNDI1MTVjODBjYmU4MWRkYTZiNDU3MzhmMTA1NWUzNWFiN2UxYTUzNjRlNWIwODVkYWQyMzJkNmI4ZjYyMTFkZSIsInRhZyI6IiJ9\"}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "913aedc4-069d-45ea-bd92-28abb4b82893",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 4,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_step_start",
+                "payload": "{\"id\":\"76a2eb99-520a-484f-aa75-61827f7e563d\",\"invocation_id\":null,\"node_id\":null,\"type\":\"swarm_step_start\",\"run_id\":\"v0263-stream\",\"step_index\":1,\"agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\",\"agent\":\"FakeWriter\",\"input\":\"old-researched\",\"timestamp\":1790217402,\"attempt_epoch\":null}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "76a2eb99-520a-484f-aa75-61827f7e563d",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 5,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_step_end",
+                "payload": "{\"id\":\"6d8a7c11-8c6c-4f5d-a407-3ab2764e3147\",\"invocation_id\":null,\"node_id\":null,\"type\":\"swarm_step_end\",\"run_id\":\"v0263-stream\",\"step_index\":1,\"agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\",\"agent\":\"FakeWriter\",\"output\":\"old-written\",\"duration_ms\":1,\"metadata\":{\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}},\"timestamp\":1790217402,\"attempt_epoch\":null,\"citation_evidence\":\"sw0:eyJpdiI6Imxja1JZcGR5K1poamdva28rOWNaVXc9PSIsInZhbHVlIjoiNmxoUDRrNURKTmlHajF6bDhqMk5qMGJUODdIcm41czlSdUZ1eWVTdjdvZnhPdUlmK0tKazBmUXVueVltNnEvU2VtalpMUEVWY2c5Y1ZsRkpqaVdmRDdCOHcwQkRDNmxZTEtGTVhMR2NWTVU9IiwibWFjIjoiZjYzZDk2NWFkZTg1MjkwYzFhZjQxZDZlMWQzMjA5NWIyM2E4NmNlZDI0ZDE4N2Y2N2UyNGQ4M2E5YjYzNGJjMiIsInRhZyI6IiJ9\"}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "6d8a7c11-8c6c-4f5d-a407-3ab2764e3147",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 6,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_step_start",
+                "payload": "{\"id\":\"104e4339-44ab-49e5-8c1a-a494acd38a93\",\"invocation_id\":null,\"node_id\":null,\"type\":\"swarm_step_start\",\"run_id\":\"v0263-stream\",\"step_index\":2,\"agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"agent\":\"FakeEditor\",\"input\":\"old-written\",\"timestamp\":1790217402,\"attempt_epoch\":null}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "104e4339-44ab-49e5-8c1a-a494acd38a93",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 7,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_text_delta",
+                "payload": "{\"id\":\"01m38mbe7cja0awee79brzydca\",\"invocation_id\":\"01a0d145-b8e9-7382-a835-9233d313b1b6\",\"node_id\":null,\"type\":\"swarm_text_delta\",\"run_id\":\"v0263-stream\",\"step_index\":2,\"agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"delta\":\"old-edited\",\"timestamp\":1790217402,\"attempt_epoch\":null}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "01m38mbe7cja0awee79brzydca",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 8,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_text_end",
+                "payload": "{\"id\":\"01m38mbe7cja0awee79brzydcb\",\"invocation_id\":\"01a0d145-b8e9-7382-a835-9233d313b1b6\",\"node_id\":null,\"type\":\"swarm_text_end\",\"run_id\":\"v0263-stream\",\"step_index\":2,\"agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"message_id\":\"01m38mbe7bdqdvcvzd8jrz85t8\",\"timestamp\":1790217402,\"attempt_epoch\":null}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "01m38mbe7cja0awee79brzydcb",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 9,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_step_end",
+                "payload": "{\"id\":\"e0929993-8332-4d12-8c6c-b4c360671158\",\"invocation_id\":null,\"node_id\":null,\"type\":\"swarm_step_end\",\"run_id\":\"v0263-stream\",\"step_index\":2,\"agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"agent\":\"FakeEditor\",\"output\":\"old-edited\",\"duration_ms\":11,\"metadata\":{\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":7,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":0,\"reasoning_tokens\":2}},\"timestamp\":1790217402,\"attempt_epoch\":null,\"citation_evidence\":\"sw0:eyJpdiI6IlNWK0VSSGlVU3g5enJ3aitzR3pza2c9PSIsInZhbHVlIjoicWNjVkFuQ3VUdDRDWVpBYXdJKzVtTlpvYVNjUS9KKzRQVzcrcDBOYWRRWUgxR2VhODdiM0x3bnJCQW11UUdobW8zWEtLbHhhMUNLWUt0M0dUMmI2Tk9EbDRJakVKNHVaTkFIb3h6MXFKM1k9IiwibWFjIjoiODNjZTNiZGU4ZDIyOWE3NWIzZDc5YWFiMTdhZjg0ZjBjNzRlMDE3MWMyNDE4YTUzMTY1NmQ5N2ZiYmViMzk5NyIsInRhZyI6IiJ9\"}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "e0929993-8332-4d12-8c6c-b4c360671158",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 10,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_stream_end",
+                "payload": "{\"id\":\"eb74daf2-cb27-47ac-8528-a3ccdffe5428\",\"invocation_id\":null,\"node_id\":null,\"type\":\"swarm_stream_end\",\"run_id\":\"v0263-stream\",\"output\":\"old-edited\",\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4},\"metadata\":{\"swarm_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Swarms\\\\FakeSequentialSwarm\",\"topology\":\"sequential\",\"last_agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":15,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":6,\"reasoning_tokens\":4},\"run_id\":\"v0263-stream\"},\"timestamp\":1790217402,\"attempt_epoch\":null,\"citation_evidence\":\"sw0:eyJpdiI6InVsOVhZVEFRdloyVGJPQkUxK0tNTEE9PSIsInZhbHVlIjoiM2tKMmRSaHNSMVBaVHJheC9CMFNuVnFQelUrelNob1dmSDM3SHhtTlIycm9ZR0lQSUdmREVnNTdGby9xWEFrTlBiMVZzSGdHeWNZMFFCNzFybENEdVZUWVhzeWgwY3U2T2pJU0VsNlJicGs9IiwibWFjIjoiMTlkMTVlODMzNGExZjg1YTAwODBiYjA5MzM0MjgxNGFkZjJkN2UyNzIwYTAwODFlODdiNDg1MzU1YTIwYmU3NyIsInRhZyI6IiJ9\"}",
+                "expires_at": "2026-09-23 01:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "eb74daf2-cb27-47ac-8528-a3ccdffe5428",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            },
+            {
+                "id": 11,
+                "run_id": "v0263-stream",
+                "event_type": "swarm_tool_result",
+                "payload": "{\"id\":\"old-denied-event\",\"invocation_id\":\"old-editor\",\"node_id\":null,\"type\":\"swarm_tool_result\",\"run_id\":\"v0263-stream\",\"step_index\":2,\"agent_class\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"tool_result\":{\"id\":\"old-call\",\"name\":\"old-tool\",\"arguments\":{\"query\":\"retained\"},\"result\":\"denied\",\"result_id\":null,\"denied\":true},\"successful\":false,\"error\":\"denied\",\"timestamp\":1790121600,\"attempt_epoch\":null}",
+                "expires_at": "2026-09-24 00:00:00",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "event_uuid": "old-denied-event",
+                "void_type": null,
+                "void_target_event_uuid": null,
+                "void_reason": null,
+                "sealed_at": null,
+                "node_id": null,
+                "attempt_epoch": null
+            }
+        ],
+        "swarm_stream_step_checkpoints": [
+            {
+                "id": 1,
+                "run_id": "v0263-stream",
+                "step_index": 0,
+                "output": "sw0:eyJpdiI6InFHa3Z1TDJFVFg2bzRyVktsazR2c0E9PSIsInZhbHVlIjoiMmJtNFNOdFdHV2JLSUVESkh2ZE1QZz09IiwibWFjIjoiYjA4NWY0ZTc5ZTg5MGMxMWNkMDE3YzNlZjc4YjEwZjczNDk5ZWE1NzYxMjEzYjRkNjBmOWM1MzliNDlkZDUwMCIsInRhZyI6IiJ9",
+                "usage": "{\"prompt_tokens\":11,\"completion_tokens\":3,\"cache_write_input_tokens\":2,\"cache_read_input_tokens\":4,\"reasoning_tokens\":1}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6IjFQT0xXVktza1RkbkV1NzUyZy90bWc9PSIsInZhbHVlIjoibDA0R3VNc1dSa09FTXpzTnpXZjNCTkUxTEtjSDYzU25hcDI2WHdxRU8vUlBpaWlPaFhJdnFCZ2dFenhjNWdFbGFNa3U4aTlmU0o4dlZjZjRUTVVLSUlCMlA0SkhNcWxLaGN1Mkd0WEQ1QnM9IiwibWFjIjoiNzE0OTI2NjZlYTMwNjBhYWM5OWNjMjlhNDU2MzFmYWEzYjBmN2NhZmQ5YmZkNDliMDgyNDdmZjUwOTQ5NGJiMCIsInRhZyI6IiJ9"
+            },
+            {
+                "id": 2,
+                "run_id": "v0263-stream",
+                "step_index": 1,
+                "output": "sw0:eyJpdiI6ImF6ZEMxWTQ0c3ZoUzNsNkFqeTdCS3c9PSIsInZhbHVlIjoiWTVzR0ZTOS9UTmZXYnI2YjlZZE9Udz09IiwibWFjIjoiZGFmNWQwZWNlYjJkNWYxNDhjYzQxYzk0MjdlNDJiNGYzYmU4YzJhYjlhNWY0MDExZThiZmY4ZTYzMjg4NGViOSIsInRhZyI6IiJ9",
+                "usage": "{\"prompt_tokens\":13,\"completion_tokens\":5,\"cache_write_input_tokens\":0,\"cache_read_input_tokens\":2,\"reasoning_tokens\":1}",
+                "created_at": "2026-09-23 00:00:00",
+                "updated_at": "2026-09-23 00:00:00",
+                "citation_evidence": "sw0:eyJpdiI6IjNKQUUvcGYyOVB6RUxaNDg0UUxNYkE9PSIsInZhbHVlIjoiZGRpZ2FsVXg0WjZHRi9ucmtyWjJKQUZHWjdVR3BPVWdYV2hZNnhlY2ROZmxEM0JpMVVYOVhNczhtS0J6cFJrbzd0UHFsbXRwUEVLV1ZhOWJIVFVGdGZZL0xteG9HMy9aOGRwV3ZiUU1mclk9IiwibWFjIjoiZGJhNGI1NDhlZjY1Yzg1ODZmZDVkNjFhY2RjOGExNzc2NmExMmY4NjA0NGI3ODllYjZmMWI4M2JiMWQ2ZTFhYSIsInRhZyI6IiJ9"
+            }
+        ]
+    },
+    "histories": {
+        "completed": {
+            "citation_status": "available",
+            "citation_reasons": [],
+            "citations": [],
+            "run_id": "v0263-completed",
+            "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+            "topology": "sequential",
+            "status": "completed",
+            "context": {
+                "run_id": "v0263-completed",
+                "input": "old completed input",
+                "data": {
+                    "last_output": "old-edited",
+                    "steps": 3
+                },
+                "metadata": {
+                    "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                    "topology": "sequential",
+                    "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                    "usage": {
+                        "prompt_tokens": 41,
+                        "completion_tokens": 15,
+                        "cache_write_input_tokens": 2,
+                        "cache_read_input_tokens": 6,
+                        "reasoning_tokens": 4
+                    }
+                },
+                "artifacts": [
+                    {
+                        "name": "agent_output",
+                        "content": "old-researched",
+                        "metadata": {
+                            "index": 0,
+                            "usage": {
+                                "prompt_tokens": 11,
+                                "completion_tokens": 3,
+                                "cache_write_input_tokens": 2,
+                                "cache_read_input_tokens": 4,
+                                "reasoning_tokens": 1
+                            }
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                    },
+                    {
+                        "name": "agent_output",
+                        "content": "old-written",
+                        "metadata": {
+                            "index": 1,
+                            "usage": {
+                                "prompt_tokens": 13,
+                                "completion_tokens": 5,
+                                "cache_write_input_tokens": 0,
+                                "cache_read_input_tokens": 2,
+                                "reasoning_tokens": 1
+                            }
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter"
+                    },
+                    {
+                        "name": "agent_output",
+                        "content": "old-edited",
+                        "metadata": {
+                            "index": 2,
+                            "usage": {
+                                "prompt_tokens": 17,
+                                "completion_tokens": 7,
+                                "cache_write_input_tokens": 0,
+                                "cache_read_input_tokens": 0,
+                                "reasoning_tokens": 2
+                            }
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor"
+                    }
+                ]
+            },
+            "metadata": {
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                "usage": {
+                    "prompt_tokens": 41,
+                    "completion_tokens": 15,
+                    "cache_write_input_tokens": 2,
+                    "cache_read_input_tokens": 6,
+                    "reasoning_tokens": 4
+                },
+                "run_id": "v0263-completed"
+            },
+            "steps": [
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                    "input": "old completed input",
+                    "output": "old-researched",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-researched",
+                            "metadata": {
+                                "index": 0,
+                                "usage": {
+                                    "prompt_tokens": 11,
+                                    "completion_tokens": 3,
+                                    "cache_write_input_tokens": 2,
+                                    "cache_read_input_tokens": 4,
+                                    "reasoning_tokens": 1
+                                }
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    }
+                },
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                    "input": "old-researched",
+                    "output": "old-written",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-written",
+                            "metadata": {
+                                "index": 1,
+                                "usage": {
+                                    "prompt_tokens": 13,
+                                    "completion_tokens": 5,
+                                    "cache_write_input_tokens": 0,
+                                    "cache_read_input_tokens": 2,
+                                    "reasoning_tokens": 1
+                                }
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 1,
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 5,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 2,
+                            "reasoning_tokens": 1
+                        }
+                    }
+                },
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                    "input": "old-written",
+                    "output": "old-edited",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-edited",
+                            "metadata": {
+                                "index": 2,
+                                "usage": {
+                                    "prompt_tokens": 17,
+                                    "completion_tokens": 7,
+                                    "cache_write_input_tokens": 0,
+                                    "cache_read_input_tokens": 0,
+                                    "reasoning_tokens": 2
+                                }
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 2,
+                        "usage": {
+                            "prompt_tokens": 17,
+                            "completion_tokens": 7,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "reasoning_tokens": 2
+                        }
+                    }
+                }
+            ],
+            "output": "old-edited",
+            "usage": {
+                "prompt_tokens": 41,
+                "completion_tokens": 15,
+                "cache_write_input_tokens": 2,
+                "cache_read_input_tokens": 6,
+                "reasoning_tokens": 4
+            },
+            "error": null,
+            "artifacts": [
+                {
+                    "name": "agent_output",
+                    "content": "old-researched",
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                },
+                {
+                    "name": "agent_output",
+                    "content": "old-written",
+                    "metadata": {
+                        "index": 1,
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 5,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 2,
+                            "reasoning_tokens": 1
+                        }
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter"
+                },
+                {
+                    "name": "agent_output",
+                    "content": "old-edited",
+                    "metadata": {
+                        "index": 2,
+                        "usage": {
+                            "prompt_tokens": 17,
+                            "completion_tokens": 7,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "reasoning_tokens": 2
+                        }
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor"
+                }
+            ],
+            "started_at": "2026-09-23 00:00:00",
+            "finished_at": "2026-09-23 00:00:00",
+            "execution_token": null,
+            "leased_until": null,
+            "updated_at": "2026-09-23 00:00:00"
+        },
+        "pending": {
+            "citation_status": "unknown",
+            "citation_reasons": [],
+            "citations": [],
+            "run_id": "v0263-pending",
+            "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+            "topology": "sequential",
+            "status": "pending",
+            "context": {
+                "run_id": "v0263-pending",
+                "input": "old pending input",
+                "data": {
+                    "last_output": "old-researched",
+                    "steps": 1
+                },
+                "metadata": {
+                    "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                    "topology": "sequential",
+                    "execution_mode": "durable",
+                    "completed_steps": 1,
+                    "total_steps": 3,
+                    "durable_parallel_failure_policy": "collect_failures",
+                    "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                    "usage": {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 3,
+                        "cache_write_input_tokens": 2,
+                        "cache_read_input_tokens": 4,
+                        "reasoning_tokens": 1
+                    }
+                },
+                "artifacts": [
+                    {
+                        "name": "agent_output",
+                        "content": "old-researched",
+                        "metadata": {
+                            "index": 0,
+                            "usage": {
+                                "prompt_tokens": 11,
+                                "completion_tokens": 3,
+                                "cache_write_input_tokens": 2,
+                                "cache_read_input_tokens": 4,
+                                "reasoning_tokens": 1
+                            }
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                    }
+                ]
+            },
+            "metadata": {
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "execution_mode": "durable",
+                "completed_steps": 1,
+                "total_steps": 3,
+                "durable_parallel_failure_policy": "collect_failures",
+                "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 3,
+                    "cache_write_input_tokens": 2,
+                    "cache_read_input_tokens": 4,
+                    "reasoning_tokens": 1
+                }
+            },
+            "steps": [
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                    "input": "old pending input",
+                    "output": "old-researched",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-researched",
+                            "metadata": {
+                                "index": 0,
+                                "usage": {
+                                    "prompt_tokens": 11,
+                                    "completion_tokens": 3,
+                                    "cache_write_input_tokens": 2,
+                                    "cache_read_input_tokens": 4,
+                                    "reasoning_tokens": 1
+                                }
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    }
+                }
+            ],
+            "output": null,
+            "usage": [],
+            "error": null,
+            "artifacts": [
+                {
+                    "name": "agent_output",
+                    "content": "old-researched",
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                }
+            ],
+            "started_at": "2026-09-23 00:00:00",
+            "finished_at": null,
+            "execution_token": null,
+            "leased_until": "2026-09-23 00:05:00",
+            "updated_at": "2026-09-23 00:00:00"
+        },
+        "waiting": {
+            "citation_status": "unknown",
+            "citation_reasons": [],
+            "citations": [],
+            "run_id": "v0263-waiting",
+            "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+            "topology": "sequential",
+            "status": "waiting",
+            "context": {
+                "run_id": "v0263-waiting",
+                "input": "old waiting input",
+                "data": {
+                    "last_output": "old-researched",
+                    "steps": 1
+                },
+                "metadata": {
+                    "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                    "topology": "sequential",
+                    "execution_mode": "durable",
+                    "completed_steps": 0,
+                    "total_steps": 3,
+                    "durable_parallel_failure_policy": "collect_failures",
+                    "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                    "usage": {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 3,
+                        "cache_write_input_tokens": 2,
+                        "cache_read_input_tokens": 4,
+                        "reasoning_tokens": 1
+                    }
+                },
+                "artifacts": [
+                    {
+                        "name": "agent_output",
+                        "content": "old-researched",
+                        "metadata": {
+                            "index": 0,
+                            "usage": {
+                                "prompt_tokens": 11,
+                                "completion_tokens": 3,
+                                "cache_write_input_tokens": 2,
+                                "cache_read_input_tokens": 4,
+                                "reasoning_tokens": 1
+                            }
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                    }
+                ]
+            },
+            "metadata": {
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "execution_mode": "durable",
+                "completed_steps": 0,
+                "total_steps": 3,
+                "durable_parallel_failure_policy": "collect_failures",
+                "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 3,
+                    "cache_write_input_tokens": 2,
+                    "cache_read_input_tokens": 4,
+                    "reasoning_tokens": 1
+                }
+            },
+            "steps": [
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                    "input": "old waiting input",
+                    "output": "old-researched",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-researched",
+                            "metadata": {
+                                "index": 0,
+                                "usage": {
+                                    "prompt_tokens": 11,
+                                    "completion_tokens": 3,
+                                    "cache_write_input_tokens": 2,
+                                    "cache_read_input_tokens": 4,
+                                    "reasoning_tokens": 1
+                                }
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    }
+                }
+            ],
+            "output": null,
+            "usage": [],
+            "error": null,
+            "artifacts": [
+                {
+                    "name": "agent_output",
+                    "content": "old-researched",
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                }
+            ],
+            "started_at": "2026-09-23 00:00:00",
+            "finished_at": null,
+            "execution_token": null,
+            "leased_until": null,
+            "updated_at": "2026-09-23 00:00:00"
+        },
+        "running": {
+            "citation_status": "unknown",
+            "citation_reasons": [],
+            "citations": [],
+            "run_id": "v0263-running",
+            "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+            "topology": "sequential",
+            "status": "pending",
+            "context": {
+                "run_id": "v0263-running",
+                "input": "old running input",
+                "data": {
+                    "last_output": "old-researched",
+                    "steps": 1
+                },
+                "metadata": {
+                    "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                    "topology": "sequential",
+                    "execution_mode": "durable",
+                    "completed_steps": 1,
+                    "total_steps": 3,
+                    "durable_parallel_failure_policy": "collect_failures",
+                    "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                    "usage": {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 3,
+                        "cache_write_input_tokens": 2,
+                        "cache_read_input_tokens": 4,
+                        "reasoning_tokens": 1
+                    }
+                },
+                "artifacts": [
+                    {
+                        "name": "agent_output",
+                        "content": "old-researched",
+                        "metadata": {
+                            "index": 0,
+                            "usage": {
+                                "prompt_tokens": 11,
+                                "completion_tokens": 3,
+                                "cache_write_input_tokens": 2,
+                                "cache_read_input_tokens": 4,
+                                "reasoning_tokens": 1
+                            }
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                    }
+                ]
+            },
+            "metadata": {
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "execution_mode": "durable",
+                "completed_steps": 1,
+                "total_steps": 3,
+                "durable_parallel_failure_policy": "collect_failures",
+                "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 3,
+                    "cache_write_input_tokens": 2,
+                    "cache_read_input_tokens": 4,
+                    "reasoning_tokens": 1
+                }
+            },
+            "steps": [
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                    "input": "old running input",
+                    "output": "old-researched",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-researched",
+                            "metadata": {
+                                "index": 0,
+                                "usage": {
+                                    "prompt_tokens": 11,
+                                    "completion_tokens": 3,
+                                    "cache_write_input_tokens": 2,
+                                    "cache_read_input_tokens": 4,
+                                    "reasoning_tokens": 1
+                                }
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    }
+                }
+            ],
+            "output": null,
+            "usage": [],
+            "error": null,
+            "artifacts": [
+                {
+                    "name": "agent_output",
+                    "content": "old-researched",
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                }
+            ],
+            "started_at": "2026-09-23 00:00:00",
+            "finished_at": null,
+            "execution_token": null,
+            "leased_until": "2026-09-23 00:05:00",
+            "updated_at": "2026-09-23 00:00:00"
+        },
+        "parallel": {
+            "citation_status": "unknown",
+            "citation_reasons": [],
+            "citations": [],
+            "run_id": "v0263-parallel",
+            "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeParallelSwarm",
+            "topology": "parallel",
+            "status": "running",
+            "context": {
+                "run_id": "v0263-parallel",
+                "input": "old parallel input",
+                "data": [],
+                "metadata": {
+                    "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeParallelSwarm",
+                    "topology": "parallel",
+                    "execution_mode": "durable",
+                    "completed_steps": 0,
+                    "total_steps": 3,
+                    "durable_parallel_failure_policy": "collect_failures"
+                },
+                "artifacts": []
+            },
+            "metadata": {
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeParallelSwarm",
+                "topology": "parallel",
+                "execution_mode": "durable",
+                "completed_steps": 0,
+                "total_steps": 3,
+                "durable_parallel_failure_policy": "collect_failures"
+            },
+            "steps": [
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                    "input": "old parallel input",
+                    "output": "old-researched",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-researched",
+                            "metadata": {
+                                "index": 0,
+                                "usage": {
+                                    "prompt_tokens": 11,
+                                    "completion_tokens": 3,
+                                    "cache_write_input_tokens": 2,
+                                    "cache_read_input_tokens": 4,
+                                    "reasoning_tokens": 1
+                                },
+                                "parallel_branch_index": 0
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        },
+                        "parallel_branch_index": 0
+                    }
+                }
+            ],
+            "output": null,
+            "usage": [],
+            "error": null,
+            "artifacts": [],
+            "started_at": "2026-09-23 00:00:00",
+            "finished_at": null,
+            "execution_token": "f02f4924-6485-47bf-9a69-4cc95429855b",
+            "leased_until": "2026-09-23 00:05:00",
+            "updated_at": "2026-09-23 00:00:00"
+        },
+        "join": {
+            "citation_status": "unknown",
+            "citation_reasons": [],
+            "citations": [],
+            "run_id": "v0263-join",
+            "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeHierarchicalFullSwarm",
+            "topology": "hierarchical",
+            "status": "waiting",
+            "context": {
+                "run_id": "v0263-join",
+                "input": "old join input",
+                "data": {
+                    "last_output": "{\"start_at\":\"parallel\",\"nodes\":{\"parallel\":{\"type\":\"parallel\",\"branches\":[\"writer\",\"editor\"],\"next\":\"finish\"},\"writer\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\",\"prompt\":\"old branch writer\"},\"editor\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"prompt\":\"old branch editor\"},\"finish\":{\"type\":\"finish\",\"output_from\":\"editor\"}}}",
+                    "steps": 1,
+                    "hierarchical_node_outputs": []
+                },
+                "metadata": {
+                    "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeHierarchicalFullSwarm",
+                    "topology": "hierarchical",
+                    "durable_parallel_failure_policy": "collect_failures",
+                    "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator",
+                    "coordinator_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator",
+                    "route_plan_start": "parallel",
+                    "current_node_id": "parallel",
+                    "completed_node_ids": [],
+                    "executed_node_ids": [
+                        "parallel"
+                    ],
+                    "executed_agent_classes": [],
+                    "parallel_groups": [
+                        {
+                            "node_id": "parallel",
+                            "branches": [
+                                "writer",
+                                "editor"
+                            ]
+                        }
+                    ],
+                    "executed_steps": 1,
+                    "total_steps": 3,
+                    "usage": {
+                        "prompt_tokens": 19,
+                        "completion_tokens": 11,
+                        "cache_write_input_tokens": 0,
+                        "cache_read_input_tokens": 3,
+                        "reasoning_tokens": 1
+                    },
+                    "execution_mode": "queue",
+                    "queue_hierarchical_waiting_parallel": true
+                },
+                "artifacts": [
+                    {
+                        "name": "agent_output",
+                        "content": "{\"start_at\":\"parallel\",\"nodes\":{\"parallel\":{\"type\":\"parallel\",\"branches\":[\"writer\",\"editor\"],\"next\":\"finish\"},\"writer\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\",\"prompt\":\"old branch writer\"},\"editor\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"prompt\":\"old branch editor\"},\"finish\":{\"type\":\"finish\",\"output_from\":\"editor\"}}}",
+                        "metadata": {
+                            "index": 0,
+                            "usage": {
+                                "prompt_tokens": 19,
+                                "completion_tokens": 11,
+                                "cache_write_input_tokens": 0,
+                                "cache_read_input_tokens": 3,
+                                "reasoning_tokens": 1
+                            },
+                            "node_role": "coordinator"
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator"
+                    }
+                ]
+            },
+            "metadata": {
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeHierarchicalFullSwarm",
+                "topology": "hierarchical",
+                "durable_parallel_failure_policy": "collect_failures",
+                "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator",
+                "coordinator_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator",
+                "route_plan_start": "parallel",
+                "current_node_id": "parallel",
+                "completed_node_ids": [],
+                "executed_node_ids": [
+                    "parallel"
+                ],
+                "executed_agent_classes": [],
+                "parallel_groups": [
+                    {
+                        "node_id": "parallel",
+                        "branches": [
+                            "writer",
+                            "editor"
+                        ]
+                    }
+                ],
+                "executed_steps": 1,
+                "total_steps": 3,
+                "usage": {
+                    "prompt_tokens": 19,
+                    "completion_tokens": 11,
+                    "cache_write_input_tokens": 0,
+                    "cache_read_input_tokens": 3,
+                    "reasoning_tokens": 1
+                },
+                "execution_mode": "queue",
+                "queue_hierarchical_waiting_parallel": true
+            },
+            "steps": [
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator",
+                    "input": "old join input",
+                    "output": "{\"start_at\":\"parallel\",\"nodes\":{\"parallel\":{\"type\":\"parallel\",\"branches\":[\"writer\",\"editor\"],\"next\":\"finish\"},\"writer\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\",\"prompt\":\"old branch writer\"},\"editor\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"prompt\":\"old branch editor\"},\"finish\":{\"type\":\"finish\",\"output_from\":\"editor\"}}}",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "{\"start_at\":\"parallel\",\"nodes\":{\"parallel\":{\"type\":\"parallel\",\"branches\":[\"writer\",\"editor\"],\"next\":\"finish\"},\"writer\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\",\"prompt\":\"old branch writer\"},\"editor\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"prompt\":\"old branch editor\"},\"finish\":{\"type\":\"finish\",\"output_from\":\"editor\"}}}",
+                            "metadata": {
+                                "index": 0,
+                                "usage": {
+                                    "prompt_tokens": 19,
+                                    "completion_tokens": 11,
+                                    "cache_write_input_tokens": 0,
+                                    "cache_read_input_tokens": 3,
+                                    "reasoning_tokens": 1
+                                },
+                                "node_role": "coordinator"
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 19,
+                            "completion_tokens": 11,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 3,
+                            "reasoning_tokens": 1
+                        },
+                        "node_role": "coordinator"
+                    }
+                },
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                    "input": "old branch writer",
+                    "output": "old-written",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-written",
+                            "metadata": {
+                                "index": 1,
+                                "usage": {
+                                    "prompt_tokens": 13,
+                                    "completion_tokens": 5,
+                                    "cache_write_input_tokens": 0,
+                                    "cache_read_input_tokens": 2,
+                                    "reasoning_tokens": 1
+                                },
+                                "node_id": "writer",
+                                "parent_parallel_node_id": "parallel"
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 1,
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 5,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 2,
+                            "reasoning_tokens": 1
+                        },
+                        "node_id": "writer",
+                        "parent_parallel_node_id": "parallel"
+                    }
+                }
+            ],
+            "output": null,
+            "usage": [],
+            "error": null,
+            "artifacts": [
+                {
+                    "name": "agent_output",
+                    "content": "{\"start_at\":\"parallel\",\"nodes\":{\"parallel\":{\"type\":\"parallel\",\"branches\":[\"writer\",\"editor\"],\"next\":\"finish\"},\"writer\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeWriter\",\"prompt\":\"old branch writer\"},\"editor\":{\"type\":\"worker\",\"agent\":\"BuiltByBerry\\\\LaravelSwarm\\\\Tests\\\\Fixtures\\\\Agents\\\\FakeEditor\",\"prompt\":\"old branch editor\"},\"finish\":{\"type\":\"finish\",\"output_from\":\"editor\"}}}",
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 19,
+                            "completion_tokens": 11,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 3,
+                            "reasoning_tokens": 1
+                        },
+                        "node_role": "coordinator"
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeHierarchicalCoordinator"
+                }
+            ],
+            "started_at": "2026-09-23 00:00:00",
+            "finished_at": null,
+            "execution_token": null,
+            "leased_until": "2026-09-23 00:10:00",
+            "updated_at": "2026-09-23 00:00:00"
+        },
+        "stream": {
+            "citation_status": "available",
+            "citation_reasons": [],
+            "citations": [],
+            "run_id": "v0263-stream",
+            "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+            "topology": "sequential",
+            "status": "completed",
+            "context": {
+                "run_id": "v0263-stream",
+                "input": "old stream input",
+                "data": {
+                    "last_output": "old-edited",
+                    "steps": 3
+                },
+                "metadata": {
+                    "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                    "topology": "sequential",
+                    "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                    "usage": {
+                        "prompt_tokens": 41,
+                        "completion_tokens": 15,
+                        "cache_write_input_tokens": 2,
+                        "cache_read_input_tokens": 6,
+                        "reasoning_tokens": 4
+                    }
+                },
+                "artifacts": [
+                    {
+                        "name": "agent_output",
+                        "content": "old-researched",
+                        "metadata": {
+                            "index": 0,
+                            "usage": {
+                                "prompt_tokens": 11,
+                                "completion_tokens": 3,
+                                "cache_write_input_tokens": 2,
+                                "cache_read_input_tokens": 4,
+                                "reasoning_tokens": 1
+                            }
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                    },
+                    {
+                        "name": "agent_output",
+                        "content": "old-written",
+                        "metadata": {
+                            "index": 1,
+                            "usage": {
+                                "prompt_tokens": 13,
+                                "completion_tokens": 5,
+                                "cache_write_input_tokens": 0,
+                                "cache_read_input_tokens": 2,
+                                "reasoning_tokens": 1
+                            }
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter"
+                    },
+                    {
+                        "name": "agent_output",
+                        "content": "old-edited",
+                        "metadata": {
+                            "index": 2,
+                            "usage": {
+                                "prompt_tokens": 17,
+                                "completion_tokens": 7,
+                                "cache_write_input_tokens": 0,
+                                "cache_read_input_tokens": 0,
+                                "reasoning_tokens": 2
+                            }
+                        },
+                        "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor"
+                    }
+                ]
+            },
+            "metadata": {
+                "swarm_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Swarms\\FakeSequentialSwarm",
+                "topology": "sequential",
+                "last_agent": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                "usage": {
+                    "prompt_tokens": 41,
+                    "completion_tokens": 15,
+                    "cache_write_input_tokens": 2,
+                    "cache_read_input_tokens": 6,
+                    "reasoning_tokens": 4
+                },
+                "run_id": "v0263-stream"
+            },
+            "steps": [
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher",
+                    "input": "old stream input",
+                    "output": "old-researched",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-researched",
+                            "metadata": {
+                                "index": 0,
+                                "usage": {
+                                    "prompt_tokens": 11,
+                                    "completion_tokens": 3,
+                                    "cache_write_input_tokens": 2,
+                                    "cache_read_input_tokens": 4,
+                                    "reasoning_tokens": 1
+                                }
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    }
+                },
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter",
+                    "input": "old-researched",
+                    "output": "old-written",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-written",
+                            "metadata": {
+                                "index": 1,
+                                "usage": {
+                                    "prompt_tokens": 13,
+                                    "completion_tokens": 5,
+                                    "cache_write_input_tokens": 0,
+                                    "cache_read_input_tokens": 2,
+                                    "reasoning_tokens": 1
+                                }
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 1,
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 5,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 2,
+                            "reasoning_tokens": 1
+                        }
+                    }
+                },
+                {
+                    "agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor",
+                    "input": "old-written",
+                    "output": "old-edited",
+                    "citation_status": "available",
+                    "citation_reasons": [],
+                    "citations": [],
+                    "artifacts": [
+                        {
+                            "name": "agent_output",
+                            "content": "old-edited",
+                            "metadata": {
+                                "index": 2,
+                                "usage": {
+                                    "prompt_tokens": 17,
+                                    "completion_tokens": 7,
+                                    "cache_write_input_tokens": 0,
+                                    "cache_read_input_tokens": 0,
+                                    "reasoning_tokens": 2
+                                }
+                            },
+                            "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor"
+                        }
+                    ],
+                    "metadata": {
+                        "index": 2,
+                        "usage": {
+                            "prompt_tokens": 17,
+                            "completion_tokens": 7,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "reasoning_tokens": 2
+                        }
+                    }
+                }
+            ],
+            "output": "old-edited",
+            "usage": {
+                "prompt_tokens": 41,
+                "completion_tokens": 15,
+                "cache_write_input_tokens": 2,
+                "cache_read_input_tokens": 6,
+                "reasoning_tokens": 4
+            },
+            "error": null,
+            "artifacts": [
+                {
+                    "name": "agent_output",
+                    "content": "old-researched",
+                    "metadata": {
+                        "index": 0,
+                        "usage": {
+                            "prompt_tokens": 11,
+                            "completion_tokens": 3,
+                            "cache_write_input_tokens": 2,
+                            "cache_read_input_tokens": 4,
+                            "reasoning_tokens": 1
+                        }
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeResearcher"
+                },
+                {
+                    "name": "agent_output",
+                    "content": "old-written",
+                    "metadata": {
+                        "index": 1,
+                        "usage": {
+                            "prompt_tokens": 13,
+                            "completion_tokens": 5,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 2,
+                            "reasoning_tokens": 1
+                        }
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeWriter"
+                },
+                {
+                    "name": "agent_output",
+                    "content": "old-edited",
+                    "metadata": {
+                        "index": 2,
+                        "usage": {
+                            "prompt_tokens": 17,
+                            "completion_tokens": 7,
+                            "cache_write_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "reasoning_tokens": 2
+                        }
+                    },
+                    "step_agent_class": "BuiltByBerry\\LaravelSwarm\\Tests\\Fixtures\\Agents\\FakeEditor"
+                }
+            ],
+            "started_at": "2026-09-23 00:00:00",
+            "finished_at": "2026-09-23 00:00:00",
+            "execution_token": null,
+            "leased_until": null,
+            "updated_at": "2026-09-23 00:00:00"
+        }
+    }
+}

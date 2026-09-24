@@ -29,6 +29,10 @@ backup/restore boundary. Stop all writers and stage the new autoload environment
 before running the migration; restart only after semantic verification. Do not
 run the migration on real data merely because dependency checks are green.
 
+See [persisted-state upgrade evidence](docs/ai-1-upgrade-evidence.md) for the
+representative old-worker/job/replay boundary, and the [preservation ledger](docs/ai-1-preservation-evidence.md)
+for retained workflow guarantees and explicit exclusions.
+
 ### Native agent inputs and test agents
 
 Native agents accept `AgentInput|UserMessage|Decisions|string` on their six prompt,

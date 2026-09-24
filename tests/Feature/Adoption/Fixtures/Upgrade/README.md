@@ -44,3 +44,66 @@ nested tool-result semantics. A successful harness therefore reports
 `DOWNGRADE BLOCKED`; it does not approve a downgrade. Keep a compatible reader
 or return to reviewed design. Never delete or rewrite evidence to enable rollback.
 See [the upgrade evidence](../../../../../docs/ai-0112-upgrade-evidence.md).
+
+## Frozen v0.26.3 → native AI 1.0 fixture
+
+`v0263.json` was produced before its candidate reader ran, by executing
+`generate-v0263.php` from an isolated, clean checkout of Swarm v0.26.3,
+`38b3b649f3416a31c8d1f39ecefd77446e676a3c`. The original writer used the
+frozen `v0263-producer.lock`, with official Laravel AI v0.11.2
+`ee2c5162838d440c4e2e629ea93c8c87e838eaed`. The harness refuses a wrong source,
+modified tracked source, wrong lock, mismatched installed dependencies, another
+AI version/source, or an existing output file. No candidate runtime is loaded.
+
+- Fixture SHA-256: `439ead223213a62f022619f95df7e400d7c61bec693c080c5d0ff0cfa33fdd50`.
+- Lock SHA-256: `6a61302fcde29102943661112af82142417a54a57da08bc1e234616afcdec559`.
+- Harness, manifest, PHP and resolved dependency identities are embedded in the fixture.
+- Synthetic key: 32 `v` bytes; database clock: 2026-09-23 00:00 UTC. Native stream
+  timestamps may use the generating process's wall clock; those actual values are
+  frozen and checked, not rewritten to match Carbon. Ciphertext and generated IDs
+  are randomized. A regeneration is a separately identified artifact, never a
+  silent replacement of these bytes. Never use this key or data in an application.
+
+To reproduce, materialize that exact Git commit in a disposable detached checkout,
+copy `v0263-producer.lock` to its `composer.lock`, run `composer install`, and run
+from that checkout with a fresh output path:
+
+```sh
+php /absolute/candidate/tests/Feature/Adoption/Fixtures/Upgrade/generate-v0263.php /tmp/new-v0263.json
+```
+
+The original runtime produced completed history; pending, named-wait and expired
+running cursors with one completed worker; a partly completed durable parallel
+join; a coordinated hierarchical queue join with an old coordinator and completed
+worker; and all five supported job classes used by this fixture. Candidate tests
+execute those serialized handlers with new native responses, assert completed work
+is not repeated, and retain both generations' raw accounting while the mixed
+aggregate is unavailable. The named wait is a Swarm workflow wait, not a native
+pending-tool approval. Invocation and broadcast jobs have not begun any worker
+before upgrade, so their completed usage is entirely native.
+
+The old streaming runner produced its ordinary replay events. One denied tool
+result was additionally recorded through the old event store to exercise the
+historical nested-denied fallback. These are not provider-wire fixtures or proof
+of every citation/provider-tool variant; those contracts have their own named
+tests in the [preservation ledger](../../../../../docs/ai-1-preservation-evidence.md).
+Replay assertions preserve old event identity, order, time, payload and legacy
+usage, decrypt the old sealed citation envelope, and retain the unchanged raw
+stored rows. A null historical attempt is still absent semantically; new codec
+output omits its null field. Old tool results default preliminary to false and
+recover only the previously stored nested denial, not missing historical
+provenance.
+
+Run the candidate reader with:
+
+```sh
+vendor/bin/pest tests/Feature/Adoption/NativeUpgradeCompatibilityTest.php
+```
+
+This is representative synthetic supported-state proof under SQLite. The native
+conversation schema conversion remains a separate application-owned migration
+rehearsed by `NativeConversationUpgradeTest` on actual MySQL/PostgreSQL services.
+No old application database was migrated, no approval continuation was added,
+and no downgrade is authorized. Existing `v025.json`, `generate.php` and
+`cross-reader.php` retain their original meaning and bytes. See the
+[native AI upgrade evidence](../../../../../docs/ai-1-upgrade-evidence.md).

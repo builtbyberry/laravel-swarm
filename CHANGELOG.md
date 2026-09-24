@@ -6,6 +6,7 @@ Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabiliti
 
 ### Added
 
+- Frozen v0.26.3 producer fixtures and candidate-reader guards for retained workflow state, plus a 54-row preservation ledger. Usage guards distinguish empty reports from no contributors; native hosted-code wire fixtures preserve provider identity and output capture.
 - Explicit `0.26-to-0.27` upgrade-assistant recipe preserves the old recipe/default, binds preview and backups to the selected recipe, and provides native/core migration advice. Unresolved companion targets block application until the reviewed compatibility map is complete.
 - Application-owned native conversation migration and authorization examples, with semantic fresh/backfill/custom-store/backup rehearsals routed through SQLite and the existing MySQL/PostgreSQL service jobs. Preflight refuses unresolved approvals before DDL; native tables remain outside Swarm capture/sealing/pruning.
 - Native conversion preserves row-local repeated tool IDs and edited executed arguments/results. Executed arguments occupy the new single native slot; the original proposal remains in the coordinated backup. This avoids preserving proposal arguments at the cost of misdescribing execution. Tests and the upgrade guide document upstream replay/unanswered-call losses and the non-atomic MySQL DDL boundary.
