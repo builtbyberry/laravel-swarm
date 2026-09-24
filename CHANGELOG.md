@@ -6,6 +6,8 @@ Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabiliti
 
 ### Added
 
+- Consolidated [adoption evidence and release-wrap handoff](docs/ai-1-release-evidence.md), linking reviewed core/companion sources, the final installed candidate proof, preservation gates and application-owned migration/rollback boundaries. Publication remains a separate phase.
+
 - Reproducible fresh-application proof for the exact core and four companion candidates, with lock/installed source validation, discovered providers, migrations, workflow/history/replay, Pulse/Filament usage, authenticated MCP resources and vector memory. A separate default-Packagist mode supports later published verification; candidate runs do not establish publication.
 
 - Reviewed compatibility candidates for Pulse 0.1.8, Filament 0.3.0, MCP 0.2.0 and memory-vector 0.2.0, with frozen source/manifests, real reader/provider/protocol checks and independent evidence in [the companion map](docs/ai-1-companion-evidence.md). The [ecosystem proof procedure](docs/ai-1-ecosystem-evidence.md) combines those sources in a fresh application.

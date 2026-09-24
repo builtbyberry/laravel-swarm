@@ -2,6 +2,10 @@
 
 ## Upgrading to v0.27.0
 
+The [adoption evidence index](docs/ai-1-release-evidence.md) records the reviewed
+candidate sources and migration proof; publication and your own application
+rehearsal remain separate requirements.
+
 **Breaking dependency change:** require official `laravel/ai ^1.0` together with
 Swarm `^0.27.0`. PHP remains `^8.4`; Laravel remains `^13.16`. Keep stable
 Composer resolution for applications. Development branch canaries are CI proof,

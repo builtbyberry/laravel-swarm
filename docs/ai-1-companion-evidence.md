@@ -86,9 +86,9 @@ live Bedrock/provider qualification.
 
 ## Remaining phase boundaries
 
-The [C5 procedure](ai-1-ecosystem-evidence.md) owns combined fresh candidate
-installation and the final assistant target map. C6 reconciles final evidence for
-release-wrap.
+The [C5 procedure](ai-1-ecosystem-evidence.md) proves combined fresh candidate
+installation and the final assistant target map. Its completed run and final
+source identities are in the [release evidence index](ai-1-release-evidence.md).
 Separate wrap/readiness and later publication remain required. Publish and observe
 core first, then compatible companions; only a fresh default-Packagist five-package
 installation after all five releases can establish published ecosystem delivery.
