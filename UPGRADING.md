@@ -354,6 +354,9 @@ changes even when the application-facing swarm API stays the same.
 
 ## Dependency Upgrades
 
+This section preserves the dependency guidance for **Swarm v0.26.x**. For the
+current AI 1.x requirement, see [Upgrading to v0.27.0](#upgrading-to-v0270).
+
 `laravel/ai` is required in the **^0.11.2** range as of v0.26.0; support for
 0.10 is dropped. Laravel AI remains **pre-1.0**. Public
 contracts, streaming behavior, and provider integrations can change between
@@ -361,8 +364,8 @@ releases without the stability guarantees of a stable major line.
 
 ### Laravel AI compatibility policy
 
-Laravel Swarm intentionally validates and supports one pre-1.0 Laravel AI minor
-line at a time. Every Laravel AI patch or minor update is an integration-test
+For **Swarm v0.26.x**, the compatibility policy supports one pre-1.0 Laravel AI
+minor line at a time. Every Laravel AI patch or minor update is an integration-test
 event: run the automated suite and the queued, streamed, and durable paths your
 application uses before deploying the resolved version.
 
