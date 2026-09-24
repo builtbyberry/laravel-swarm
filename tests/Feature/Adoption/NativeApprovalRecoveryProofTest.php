@@ -11,7 +11,6 @@ use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeApprovalReco
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeApprovalRecovery\NativeOrdinaryTool;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeApprovalRecovery\NativeRejectableApprovalTool;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeApprovalRecovery\PlainConversationStore;
-use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeApprovalRecovery\ReconstructedHistoryAgent;
 use Composer\InstalledVersions;
 use Composer\Semver\VersionParser;
 use Illuminate\Http\Client\Request;
@@ -31,6 +30,7 @@ use Laravel\Ai\Storage\DatabaseConversationStore;
 
 beforeEach(function () {
     config()->set('ai.providers.openai.key', 'test-key');
+    config()->set('ai.providers.openai.url', 'https://api.openai.com/v1');
     config()->set('ai.providers.openai-compatible.key', 'backup-key');
     config()->set('ai.providers.openai-compatible.url', 'https://backup.test/v1');
     config()->set('ai.conversations.generate_title', false);
@@ -56,7 +56,7 @@ function nativeApprovalProofCalls(): array
 it('pins the accepted Laravel AI 1.0.0 source while leaving later supported releases behavioral', function () {
     expect(InstalledVersions::satisfies(new VersionParser, 'laravel/ai', '^1.0'))->toBeTrue();
 
-    if (InstalledVersions::getPrettyVersion('laravel/ai') === 'v1.0.0') {
+    if (InstalledVersions::satisfies(new VersionParser, 'laravel/ai', '==1.0.0')) {
         expect(InstalledVersions::getReference('laravel/ai'))->toBe('101c7ea33cd8569d82570f753fbf38e48b7d3d95');
     }
 });
@@ -83,13 +83,15 @@ it('persists inspects owns and resumes native approvals with exact ordered wire 
             ->and(count(array_filter($input, fn (mixed $item): bool => is_array($item) && ($item['role'] ?? null) === 'user')))->toBe(1);
 
         $initialBlocks = NativeApprovalWire::toolCalls($calls)['output'];
-        expect(array_slice($input, 2, 4))->toBe($initialBlocks)
-            ->and(array_slice($input, 6, 4))->toBe([
-                ['type' => 'function_call_output', 'call_id' => 'call_ordinary', 'output' => 'ordinary:ordinary-original'],
-                ['type' => 'function_call_output', 'call_id' => 'call_approve', 'output' => 'approved:approve-original'],
-                ['type' => 'function_call_output', 'call_id' => 'call_edit', 'output' => 'edited:edit-revised'],
-                ['type' => 'function_call_output', 'call_id' => 'call_reject', 'output' => 'policy rejected'],
-            ]);
+        $firstContinuationInput = [
+            ['role' => 'system', 'content' => 'Exercise Laravel AI native tool approval contracts.'],
+            ['role' => 'user', 'content' => [['type' => 'input_text', 'text' => 'perform controlled actions']]],
+            ...$initialBlocks,
+            ['type' => 'function_call_output', 'call_id' => 'call_ordinary', 'output' => 'ordinary:ordinary-original'],
+            ['type' => 'function_call_output', 'call_id' => 'call_approve', 'output' => 'approved:approve-original'],
+            ['type' => 'function_call_output', 'call_id' => 'call_edit', 'output' => 'edited:edit-revised'],
+            ['type' => 'function_call_output', 'call_id' => 'call_reject', 'output' => 'policy rejected'],
+        ];
 
         $stored = json_decode(DB::table('agent_conversation_messages')->where('role', 'assistant')->sole()->steps, true, flags: JSON_THROW_ON_ERROR);
         expect($stored[0]['tool_calls'][1])->toMatchArray(['id' => 'fc_approve', 'result' => 'approved:approve-original'])
@@ -97,13 +99,22 @@ it('persists inspects owns and resumes native approvals with exact ordered wire 
             ->and($stored[0]['tool_calls'][3])->toMatchArray(['id' => 'fc_reject', 'result' => 'policy rejected', 'denied' => true]);
 
         if ($number === 2) {
+            expect($input)->toBe($firstContinuationInput);
+
             return Http::response(NativeApprovalWire::toolCalls($repeat, 'response-repeat'));
         }
 
-        expect(array_slice($input, 10, 1))->toBe(NativeApprovalWire::toolCalls($repeat, 'response-repeat')['output'])
-            ->and(array_slice($input, 11))->toBe([
-                ['type' => 'function_call_output', 'call_id' => 'call_repeat', 'output' => 'approved:repeat-original'],
-            ]);
+        expect($input)->toBe([
+            ['role' => 'system', 'content' => 'Exercise Laravel AI native tool approval contracts.'],
+            ['role' => 'user', 'content' => [['type' => 'input_text', 'text' => 'perform controlled actions']]],
+            ...$initialBlocks,
+            ['type' => 'function_call_output', 'call_id' => 'call_ordinary', 'output' => 'ordinary:ordinary-original'],
+            ['type' => 'function_call_output', 'call_id' => 'call_approve', 'output' => 'approved:approve-original'],
+            ['type' => 'function_call_output', 'call_id' => 'call_edit', 'output' => 'edited:edit-revised'],
+            ['type' => 'function_call_output', 'call_id' => 'call_reject', 'output' => 'policy rejected'],
+            ...NativeApprovalWire::toolCalls($repeat, 'response-repeat')['output'],
+            ['type' => 'function_call_output', 'call_id' => 'call_repeat', 'output' => 'approved:repeat-original'],
+        ]);
 
         return Http::response(NativeApprovalWire::final());
     });
@@ -151,6 +162,7 @@ it('persists inspects owns and resumes native approvals with exact ordered wire 
         ]);
 
     expect(fn () => $agent->prompt($decisions))->toThrow(ApprovalMismatchException::class, 'already-resolved');
+    expect(NativeApprovalAgent::$effects)->toHaveCount(4);
     Http::assertSentCount(3);
 });
 
@@ -172,6 +184,22 @@ it('rejects a partial decision set with the native mismatch and performs no gate
             ->and($exception->pendingApprovals->pluck('id')->all())->toBe(['fc_first', 'fc_second']);
     }
 
+    expect(NativeApprovalAgent::$effects)->toBe([]);
+    Http::assertSentCount(1);
+});
+
+it('rejects an extra decision id before transport or a gated effect', function () {
+    app()->instance(ConversationStore::class, new DatabaseConversationStore('testing'));
+    Http::fake(['*' => Http::response(NativeApprovalWire::toolCalls([[
+        'id' => 'fc_known', 'call_id' => 'call_known', 'name' => class_basename(NativeApprovalTool::class), 'arguments' => ['value' => 'known'],
+    ]]))]);
+    $agent = (new NativeApprovalAgent)->forParticipant((object) ['id' => 106]);
+    $agent->prompt('pause once');
+
+    expect(fn () => $agent->prompt(Decisions::from([
+        'fc_known' => Decision::approve(),
+        'fc_unknown' => Decision::approve(),
+    ])))->toThrow(ApprovalMismatchException::class, 'do not match');
     expect(NativeApprovalAgent::$effects)->toBe([]);
     Http::assertSentCount(1);
 });
@@ -303,12 +331,13 @@ it('proves a committed-result retry is already resolved and reconstruction is on
     ]);
 
     expect(fn () => $agent->prompt($decision))->toThrow(ApprovalMismatchException::class, 'already-resolved');
-    expect($requests)->toHaveCount(2);
+    expect($requests)->toHaveCount(2)
+        ->and(NativeApprovalAgent::$effects)->toHaveCount(1);
 
     $storedCount = DB::table('agent_conversation_messages')->count();
-    $history = $store->getLatestConversationMessages($conversationId, 100)->all();
-    $fallback = new ReconstructedHistoryAgent($history);
-    $response = $fallback->prompt('Continue from the saved result.', provider: [
+    $participant = (object) ['id' => 105];
+    $fallback = (new NativeApprovalAgent)->continue($conversationId, $participant);
+    $response = $fallback->prompt('Start a new turn after reconciling the interrupted result.', provider: [
         'openai' => 'gpt-4.1-mini',
         'openai-compatible' => 'backup-model',
     ]);
@@ -316,21 +345,15 @@ it('proves a committed-result retry is already resolved and reconstruction is on
     $fallbackInput = $requests[2]['body']['input'];
     expect(last($fallbackInput))->toBe([
         'role' => 'user',
-        'content' => [['type' => 'input_text', 'text' => 'Continue from the saved result.']],
+        'content' => [['type' => 'input_text', 'text' => 'Start a new turn after reconciling the interrupted result.']],
     ])->and(count(array_filter($fallbackInput, fn (mixed $item): bool => is_array($item) && ($item['role'] ?? null) === 'user')))->toBe(2)
         ->and($requests[2]['url'])->toContain('api.openai.com')
         ->and($requests[3]['url'])->toContain('backup.test')
         ->and($failedOver)->toHaveCount(1)
         ->and($resolved)->toBe([])
         ->and($response->text)->toBe('reconstructed continuation')
-        ->and($response->conversationId)->toBeNull()
-        ->and(DB::table('agent_conversation_messages')->count())->toBe($storedCount)
-        ->and(ReconstructedHistoryAgent::DIVERGENCES)->toBe([
-            'approval-validation',
-            'provider-selection',
-            'approval-events',
-            'conversation-remembering',
-            'model-failover',
-        ]);
+        ->and($response->conversationId)->toBe($conversationId)
+        ->and(DB::table('agent_conversation_messages')->count())->toBe($storedCount + 2)
+        ->and(NativeApprovalAgent::$effects)->toHaveCount(1);
     Http::assertSentCount(4);
 });

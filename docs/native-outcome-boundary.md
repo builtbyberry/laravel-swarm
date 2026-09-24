@@ -1,6 +1,6 @@
 # Native approval outcomes
 
-> **Current v0.28 status:** this default rejection remains the shipped runtime
+> **Planned v0.28 status:** the existing shipped default rejection remains the runtime
 > behavior. The [native approval recovery proof](native-approval-recovery-proof.md)
 > demonstrates the released Laravel AI contracts and crash boundaries without
 > installing a production bridge. Saved-result fresh-process continuation still

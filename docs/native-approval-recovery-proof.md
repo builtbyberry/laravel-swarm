@@ -9,9 +9,10 @@ required to retain that source reference.
 
 Laravel Swarm still rejects a native approval outcome by default. This proof
 adds no runtime integration, configuration, migration, command, persistence,
-or retention behavior. P6, the production bridge, remains blocked pending an
-explicit decision about the missing continuation contract described below and
-independent acceptance of that decision.
+or retention behavior. The future production approval bridge remains blocked
+until this executable proof is independently accepted **and** the missing
+continuation contract described below has an explicitly accepted disposition.
+Neither condition alone authorizes production work.
 
 ## What the released public contracts prove
 
@@ -25,8 +26,8 @@ With controlled provider responses, Laravel AI's public contracts can:
   before the pause, and a second approval pause;
 - store the approved, edited, and denied results before the next model call
   when the agent uses Laravel AI's `RemembersConversations` trait;
-- reject a partial, stale, or repeated decision set before another provider
-  request or gated effect; and
+- reject a partial or repeated/already-resolved decision set before another
+  provider request or gated effect; and
 - preserve the exact ordered OpenAI Responses input across continuation.
 
 A wrapper around the native database store must preserve each optional
@@ -39,8 +40,14 @@ the `RemembersConversations` contract without using the trait can remember the
 final response, but Laravel AI does not record intermediate approval results
 before the continued model call. The recorder path is selected through the
 concrete trait, not the contract. That path is therefore not adequate for a
-general production bridge without an upstream extension point or a documented
-trait requirement.
+general production bridge without trait-independent recorder activation or a
+documented trait requirement. `ConversationStore::storeApprovalResults()` is
+already the public storage capability; the gap is that recorder selection checks
+the concrete trait rather than the `RemembersConversations` contract.
+
+Assertions against Laravel AI's conversation tables and serialized `steps` JSON
+characterize the pinned v1.0.0 first-party database store. They are white-box
+evidence for this proof, not a promise that the upstream schema is a public API.
 
 ## Saved-result continuation is not presently supported
 
@@ -49,19 +56,21 @@ before the model returns. Replaying the same `Decisions` object is rejected as
 already resolved. That is correct duplicate-effect protection, but it does not
 finish the interrupted model turn.
 
-Reconstructing the public message history and sending another prompt does
-produce model text, but it is not the same native continuation operation:
+Continuing the same conversational agent and sending another ordinary prompt
+does produce and store model text, but it is not the same native continuation
+operation:
 
 - it adds a second user message instead of continuing the paused assistant turn;
 - it bypasses native pending-approval validation;
 - it emits no `ToolApprovalResolved` event for the recovered operation;
-- it does not remember or fold the response into the original conversation;
+- it stores a new user/assistant turn rather than folding completion into the
+  interrupted approval turn;
 - it performs provider selection and failover as a new request; and
 - it cannot prove identical tool, middleware, options, structured-output,
   streaming, usage, or storage semantics.
 
-The proof consequently does **not** label reconstructed history as supported
-continuation. The safe application-owned alternative is to stop automatic
+The proof consequently does **not** label an ordinary prompt over stored history
+as supported continuation. The safe application-owned alternative is to stop automatic
 recovery, reconcile the external effect, and let an authorized operator start
 a new, explicitly identified user turn when that is appropriate. The new turn
 must not be represented as completion of the interrupted turn.
@@ -73,33 +82,41 @@ results without a new user message or a repeated tool execution. It must
 preserve the original provider, model, account, tools, middleware, options,
 structured-output and streaming behavior; events and failover rules; usage and
 conversation folding; and stale, deleted, ownership, and approval validation.
-It also needs a contract-level extension point for recording approval results
-before the model call. Without that primitive, P6 cannot honestly promise
-fresh-process continuation after the saved-result boundary.
+It also needs trait-independent activation of the existing public approval-result
+recorder before the model call. Without those capabilities, the future production
+approval bridge cannot honestly promise fresh-process continuation after the
+saved-result boundary.
 
 ## Fresh-process crash matrix
 
-Every row below starts with a fresh SQLite database, produces a real native
-approval pause in one process, resumes in a second process, waits until a
-durably flushed barrier is visible to the parent, sends that process `SIGKILL`,
-and classifies recovery in a third process. SQLite proves the process and
-reconstruction boundaries; it does not prove production row-lock behavior.
+Every row below starts with a fresh SQLite database and produces a real native
+approval pause in one process. Decision ingress and continuation then run in
+separate fresh processes where the boundary requires them. The parent waits for
+a durably flushed barrier, sends the boundary process `SIGKILL`, and starts a
+fresh recovery process that receives only the database/run identity. The
+recovery action is derived from persisted evidence, never from the boundary
+label. SQLite proves the process and reconstruction boundaries; it does not
+prove production row-lock behavior.
+The `SIGKILL` matrix requires process spawning and POSIX signals. Unsupported
+local platforms skip it with an explicit reason; Linux CI remains the
+authoritative execution lane.
 
 | Crash boundary | Durable observation | Recovery classification |
 | --- | --- | --- |
 | Before persisted intent | No intent and no effect | Safe to resubmit through authenticated ingress |
 | Intent persisted, worker not started | Recorded intent and no effect | Recover the recorded intent |
-| Before tool effect | Recorded intent and no effect | Retry the recorded intent |
+| Before tool effect | Claimed worker, recorded intent and no observed effect | Indeterminate for a non-idempotent external effect; reconcile, never blind-retry |
 | After effect, before result | Effect exists without a result or receipt | Indeterminate; reconcile externally, never blind-retry |
 | After saved result, before model | Saved result exists; replay is already resolved | Requires the upstream continuation primitive |
-| After native completion, before checkpoint | Validated native receipt exists | Reconcile the receipt and write the fenced checkpoint |
+| After native completion, before checkpoint | Completed bound native message exists; application receipt is absent | Validate native identity under the active fence, then create the bound receipt and checkpoint |
 | After checkpoint, before acknowledgement | Fenced checkpoint exists | Return the existing checkpoint; do not rerun |
 
 The crash worker is never trusted merely because it exited. The parent observes
 the exact barrier in the database, explicitly releases it, asserts abnormal
-termination, and only then starts recovery. The effect-before-result row is
-intentionally not made safe by a local deduplication fiction: an external
-provider may have committed while the application has no receipt.
+termination, and only then starts recovery. The before-effect and
+effect-before-result rows are intentionally not made safe by a local observation
+or deduplication fiction: once a non-idempotent worker is claimed, absence of a
+local effect row cannot prove that an external provider did not commit.
 
 ## Production design requirements established by the proof
 
@@ -109,9 +126,11 @@ this component:
 1. **Identity and authorization.** Persist the Swarm run, native conversation,
    paused assistant message/result, every pending tool-call ID and argument
    digest, tenant/participant identity, topology location, revision, and fence.
-   Re-authorize the current participant and current conversation ownership at
-   decision ingress and again before dispatch. A changed or deleted owner is a
-   denial, not a retry.
+   Re-authenticate the actor and record authentication provenance. Re-authorize
+   current participant/conversation ownership **and** the application policy for
+   each approve, reject, or edit action at decision ingress and again before
+   dispatch. Record the policy/version and denied attempts without copying
+   sensitive arguments. A changed or deleted owner is a denial, not a retry.
 2. **Complete decisions.** Normalize the whole native pending set before
    accepting it. Missing, extra, stale, duplicate, or conflicting decisions
    must not reach the provider or an approved tool. Repeated pauses create a new
@@ -129,12 +148,16 @@ this component:
    side-effecting tool and downstream service that supports it. Classify effects
    as safely idempotent, receipt-reconcilable, or indeterminate. The last class
    requires operator intervention after the effect-before-result crash window.
-6. **Audit and privacy.** Audit who decided, when, the normalized decision
-   digest, revision/fence, and outcome without copying approval arguments by
-   default. Approval payloads, native conversation rows, results, and provider
-   continuation data follow their owning capture, sealing, access, retention,
-   pruning, and deletion policies. Swarm capture settings do not govern native
-   conversation storage.
+6. **Audit and privacy.** Write an append-only, queryable audit lifecycle with
+   tenant, authenticated actor, subject/conversation/run, request correlation,
+   authorization result and policy/version, normalized decision/result digests,
+   revision/fence/idempotency key, outcome, and timestamps without copying
+   approval arguments by default. Audit retention and erasure rules are separate
+   from sensitive payload retention and must preserve defensible provenance when
+   arguments are deleted. Approval payloads, native conversation rows, results,
+   and provider continuation data follow their owning capture, sealing, access,
+   retention, pruning, and deletion policies. Swarm capture settings do not
+   govern native conversation storage.
 7. **Rollout and rollback.** Admission is default-off and capability-gated.
    Enable only workers that understand the persisted version and continuation
    mode. Drain active waits before rollback; old workers must reject unknown
@@ -143,19 +166,19 @@ this component:
 
 The bounded cases have the following disposition:
 
-| Case | P5 evidence or required disposition |
+| Case | Executable proof or required disposition |
 | --- | --- |
 | Prior ordinary tool; multiple approve/reject/edit decisions; partial decisions; repeated pause | Exercised through native HTTP parsing and exact ordered wire assertions. |
-| Native failure and failover | The approved result is durably recorded before a rate-limit failure; reconstruction then demonstrates that a new prompt has different failover semantics. |
+| Native failure and failover | The approved result is durably recorded before a rate-limit failure; the same conversational agent then demonstrates that an explicitly new prompt has different turn and failover semantics. |
 | Optional custom-store capabilities | Native invocation proves the capability-preserving wrapper; a contract-only wrapper and contract-only agent characterize both losses. |
-| Conversation ownership changes or deletion | Re-authorized before transport and gated effects; both deny. Content/revision interference must use the same fail-closed fence in P6. |
-| Concurrent duplicate/conflicting decisions and stale revision/fence | Exercised through real process workers and row locks on MySQL and PostgreSQL. |
-| Stream disconnect | There is no bridge to resume. A later approval must be a new transport session; P6 must prove native streamed pause and disconnect explicitly. |
-| Hierarchy join waiting | There is no paused workflow node in this component. P6 must prove the join stays waiting for the active fenced approval revision. |
-| Old persisted approval state | No P5 schema is shipped. P6 admission must reject unknown versions and prove mixed-worker readers before enabling writes. |
+| Conversation ownership changes or deletion | Re-authorized before transport and gated effects; both deny. Content/revision interference must use the same fail-closed fence in a future bridge. |
+| Concurrent duplicate/conflicting decisions and stale revision/fence | Exercised through a deterministic holder/contender rendezvous and real row locks on MySQL and PostgreSQL. The complete decision set is canonicalized with pending arguments and accepted fence. |
+| Stream disconnect | There is no bridge to resume. A later approval must be a new transport session; the future bridge must prove native streamed pause and disconnect explicitly. |
+| Hierarchy join waiting | There is no paused workflow node in this component. The future bridge must prove the join stays waiting for the active fenced approval revision. |
+| Old persisted approval state | This proof ships no production schema. Future admission must reject unknown versions and prove mixed-worker readers before enabling writes. |
 
 The stream, join, and old-state rows cannot be converted into executable bridge
-claims by a proof-only component. They remain explicit P6 acceptance gates, not
+claims by a proof-only component. They remain explicit production-bridge acceptance gates, not
 silent exclusions. A separate MySQL/PostgreSQL process lane exercises real row
 locks for duplicate, conflict, revision, and fence classification; SQLite is
 deliberately skipped in that lane.
@@ -166,7 +189,8 @@ deliberately skipped in that lane.
   proves the released public contracts, exact provider wire, ownership denial,
   result recording asymmetry, and saved-result limitation.
 - [NativeApprovalRecoveryCrashTest](../tests/Feature/Adoption/NativeApprovalRecoveryCrashTest.php)
-  kills and recovers fresh processes at every named crash boundary.
+  kills a fresh boundary process and classifies persisted evidence from another
+  fresh process at every named crash boundary.
 - [NativeApprovalDecisionRaceTest](../tests/ProcessConcurrency/NativeApprovalDecisionRaceTest.php)
   is the real MySQL/PostgreSQL row-lock lane for concurrent decision ingress.
 
