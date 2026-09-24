@@ -7,6 +7,21 @@ Laravel Swarm includes two complementary testing styles:
 
 Most tests should start with fakes.
 
+For provider-free example agents, extend
+[`ScriptedAgent`](../src/Testing/ScriptedAgent.php) and implement `reply(string)`.
+Its native-compatible prompt signature rejects `AgentInput`, `UserMessage` and
+`Decisions` before invoking that string reply; use a native `Promptable` agent
+when testing richer inputs. Direct native implementations and narrower overrides
+must match all six released Laravel AI 1.0 verb signatures. Construct text
+response fixtures with native `TextUsage` and explicitly choose optional counts
+when a test needs known zero rather than unknown accounting.
+
+Native middleware runs on `PendingStep` for each model generation. Verify copied
+messages/options in captured HTTP requests, and distinguish them from the
+original prompt in native events. Native generation counts do not replace Swarm
+workflow guardrail/effect assertions. Use mocked provider HTTP for this proof;
+ordinary fakes do not exercise the native wire path.
+
 **Guardrails and fakes:** `SwarmFake` records dispatch intent and bypasses the runner entirely. Guardrails do not fire when a swarm is faked. Test guardrail classes directly as plain PHP units using `RunContext::from()` and `GuardrailStepContext`; see [Guardrails Policy](../examples/guardrails-policy/README.md) for examples.
 
 ## Faking A Swarm

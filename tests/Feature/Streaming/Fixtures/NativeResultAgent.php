@@ -6,11 +6,13 @@ namespace BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures;
 
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RichStreamEditor;
 use Laravel\Ai\Approvals\Decisions;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\Data\Meta;
+use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\Data\ToolCall as CallData;
 use Laravel\Ai\Responses\Data\ToolResult as ResultData;
-use Laravel\Ai\Responses\Data\Usage;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use Laravel\Ai\Streaming\Events\ReasoningDelta;
 use Laravel\Ai\Streaming\Events\ReasoningEnd;
@@ -23,7 +25,7 @@ use RuntimeException;
 
 class NativeResultAgent extends RichStreamEditor
 {
-    public function stream(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
+    public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
         $label = is_string($prompt) ? $prompt : throw new RuntimeException('Fixture expects a string task.');
         $invocation = str_contains($label, 'missing-id') ? null : 'invocation-'.$label;
@@ -38,7 +40,7 @@ class NativeResultAgent extends RichStreamEditor
                 new ToolCall($label.'-call', $call, 1710000004),
                 new ToolResult($label.'-result', $result, $result->successful(), $result->error(), 1710000005, denied: $result->denied),
                 new TextEnd($label.'-text-end', 'message-'.$label, 1710000006),
-                new StreamEnd($label.'-end', 'stop', new Usage(promptTokens: 2, completionTokens: 3), 1710000007),
+                new StreamEnd($label.'-end', 'stop', new TextUsage(inputTokens: 2, outputTokens: 3), 1710000007),
             ];
             foreach ($events as $event) {
                 if ($invocation !== null) {

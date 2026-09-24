@@ -6,7 +6,9 @@ namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Streaming\UnknownStreamEvent;
 use Laravel\Ai\Approvals\Decisions;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use Laravel\Ai\Streaming\Events\Error;
@@ -24,7 +26,7 @@ class UnknownThenErrorStreamEditor extends RichStreamEditor
     /**
      * @param  array<int, mixed>  $attachments
      */
-    public function stream(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
+    public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
         return new StreamableAgentResponse('unknown-then-error-invocation', function (): \Generator {
             $timestamp = 1_710_000_000;

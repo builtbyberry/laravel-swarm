@@ -10,6 +10,9 @@ use Illuminate\Support\Str;
 
 abstract class SwarmStreamEvent extends StreamEvent
 {
+    /** @internal Hydrated causal storage identity; never part of the public event wire. */
+    public ?string $storageEventId = null;
+
     /**
      * @return array<string, mixed>
      */
@@ -68,6 +71,11 @@ abstract class SwarmStreamEvent extends StreamEvent
         if (is_int($payload['attempt_epoch'] ?? null)) {
             $event->withAttemptEpoch($payload['attempt_epoch']);
         }
+
+        // Old stored events retain their original raw-ID target semantics.
+        $event->storageEventId = is_string($payload['storage_event_uuid'] ?? null)
+            ? $payload['storage_event_uuid']
+            : ($event instanceof SwarmProviderToolEvent ? $event->causalId() : self::nullableStringValue($payload, 'id'));
 
         return $event;
     }

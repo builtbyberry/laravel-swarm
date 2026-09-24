@@ -383,7 +383,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                     streamTelemetryStart: $streamTelemetryStart,
                 );
 
-            $mergedUsage = $this->mergeUsage($coordinatorUsage, $walkUsage);
+            $mergedUsage = $this->mergeUsage($this->normalizeUsageReport($coordinatorUsage), $walkUsage);
 
             $context->mergeMetadata([
                 'usage' => $mergedUsage,

@@ -1,7 +1,7 @@
 name: tests (real DB)
 
 # Enforces the `skip-locked-real-db` group from `composer test:process-concurrency:real-db`
-# against actual MySQL and Postgres service containers. The default `tests` workflow runs
+# and the native conversation upgrade fixtures against actual MySQL and Postgres service containers. The default `tests` workflow runs
 # the process-concurrency suite against in-memory SQLite, which honors neither cross-process
 # state nor `FOR UPDATE SKIP LOCKED` — so the audit outbox concurrency contract can only
 # be enforced here.
@@ -67,18 +67,40 @@ jobs:
         with:
           php-version: '8.4'
           tools: composer:v2
-          extensions: pdo, pdo_mysql
+          extensions: pdo, pdo_mysql, pdo_sqlite
           coverage: none
           ini-values: memory_limit=512M
 
       - name: Preserve production manifest
         run: cp composer.json /tmp/swarm-production-composer.json
 
+      - name: Capture official moving branch references
+        if: matrix.dependencies == 'moving-dev'
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_ref() {
+            local url="$1" branch="$2" variable="$3" ref name
+            local evidence="$RUNNER_TEMP/$variable.refs"
+            git ls-remote --exit-code "$url" "$branch" > "$evidence"
+            test "$(wc -l < "$evidence")" -eq 1
+            read -r ref name < "$evidence"
+            if [[ "$name" != "$branch" || ! "$ref" =~ ^[a-f0-9]{40}$ ]]; then
+              echo "Invalid official branch reference for $url $branch" >&2
+              return 1
+            fi
+            printf '%s=%s\n' "$variable" "$ref" >> "$GITHUB_ENV"
+            printf '%s %s %s\n' "$url" "$branch" "$ref"
+          }
+          date -u '+Official branch refs observed at %Y-%m-%dT%H:%M:%SZ'
+          capture_ref https://github.com/laravel/ai.git refs/heads/1.x SWARM_AI_DEV_REF
+          capture_ref https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF
+
       - name: Require compatible moving development dependencies
         if: matrix.dependencies == 'moving-dev'
         run: |
-          composer require --no-update "laravel/ai:0.x-dev"
-          composer require --no-update --dev "laravel/framework:13.x-dev"
+          composer require --no-update "laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"
+          composer require --no-update --dev "laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"
 
       - name: Install dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
@@ -87,7 +109,7 @@ jobs:
         run: cp /tmp/swarm-production-composer.json composer.json
 
       - name: Verify official dependencies
-        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }}
+        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }} "$PWD" /tmp/swarm-production-composer.json
 
       # testbench-core no longer auto-creates this symlink in some versions; the
       # process-concurrency tests spawn a real artisan subprocess that needs it.
@@ -119,6 +141,12 @@ jobs:
       # because a silent skip would let the SKIP LOCKED contract regress unnoticed.
       - name: Execute real-DB process concurrency suite
         run: composer test:process-concurrency:real-db
+
+      - name: Verify native upgrade fixture drivers
+        run: php -r 'foreach (["sqlite", getenv("DB_CONNECTION")] as $driver) { if (!in_array($driver, PDO::getAvailableDrivers(), true)) { fwrite(STDERR, "Missing PDO driver ".$driver."\n"); exit(1); } }'
+
+      - name: Execute native conversation upgrade suite
+        run: composer test:native-conversation-upgrade:real-db
 
   tests-real-db-postgres:
     name: PHP 8.4 - real DB (postgres-16, ${{ matrix.dependencies }})
@@ -160,18 +188,40 @@ jobs:
         with:
           php-version: '8.4'
           tools: composer:v2
-          extensions: pdo, pdo_pgsql
+          extensions: pdo, pdo_pgsql, pdo_sqlite
           coverage: none
           ini-values: memory_limit=512M
 
       - name: Preserve production manifest
         run: cp composer.json /tmp/swarm-production-composer.json
 
+      - name: Capture official moving branch references
+        if: matrix.dependencies == 'moving-dev'
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_ref() {
+            local url="$1" branch="$2" variable="$3" ref name
+            local evidence="$RUNNER_TEMP/$variable.refs"
+            git ls-remote --exit-code "$url" "$branch" > "$evidence"
+            test "$(wc -l < "$evidence")" -eq 1
+            read -r ref name < "$evidence"
+            if [[ "$name" != "$branch" || ! "$ref" =~ ^[a-f0-9]{40}$ ]]; then
+              echo "Invalid official branch reference for $url $branch" >&2
+              return 1
+            fi
+            printf '%s=%s\n' "$variable" "$ref" >> "$GITHUB_ENV"
+            printf '%s %s %s\n' "$url" "$branch" "$ref"
+          }
+          date -u '+Official branch refs observed at %Y-%m-%dT%H:%M:%SZ'
+          capture_ref https://github.com/laravel/ai.git refs/heads/1.x SWARM_AI_DEV_REF
+          capture_ref https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF
+
       - name: Require compatible moving development dependencies
         if: matrix.dependencies == 'moving-dev'
         run: |
-          composer require --no-update "laravel/ai:0.x-dev"
-          composer require --no-update --dev "laravel/framework:13.x-dev"
+          composer require --no-update "laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"
+          composer require --no-update --dev "laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"
 
       - name: Install dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
@@ -180,7 +230,7 @@ jobs:
         run: cp /tmp/swarm-production-composer.json composer.json
 
       - name: Verify official dependencies
-        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }}
+        run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'moving-dev' && 'moving-dev' || 'current' }} "$PWD" /tmp/swarm-production-composer.json
 
       # testbench-core no longer auto-creates this symlink in some versions; the
       # process-concurrency tests spawn a real artisan subprocess that needs it.
@@ -212,3 +262,9 @@ jobs:
       # because a silent skip would let the SKIP LOCKED contract regress unnoticed.
       - name: Execute real-DB process concurrency suite
         run: composer test:process-concurrency:real-db
+
+      - name: Verify native upgrade fixture drivers
+        run: php -r 'foreach (["sqlite", getenv("DB_CONNECTION")] as $driver) { if (!in_array($driver, PDO::getAvailableDrivers(), true)) { fwrite(STDERR, "Missing PDO driver ".$driver."\n"); exit(1); } }'
+
+      - name: Execute native conversation upgrade suite
+        run: composer test:native-conversation-upgrade:real-db

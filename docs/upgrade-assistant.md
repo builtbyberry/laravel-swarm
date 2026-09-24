@@ -1,11 +1,80 @@
 # Upgrade assistant
 
-`swarm:upgrade` previews dependency fixes for an application moving from Swarm
-**v0.25 to the v0.26 line**. The first recipe targets v0.26.1 and also inspects
-applications already on v0.26. It produces an upgrade checklist; it does not
-certify that your application is ready to deploy.
+`swarm:upgrade` previews dependency fixes using a selected recipe. The default
+remains **0.25-to-0.26**, targeting v0.26.1 and also inspecting existing v0.26
+applications. The explicit **0.26-to-0.27** recipe covers the Laravel AI 1.0
+transition. Both produce an upgrade checklist; neither certifies deployment or
+database readiness.
+
+## Laravel AI 1.0 recipe
+
+Use the v0.27.0 source archive or a reviewed candidate checkout. Keep its `bin`
+and `src` directories together; no Composer install is needed to run the
+standalone script. The published v0.26.1 script does not contain this recipe.
+Verify the required package versions are available before changing a production
+application; candidate evidence is not proof of published dependency availability.
+
+```bash
+php /path/to/laravel-swarm-v0.27.0/bin/swarm-upgrade \
+  --path=/path/to/disposable-application --recipe=0.26-to-0.27 --json
+```
+
+After installing the matching package, Artisan exposes the same selected report:
+
+```bash
+php artisan swarm:upgrade --recipe=0.26-to-0.27 --json
+```
+
+The supported upgrade source is stable Swarm 0.26.x. Already-target 0.27.x gets
+verification advice with no repeat rewrite or downgrade. Other or unknown source
+lines require manual review with unchanged files. Core targets 0.27.0 and native
+AI targets a minimum 1.0.0; supported newer 1.x requirements are not lowered.
+The tool never adds an absent optional package or direct requirement for a
+transitive dependency. The reviewed candidate map selects Pulse 0.1.8, Filament
+0.3.0, MCP 0.2.0 and memory-vector 0.2.0. Simple exact/caret constraints retain
+their style and requirement section; a constraint that already permits the target
+is preserved. Supported newer target versions are not lowered. Transitive
+companions receive inventory and Composer verification advice without becoming
+direct requirements. Unsupported source lines and complex constraints require
+manual review with unchanged files.
+
+These are the v0.27.0 coordinated targets. The
+[frozen companion sources](ai-1-companion-evidence.md) and
+[integrated proof procedure](ai-1-ecosystem-evidence.md) distinguish temporary
+candidate repositories from public installation. Review application-owned
+native MCP/provider constraints with Composer as well; the recipe does not silently
+rewrite dependencies outside its explicit package map.
+
+Select only actions from your report and use its digest with the same recipe:
+
+```bash
+php artisan swarm:upgrade --recipe=0.26-to-0.27 \
+  --apply=dependency:builtbyberry/laravel-swarm,dependency:laravel/ai \
+  --expect=THE_64_CHARACTER_PREVIEW_DIGEST --yes
+php artisan swarm:upgrade --recipe=0.26-to-0.27 --restore=BACKUP_ID --yes
+```
+
+An application's report may expose fewer actions or block all application. A
+recipe/target change invalidates a preview just as changed manifest, lock or
+installed bytes do. Restore requires the matching backup recipe and the unchanged
+after-image. Old schema-1 backups still restore under the old default or explicit
+old recipe. A manifest restore does not restore packages, native tables or effects.
+
+Both entry points validate selected recipe identity and share report/help/mutation
+behavior. Standalone refuses repeated options; Artisan retains Symfony's ordinary
+option parsing. Invalid selectors do not acquire a valid target identity.
+
+Follow the [native conversation upgrade procedure](native-conversation-upgrade.md)
+for stopped writers, pending-turn disposition, the executable application-owned
+migration, configured table/connection rehearsal, custom stores, authorization,
+privacy and coordinated restore. The static report never reads native rows or
+claims to know pending counts. Keep `runtime_verified=false` until your own
+application verification; this field is never promoted by the assistant.
 
 ## Run before upgrading
+
+The following source-download instructions and omitted-selector examples describe
+the preserved **0.25-to-0.26** default recipe.
 
 An old application's Artisan bootstrap may fail after changing dependencies. To
 inspect it first, download and extract the **v0.26.1 source archive** from the
@@ -63,7 +132,7 @@ finding or a deployment. No interactive input is required. An unknown, duplicate
 or unselected action is never inferred. A changed manifest, lock or installed
 metadata invalidates the preview. Run another preview after any edit or apply.
 
-Mutation requires a readable lock establishing stable core 0.25.x or 0.26.x.
+The default recipe requires a readable lock establishing stable core 0.25.x or 0.26.x.
 Missing installed metadata is reported as unverified. If installed metadata is
 present, relevant lock/installed versions and source metadata must agree.
 Malformed or unsupported evidence blocks automatic edits. A static source
@@ -109,6 +178,9 @@ After verification, remove retained backup files according to your own retention
 policy. Do not delete the directory or persistent lock during an active operation.
 
 ## Finish the application upgrade
+
+For the new recipe, use the [Laravel AI 1.0 procedure](native-conversation-upgrade.md).
+For the preserved default recipe:
 
 Follow [Upgrading to v0.26.0](../UPGRADING.md#upgrading-to-v0260) and the official
 [Laravel AI upgrade guide](https://github.com/laravel/ai/blob/v0.11.2/UPGRADE.md).

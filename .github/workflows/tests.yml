@@ -43,7 +43,7 @@ jobs:
 
       - name: Install lowest dependencies
         if: matrix.dependencies == 'lowest'
-        run: composer update --with laravel/ai:0.11.2 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress
+        run: composer update --with laravel/ai:1.0.0 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress
 
       - name: Verify official dependency provenance
         run: php .github/workflows/verify-adoption-dependencies.php ${{ matrix.dependencies == 'lowest' && 'minimum' || 'current' }}
@@ -112,13 +112,13 @@ jobs:
         run: composer require --no-update --dev "pestphp/pest:^4.7" "pestphp/pest-plugin-laravel:^4.1" "laravel/framework:13.16.0"
 
       - name: Install compatibility dependencies
-        run: composer update --with laravel/ai:0.11.2 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress
+        run: composer update --with laravel/ai:1.0.0 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress
 
       - name: Restore production manifest for package contract tests
         run: cp /tmp/swarm-production-composer.json composer.json
 
       - name: Verify installed compatibility dependencies
-        run: php .github/workflows/verify-adoption-dependencies.php laravel-13.16
+        run: php .github/workflows/verify-adoption-dependencies.php laravel-13.16 "$PWD" /tmp/swarm-production-composer.json
 
       - name: Prepare testbench vendor symlink
         run: |

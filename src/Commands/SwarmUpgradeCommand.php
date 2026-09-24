@@ -14,13 +14,14 @@ class SwarmUpgradeCommand extends Command
 {
     protected $signature = 'swarm:upgrade
         {--path= : Application directory (defaults to this application)}
+        {--recipe=0.25-to-0.26 : Upgrade recipe (0.25-to-0.26 or 0.26-to-0.27)}
         {--json : Print a machine-readable upgrade report}
         {--apply= : Comma-separated action IDs from a reviewed preview}
         {--expect= : Require this exact preview SHA-256 before applying}
         {--yes : Explicitly approve selected apply or restore operation}
         {--restore= : Restore a manifest backup only if later edits will not be lost}';
 
-    protected $description = 'Preview an upgrade to Swarm v0.26.1 and explicitly apply safe dependency fixes';
+    protected $description = 'Preview a selected Swarm upgrade recipe and explicitly apply safe dependency fixes';
 
     protected $help = UpgradeConsole::HELP;
 

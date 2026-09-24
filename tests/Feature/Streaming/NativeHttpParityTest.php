@@ -26,7 +26,6 @@ use Laravel\Ai\Events\AgentFailed;
 use Laravel\Ai\Events\AgentFailedOver;
 use Laravel\Ai\Events\AgentStreamed;
 use Laravel\Ai\Events\InvokingTool;
-use Laravel\Ai\Events\PromptingAgent;
 use Laravel\Ai\Events\StreamingAgent;
 use Laravel\Ai\Events\ToolFailed;
 use Laravel\Ai\Events\ToolInvoked;
@@ -89,8 +88,8 @@ it('retains native pre-output failover identity and counts usage once', function
         ->and($failovers)->toHaveCount(1)->and($failovers[0]->invocationId)->toBe($invocations[0]);
     expect($events->whereInstanceOf(SwarmTextDelta::class)->sole()->invocationId)->toBe($invocations[0])
         ->and($stream->streamedResponse->output)->toBe('native-output')
-        ->and($stream->streamedResponse->usage['prompt_tokens'])->toBe(2)
-        ->and($stream->streamedResponse->usage['completion_tokens'])->toBe(3);
+        ->and($stream->streamedResponse->usage['input_tokens'])->toBe(2)
+        ->and($stream->streamedResponse->usage['output_tokens'])->toBe(3);
     Event::assertDispatchedTimes(SwarmCompleted::class, 1);
     Event::assertDispatchedTimes(SwarmStepCompleted::class, 1);
     Http::assertSentCount(2);
@@ -105,7 +104,7 @@ it('preserves released validation and nested AgentTool result semantics', functi
     $parentRequests = 0;
     Http::fake(function (Request $request) use (&$parentRequests, $mode) {
         expect(DB::connection()->transactionLevel())->toBe(0);
-        if (! ($request['stream'] ?? false)) {
+        if (($request['input'][0]['content'] ?? null) === 'child-native-parity') {
             return Http::response(['error' => ['message' => 'child denied', 'type' => 'rate_limit_exceeded']], 429);
         }
         $parentRequests++;
@@ -114,22 +113,22 @@ it('preserves released validation and nested AgentTool result semantics', functi
     });
     $stream = app(SwarmRunner::class)->agent(new NativeHttpAgent)->stream('task');
     $events = collect(iterator_to_array($stream));
-    $result = $events->whereInstanceOf(SwarmToolResult::class)->sole();
+    $result = $events->whereInstanceOf(SwarmToolResult::class)->where('preliminary', false)->sole();
     expect($result->successful)->toBeTrue()->and($result->toolResult->failed)->toBeFalse()
         ->and($result->toolResult->denied)->toBeFalse()->and($result->error)->toBeNull()
         ->and($result->toolResult->result)->toContain($mode === 'child' ? 'Agent failed:' : 'validation-secret')
         ->and($native[ToolFailed::class] ?? [])->toBe([])
         ->and($native[InvokingTool::class])->toHaveCount(1)
         ->and($native[ToolInvoked::class])->toHaveCount(1)
-        ->and($stream->streamedResponse->usage['prompt_tokens'])->toBe(4)
-        ->and($stream->streamedResponse->usage['completion_tokens'])->toBe(6);
+        ->and($stream->streamedResponse->usage['input_tokens'])->toBe(4)
+        ->and($stream->streamedResponse->usage['output_tokens'])->toBe(6);
     $toolInvocation = $native[ToolInvoked::class][0]->toolInvocationId;
     expect($toolInvocation)->not->toBe('provider-call')
         ->and($result->toolResult->id)->toBe('item')
         ->and($result->toolResult->resultId)->toBe('provider-call')
         ->and($result->toArray())->not->toHaveKeys(['tool_invocation_id', 'generation_id', 'parent_invocation_id']);
     if ($mode === 'child') {
-        $child = collect($native[PromptingAgent::class])->first(fn ($event) => $event->prompt->agent instanceof NativeChildAgent);
+        $child = collect($native[StreamingAgent::class])->first(fn ($event) => $event->prompt->agent instanceof NativeChildAgent);
         expect($child->prompt->parentInvocationId)->toBe($result->invocationId)
             ->and($child->prompt->parentToolInvocationId)->toBe($toolInvocation)
             ->and($native[AgentFailed::class])->toHaveCount(1)

@@ -394,6 +394,8 @@ function event_payload_cases(): array
             'result_id' => 'res-1',
         ],
         'successful' => true,
+        'preliminary' => false,
+        'denied' => false,
         'error' => null,
         'timestamp' => 1_700_000_020,
     ]];
@@ -413,6 +415,8 @@ function event_payload_cases(): array
             'result_id' => null,
         ],
         'successful' => false,
+        'preliminary' => false,
+        'denied' => false,
         'error' => 'tool exploded',
         'timestamp' => 1_700_000_021,
     ]];

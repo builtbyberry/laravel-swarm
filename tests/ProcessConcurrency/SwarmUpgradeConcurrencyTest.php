@@ -12,9 +12,9 @@ function swarmUpgradeProcess(string $root, array $options = []): Process
     return new Process([PHP_BINARY, dirname(__DIR__, 2).'/bin/swarm-upgrade', '--path='.$root, '--json', ...$options], timeout: 10);
 }
 
-function swarmUpgradeProcessPreview(string $root): array
+function swarmUpgradeProcessPreview(string $root, string $recipe): array
 {
-    $process = swarmUpgradeProcess($root);
+    $process = swarmUpgradeProcess($root, ['--recipe='.$recipe]);
     $process->run();
     expect($process->getExitCode())->toBe(1);
 
@@ -39,8 +39,9 @@ afterEach(function (): void {
     (new Filesystem)->deleteDirectory($this->upgradeProcessRoot);
 });
 
-test('a real process holding the upgrade sidecar lock prevents another CLI writer', function (): void {
-    $preview = swarmUpgradeProcessPreview($this->upgradeProcessRoot);
+test('a real process holding the upgrade sidecar lock prevents another CLI writer', function (string $recipe): void {
+    swarmUpgradeProcessRecipe($this, $recipe);
+    $preview = swarmUpgradeProcessPreview($this->upgradeProcessRoot, $recipe);
     mkdir($this->upgradeProcessRoot.'/.swarm-upgrade', 0700);
     $lockPath = $this->upgradeProcessRoot.'/.swarm-upgrade/lock';
     touch($lockPath);
@@ -58,7 +59,7 @@ PHP, $lockPath, $this->upgradeProcessRoot.'/release-lock'], timeout: 10);
 
     try {
         expect($holder->waitUntil(static fn (string $type, string $output): bool => str_contains($output, 'LOCKED')))->toBeTrue();
-        $contender = swarmUpgradeProcess($this->upgradeProcessRoot, ['--apply='.$preview['actions'][0]['id'], '--expect='.$preview['preview_digest'], '--yes']);
+        $contender = swarmUpgradeProcess($this->upgradeProcessRoot, ['--recipe='.$recipe, '--apply='.$preview['actions'][0]['id'], '--expect='.$preview['preview_digest'], '--yes']);
         $contender->run();
 
         expect($contender->getExitCode())->toBe(2)
@@ -71,16 +72,17 @@ PHP, $lockPath, $this->upgradeProcessRoot.'/release-lock'], timeout: 10);
         $holder->stop();
     }
 
-    $writer = swarmUpgradeProcess($this->upgradeProcessRoot, ['--apply='.$preview['actions'][0]['id'], '--expect='.$preview['preview_digest'], '--yes']);
+    $writer = swarmUpgradeProcess($this->upgradeProcessRoot, ['--recipe='.$recipe, '--apply='.$preview['actions'][0]['id'], '--expect='.$preview['preview_digest'], '--yes']);
     $writer->run();
     expect($holder->getExitCode())->toBe(0)
         ->and($writer->getExitCode())->toBe(0)
         ->and(json_decode($writer->getOutput(), true, 512, JSON_THROW_ON_ERROR)['status'])->toBe('applied');
-});
+})->with(['0.25-to-0.26', '0.26-to-0.27']);
 
-test('two real same-digest CLI writers apply once and reject the second busy or stale writer', function (): void {
-    $preview = swarmUpgradeProcessPreview($this->upgradeProcessRoot);
-    $options = ['--apply='.$preview['actions'][0]['id'], '--expect='.$preview['preview_digest'], '--yes'];
+test('two real same-digest CLI writers apply once and reject the second busy or stale writer', function (string $recipe): void {
+    swarmUpgradeProcessRecipe($this, $recipe);
+    $preview = swarmUpgradeProcessPreview($this->upgradeProcessRoot, $recipe);
+    $options = ['--recipe='.$recipe, '--apply='.$preview['actions'][0]['id'], '--expect='.$preview['preview_digest'], '--yes'];
     $first = swarmUpgradeProcess($this->upgradeProcessRoot, $options);
     $second = swarmUpgradeProcess($this->upgradeProcessRoot, $options);
     $first->start();
@@ -96,7 +98,7 @@ test('two real same-digest CLI writers apply once and reject the second busy or 
 
         expect($exits)->toBe([0, 2])
             ->and($statuses)->toBe(['applied', 'error'])
-            ->and(json_decode(file_get_contents($this->upgradeProcessRoot.'/composer.json'), true, 512, JSON_THROW_ON_ERROR)['require']['builtbyberry/laravel-swarm'])->toBe('^0.26.1')
+            ->and(json_decode(file_get_contents($this->upgradeProcessRoot.'/composer.json'), true, 512, JSON_THROW_ON_ERROR)['require']['builtbyberry/laravel-swarm'])->toBe($recipe === '0.26-to-0.27' ? '^0.27.0' : '^0.26.1')
             ->and(glob($this->upgradeProcessRoot.'/.swarm-upgrade/*.json'))->toHaveCount(1)
             ->and(fileperms($this->upgradeProcessRoot.'/.swarm-upgrade') & 0777)->toBe(0700)
             ->and(fileperms($this->upgradeProcessRoot.'/.swarm-upgrade/lock') & 0777)->toBe(0600);
@@ -111,4 +113,14 @@ test('two real same-digest CLI writers apply once and reject the second busy or 
         $first->stop();
         $second->stop();
     }
-});
+})->with(['0.25-to-0.26', '0.26-to-0.27']);
+
+function swarmUpgradeProcessRecipe(object $test, string $recipe): void
+{
+    if ($recipe === '0.26-to-0.27') {
+        $test->upgradeProcessManifest = str_replace('^0.25.0', '^0.26.3', $test->upgradeProcessManifest);
+        file_put_contents($test->upgradeProcessRoot.'/composer.json', $test->upgradeProcessManifest);
+        $lock = file_get_contents($test->upgradeProcessRoot.'/composer.lock');
+        file_put_contents($test->upgradeProcessRoot.'/composer.lock', str_replace(['v0.25.0', 'v0.10.3'], ['v0.26.3', 'v0.11.2'], $lock));
+    }
+}

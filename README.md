@@ -56,23 +56,24 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 ## Requirements
 
 - PHP **^8.4**
-- Laravel **13** (`illuminate/*` **^13.0**)
-- `laravel/ai` **^0.11.2**
+- Laravel **^13.16** (requires `illuminate/json-schema` **^13.16**)
+- `laravel/ai` **^1.0**
 
-PHP **^8.4** is supported alongside PHP 8.5. As of **v0.26.0**, the official `laravel/ai` floor is **^0.11.2** and support for **0.10** is dropped. Upgrade the dependency and Swarm together; see [UPGRADING.md](UPGRADING.md#upgrading-to-v0260).
+PHP **^8.4** is supported alongside PHP 8.5. As of **v0.27.0**, the official `laravel/ai` requirement is **^1.0**. Upgrade the dependency and Swarm together; see [UPGRADING.md](UPGRADING.md#upgrading-to-v0270).
 
-**No special stability configuration is required.** `laravel/ai` ships stable tags on the 0.11 line, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
+**No special stability configuration is required.** Laravel AI 1.0 is a stable release, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
 
 Earlier versions of this document asked you to set `"minimum-stability": "dev"` in your application's `composer.json`. That is no longer necessary, and as of **v0.23.0** it is no longer recommended — it loosens the resolution floor for your *entire* dependency tree, not just for Swarm. If you added those keys solely to install this package, you can remove them.
 
 Laravel Swarm orchestrates the same Laravel AI agents, providers, and streams as your application. Treat Composer updates to Laravel or `laravel/ai` as integration-test events: run your test suite and any queued, streamed, or durable swarm smoke paths after dependency changes. This package's [changelog](CHANGELOG.md) covers Swarm-owned changes; it does not replace verification against upstream Laravel or Laravel AI releases.
 
-Because Laravel AI is pre-1.0, Laravel Swarm intentionally validates and
-supports one Laravel AI minor line at a time. A patch within the declared range
-still needs integration testing; a new minor is unsupported until a later Swarm
-release explicitly adopts it after validation. Application test results do not
-expand the Composer range declared by the package. See the
-[Laravel AI compatibility policy](UPGRADING.md#laravel-ai-compatibility-policy).
+The declared `laravel/ai ^1.0` range permits compatible 1.x releases. Treat minor
+and patch updates as integration-test events; a successful Composer resolution
+alone does not verify an application's workflow behavior. See the
+[Laravel AI 1.0 upgrade guidance](UPGRADING.md#upgrading-to-v0270).
+
+For the Laravel AI 1.0 transition, follow the [native conversation upgrade](docs/native-conversation-upgrade.md)
+and explicitly select the [new upgrade recipe](docs/upgrade-assistant.md#laravel-ai-10-recipe).
 
 ## Installation
 
@@ -661,7 +662,7 @@ See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full refe
 
 ## Documentation
 
-For the unreleased v0.26.0 adoption, see the [44-row contracts and evidence index](docs/ai-0112-release-evidence.md) and [upgrade instructions](UPGRADING.md#upgrading-to-v0260). Companion installability and the post-main moving-dev gate remain separate release requirements.
+For the v0.27.0 adoption, start with the [release evidence and wrap handoff](docs/ai-1-release-evidence.md), then see the [54-row preservation ledger](docs/ai-1-preservation-evidence.md), [persisted-state upgrade evidence](docs/ai-1-upgrade-evidence.md), and [upgrade instructions](UPGRADING.md#upgrading-to-v0270). The [four reviewed companion candidates](docs/ai-1-companion-evidence.md) are merged to their release branches; the [fresh application procedure](docs/ai-1-ecosystem-evidence.md) verifies the combined candidate set, while published-install proof remains a separate phase. The [v0.26.0 evidence index](docs/ai-0112-release-evidence.md) remains a historical record.
 
 The full documentation site is at **[swarm.builtbyberry.com](https://swarm.builtbyberry.com)** — searchable, versioned, and the recommended starting point.
 

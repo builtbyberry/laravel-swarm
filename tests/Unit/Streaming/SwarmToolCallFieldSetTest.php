@@ -6,27 +6,12 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use Laravel\Ai\Responses\Data\ToolCall;
 
 /**
- * F2 drift guard for the laravel/ai ^0.8 floor (issue #255).
- *
- * SwarmToolCall::toArray() is deliberately pinned to a swarm-owned subset of
- * the provider ToolCall (id, name, arguments, result_id, reasoning_id,
- * reasoning_summary) and intentionally drops reasoning_encrypted_content (the
- * opaque ZDR blob). That pin is a safe default, but it has a blind spot: if a
- * future laravel/ai release adds a field swarm *should* carry, the pin would
- * silently drop it — the inverse of the silent-drop this release is hardening
- * against in the stream-event set and the snapshot normalizer.
- *
- * This test fails loud when Data\ToolCall's property set changes, forcing a
- * deliberate carry-vs-ignore triage for SwarmToolCall::toArray() rather than a
- * silent omission. The expected list is a HARDCODED LITERAL — never derived
- * from reflection — so the assertion cannot drift in lockstep with the DTO it
- * guards.
+ * Literal drift guard: each upstream property change needs explicit triage.
  *
  * @see SwarmToolCall::toArray()
  */
 test('Data\\ToolCall property set is pinned so upstream additions force a triage', function (): void {
-    // Hardcoded snapshot of the laravel/ai 0.8 ToolCall surface. Bump this list
-    // ONLY after deciding whether each new field belongs in SwarmToolCall::toArray().
+    // Hardcoded snapshot of the reviewed Laravel AI 1.0 property set.
     $expected = [
         'id',
         'name',
@@ -35,6 +20,7 @@ test('Data\\ToolCall property set is pinned so upstream additions force a triage
         'reasoningId',
         'reasoningSummary',
         'reasoningEncryptedContent',
+        'thoughtSignature',
     ];
 
     $actual = collect((new ReflectionClass(ToolCall::class))->getProperties())
@@ -49,4 +35,28 @@ test('Data\\ToolCall property set is pinned so upstream additions force a triage
         .'belongs in SwarmToolCall::toArray() (carry it) or stays excluded (e.g. another opaque blob like '
         .'reasoning_encrypted_content), then update this hardcoded list to match.',
     );
+});
+
+test('serialized tool calls omit opaque provider continuation state without mutating native data', function (): void {
+    $call = new ToolCall(
+        id: 'call',
+        name: 'lookup',
+        arguments: ['query' => 'visible'],
+        resultId: 'result',
+        reasoningEncryptedContent: 'OPAQUE_ENCRYPTED_REASONING',
+        thoughtSignature: 'OPAQUE_THOUGHT_SIGNATURE',
+    );
+    $event = new SwarmToolCall('event', 'run', 0, 'agent', $call, 123);
+    $payload = $event->toArray();
+
+    expect($payload['tool_call'])->toBe([
+        'id' => 'call',
+        'name' => 'lookup',
+        'arguments' => ['query' => 'visible'],
+        'result_id' => 'result',
+        'reasoning_id' => null,
+        'reasoning_summary' => null,
+    ])->and(SwarmToolCall::fromArray($payload)->toArray())->toBe($payload)
+        ->and($call->reasoningEncryptedContent)->toBe('OPAQUE_ENCRYPTED_REASONING')
+        ->and($call->thoughtSignature)->toBe('OPAQUE_THOUGHT_SIGNATURE');
 });

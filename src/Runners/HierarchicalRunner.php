@@ -110,7 +110,7 @@ class HierarchicalRunner
         );
 
         $steps[] = $coordinatorStep;
-        $mergedUsage = $this->mergeUsage($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
+        $mergedUsage = $this->mergeUsageReport($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
 
         $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorStep->output, $state->swarm::class);
         $this->ensurePlanWithinExecutionBudget($state, $plan);
@@ -207,7 +207,7 @@ class HierarchicalRunner
         );
 
         $steps[] = $coordinatorStep;
-        $mergedUsage = $this->mergeUsage($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
+        $mergedUsage = $this->mergeUsageReport($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
 
         $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorStep->output, $state->swarm::class);
         $this->ensurePlanWithinExecutionBudget($state, $plan);
@@ -320,7 +320,7 @@ class HierarchicalRunner
             }
 
             if (($branch['status'] ?? null) === 'completed' && is_array($branch['usage'] ?? null)) {
-                $branchUsage = $this->mergeUsage($branchUsage, $branch['usage']);
+                $branchUsage = $this->mergeUsageReport($branchUsage, $branch['usage']);
             }
         }
         $nodeOutputs = array_merge(
@@ -435,7 +435,7 @@ class HierarchicalRunner
 
     /**
      * @param  array<int, SwarmStep>  $steps
-     * @param  array<string, int>  $mergedUsage
+     * @param  array<string, int|null>  $mergedUsage
      * @param  array<int, string>  $executedNodeIds
      * @param  array<int, string>  $executedAgentClasses
      * @param  array<int, array{node_id: string, branches: array<int, string>}>  $parallelGroups
@@ -675,9 +675,14 @@ class HierarchicalRunner
                 }
 
                 $nodeOutputs = $this->durableNodeOutputsForCursor($state, $plan, $cursor);
+                $branchUsage = [];
                 foreach ($branches as $branch) {
                     if (($branch['status'] ?? null) === 'completed' && is_string($branch['node_id'] ?? null) && is_string($branch['output'] ?? null)) {
                         $nodeOutputs[$branch['node_id']] = $branch['output'];
+                    }
+
+                    if (($branch['status'] ?? null) === 'completed') {
+                        $branchUsage = $this->mergeUsageReport($branchUsage, is_array($branch['usage'] ?? null) ? $branch['usage'] : []);
                     }
                 }
 
@@ -702,6 +707,12 @@ class HierarchicalRunner
 
                 $this->advanceDurableCursorToNextWorker($state, $plan, $cursor, $nodeOutputs);
                 $this->applyDurableCursorToContext($state, $cursor);
+                $state->context->mergeMetadata([
+                    'usage' => $this->mergeUsage(
+                        is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [],
+                        $branchUsage,
+                    ),
+                ]);
 
                 return new DurableHierarchicalStepResult(
                     step: null,
@@ -805,7 +816,7 @@ class HierarchicalRunner
     /**
      * @param  array<class-string, Agent>  $workerMap
      * @param  array<int, SwarmStep>  $steps
-     * @param  array<string, int>  $mergedUsage
+     * @param  array<string, int|null>  $mergedUsage
      * @param  array<int, string>  $executedNodeIds
      * @param  array<int, string>  $executedAgentClasses
      * @param  array<int, array{node_id: string, branches: array<int, string>}>  $parallelGroups
@@ -857,7 +868,7 @@ class HierarchicalRunner
                 );
 
                 $steps[] = $step;
-                $mergedUsage = $this->mergeUsage($mergedUsage, (array) ($step->metadata['usage'] ?? []));
+                $mergedUsage = $this->mergeUsageReport($mergedUsage, (array) ($step->metadata['usage'] ?? []));
                 $nodeOutputs[$node->id] = $step->output;
                 $executedAgentClasses[] = $step->agentClass;
                 $lastOutput = $step->output;
@@ -945,7 +956,7 @@ class HierarchicalRunner
                         );
 
                         $steps[] = $step;
-                        $mergedUsage = $this->mergeUsage($mergedUsage, (array) ($step->metadata['usage'] ?? []));
+                        $mergedUsage = $this->mergeUsageReport($mergedUsage, (array) ($step->metadata['usage'] ?? []));
                         $nodeOutputs[$branch->id] = $step->output;
                         $executedNodeIds[] = $branch->id;
                         $executedAgentClasses[] = $step->agentClass;
@@ -1016,7 +1027,7 @@ class HierarchicalRunner
 
                     $driver = $this->concurrency->driver();
                     $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-                    /** @var array<string, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+                    /** @var array<string, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
                     $results = $this->outcomes->validateConcurrentResults($results);
 
                     foreach ($results as $branchNodeId => $rowData) {
@@ -1107,7 +1118,7 @@ class HierarchicalRunner
                         );
 
                         $steps[] = $step;
-                        $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
+                        $mergedUsage = $this->mergeUsageReport($mergedUsage, $row['usage']);
                         $nodeOutputs[$branch->id] = $step->output;
                         $executedNodeIds[] = $branch->id;
                         $executedAgentClasses[] = $step->agentClass;
@@ -1460,7 +1471,7 @@ class HierarchicalRunner
     protected function mergeDurableUsage(SwarmExecutionState $state, SwarmStep $step): void
     {
         $state->context->mergeMetadata([
-            'usage' => $this->mergeUsage(
+            'usage' => $this->mergeUsageReport(
                 is_array($state->context->metadata['usage'] ?? null) ? $state->context->metadata['usage'] : [],
                 is_array($step->metadata['usage'] ?? null) ? $step->metadata['usage'] : [],
             ),

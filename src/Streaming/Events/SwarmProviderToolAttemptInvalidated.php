@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
-/** Invalidates provider observations below an epoch, including observations arriving later. */
+use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
+
+/**
+ * Per-node attempt watermark retaining its original provider-tool event name.
+ * See {@see CausalLogView} for interpretation.
+ */
 final class SwarmProviderToolAttemptInvalidated extends SwarmStreamEvent
 {
     public function __construct(public string $id, public string $runId, ?string $nodeId,

@@ -664,7 +664,7 @@ test('#202 a resumed run rehydrates the non-final step usage, not just its outpu
     // broken the resumed total would be missing the primer's 7/11.)
     expect($resumedEnd->usage)->toBe($controlEnd->usage);
     // And it actually includes the primer's contribution (non-vacuous).
-    expect($resumedEnd->usage['prompt_tokens'] ?? 0)->toBeGreaterThanOrEqual(7);
+    expect($resumedEnd->usage['input_tokens'] ?? 0)->toBeGreaterThanOrEqual(7);
 });
 
 test('#202 the skip path re-runs step guardrails on the rehydrated output', function () {

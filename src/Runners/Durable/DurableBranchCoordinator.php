@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\RoutesDurableBranches;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
@@ -17,6 +18,8 @@ use Illuminate\Support\Carbon;
  */
 class DurableBranchCoordinator
 {
+    use MergesAgentUsage;
+
     public function __construct(
         protected ConfigRepository $config,
     ) {}
@@ -100,18 +103,14 @@ class DurableBranchCoordinator
 
     /**
      * @param  array<int, array<string, mixed>>  $branches
-     * @return array<string, int>
+     * @return array<string, int|null>
      */
     public function mergeBranchUsage(array $branches): array
     {
         $usage = [];
 
         foreach ($branches as $branch) {
-            foreach ((array) ($branch['usage'] ?? []) as $key => $value) {
-                if (is_int($value)) {
-                    $usage[$key] = ($usage[$key] ?? 0) + $value;
-                }
-            }
+            $usage = $this->mergeUsageReport($usage, (array) ($branch['usage'] ?? []));
         }
 
         return $usage;

@@ -16,7 +16,7 @@ final readonly class QueueHierarchicalParallelBoundary
      * @param  array<string, mixed>  $routeCursor
      * @param  array<string, mixed>  $routePlan
      * @param  array<int, SwarmStep>  $stepsSoFar
-     * @param  array<string, int>  $mergedUsage
+     * @param  array<string, int|null>  $mergedUsage
      * @param  array<int, string>  $executedNodeIds
      * @param  array<int, string>  $executedAgentClasses
      * @param  array<int, array{node_id: string, branches: array<int, string>}>  $parallelGroups

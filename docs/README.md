@@ -19,7 +19,11 @@ The recommended reading path for new users.
 - [Choosing an Execution Mode](execution-modes.md) — prompt, queue, stream, or durable: when to use each
 - [Structured Input](structured-input.md)
 - [Testing](testing.md)
-- [Laravel AI 0.11.2 adoption contracts and release evidence](ai-0112-release-evidence.md) — all 44 dispositions, executed proof, deletion manifest and outstanding release gates
+- [Upgrading to v0.27.0 / Laravel AI 1.0](../UPGRADING.md#upgrading-to-v0270) — dependency, reader, usage and rollback boundaries
+- [Native Conversation Upgrade](native-conversation-upgrade.md) — application-owned migration, rehearsal, authorization and restore procedure
+- [Upgrade Assistant](upgrade-assistant.md#laravel-ai-10-recipe) — the explicit `0.26-to-0.27` recipe and guarded manifest edits
+- [Laravel AI 1.0 adoption evidence](ai-1-release-evidence.md) — reviewed core/companion candidates, preservation gates and publication boundaries
+- [Historical Laravel AI 0.11.2 adoption evidence](ai-0112-release-evidence.md) — v0.26 dispositions, executed proof and deletion manifest
 
 ---
 

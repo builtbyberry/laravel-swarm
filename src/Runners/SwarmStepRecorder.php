@@ -61,9 +61,9 @@ class SwarmStepRecorder
     }
 
     /**
-     * @param  array<string, int>  $usage
+     * @param  array<string, int|null>  $usage
      * @param  array<string, mixed>  $metadata
-     * @param  array<string, int>|null  $contextUsage
+     * @param  array<string, int|null>|null  $contextUsage
      */
     public function completed(
         SwarmExecutionState $state,

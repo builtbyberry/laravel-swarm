@@ -37,6 +37,7 @@ beforeEach(function () {
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
     Http::preventStrayRequests();
     WorkflowAgent::$trace = [];
+    WorkflowAgent::$generationSteps = [];
     WorkflowTool::$effects = [];
 });
 
@@ -133,7 +134,8 @@ it('can repeat a native tool effect when workflow retry follows native completio
     Event::fake([SwarmStepCompleted::class]);
     $nativeCompletions = 0;
     app('events')->listen(AgentPrompted::class, function ($event) use (&$nativeCompletions) {
-        expect($event->response->text)->toBe('native-answer');
+        expect($event->response->text)->toBe('native-answer')
+            ->and($event->prompt->prompt)->toBe('task');
         if (++$nativeCompletions === 1) {
             throw new RuntimeException('native complete before swarm checkpoint');
         }
@@ -141,7 +143,9 @@ it('can repeat a native tool effect when workflow retry follows native completio
     $requests = 0;
     Http::fake(function (Request $request) use (&$requests) {
         $requests++;
-        expect(DB::connection()->transactionLevel())->toBe(0);
+        expect(DB::connection()->transactionLevel())->toBe(0)
+            ->and($request['input'][1]['content'][0]['text'])->toBe('inner outer task')
+            ->and($request['metadata'])->toBe(['preservation' => 'native-options']);
 
         return Http::response(NativeWire::response(tool: $requests % 2 === 1));
     });
@@ -162,4 +166,6 @@ it('can repeat a native tool effect when workflow retry follows native completio
         ->and($nativeCompletions)->toBe(2)->and(WorkflowTool::$effects)->toBe(['effect-secret', 'effect-secret']);
     Event::assertDispatchedTimes(SwarmStepCompleted::class, 1);
     Http::assertSentCount(4);
+    expect(WorkflowAgent::$trace)->toBe(array_merge(...array_fill(0, 4, ['outer:task', 'inner:outer task'])))
+        ->and(array_column(WorkflowAgent::$generationSteps, 'number'))->toBe([0, 1, 0, 1]);
 });

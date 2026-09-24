@@ -46,7 +46,7 @@ interface StreamStepCheckpointStore
      * recording have all succeeded — the write is the completion marker. The
      * `$output` is the raw, un-redacted value the step produced.
      *
-     * @param  array<string, int>  $usage
+     * @param  array<string, int|null>  $usage
      */
     public function record(string $runId, int $stepIndex, string $output, array $usage): void;
 

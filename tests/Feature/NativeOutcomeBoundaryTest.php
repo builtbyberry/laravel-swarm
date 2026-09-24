@@ -38,8 +38,10 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 use Laravel\Ai\Approvals\Decisions;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Exceptions\ApprovalNotResumableException;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\AgentResponse;
 use Psr\Log\LoggerInterface;
 
@@ -111,7 +113,7 @@ it('rejects a pending coordinator before reading its route plan', function (stri
     config()->set('tests.native.pending_coordinator', true);
     app()->bind(FakeHierarchicalCoordinator::class, fn () => new class extends FakeHierarchicalCoordinator
     {
-        public function prompt(Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
+        public function prompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
         {
             return PendingAgent::pending();
         }
