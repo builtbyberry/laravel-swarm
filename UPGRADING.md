@@ -19,8 +19,8 @@ restarting production work.
 
 The [upgrade assistant](docs/upgrade-assistant.md#laravel-ai-10-recipe) retains
 its old default. Select `--recipe=0.26-to-0.27` explicitly for this transition.
-Its static report cannot certify native database safety. Candidate companion
-targets remain blocked until the compatibility map is complete.
+Its static report cannot certify native database safety. The [reviewed companion source map](docs/ai-1-companion-evidence.md) is frozen;
+the assistant still blocks present companion targets until C5 implements that map.
 
 Follow the [native conversation upgrade procedure](docs/native-conversation-upgrade.md)
 for the application-owned executable migration, pending-turn disposition,
