@@ -201,6 +201,76 @@ test('operational manifests reject malformed attachment and recipient descriptor
 })->with([
     'attachment' => [['attachments' => [['type' => 'invented']]], 'unsupported attachment descriptor'],
     'recipient' => [['recipients' => ['invented']], 'invalid recipient descriptor'],
+    'recipient attachment selection' => [[
+        'attachments' => [['type' => 'stored-document', 'path' => 'secret.pdf', 'disk' => 'private']],
+        'recipients' => [[
+            'recipient' => 'parallel:0',
+            'text_source' => 'topology',
+            'attachments' => 'malformed',
+            'provider' => null,
+            'model' => null,
+            'timeout' => null,
+        ]],
+    ], 'invalid attachment selection'],
+    'recipient non-list attachment selection' => [[
+        'recipients' => [[
+            'recipient' => 'parallel:0',
+            'text_source' => 'topology',
+            'attachments' => [1 => 0],
+            'provider' => null,
+            'model' => null,
+            'timeout' => null,
+        ]],
+    ], 'invalid attachment selection'],
+    'recipient provider selection' => [[
+        'recipients' => [[
+            'recipient' => 'parallel:0',
+            'text_source' => 'topology',
+            'attachments' => [],
+            'provider' => 123,
+            'model' => null,
+            'timeout' => null,
+        ]],
+    ], 'invalid provider selection'],
+    'recipient provider failover selection' => [[
+        'recipients' => [[
+            'recipient' => 'parallel:0',
+            'text_source' => 'topology',
+            'attachments' => [],
+            'provider' => ['openai' => 123],
+            'model' => null,
+            'timeout' => null,
+        ]],
+    ], 'failover map'],
+    'recipient model selection' => [[
+        'recipients' => [[
+            'recipient' => 'parallel:0',
+            'text_source' => 'topology',
+            'attachments' => [],
+            'provider' => null,
+            'model' => false,
+            'timeout' => null,
+        ]],
+    ], 'invalid model selection'],
+    'recipient timeout' => [[
+        'recipients' => [[
+            'recipient' => 'parallel:0',
+            'text_source' => 'topology',
+            'attachments' => [],
+            'provider' => null,
+            'model' => null,
+            'timeout' => '30',
+        ]],
+    ], 'invalid timeout'],
+    'recipient missing field' => [[
+        'recipients' => [[
+            'recipient' => 'parallel:0',
+            'text_source' => 'topology',
+            'attachments' => [],
+            'provider' => null,
+            'model' => null,
+        ]],
+    ], 'missing [timeout]'],
     'invocation options' => [[
         'attachments' => [[
             'type' => 'base64-image',

@@ -25,12 +25,19 @@ final readonly class NativeInputRecipient
             throw new SwarmException('Native input textSource must be [topology] or [original].');
         }
 
-        if ($attachments !== null && array_filter($attachments, static fn (mixed $index): bool => ! is_int($index) || $index < 0) !== []) {
+        if ($attachments !== null && (! array_is_list($attachments)
+            || array_filter($attachments, static fn (mixed $index): bool => ! is_int($index) || $index < 0) !== [])) {
             throw new SwarmException('Native input attachment indexes must be non-negative integers.');
         }
 
-        if ($recipient === '') {
+        if (trim($recipient) === '') {
             throw new SwarmException('Native input recipient identity cannot be empty.');
+        }
+
+        self::assertProvider($provider);
+
+        if ($model !== null && trim($model) === '') {
+            throw new SwarmException('Native input provider model cannot be empty.');
         }
 
         if ($timeout !== null && $timeout <= 0) {
@@ -104,14 +111,79 @@ final readonly class NativeInputRecipient
     /** @param array<string, mixed> $payload */
     public static function fromArray(array $payload): self
     {
+        foreach (['recipient', 'text_source', 'attachments', 'provider', 'model', 'timeout'] as $field) {
+            if (! array_key_exists($field, $payload)) {
+                throw new SwarmException("Native input recipient descriptor is missing [{$field}].");
+            }
+        }
+
+        if (! is_string($payload['recipient']) || ! is_string($payload['text_source'])) {
+            throw new SwarmException('Native input recipient descriptor contains an invalid recipient or text source.');
+        }
+
+        if ($payload['attachments'] !== null && ! is_array($payload['attachments'])) {
+            throw new SwarmException('Native input recipient descriptor contains an invalid attachment selection.');
+        }
+        if (is_array($payload['attachments']) && (! array_is_list($payload['attachments'])
+            || array_filter($payload['attachments'], static fn (mixed $index): bool => ! is_int($index) || $index < 0) !== [])) {
+            throw new SwarmException('Native input recipient descriptor contains an invalid attachment selection.');
+        }
+
+        if ($payload['provider'] !== null && ! is_string($payload['provider']) && ! is_array($payload['provider'])) {
+            throw new SwarmException('Native input recipient descriptor contains an invalid provider selection.');
+        }
+
+        if ($payload['model'] !== null && ! is_string($payload['model'])) {
+            throw new SwarmException('Native input recipient descriptor contains an invalid model selection.');
+        }
+
+        if ($payload['timeout'] !== null && ! is_int($payload['timeout'])) {
+            throw new SwarmException('Native input recipient descriptor contains an invalid timeout.');
+        }
+
         return new self(
-            recipient: (string) ($payload['recipient'] ?? ''),
-            textSource: (string) ($payload['text_source'] ?? 'topology'),
-            attachments: is_array($payload['attachments'] ?? null) ? array_values($payload['attachments']) : null,
-            provider: is_string($payload['provider'] ?? null) || is_array($payload['provider'] ?? null) ? $payload['provider'] : null,
-            model: is_string($payload['model'] ?? null) ? $payload['model'] : null,
-            timeout: is_int($payload['timeout'] ?? null) ? $payload['timeout'] : null,
+            recipient: $payload['recipient'],
+            textSource: $payload['text_source'],
+            attachments: $payload['attachments'],
+            provider: $payload['provider'],
+            model: $payload['model'],
+            timeout: $payload['timeout'],
         );
+    }
+
+    /** @param Lab|array<string|int, mixed>|string|null $provider */
+    protected static function assertProvider(Lab|array|string|null $provider): void
+    {
+        if (is_string($provider)) {
+            if (trim($provider) === '') {
+                throw new SwarmException('Native input provider selection cannot be empty.');
+            }
+
+            return;
+        }
+
+        if (! is_array($provider)) {
+            return;
+        }
+
+        if ($provider === []) {
+            throw new SwarmException('Native input provider failover selection cannot be empty.');
+        }
+
+        foreach ($provider as $key => $value) {
+            if (is_int($key)) {
+                if ((! is_string($value) && ! $value instanceof Lab)
+                    || (is_string($value) && trim($value) === '')) {
+                    throw new SwarmException('Native input provider failover entries must be non-empty provider names.');
+                }
+
+                continue;
+            }
+
+            if (trim($key) === '' || ($value !== null && (! is_string($value) || trim($value) === ''))) {
+                throw new SwarmException('Native input provider failover map must use provider names with optional model names.');
+            }
+        }
     }
 
     protected static function assertSlot(int $slot): void
