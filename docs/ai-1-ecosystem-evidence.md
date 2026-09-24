@@ -5,6 +5,9 @@ It verifies candidate compatibility; it does not publish packages or migrate an
 existing application. The [companion map](ai-1-companion-evidence.md) records the
 independently reviewed component sources and their separate platform evidence.
 
+The [release evidence index](ai-1-release-evidence.md#combined-installed-proof)
+records the completed C5 run, exact source map, results and fault restoration.
+
 ## Version and source identity
 
 The selected version map is core 0.27.0, Pulse 0.1.8, Filament 0.3.0, MCP 0.2.0

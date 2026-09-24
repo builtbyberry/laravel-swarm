@@ -198,11 +198,11 @@ v025 fixture is separate historical evidence and is not relabeled as a v0.26.3 w
 Applications still rehearse their own classes, payloads and data; synthetic
 package fixtures do not certify an application migration.
 
-R28/N04 companion display and recording paths belong to the separately claimed
-C4 companion units; C5 owns the combined candidate installation/proof. N08's
-memory-vector consumer evidence belongs to those phases as well. C6 reconciles
-their final candidate evidence into the release report. Core green, temporary
-candidate repositories and aliases do not establish published-install proof.
+R28/N04 companion display and recording paths are covered by the completed
+[C4 companion units](ai-1-companion-evidence.md); the [release evidence index](ai-1-release-evidence.md)
+records C5's combined installed proof and N08's vector consumer evidence. Core
+green, temporary candidate repositories and aliases do not establish
+published-install proof.
 
 Component acceptance is distinct from release readiness, main merge, tags,
 publication and application cutover. None is authorized or claimed by this ledger.
