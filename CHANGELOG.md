@@ -6,10 +6,12 @@ Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabiliti
 
 ### Added
 
-- Reviewed compatibility candidates for Pulse 0.1.8, Filament 0.3.0, MCP 0.2.0 and memory-vector 0.2.0, with frozen source/manifests, real reader/provider/protocol checks and independent evidence in [the companion map](docs/ai-1-companion-evidence.md). Combined installation and final upgrade-assistant targets remain C5 work.
+- Reproducible fresh-application proof for the exact core and four companion candidates, with lock/installed source validation, discovered providers, migrations, workflow/history/replay, Pulse/Filament usage, authenticated MCP resources and vector memory. A separate default-Packagist mode supports later published verification; candidate runs do not establish publication.
+
+- Reviewed compatibility candidates for Pulse 0.1.8, Filament 0.3.0, MCP 0.2.0 and memory-vector 0.2.0, with frozen source/manifests, real reader/provider/protocol checks and independent evidence in [the companion map](docs/ai-1-companion-evidence.md). The [ecosystem proof procedure](docs/ai-1-ecosystem-evidence.md) combines those sources in a fresh application.
 
 - Frozen v0.26.3 producer fixtures and candidate-reader guards for retained workflow state, plus a 54-row preservation ledger. Usage guards distinguish empty reports from no contributors; native hosted-code wire fixtures preserve provider identity and output capture.
-- Explicit `0.26-to-0.27` upgrade-assistant recipe preserves the old recipe/default, binds preview and backups to the selected recipe, and provides native/core migration advice. Unresolved companion targets block application until the reviewed compatibility map is complete.
+- Explicit `0.26-to-0.27` upgrade-assistant recipe preserves the old recipe/default, binds preview and backups to the selected recipe, and provides native/core migration advice. Reviewed optional companion targets preserve constraint style and section, refuse unsupported sources and never add absent packages.
 - Application-owned native conversation migration and authorization examples, with semantic fresh/backfill/custom-store/backup rehearsals routed through SQLite and the existing MySQL/PostgreSQL service jobs. Preflight refuses unresolved approvals before DDL; native tables remain outside Swarm capture/sealing/pruning.
 - Native conversion preserves row-local repeated tool IDs and edited executed arguments/results. Executed arguments occupy the new single native slot; the original proposal remains in the coordinated backup. This avoids preserving proposal arguments at the cost of misdescribing execution. Tests and the upgrade guide document upstream replay/unanswered-call losses and the non-atomic MySQL DDL boundary.
 

@@ -259,10 +259,58 @@ test('Artisan and standalone share selector errors and describe their native par
         expect($artisan['recipe'])->toBe($standalone['recipe'])->and($artisan['target'])->toBe($standalone['target']);
     }
     $standaloneHelp = swarmUpgradeCli($this->upgradeCommandRoot, ['--help']);
-    expect($standaloneHelp->getExitCode())->toBe(0)->and($standaloneHelp->getOutput())->toContain(UpgradeConsole::HELP);
+    expect($standaloneHelp->getExitCode())->toBe(0)->and($standaloneHelp->getOutput())->toContain(UpgradeConsole::HELP, 'Reviewed companion targets remain candidates, not published-install proof.')
+        ->not->toContain('unresolved companions block apply');
     expect(Artisan::call('help', ['command_name' => 'swarm:upgrade']))->toBe(0);
     expect(Artisan::output())->toContain('0.25-to-0.26', '0.26-to-0.27', 'Standalone refuses repeated options', "Symfony's option parsing");
     // Symfony resolves repeated scalar options; no extra parser is layered on Artisan.
     expect(Artisan::call('swarm:upgrade --path='.$this->upgradeCommandRoot.' --recipe=0.25-to-0.26 --recipe=0.26-to-0.27 --json'))->toBe(1);
     expect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['recipe'])->toBe('0.26-to-0.27');
+});
+
+test('resolved companion map has standalone and Artisan parity with selective apply and exact restore', function (): void {
+    swarmNativeUpgradeCommandFixture($this->upgradeCommandRoot);
+    $manifest = json_decode(file_get_contents($this->upgradeCommandRoot.'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
+    $lock = json_decode(file_get_contents($this->upgradeCommandRoot.'/composer.lock'), true, flags: JSON_THROW_ON_ERROR);
+    $companions = [
+        'builtbyberry/laravel-swarm-pulse' => ['require', '0.1.7', '0.1.8'],
+        'builtbyberry/laravel-swarm-filament' => ['require-dev', '^0.2.3', '^0.3.0'],
+        'builtbyberry/laravel-swarm-mcp' => ['require', '^0.1.2', '^0.2.0'],
+        'builtbyberry/laravel-swarm-memory-vector' => ['require-dev', '0.1.4', '0.2.0'],
+    ];
+    foreach ($companions as $package => [$section, $source, $target]) {
+        $manifest[$section][$package] = $source;
+        $lock[$section === 'require' ? 'packages' : 'packages-dev'][] = ['name' => $package, 'version' => 'v'.ltrim($source, '^')];
+    }
+    $original = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\r\n";
+    $lockBytes = json_encode($lock, JSON_THROW_ON_ERROR);
+    file_put_contents($this->upgradeCommandRoot.'/composer.json', $original);
+    file_put_contents($this->upgradeCommandRoot.'/composer.lock', $lockBytes);
+    mkdir($this->upgradeCommandRoot.'/vendor/composer', 0700, true);
+    $installedBytes = json_encode(['packages' => array_merge($lock['packages'], $lock['packages-dev'])], JSON_THROW_ON_ERROR);
+    file_put_contents($this->upgradeCommandRoot.'/vendor/composer/installed.json', $installedBytes);
+    $options = ['--recipe=0.26-to-0.27', '--json'];
+    $preview = swarmUpgradeCliReport(swarmUpgradeCli($this->upgradeCommandRoot, $options));
+    $artisan = ['--path' => $this->upgradeCommandRoot, '--recipe' => '0.26-to-0.27', '--json' => true];
+    expect(Artisan::call('swarm:upgrade', $artisan))->toBe(1);
+    expect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR))->toBe($preview)
+        ->and($preview['can_apply'])->toBeTrue()->and($preview['runtime_verified'])->toBeFalse();
+    $human = swarmUpgradeCli($this->upgradeCommandRoot, ['--recipe=0.26-to-0.27']);
+    foreach ($companions as $package => [$section, $source, $target]) {
+        expect(collect($preview['actions'])->firstWhere('package', $package))->toBe(['id' => 'dependency:'.$package, 'package' => $package, 'section' => $section, 'from' => $source, 'to' => $target]);
+        expect($human->getOutput())->toContain('dependency:'.$package.' ['.$section.']: '.$source.' -> '.$target);
+    }
+    $selected = 'dependency:builtbyberry/laravel-swarm-filament,dependency:builtbyberry/laravel-swarm-memory-vector';
+    $apply = swarmUpgradeCli($this->upgradeCommandRoot, [...$options, '--apply='.$selected, '--expect='.$preview['preview_digest'], '--yes']);
+    $applied = swarmUpgradeCliReport($apply);
+    expect($apply->getExitCode())->toBe(0)
+        ->and($applied['runtime_verified'])->toBeFalse()
+        ->and(file_get_contents($this->upgradeCommandRoot.'/composer.json'))->toBe(str_replace(['"^0.2.3"', '"0.1.4"'], ['"^0.3.0"', '"0.2.0"'], $original))
+        ->and(file_get_contents($this->upgradeCommandRoot.'/composer.lock'))->toBe($lockBytes)
+        ->and(file_get_contents($this->upgradeCommandRoot.'/vendor/composer/installed.json'))->toBe($installedBytes);
+    expect(Artisan::call('swarm:upgrade', $artisan + ['--restore' => $applied['backup_id'], '--yes' => true]))->toBe(0);
+    expect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['runtime_verified'])->toBeFalse()
+        ->and(file_get_contents($this->upgradeCommandRoot.'/composer.json'))->toBe($original)
+        ->and(file_get_contents($this->upgradeCommandRoot.'/composer.lock'))->toBe($lockBytes)
+        ->and(file_get_contents($this->upgradeCommandRoot.'/vendor/composer/installed.json'))->toBe($installedBytes);
 });
