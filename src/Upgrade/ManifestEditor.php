@@ -10,6 +10,8 @@ use Throwable;
 /** Guarded, manifest-only replacement with operator-managed backups. */
 class ManifestEditor
 {
+    public function __construct(private readonly UpgradeRecipe $recipe = new UpgradeRecipe) {}
+
     /**
      * The preparation callback must rederive the selected changes while this lock
      * is held. The lock serializes this tool only: external editors and Composer
@@ -37,8 +39,8 @@ class ManifestEditor
             $id = bin2hex(random_bytes(16));
             $record = [
                 'schema_version' => 1,
-                'recipe' => '0.25-to-0.26',
-                'target' => '0.26.1',
+                'recipe' => $this->recipe->id,
+                'target' => $this->recipe->target,
                 'before_base64' => base64_encode($original),
                 'after_base64' => base64_encode($change['after']),
                 'before_sha256' => hash('sha256', $original),
@@ -74,7 +76,7 @@ class ManifestEditor
             } catch (Throwable $exception) {
                 throw new RuntimeException('Invalid backup JSON.', 0, $exception);
             }
-            if (! is_array($record) || ($record['schema_version'] ?? null) !== 1 || ($record['recipe'] ?? null) !== '0.25-to-0.26' || ($record['target'] ?? null) !== '0.26.1') {
+            if (! is_array($record) || ($record['schema_version'] ?? null) !== 1 || ($record['recipe'] ?? null) !== $this->recipe->id || ($record['target'] ?? null) !== $this->recipe->target) {
                 throw new RuntimeException('Unsupported backup schema or recipe.');
             }
             foreach (['mode', 'uid', 'gid'] as $field) {

@@ -76,6 +76,7 @@
         "test": "vendor/bin/pest tests/Feature tests/Unit tests/Installer",
         "test:process-concurrency": "vendor/bin/pest tests/ProcessConcurrency",
         "test:process-concurrency:ci": "vendor/bin/pest tests/ProcessConcurrency --fail-on-skipped --exclude-group=skip-locked-real-db",
+        "test:native-conversation-upgrade:real-db": "SWARM_NATIVE_UPGRADE_REAL_DB=1 vendor/bin/pest tests/Feature/Adoption/NativeConversationUpgradeTest.php --group=native-conversation-upgrade --fail-on-skipped",
         "test:process-concurrency:real-db": "vendor/bin/pest tests/ProcessConcurrency --group=skip-locked-real-db --fail-on-skipped",
         "test:coverage": "vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage",
         "test:coverage:ci": "vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=80",

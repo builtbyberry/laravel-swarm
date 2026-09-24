@@ -1,7 +1,7 @@
 name: tests (real DB)
 
 # Enforces the `skip-locked-real-db` group from `composer test:process-concurrency:real-db`
-# against actual MySQL and Postgres service containers. The default `tests` workflow runs
+# and the native conversation upgrade fixtures against actual MySQL and Postgres service containers. The default `tests` workflow runs
 # the process-concurrency suite against in-memory SQLite, which honors neither cross-process
 # state nor `FOR UPDATE SKIP LOCKED` — so the audit outbox concurrency contract can only
 # be enforced here.
@@ -67,7 +67,7 @@ jobs:
         with:
           php-version: '8.4'
           tools: composer:v2
-          extensions: pdo, pdo_mysql
+          extensions: pdo, pdo_mysql, pdo_sqlite
           coverage: none
           ini-values: memory_limit=512M
 
@@ -142,6 +142,12 @@ jobs:
       - name: Execute real-DB process concurrency suite
         run: composer test:process-concurrency:real-db
 
+      - name: Verify native upgrade fixture drivers
+        run: php -r 'foreach (["sqlite", getenv("DB_CONNECTION")] as $driver) { if (!in_array($driver, PDO::getAvailableDrivers(), true)) { fwrite(STDERR, "Missing PDO driver ".$driver."\n"); exit(1); } }'
+
+      - name: Execute native conversation upgrade suite
+        run: composer test:native-conversation-upgrade:real-db
+
   tests-real-db-postgres:
     name: PHP 8.4 - real DB (postgres-16, ${{ matrix.dependencies }})
     runs-on: ubuntu-24.04
@@ -182,7 +188,7 @@ jobs:
         with:
           php-version: '8.4'
           tools: composer:v2
-          extensions: pdo, pdo_pgsql
+          extensions: pdo, pdo_pgsql, pdo_sqlite
           coverage: none
           ini-values: memory_limit=512M
 
@@ -256,3 +262,9 @@ jobs:
       # because a silent skip would let the SKIP LOCKED contract regress unnoticed.
       - name: Execute real-DB process concurrency suite
         run: composer test:process-concurrency:real-db
+
+      - name: Verify native upgrade fixture drivers
+        run: php -r 'foreach (["sqlite", getenv("DB_CONNECTION")] as $driver) { if (!in_array($driver, PDO::getAvailableDrivers(), true)) { fwrite(STDERR, "Missing PDO driver ".$driver."\n"); exit(1); } }'
+
+      - name: Execute native conversation upgrade suite
+        run: composer test:native-conversation-upgrade:real-db

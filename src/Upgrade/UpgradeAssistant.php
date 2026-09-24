@@ -7,21 +7,14 @@ namespace BuiltByBerry\LaravelSwarm\Upgrade;
 use RuntimeException;
 use Throwable;
 
-/** Static dependency inspection and the v0.25 to v0.26 manifest recipe. */
+/** Static dependency inspection and explicitly selected manifest recipes. */
 final class UpgradeAssistant
 {
     public const RECIPE = '0.25-to-0.26';
 
     public const TARGET = '0.26.1';
 
-    private const PACKAGES = [
-        'builtbyberry/laravel-swarm' => '0.26.1',
-        'laravel/ai' => '0.11.2',
-        'builtbyberry/laravel-swarm-pulse' => '0.1.7',
-        'builtbyberry/laravel-swarm-filament' => '0.2.3',
-        'builtbyberry/laravel-swarm-mcp' => '0.1.2',
-        'builtbyberry/laravel-swarm-memory-vector' => '0.1.4',
-    ];
+    public function __construct(private readonly UpgradeRecipe $recipe = new UpgradeRecipe) {}
 
     /** @return array<string, mixed> */
     public function inspect(string $path): array
@@ -31,8 +24,8 @@ final class UpgradeAssistant
         $manifest = new JsonDocument($manifestBytes ?? '');
         $report = [
             'schema_version' => 1,
-            'recipe' => self::RECIPE,
-            'target' => self::TARGET,
+            'recipe' => $this->recipe->id,
+            'target' => $this->recipe->target,
             'status' => 'preview',
             'root' => $root,
             'preview_digest' => '',
@@ -63,7 +56,7 @@ final class UpgradeAssistant
                 if (! is_string($constraint)) {
                     throw new RuntimeException('Dependency constraints must be strings.');
                 }
-                if (isset(self::PACKAGES[$package])) {
+                if (array_key_exists($package, $this->recipe->packages)) {
                     if (isset($requirements[$package])) {
                         $add('duplicate-requirement', 'blocker', "{$package} is declared in both requirement sections; reconcile it manually.");
                     }
@@ -131,10 +124,14 @@ final class UpgradeAssistant
             }
         }
         $core = $locked['builtbyberry/laravel-swarm']['version'] ?? '';
-        if (! is_string($core) || ! preg_match('/\Av?0\.(?:25|26)\.\d+\z/', $core)) {
-            $add('unsupported-source', 'blocker', 'This recipe requires a lock with stable Swarm 0.25.x or 0.26.x. Other or unknown source versions require manual upgrade guidance.');
+        if (! is_string($core) || ! $this->recipe->acceptsSource($core)) {
+            $add('unsupported-source', 'blocker', 'This recipe requires a lock with '.$this->recipe->sourceRequirement().'. Other or unknown source versions require manual upgrade guidance.');
         }
-        foreach (self::PACKAGES as $package => $minimum) {
+        $verificationOnly = $this->recipe->verificationOnly($core);
+        if ($verificationOnly) {
+            $add('already-target', 'manual', 'Swarm is already on the target 0.27.x line. Verify dependencies, native schema and application behavior manually; this recipe will not rewrite or downgrade the manifest.');
+        }
+        foreach ($this->recipe->packages as $package => $minimum) {
             $requirement = $requirements[$package] ?? null;
             $lockedPackage = $locked[$package] ?? null;
             $installedPackage = $installed[$package] ?? null;
@@ -158,9 +155,16 @@ final class UpgradeAssistant
                 $version = $lockedPackage['version'];
                 if (! is_string($version) || ! preg_match('/\Av?\d+\.\d+\.\d+\z/', $version)) {
                     $add('unstable:'.$package, 'blocker', "{$package} is not locked to an ordinary stable release; inspect its provenance manually.");
-                } elseif (version_compare(ltrim($version, 'v'), $minimum, '<')) {
+                } elseif ($minimum !== null && version_compare(ltrim($version, 'v'), $minimum, '<')) {
                     $add('resolve:'.$package, 'manual', "{$package} is locked below {$minimum}. After reviewing constraints, resolve with Composer and verify the resulting lock and installation.");
                 }
+            }
+            if ($minimum === null) {
+                if ($requirement !== null || $lockedPackage !== null || $installedPackage !== null) {
+                    $add('companion-target-unresolved:'.$package, 'blocker', "{$package} is present but its candidate target is incomplete. Automatic changes are unavailable until the reviewed companion compatibility map supplies a target; no candidate version is inferred.");
+                }
+
+                continue;
             }
             if ($requirement === null) {
                 continue;
@@ -175,14 +179,12 @@ final class UpgradeAssistant
                 continue;
             }
             $version = $parts[2];
-            $allowedMinor = $package === 'builtbyberry/laravel-swarm' ? ['0.25', '0.26']
-                : ($package === 'laravel/ai' ? ['0.10', '0.11'] : [$this->minor($minimum)]);
-            if (! in_array($this->minor($version), $allowedMinor, true)) {
+            if (! $this->recipe->acceptsConstraint($package, $version)) {
                 $add('constraint-line:'.$package, 'blocker', "{$package} constraint is outside this recipe's supported version lines; no change is inferred.");
 
                 continue;
             }
-            if (version_compare($version, $minimum, '<')) {
+            if (! $verificationOnly && version_compare($version, $minimum, '<')) {
                 // A caret on the target minor already permits its newer patches.
                 $sameMinor = $this->minor($version) === $this->minor($minimum);
                 if ($parts[1] === '^' && $sameMinor) {
@@ -219,7 +221,7 @@ final class UpgradeAssistant
         $report['findings'] = $findings;
         $report['actions'] = $actions;
         $report['can_apply'] = $actions !== [] && ! in_array('blocker', array_column($findings, 'level'), true);
-        $report['preview_digest'] = hash('sha256', json_encode([self::RECIPE, self::TARGET, $root, $manifestBytes, $lockBytes, $installedBytes, $actions, $findings], JSON_THROW_ON_ERROR));
+        $report['preview_digest'] = hash('sha256', json_encode([$this->recipe->id, $this->recipe->target, $root, $manifestBytes, $lockBytes, $installedBytes, $actions, $findings], JSON_THROW_ON_ERROR));
 
         return $report;
     }
@@ -234,7 +236,7 @@ final class UpgradeAssistant
         }
         $root = $this->root($path);
         $report = [];
-        $result = (new ManifestEditor)->apply($root, function () use ($root, $ids, $expected, &$report): array {
+        $result = (new ManifestEditor($this->recipe))->apply($root, function () use ($root, $ids, $expected, &$report): array {
             $report = $this->inspect($root);
             if (! hash_equals($report['preview_digest'], $expected)) {
                 throw new RuntimeException('The preview is stale or does not match this application. Run a new preview.');
@@ -264,9 +266,9 @@ final class UpgradeAssistant
     public function restore(string $path, string $backupId): array
     {
         $root = $this->root($path);
-        $result = (new ManifestEditor)->restore($root, $backupId);
+        $result = (new ManifestEditor($this->recipe))->restore($root, $backupId);
 
-        return ['schema_version' => 1, 'recipe' => self::RECIPE, 'target' => self::TARGET, 'status' => 'restored', 'root' => $root, 'backup_id' => $result['backup_id'], 'runtime_verified' => false,
+        return ['schema_version' => 1, 'recipe' => $this->recipe->id, 'target' => $this->recipe->target, 'status' => 'restored', 'root' => $root, 'backup_id' => $result['backup_id'], 'runtime_verified' => false,
             'next_step' => 'Only composer.json was restored. Reconcile the lock and installed dependencies separately; this is not a data or package rollback.'];
     }
 
@@ -349,7 +351,7 @@ final class UpgradeAssistant
     /** @return array<string, string> */
     private function manualSteps(): array
     {
-        return [
+        $steps = [
             'composer-resolution' => 'Previewed manifest edits do not resolve dependencies. Review composer update --with-all-dependencies --dry-run, then perform the intended Composer update and verify lock/installed provenance and platform requirements. Composer may execute application plugins/scripts.',
             'upstream-api' => 'Review native AI connection/stream exceptions, event and Request constructor overrides, queued fake behavior and provider model defaults: https://github.com/laravel/ai/blob/v0.11.2/UPGRADE.md. No application source has been scanned or rewritten.',
             'approval-effects' => 'Native pending tool approvals fail explicitly and are nonretryable in Swarm. Inspect possible tool effects before manually restarting. Swarm waits/signals remain supported; native approval continuation is unavailable.',
@@ -357,5 +359,17 @@ final class UpgradeAssistant
             'operational-upgrade' => 'Rehearse first. Stop intake, drain calls and queued work, inventory active durable work and custom serialized classes, stop workers, deploy code and lock together, refresh autoload/opcache, restart and smoke-test before resuming intake. Retain APP_KEY and prune/recover schedules.',
             'application-verification' => 'Runtime readiness remains unverified. Test your sync, queue, stream, durable, history/replay and recovery paths and custom native stores. See https://github.com/builtbyberry/laravel-swarm/blob/v0.26.0/UPGRADING.md#upgrading-to-v0260.',
         ];
+
+        if ($this->recipe->id === UpgradeRecipe::NATIVE_ONE) {
+            $steps['candidate-target'] = 'This explicit recipe targets planned Swarm 0.27.0 and Laravel AI 1.x. Candidate advice does not establish published package availability or successful Composer resolution.';
+            $steps['upstream-api'] = 'Review the released Laravel AI 1.0 guide: https://github.com/laravel/ai/blob/v1.0.0/UPGRADE.md. Update custom ConversationStore signatures, agent-scoped lookup, supplied conversation IDs, UserMessage storage and failed-turn handling. No application source has been scanned or rewritten.';
+            $steps['native-schema'] = 'Existing native conversation tables require an application-owned migration. See docs/native-conversation-upgrade.md and its executable example in this Swarm source distribution. The assistant does not inspect native rows or pending counts and never runs SQL. Stop writers, resolve or abandon pending turns, and rehearse semantic backfill verification before any destructive DDL.';
+            $steps['native-privacy'] = 'Native conversation content, steps, reasoning, provider-tool data, errors and titles follow the application storage/privacy/retention policy. Swarm capture flags, sealing and swarm:prune do not protect or remove native conversation records; capture-off is not global zero retention.';
+            $steps['native-authorization'] = 'Authorize frontend-supplied conversation IDs before native inspection or invocation. Optional native ownership/inspection interfaces do not authorize access by themselves; no native approval continuation bridge is supplied by Swarm.';
+            $steps['rollback-reader'] = 'Before native conversion, drain and restore a tested old code/dependency pair. After conversion or new-format writes, use a verified compatibility migration or coordinated schema/data backup restore with matching code, dependencies and configuration. Reconcile effects after the backup before rerunning work. Manifest restore is not database, dependency or effect rollback; DDL is not portably atomic.';
+            $steps['application-verification'] = 'Runtime readiness remains unverified. Test your sync, queue, stream, durable, history/replay and recovery paths, custom native stores and fresh/upgraded native schema on the actual database. Follow UPGRADING.md and docs/native-conversation-upgrade.md in this source distribution.';
+        }
+
+        return $steps;
     }
 }
