@@ -6,6 +6,8 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolEvent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Citations\Fixtures\HttpCitationAgent;
 use Illuminate\Support\Facades\Http;
+use Laravel\Ai\Contracts\HasTools;
+use Laravel\Ai\Providers\Tools\CodeExecution;
 
 beforeEach(function () {
     config()->set('ai.providers.openai.key', 'fixture');
@@ -58,3 +60,42 @@ it('preserves native Anthropic started completed and failed result data distinct
         ->and($tools[0]->provider)->toBe('anthropic')->and($tools[0]->invocationId)->not->toBeNull();
     Http::assertSentCount(1);
 });
+
+it('preserves hosted code execution wire identity and capture policy without function results', function (bool $capture) {
+    config()->set('ai.default', 'openai');
+    config()->set('swarm.capture.outputs', $capture);
+    $agent = new class extends HttpCitationAgent implements HasTools
+    {
+        public function tools(): iterable
+        {
+            return [new CodeExecution];
+        }
+    };
+    $item = ['type' => 'code_interpreter_call', 'id' => 'code-item', 'status' => 'completed',
+        'container_id' => 'container-fixture', 'code' => 'print("code-secret")',
+        'outputs' => [['type' => 'logs', 'logs' => 'code-secret']]];
+    $response = ['id' => 'code-response', 'model' => 'gpt-4.1-mini', 'status' => 'completed',
+        'output' => [$item], 'usage' => ['input_tokens' => 2, 'output_tokens' => 3]];
+    $progress = ['type' => 'response.code_interpreter_call_code.delta', 'item_id' => 'code-item', 'delta' => 'print("code-secret")'];
+    $wire = [['type' => 'response.created', 'response' => $response], $progress,
+        ['type' => 'response.output_item.done', 'item' => $item],
+        ['type' => 'response.completed', 'response' => $response]];
+    Http::fake(['*' => Http::response(implode('', array_map(fn ($event) => 'data: '.json_encode($event, JSON_THROW_ON_ERROR)."\n\n", $wire)))]);
+    $stream = app(SwarmRunner::class)->agent($agent)->stream('execute hosted code');
+    $all = collect(iterator_to_array($stream));
+    $events = $all->whereInstanceOf(SwarmProviderToolEvent::class)->values();
+    expect($events)->toHaveCount(2)
+        ->and($events->pluck('itemId')->all())->toBe(['code-item', 'code-item'])
+        ->and($events->pluck('providerType')->all())->toBe(['code_interpreter_call', 'code_interpreter_call'])
+        ->and($events->pluck('providerStatus')->all())->toBe(['code_delta', 'completed'])
+        ->and($events[0]->provider)->toBe('openai')
+        ->and($events[0]->invocationId)->not->toBeNull()
+        ->and($events[1]->invocationId)->toBe($events[0]->invocationId)
+        ->and($events->pluck('id')->unique())->toHaveCount(2)
+        ->and($events[0]->payload->status)->toBe($capture ? 'available' : 'redacted')
+        ->and($events[0]->payload->data)->toBe($capture ? $progress : [])
+        ->and($events[1]->payload->data)->toBe($capture ? $item : [])
+        ->and($all->filter(fn ($event) => in_array($event->type(), ['swarm_tool_call', 'swarm_tool_result'])))->toBeEmpty();
+    Http::assertSent(fn ($request) => $request['tools'] === [['type' => 'code_interpreter', 'container' => ['type' => 'auto']]]);
+    Http::assertSentCount(1);
+})->with([true, false]);

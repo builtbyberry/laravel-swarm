@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
@@ -14,6 +15,8 @@ use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\EmptyUsageAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\EmptyUsageSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
@@ -158,3 +161,39 @@ it('retains conservative accounting through a persisted coordinated queue join',
     FakeWriter::assertPromptedTimes(1);
     FakeEditor::assertPromptedTimes(1);
 })->with(['native', 'legacy', 'empty']);
+
+it('keeps a real empty agent report unavailable through ordinary and durable execution', function (string $mode) {
+    EmptyUsageAgent::$calls = 0;
+    $swarm = new EmptyUsageSwarm;
+    if ($mode === 'durable') {
+        $runId = $swarm->dispatchDurable('empty report task')->runId;
+        foreach ([0, 1, 2] as $index) {
+            (new AdvanceDurableSwarm($runId, $index))->handle(app(DurableSwarmManager::class));
+        }
+    } else {
+        $runId = $swarm->prompt('empty report task')->metadata['run_id'];
+    }
+    $history = app(RunHistoryStore::class)->find($runId);
+    expect($history['status'])->toBe('completed')
+        ->and($history['output'])->toBe('writer-out')
+        ->and($history['usage'])->toBe(array_fill_keys(['input_tokens', 'output_tokens', 'prompt_tokens', 'completion_tokens', 'cache_read_input_tokens', 'cache_write_input_tokens', 'reasoning_tokens'], null))
+        ->and($history['steps'][0]['metadata']['usage'])->toBe([])
+        ->and($history['steps'][1]['metadata']['usage']['input_tokens'])->toBe(20)
+        ->and(EmptyUsageAgent::$calls)->toBe(1);
+    FakeWriter::assertPromptedTimes(1);
+    FakeWriter::assertPrompted(fn ($prompt) => $prompt->prompt === 'empty-report-output');
+})->with(['prompt', 'durable']);
+
+it('rejects an empty hierarchical parallel group before workers execute', function (string $mode) {
+    $plan = ['start_at' => 'parallel', 'nodes' => [
+        'parallel' => ['type' => 'parallel', 'branches' => [], 'next' => 'finish'],
+        'finish' => ['type' => 'finish', 'output' => 'empty'],
+    ]];
+    FakeHierarchicalCoordinator::fake([$plan]);
+    $swarm = FakeHierarchicalFullSwarm::make();
+    expect(fn () => $mode === 'stream' ? iterator_to_array($swarm->stream('empty group')) : $swarm->prompt('empty group'))
+        ->toThrow(SwarmException::class, 'non-empty [branches] array');
+    FakeWriter::assertNeverPrompted();
+    FakeEditor::assertNeverPrompted();
+    FakeResearcher::assertNeverPrompted();
+})->with(['prompt', 'stream']);
