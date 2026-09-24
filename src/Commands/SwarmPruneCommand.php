@@ -6,8 +6,10 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Filesystem\Factory as FilesystemFactory;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -21,7 +23,7 @@ class SwarmPruneCommand extends Command
 
     protected const CHUNK_SIZE = 1000;
 
-    public function handle(Connection $connection, ConfigRepository $config, SwarmAuditDispatcher $audit): int
+    public function handle(Connection $connection, ConfigRepository $config, SwarmAuditDispatcher $audit, SwarmPersistenceCipher $cipher, FilesystemFactory $filesystems): int
     {
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
         $preventPrune = $config->get('swarm.retention.prevent_prune', false) === true;
@@ -61,6 +63,7 @@ class SwarmPruneCommand extends Command
             'durable_webhook_idempotency' => (string) $config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'),
             'durable_outbox' => (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox'),
             'audit_outbox' => (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox'),
+            'native_inputs' => (string) $config->get('swarm.tables.native_inputs', 'swarm_native_inputs'),
         ];
 
         // Seed every table key to zero so the count shape is fully known: the
@@ -88,7 +91,9 @@ class SwarmPruneCommand extends Command
 
             $counts[$name] = $dryRun
                 ? $this->countPrunableRows($connection, $config, $name, $table, $tables['history'])
-                : $this->pruneTable($connection, $config, $name, $table, $tables['history']);
+                : ($name === 'native_inputs'
+                    ? $this->pruneNativeInputs($connection, $config, $table, $tables['history'], $cipher, $filesystems)
+                    : $this->pruneTable($connection, $config, $name, $table, $tables['history']));
         }
 
         $audit->emit('command.prune', [
@@ -151,6 +156,11 @@ class SwarmPruneCommand extends Command
             '%s %d audit outbox dead-letter record(s).',
             $verb,
             $counts['audit_outbox'],
+        ));
+        $this->components->info(sprintf(
+            '%s %d expired native input operational envelope(s).',
+            $verb,
+            $counts['native_inputs'],
         ));
 
         return self::SUCCESS;
@@ -262,6 +272,37 @@ class SwarmPruneCommand extends Command
             }
 
             $deleted += $chunk;
+        }
+    }
+
+    protected function pruneNativeInputs(Connection $connection, ConfigRepository $config, string $table, string $historyTable, SwarmPersistenceCipher $cipher, FilesystemFactory $filesystems): int
+    {
+        $deleted = 0;
+
+        while (true) {
+            $rows = $this->pruneQuery($connection, $config, 'native_inputs', $table, $historyTable)
+                ->limit(self::CHUNK_SIZE)
+                ->get(['id', 'payload']);
+
+            if ($rows->isEmpty()) {
+                return $deleted;
+            }
+
+            $ids = [];
+            foreach ($rows as $row) {
+                $payload = json_decode((string) $cipher->openStrict((string) $row->payload), true, 512, JSON_THROW_ON_ERROR);
+                foreach ($payload['attachments'] ?? [] as $attachment) {
+                    if (! is_array($attachment) || ($attachment['swarm_owned'] ?? false) !== true) {
+                        continue;
+                    }
+                    if (is_string($attachment['disk'] ?? null) && is_string($attachment['path'] ?? null)) {
+                        $filesystems->disk($attachment['disk'])->delete($attachment['path']);
+                    }
+                }
+                $ids[] = $row->id;
+            }
+
+            $deleted += $connection->table($table)->whereIn('id', $ids)->delete();
         }
     }
 }

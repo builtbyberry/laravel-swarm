@@ -330,7 +330,11 @@ class DurableBranchAdvancer
      */
     protected function promptBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot): array
     {
-        $response = $agent->prompt($branch['input']);
+        $recipient = is_string($branch['node_id'] ?? null)
+            ? ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branch['node_id']
+            : 'parallel:'.(int) $branch['step_index'];
+        $invocation = $state->context->nativeInvocation($recipient, (string) $branch['input']);
+        $response = $agent->prompt($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
         $this->outcomes->validateResponse($response);
 
         foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {

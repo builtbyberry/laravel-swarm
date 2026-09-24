@@ -79,11 +79,13 @@ class ParallelRunner
                     throw new SwarmException("Parallel swarm agent [{$agentClass}] must resolve to a Laravel AI agent.");
                 }
 
-                ActiveRunContext::enter($runId, $swarmClass, RunContext::fromPayload($contextPayload, $runId));
+                $workerContext = RunContext::fromPayload($contextPayload, $runId);
+                ActiveRunContext::enter($runId, $swarmClass, $workerContext);
 
                 try {
                     $startedAt = MonotonicTime::now();
-                    $response = $agent->prompt($input);
+                    $invocation = $workerContext->nativeInvocation("parallel:{$index}", $input);
+                    $response = $agent->prompt($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
                     Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                     return [

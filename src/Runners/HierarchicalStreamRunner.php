@@ -29,6 +29,7 @@ use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Messages\UserMessage;
 use Throwable;
 
 /**
@@ -55,7 +56,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
+    public function stream(Swarm $swarm, string|array|RunContext|UserMessage $task): StreamableSwarmResponse
     {
         $agents = $swarm->agents();
 
@@ -282,7 +283,8 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
 
             try {
                 $this->citationStorage->check();
-                $coordinatorResponse = $coordinator->prompt($context->input);
+                $invocation = $context->nativeInvocation('generated:coordinator', $context->input);
+                $coordinatorResponse = $coordinator->prompt($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
                 $this->outcomes->validateResponse($coordinatorResponse);
             } finally {
                 ActiveRunContext::exit();
@@ -330,6 +332,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
 
             // Parse the coordinator's output into a route plan.
             $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorOutput, $swarm::class);
+            $context->assertNativeNodeRecipients('generated:', array_keys($plan->nodes));
 
             // Budget check: coordinator (1) + all reachable workers.
             $required = 1 + $plan->reachableWorkerCount();

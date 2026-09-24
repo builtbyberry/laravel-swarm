@@ -4,9 +4,14 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
-use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeInputQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
+use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Foundation\Bus\PendingDispatch;
 
@@ -17,6 +22,7 @@ class DurableJobDispatcher
 {
     public function __construct(
         protected ConfigRepository $config,
+        protected ?ContextStore $contexts = null,
     ) {}
 
     public function dispatchStep(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
@@ -45,13 +51,15 @@ class DurableJobDispatcher
     {
         $connection = $this->config->get('swarm.queue.hierarchical_parallel.resume.connection') ?? $connection;
         $queue = $this->config->get('swarm.queue.hierarchical_parallel.resume.name') ?? $queue;
-        $dispatch = QueuedHierarchicalCoordinator::dispatchResume($runId, $connection, $queue);
+        $dispatch = new PendingDispatch($this->makeQueuedResumeJob($runId, $connection, $queue));
         unset($dispatch);
     }
 
     public function makeStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): AdvanceDurableSwarm
     {
-        $job = new AdvanceDurableSwarm($runId, $stepIndex);
+        $job = $this->requiresNativeInputReader($runId)
+            ? new AdvanceNativeInputDurableSwarm($runId, $stepIndex)
+            : new AdvanceDurableSwarm($runId, $stepIndex);
 
         if ($connection) {
             $job->onConnection($connection);
@@ -66,7 +74,9 @@ class DurableJobDispatcher
 
     public function makeBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): AdvanceDurableBranch
     {
-        $job = new AdvanceDurableBranch($runId, $branchId);
+        $job = $this->requiresNativeInputReader($runId)
+            ? new AdvanceNativeInputDurableBranch($runId, $branchId)
+            : new AdvanceDurableBranch($runId, $branchId);
 
         if ($connection) {
             $job->onConnection($connection);
@@ -77,5 +87,29 @@ class DurableJobDispatcher
         }
 
         return $job;
+    }
+
+    public function makeQueuedResumeJob(string $runId, ?string $connection = null, ?string $queue = null): ResumeQueuedHierarchicalSwarm
+    {
+        $job = $this->requiresNativeInputReader($runId)
+            ? new ResumeNativeInputQueuedHierarchicalSwarm($runId)
+            : new ResumeQueuedHierarchicalSwarm($runId);
+
+        if ($connection) {
+            $job->onConnection($connection);
+        }
+
+        if ($queue) {
+            $job->onQueue($queue);
+        }
+
+        return $job;
+    }
+
+    protected function requiresNativeInputReader(string $runId): bool
+    {
+        $context = ($this->contexts ?? Container::getInstance()->make(ContextStore::class))->find($runId);
+
+        return is_string($context['native_input_ref'] ?? null);
     }
 }

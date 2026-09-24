@@ -35,6 +35,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Streaming\Events\Error as ProviderStreamError;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -67,7 +68,7 @@ class SequentialStreamRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
+    public function stream(Swarm $swarm, string|array|RunContext|UserMessage $task): StreamableSwarmResponse
     {
         $topology = $this->resolver->resolveTopology($swarm);
         $this->ensureSwarmHasAgents($swarm);
@@ -460,7 +461,7 @@ class SequentialStreamRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    protected function checkInputPayload(string|array|RunContext $task, RunContext $context): void
+    protected function checkInputPayload(string|array|RunContext|UserMessage $task, RunContext $context): void
     {
         if ($task instanceof RunContext) {
             $this->limits->checkContextInput($context);

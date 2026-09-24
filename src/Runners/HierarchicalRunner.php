@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
@@ -113,6 +114,7 @@ class HierarchicalRunner
         $mergedUsage = $this->mergeUsageReport($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
 
         $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorStep->output, $state->swarm::class);
+        $state->context->assertNativeNodeRecipients('generated:', array_keys($plan->nodes));
         $this->ensurePlanWithinExecutionBudget($state, $plan);
 
         $deferral = null;
@@ -210,6 +212,7 @@ class HierarchicalRunner
         $mergedUsage = $this->mergeUsageReport($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
 
         $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorStep->output, $state->swarm::class);
+        $state->context->assertNativeNodeRecipients('generated:', array_keys($plan->nodes));
         $this->ensurePlanWithinExecutionBudget($state, $plan);
 
         $deferral = null;
@@ -561,6 +564,7 @@ class HierarchicalRunner
         );
 
         $plan = $this->planner->fromCoordinatorOutput($coordinator, $workers, $coordinatorStep->output, $state->swarm::class);
+        $state->context->assertNativeNodeRecipients('generated:', array_keys($plan->nodes));
         $this->ensurePlanWithinExecutionBudget($state, $plan);
 
         $cursor = $this->buildDurableCursor($plan, $coordinator::class);
@@ -998,18 +1002,21 @@ class HierarchicalRunner
                         $branchRunId = $state->context->runId;
                         $branchSwarmClass = $state->swarm::class;
                         $branchContextPayload = $state->context->toQueuePayload();
-                        $callbacks[$branchNodeId] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchIndex, $branchNodeId, $citationLimits): array {
+                        $nativeRecipient = ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branchNodeId;
+                        $callbacks[$branchNodeId] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchIndex, $branchNodeId, $citationLimits, $nativeRecipient): array {
                             $worker = Container::getInstance()->make($agentClass);
 
                             if (! $worker instanceof Agent) {
                                 throw new SwarmException("Hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
                             }
 
-                            ActiveRunContext::enter($branchRunId, $branchSwarmClass, RunContext::fromPayload($branchContextPayload, $branchRunId));
+                            $branchContext = RunContext::fromPayload($branchContextPayload, $branchRunId);
+                            ActiveRunContext::enter($branchRunId, $branchSwarmClass, $branchContext);
 
                             try {
                                 $startedAt = MonotonicTime::now();
-                                $response = $worker->prompt($input);
+                                $invocation = $branchContext->nativeInvocation($nativeRecipient, $input);
+                                $response = $worker->prompt($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
                                 Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
@@ -1625,7 +1632,11 @@ class HierarchicalRunner
         ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
 
         try {
-            $response = $agent->prompt($input);
+            $recipient = ($metadata['node_role'] ?? null) === 'coordinator'
+                ? 'generated:coordinator'
+                : ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').(string) ($metadata['node_id'] ?? $index);
+            $invocation = $state->context->nativeInvocation($recipient, $input);
+            $response = $agent->prompt($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
             $this->outcomes->validateResponse($response);
         } finally {
             ActiveRunContext::exit();
@@ -1735,7 +1746,9 @@ class HierarchicalRunner
 
         $nativeStreamFailure = null;
         try {
-            $stream = $agent->stream($input);
+            $prefix = $state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:';
+            $invocation = $state->context->nativeInvocation($prefix.$nodeId, $input);
+            $stream = $agent->stream($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 

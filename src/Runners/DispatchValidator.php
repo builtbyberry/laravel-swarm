@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
+use Laravel\Ai\Messages\UserMessage;
 use ReflectionClass;
 use ReflectionIntersectionType;
 use ReflectionNamedType;
@@ -286,7 +287,7 @@ class DispatchValidator
     /**
      * @param  string|array<int|string, mixed>|RunContext  $task
      */
-    public function checkInputPayload(string|array|RunContext $task, RunContext $context, ExecutionMode $executionMode): void
+    public function checkInputPayload(string|array|RunContext|UserMessage $task, RunContext $context, ExecutionMode $executionMode): void
     {
         if ($task instanceof RunContext || in_array($executionMode, [ExecutionMode::Queue, ExecutionMode::Durable], true)) {
             $this->limits->checkContextInput($context);

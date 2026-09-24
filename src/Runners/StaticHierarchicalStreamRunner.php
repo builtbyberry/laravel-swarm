@@ -72,6 +72,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Events\Dispatcher;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
 use Laravel\Ai\Streaming\Events\Citation;
@@ -166,7 +167,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
+    public function stream(Swarm $swarm, string|array|RunContext|UserMessage $task): StreamableSwarmResponse
     {
         if (! $swarm instanceof HasRoutePlan) {
             throw new SwarmException(
@@ -205,6 +206,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         ]);
 
         $plan = $this->planner->fromStaticPlan($agents, $swarm->plan(), $swarm::class);
+        $context->assertNativeNodeRecipients('static:', array_keys($plan->nodes));
 
         // Enforce execution budget before any LLM call
         $required = $plan->reachableWorkerCount();
@@ -839,7 +841,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         // MemoryReplayCoordinator are both re-resolved from the
                         // child's container instead, mirroring how the worker
                         // agent is resolved below.
-                        $callbacks[$ordinal] = static function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchStepIndex, $citationLimits): array {
+                        $callbacks[$ordinal] = static function () use ($agentClass, $input, $branchNodeId, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchStepIndex, $citationLimits): array {
                             $container = Container::getInstance();
                             $worker = $container->make($agentClass);
 
@@ -885,7 +887,9 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                             try {
                                 $branchStartedAt = MonotonicTime::now();
-                                $response = $worker->prompt($input);
+                                $branchContext = RunContext::fromPayload($branchContextPayload, $branchRunId);
+                                $invocation = $branchContext->nativeInvocation('static:'.$branchNodeId, $input);
+                                $response = $worker->prompt($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
                                 Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
@@ -1109,7 +1113,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
         $nativeStreamFailure = null;
         try {
-            $stream = $agent->stream($input);
+            $invocation = $context->nativeInvocation('static:'.($nodeId ?? $stepIndex), $input);
+            $stream = $agent->stream($invocation->prompt, provider: $invocation->provider, model: $invocation->model, timeout: $invocation->timeout);
             foreach ($stream as $event) {
                 $this->outcomes->validateEvent($event);
                 if ($event instanceof TextDelta) {

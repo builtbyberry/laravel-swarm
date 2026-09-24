@@ -109,6 +109,21 @@ return [
     ],
 
     /*
+     * Native Laravel AI UserMessage input is an additive, default-off rollout.
+     * Enable only after this package's migration and v1 readers are present on
+     * every worker. Recoverable/cross-process input requires database persistence,
+     * encrypt_at_rest, and a private disk named below. Swarm-owned promoted files
+     * use the same retention window as their sealed operational envelope.
+     */
+    'native_inputs' => [
+        'enabled' => filter_var(env('SWARM_NATIVE_INPUTS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+        'disk' => env('SWARM_NATIVE_INPUTS_DISK'),
+        'retention_seconds' => (int) env('SWARM_NATIVE_INPUTS_RETENTION_SECONDS', 86400),
+        'max_attachments' => (int) env('SWARM_NATIVE_INPUTS_MAX_ATTACHMENTS', 8),
+        'max_attachment_bytes' => (int) env('SWARM_NATIVE_INPUTS_MAX_ATTACHMENT_BYTES', 10485760),
+    ],
+
+    /*
      * Capture controls what is persisted into history, context, and response payloads.
      * Defaults are conservative: opt in when you want full prompts and outputs stored.
      */
@@ -839,5 +854,6 @@ return [
         'memory_snapshots' => env('SWARM_MEMORY_SNAPSHOTS_TABLE', 'swarm_memory_snapshots'),
         'stream_step_checkpoints' => env('SWARM_STREAM_STEP_CHECKPOINTS_TABLE', 'swarm_stream_step_checkpoints'),
         'cold_archives' => env('SWARM_COLD_ARCHIVES_TABLE', 'swarm_cold_archives'),
+        'native_inputs' => env('SWARM_NATIVE_INPUTS_TABLE', 'swarm_native_inputs'),
     ],
 ];

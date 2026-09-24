@@ -227,6 +227,7 @@ class SwarmCapture
             data: $data,
             metadata: $context->metadata,
             artifacts: $this->artifacts($context->artifacts),
+            nativeInputReference: $context->nativeInputReference(),
         );
     }
 
@@ -242,6 +243,7 @@ class SwarmCapture
             data: ['input' => self::REDACTED],
             metadata: $context->metadata,
             artifacts: [],
+            nativeInputReference: $context->nativeInputReference(),
         );
     }
 

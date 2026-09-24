@@ -44,6 +44,7 @@ use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Messages\UserMessage;
 
 /**
  * Test double that records calls for assertions.
@@ -60,22 +61,22 @@ use Laravel\Ai\Contracts\Agent;
 class SwarmFake implements Swarm
 {
     /**
-     * @var array<int, string|array<string, mixed>|RunContext>
+     * @var array<int, string|array<string, mixed>|RunContext|UserMessage>
      */
     protected array $recorded = [];
 
     /**
-     * @var array<int, string|array<string, mixed>|RunContext>
+     * @var array<int, string|array<string, mixed>|RunContext|UserMessage>
      */
     protected array $recordedQueued = [];
 
     /**
-     * @var array<int, string|array<string, mixed>|RunContext>
+     * @var array<int, string|array<string, mixed>|RunContext|UserMessage>
      */
     protected array $recordedDurable = [];
 
     /**
-     * @var array<int, string|array<string, mixed>|RunContext>
+     * @var array<int, string|array<string, mixed>|RunContext|UserMessage>
      */
     protected array $recordedStreamed = [];
 
@@ -132,7 +133,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    public function prompt(string|array|RunContext $task): SwarmResponse
+    public function prompt(string|array|RunContext|UserMessage $task): SwarmResponse
     {
         $this->recorded[] = $task;
 
@@ -152,7 +153,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    public function run(string|array|RunContext $task): SwarmResponse
+    public function run(string|array|RunContext|UserMessage $task): SwarmResponse
     {
         return $this->prompt($task);
     }
@@ -162,7 +163,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    public function queue(string|array|RunContext $task): QueuedSwarmResponse
+    public function queue(string|array|RunContext|UserMessage $task): QueuedSwarmResponse
     {
         $this->recordedQueued[] = $task;
 
@@ -172,7 +173,7 @@ class SwarmFake implements Swarm
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function dispatchDurable(string|array|RunContext $task): DurableSwarmResponse
+    public function dispatchDurable(string|array|RunContext|UserMessage $task): DurableSwarmResponse
     {
         $this->recordedDurable[] = $task;
 
@@ -241,7 +242,7 @@ class SwarmFake implements Swarm
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function recordDurableChildSwarm(string $childSwarmClass, string|array|RunContext $task): self
+    public function recordDurableChildSwarm(string $childSwarmClass, string|array|RunContext|UserMessage $task): self
     {
         $this->recordedDurableOperations['children'][] = compact('childSwarmClass', 'task');
 
@@ -325,7 +326,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    public function stream(string|array|RunContext $task): StreamableSwarmResponse
+    public function stream(string|array|RunContext|UserMessage $task): StreamableSwarmResponse
     {
         return new StreamableSwarmResponse('fake-run-id', function () use ($task): \Generator {
             $this->recordedStreamed[] = $task;
@@ -400,7 +401,7 @@ class SwarmFake implements Swarm
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcast(string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
+    public function broadcast(string|array|RunContext|UserMessage $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
     {
         return $this->stream($task)
             ->each(function (SwarmStreamEvent $event) use ($channels, $now): void {
@@ -414,7 +415,7 @@ class SwarmFake implements Swarm
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcastNow(string|array|RunContext $task, Channel|array $channels): StreamableSwarmResponse
+    public function broadcastNow(string|array|RunContext|UserMessage $task, Channel|array $channels): StreamableSwarmResponse
     {
         return $this->broadcast($task, $channels, now: true);
     }
@@ -425,7 +426,7 @@ class SwarmFake implements Swarm
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcastOnQueue(string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
+    public function broadcastOnQueue(string|array|RunContext|UserMessage $task, Channel|array $channels): QueuedSwarmResponse
     {
         return $this->queue($task);
     }
@@ -435,7 +436,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmAssertTask  $task
      */
-    public function assertPrompted(string|array|callable $task): void
+    public function assertPrompted(string|array|UserMessage|callable $task): void
     {
         $this->assertRan($task);
     }
@@ -445,7 +446,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmAssertTask  $task
      */
-    public function assertRan(string|array|callable $task): void
+    public function assertRan(string|array|UserMessage|callable $task): void
     {
         if (is_callable($task)) {
             PHPUnit::assertTrue(
@@ -465,7 +466,7 @@ class SwarmFake implements Swarm
             return;
         }
 
-        PHPUnit::assertContains($task, $this->recorded, "The swarm [{$this->swarmClass}] was not run with task: [{$task}].");
+        PHPUnit::assertContains($task, $this->recorded, "The swarm [{$this->swarmClass}] was not run with task: [{$this->assertTaskDescription($task)}].");
     }
 
     /**
@@ -492,7 +493,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmAssertTask  $task
      */
-    public function assertQueued(string|array|callable $task): void
+    public function assertQueued(string|array|UserMessage|callable $task): void
     {
         if (is_callable($task)) {
             PHPUnit::assertTrue(
@@ -512,7 +513,7 @@ class SwarmFake implements Swarm
             return;
         }
 
-        PHPUnit::assertContains($task, $this->recordedQueued, "The swarm [{$this->swarmClass}] was not queued with task: [{$task}].");
+        PHPUnit::assertContains($task, $this->recordedQueued, "The swarm [{$this->swarmClass}] was not queued with task: [{$this->assertTaskDescription($task)}].");
     }
 
     /**
@@ -529,7 +530,7 @@ class SwarmFake implements Swarm
     /**
      * @param  SwarmAssertTask  $task
      */
-    public function assertDispatchedDurably(string|array|callable $task): void
+    public function assertDispatchedDurably(string|array|UserMessage|callable $task): void
     {
         if (is_callable($task)) {
             PHPUnit::assertTrue(
@@ -549,7 +550,7 @@ class SwarmFake implements Swarm
             return;
         }
 
-        PHPUnit::assertContains($task, $this->recordedDurable, "The swarm [{$this->swarmClass}] was not durably dispatched with task: [{$task}].");
+        PHPUnit::assertContains($task, $this->recordedDurable, "The swarm [{$this->swarmClass}] was not durably dispatched with task: [{$this->assertTaskDescription($task)}].");
     }
 
     public function assertNeverDispatchedDurably(): void
@@ -621,7 +622,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmAssertTask  $task
      */
-    public function assertStreamed(string|array|callable $task): void
+    public function assertStreamed(string|array|UserMessage|callable $task): void
     {
         if (is_callable($task)) {
             PHPUnit::assertTrue(
@@ -641,7 +642,7 @@ class SwarmFake implements Swarm
             return;
         }
 
-        PHPUnit::assertContains($task, $this->recordedStreamed, "The swarm [{$this->swarmClass}] was not streamed with task: [{$task}].");
+        PHPUnit::assertContains($task, $this->recordedStreamed, "The swarm [{$this->swarmClass}] was not streamed with task: [{$this->assertTaskDescription($task)}].");
     }
 
     /**
@@ -830,7 +831,7 @@ class SwarmFake implements Swarm
      *
      * @param  SwarmTaskInput  $task
      */
-    protected function resolveResponse(string|array|RunContext $task): string|SwarmResponse
+    protected function resolveResponse(string|array|RunContext|UserMessage $task): string|SwarmResponse
     {
         if (is_callable($this->responses)) {
             return ($this->responses)($task);
@@ -841,6 +842,11 @@ class SwarmFake implements Swarm
         }
 
         return "Fake response for swarm [{$this->swarmClass}].";
+    }
+
+    protected function assertTaskDescription(string|UserMessage $task): string
+    {
+        return $task instanceof UserMessage ? $task->content : $task;
     }
 
     protected function boundedCitationFixture(SwarmResponse $response): SwarmResponse
@@ -896,7 +902,7 @@ class SwarmFake implements Swarm
      * @param  array<string, mixed>  $expected
      * @param  string|array<string, mixed>|RunContext  $actual
      */
-    protected function matchesStructuredTask(array $expected, string|array|RunContext $actual): bool
+    protected function matchesStructuredTask(array $expected, string|array|RunContext|UserMessage $actual): bool
     {
         if ($actual instanceof RunContext) {
             $context = [
@@ -1005,7 +1011,7 @@ class SwarmFake implements Swarm
     /**
      * @param  string|array<string, mixed>|RunContext  $task
      */
-    protected function actorFromTask(string|array|RunContext $task): ?Actor
+    protected function actorFromTask(string|array|RunContext|UserMessage $task): ?Actor
     {
         if ($task instanceof RunContext) {
             return $task->actor();
@@ -1030,7 +1036,7 @@ class SwarmFake implements Swarm
     }
 
     /**
-     * @return array<int, string|array<string, mixed>|RunContext>
+     * @return array<int, string|array<string, mixed>|RunContext|UserMessage>
      */
     protected function allRecordedDispatches(): array
     {

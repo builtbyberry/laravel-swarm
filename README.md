@@ -53,6 +53,10 @@ echo $response->output;
 
 For background execution, streaming, and durable workflows, see [Choosing an Execution Mode](#choosing-an-execution-mode).
 
+Laravel AI `UserMessage` input and explicitly routed image/document/audio/video
+attachments are available behind the default-off v0.28 rollout controls. See
+[Native messages and attachments](docs/native-inputs.md).
+
 ## Requirements
 
 - PHP **^8.4**

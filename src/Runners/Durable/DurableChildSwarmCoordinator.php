@@ -24,6 +24,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
+use Laravel\Ai\Messages\UserMessage;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -60,7 +61,7 @@ class DurableChildSwarmCoordinator
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey = null): DurableChildRun
+    public function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext|UserMessage $task, ?string $dedupeKey = null): DurableChildRun
     {
         $parent = $this->runs->requireRun($parentRunId);
         $swarm = $this->application->make($childSwarmClass);
