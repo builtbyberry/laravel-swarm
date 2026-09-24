@@ -6,7 +6,13 @@ Native feature access through Laravel Swarm workflows.
 
 ### Added
 
-_To be filled in during release wrap-up._
+- Executable proof of Laravel AI's public native approval pause, inspection,
+  ownership, decision, and continuation contracts, including exact controlled
+  provider wire, approve/reject/edit behavior, repeated pauses, and fresh-process
+  `SIGKILL` recovery at every named boundary. The proof documents that a saved
+  result cannot presently resume the same native turn through a supported public
+  operation, defines the minimal upstream requirement and safe operator
+  alternative, and keeps the production bridge default-off and blocked.
 
 ### Changed
 

@@ -1,5 +1,12 @@
 # Native approval outcomes
 
+> **Current v0.28 status:** this default rejection remains the shipped runtime
+> behavior. The [native approval recovery proof](native-approval-recovery-proof.md)
+> demonstrates the released Laravel AI contracts and crash boundaries without
+> installing a production bridge. Saved-result fresh-process continuation still
+> needs an upstream same-turn continuation primitive, so automatic adoption
+> remains default-off.
+
 Laravel Swarm v0.26.0 rejects pending native tool approvals. A native agent may
 return an approval-pending response, but Swarm does not supply the native
 approval decision/continuation integration. Such a response fails the affected
