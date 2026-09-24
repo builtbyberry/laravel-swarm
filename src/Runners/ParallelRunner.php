@@ -102,7 +102,7 @@ class ParallelRunner
 
         $driver = $this->concurrency->driver();
         $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-        /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int>, class: string, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+        /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, class: string, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
         $results = $this->outcomes->validateConcurrentResults($results);
 
         foreach ($results as $rowIndex => $rowData) {
@@ -176,7 +176,7 @@ class ParallelRunner
 
             $steps[] = $step;
             $outputs[] = $row['output'];
-            $mergedUsage = $this->mergeUsage($mergedUsage, $row['usage']);
+            $mergedUsage = $this->mergeUsageReport($mergedUsage, $row['usage']);
         }
 
         $combined = implode("\n\n", $outputs);

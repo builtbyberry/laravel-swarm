@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmInputGuardrail;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmOutputGuardrail;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmStepGuardrail;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
@@ -10,6 +13,8 @@ use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\ConversationAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\CoordinatorAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeWire;
@@ -40,6 +45,7 @@ beforeEach(function () {
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
     Http::preventStrayRequests();
     WorkflowAgent::$trace = [];
+    WorkflowAgent::$generationSteps = [];
     WorkflowTool::$effects = [];
 });
 
@@ -70,13 +76,14 @@ it('preserves native middleware order options prompt identity and successful usa
         $response = $response->streamedResponse;
     }
     expect(WorkflowAgent::$trace)->toBe(['outer:task', 'inner:outer task'])
-        ->and($prompts)->toHaveCount(1)->and($prompts[0]->prompt)->toBe('inner outer task')
+        ->and($prompts)->toHaveCount(1)->and($prompts[0]->prompt)->toBe('task')
         ->and($prompts[0]->agent)->toBeInstanceOf(WorkflowAgent::class)
         ->and($completed)->toHaveCount(1)
+        ->and($completed[0]->prompt->prompt)->toBe('task')
         ->and($completed[0]->invocationId)->toBe($prompts[0]->invocationId)
         ->and($response->output)->toBe('native-answer')
-        ->and($response->usage['prompt_tokens'])->toBe(2)
-        ->and($response->usage['completion_tokens'])->toBe(3);
+        ->and($response->usage['input_tokens'])->toBe(2)
+        ->and($response->usage['output_tokens'])->toBe(3);
     Http::assertSentCount(1);
 })->with(['prompt', 'stream']);
 
@@ -135,8 +142,8 @@ it('uses native deferred discovery and returns the paired tool result on the wir
     }
     expect(WorkflowTool::$effects)->toBe(['effect-secret'])
         ->and($response->output)->toBe('native-answer')
-        ->and($response->usage['prompt_tokens'])->toBe(4)
-        ->and($response->usage['completion_tokens'])->toBe(6);
+        ->and($response->usage['input_tokens'])->toBe(4)
+        ->and($response->usage['output_tokens'])->toBe(6);
     Http::assertSentCount(2);
 })->with(['prompt', 'stream']);
 
@@ -189,7 +196,7 @@ it('passes native structured JSON through route validation before worker invocat
         $response = $run();
         expect($response->output)->toBe('worker-result')
             ->and($response->metadata['executed_node_ids'])->toBe(['worker'])
-            ->and($response->usage['prompt_tokens'])->toBe(4);
+            ->and($response->usage['input_tokens'])->toBe(4);
     } else {
         expect($run)->toThrow(SwarmException::class, match ($case) {
             'malformed', 'shape' => 'non-empty [start_at]',
@@ -236,3 +243,98 @@ it('keeps native conversation opt in roles isolation and separate storage privac
         ->and(DB::table('agent_conversation_messages')->where('role', 'user')->pluck('content')->all())->toBe(['first-secret', 'next-secret', 'other-secret']);
     Http::assertSentCount(4);
 })->with(['prompt', 'stream']);
+
+it('keeps generation middleware separate from workflow guardrails through final short circuit and failure', function (string $mode, string $outcome) {
+    config()->set('tests.adoption.tools', 'direct');
+    config()->set('tests.adoption.middleware_short_circuit', $outcome === 'short-circuit');
+    if ($outcome === 'later-failure') {
+        config()->set('tests.adoption.middleware_throw_step', 1);
+    }
+    $counts = (object) ['input' => 0, 'step' => 0, 'output' => 0];
+    $inputGuard = new class($counts) implements SwarmInputGuardrail
+    {
+        public function __construct(private object $counts) {}
+
+        public function validate(RunContext $context): void
+        {
+            expect($context->input)->toBe('task');
+            $this->counts->input++;
+        }
+    };
+    $stepGuard = new class($counts) implements SwarmStepGuardrail
+    {
+        public function __construct(private object $counts) {}
+
+        public function validate(GuardrailStepContext $step): void
+        {
+            expect($step->stepIndex)->toBe(0);
+            $this->counts->step++;
+        }
+    };
+    $outputGuard = new class($counts) implements SwarmOutputGuardrail
+    {
+        public function __construct(private object $counts) {}
+
+        public function validate(RunContext $context, string $output): void
+        {
+            expect($output)->toBeIn(['native-answer', 'middleware answer']);
+            $this->counts->output++;
+        }
+    };
+    foreach (['input' => $inputGuard, 'step' => $stepGuard, 'output' => $outputGuard] as $boundary => $guard) {
+        app()->instance($guard::class, $guard);
+        config()->set('swarm.guardrails.'.$boundary, [$guard::class]);
+    }
+    GuardrailContainer::refresh(app());
+    $originals = [];
+    app('events')->listen($mode === 'prompt' ? PromptingAgent::class : StreamingAgent::class, function ($event) use (&$originals) {
+        $originals[] = $event->prompt->prompt;
+    });
+    $requests = [];
+    Http::fake(function (Request $request) use (&$requests, $mode) {
+        $requests[] = $request->data();
+        expect($request['input'][1]['content'][0]['text'])->toBe('inner outer task')
+            ->and($request['model'])->toBe('gpt-4.1-mini')
+            ->and($request['max_output_tokens'])->toBe(321)
+            ->and($request['temperature'])->toBe(0.25)
+            ->and($request['top_p'])->toBe(0.75)
+            ->and($request['metadata'])->toBe(['preservation' => 'native-options']);
+        if (count($requests) === 2) {
+            expect($request['input'])->toContain(['type' => 'function_call_output', 'call_id' => 'call', 'output' => 'effect:effect-secret']);
+        }
+
+        return Http::response(NativeWire::response(tool: count($requests) === 1, stream: $mode === 'stream'));
+    });
+    $invoke = function () use ($mode) {
+        $response = app(SwarmRunner::class)->agent(new WorkflowAgent)->{$mode}('task');
+        if ($mode === 'stream') {
+            iterator_to_array($response);
+
+            return $response->streamedResponse;
+        }
+
+        return $response;
+    };
+    if ($outcome === 'later-failure') {
+        expect($invoke)->toThrow(RuntimeException::class, 'middleware stopped');
+    } else {
+        expect($invoke()->output)->toBe($outcome === 'short-circuit' ? 'middleware answer' : 'native-answer');
+    }
+    expect($originals)->toBe(['task'])
+        ->and((array) $counts)->toBe(['input' => 1, 'step' => $outcome === 'later-failure' ? 0 : 1, 'output' => $outcome === 'later-failure' ? 0 : 1])
+        ->and(WorkflowTool::$effects)->toBe($outcome === 'short-circuit' ? [] : ['effect-secret'])
+        ->and(WorkflowAgent::$generationSteps)->toBe($outcome === 'short-circuit' ? [
+            ['number' => 0, 'first' => true, 'final' => false, 'completed' => 0],
+        ] : [
+            ['number' => 0, 'first' => true, 'final' => false, 'completed' => 0],
+            ['number' => 1, 'first' => false, 'final' => true, 'completed' => 1],
+        ])
+        ->and(WorkflowAgent::$trace)->toBe(match ($outcome) {
+            'short-circuit' => ['outer:task'],
+            'later-failure' => ['outer:task', 'inner:outer task', 'outer:task'],
+            default => ['outer:task', 'inner:outer task', 'outer:task', 'inner:outer task'],
+        });
+    Http::assertSentCount(match ($outcome) {
+        'short-circuit' => 0, 'later-failure' => 1, default => 2,
+    });
+})->with(['prompt', 'stream'])->with(['final', 'short-circuit', 'later-failure']);

@@ -11,8 +11,8 @@ use BuiltByBerry\LaravelSwarm\Exceptions\UnknownCausalTargetException;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
-use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventIdentity;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use Illuminate\Support\Carbon;
 
@@ -30,12 +30,11 @@ use Illuminate\Support\Carbon;
 class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalLogStore
 {
     /**
-     * Append an event, promoting its own UUID to the indexed `event_uuid` column.
+     * Append an event with its causal storage identity in `event_uuid`.
      *
-     * The parent's insert omits `event_uuid`; without it a void-edge could not
-     * locate its target, and `isSealed()` could not address an event. We extract
-     * the id from the serialized payload (every {@see SwarmStreamEvent} emits one)
-     * rather than a typed property so this holds for any event shape.
+     * The indexed identity addresses void targets and seal checks. Identity
+     * selection is owned by {@see StreamEventIdentity}; this write keeps the
+     * event's original ID in its public payload.
      */
     public function record(string $runId, SwarmStreamEvent $event, int $ttlSeconds): void
     {
@@ -44,7 +43,7 @@ class DatabaseCausalLogStore extends DatabaseStreamEventStore implements CausalL
 
         $this->table()->insert([
             'run_id' => $runId,
-            'event_uuid' => $event instanceof SwarmProviderToolEvent ? $event->causalId() : (is_string($payload['id'] ?? null) ? $payload['id'] : null),
+            'event_uuid' => StreamEventIdentity::forEvent($event),
             // Promoted from the JSON payload (#284) / event object (#298) into
             // queryable columns so the durable resume-time void lookup can select a
             // node's prior-attempt events without unpacking JSON. node_id is null

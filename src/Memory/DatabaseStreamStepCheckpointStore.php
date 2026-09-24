@@ -149,7 +149,7 @@ final class DatabaseStreamStepCheckpointStore implements ChecksCitationStorage, 
             return null;
         }
 
-        /** @var array<string, int> $usage */
+        /** @var array<string, int|null> $usage */
         $usage = $this->decodeJson(is_string($record->usage ?? null) ? $record->usage : null, []);
 
         return StreamStepCheckpoint::fromPersisted(

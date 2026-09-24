@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Laravel\Ai\Contracts\ConversationStore;
 use Laravel\Ai\Contracts\HasTools;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Prompts\AgentPrompt;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Storage\DatabaseConversationStore;
@@ -34,32 +35,32 @@ it('uses an application ConversationStore with native history roles and tool res
 
         public function __construct(private DatabaseConversationStore $inner) {}
 
-        public function latestConversationId(string $participantType, string|int $participantId): ?string
+        public function latestConversationId(string $participantType, string|int $participantId, string $agent): ?string
         {
             $this->calls[] = 'latest';
 
-            return $this->inner->latestConversationId($participantType, $participantId);
+            return $this->inner->latestConversationId($participantType, $participantId, $agent);
         }
 
-        public function storeConversation(?string $participantType, string|int|null $participantId, string $title): string
+        public function storeConversation(?string $participantType, string|int|null $participantId, string $title, ?string $id = null): string
         {
             $this->calls[] = 'conversation';
 
-            return $this->inner->storeConversation($participantType, $participantId, $title);
+            return $this->inner->storeConversation($participantType, $participantId, $title, $id);
         }
 
-        public function storeUserMessage(string $conversationId, ?string $participantType, string|int|null $participantId, AgentPrompt $prompt): string
+        public function storeUserMessage(string $conversationId, ?string $participantType, string|int|null $participantId, string $agent, UserMessage $message): string
         {
             $this->calls[] = 'user';
 
-            return $this->inner->storeUserMessage($conversationId, $participantType, $participantId, $prompt);
+            return $this->inner->storeUserMessage($conversationId, $participantType, $participantId, $agent, $message);
         }
 
-        public function storeAssistantMessage(string $conversationId, ?string $participantType, string|int|null $participantId, AgentPrompt $prompt, AgentResponse $response): ?string
+        public function storeAssistantMessage(string $conversationId, ?string $participantType, string|int|null $participantId, AgentPrompt $prompt, AgentResponse $response, ?Throwable $exception = null): ?string
         {
             $this->calls[] = 'assistant';
 
-            return $this->inner->storeAssistantMessage($conversationId, $participantType, $participantId, $prompt, $response);
+            return $this->inner->storeAssistantMessage($conversationId, $participantType, $participantId, $prompt, $response, $exception);
         }
 
         public function getLatestConversationMessages(string $conversationId, int $limit): Collection
@@ -69,7 +70,7 @@ it('uses an application ConversationStore with native history roles and tool res
             return $this->inner->getLatestConversationMessages($conversationId, $limit);
         }
 
-        public function storeApprovalResults(string $conversationId, ?string $participantType, string|int|null $participantId, array $toolResults): void
+        public function storeApprovalResults(string $conversationId, array $toolResults): void
         {
             throw new RuntimeException('No native approval integration is exercised.');
         }
@@ -101,8 +102,12 @@ it('uses an application ConversationStore with native history roles and tool res
     expect(json_encode($bodies[2], JSON_THROW_ON_ERROR))->toContain('first', 'answer-2', 'second');
     expect($bodies[2]['input'])->toContain(['type' => 'function_call_output', 'call_id' => 'call', 'output' => 'effect:effect-secret']);
     expect(WorkflowTool::$effects)->toBe(['effect-secret']);
-    $stored = DB::table('agent_conversation_messages')->where('conversation_id', $id)->where('tool_results', '!=', '[]')->sole();
-    expect(json_decode($stored->tool_results, true, flags: JSON_THROW_ON_ERROR)[0])->toMatchArray([
+    $stored = DB::table('agent_conversation_messages')->where('conversation_id', $id)->where('content', 'answer-2')->sole();
+    $steps = json_decode($stored->steps, true, flags: JSON_THROW_ON_ERROR);
+    expect($stored->status)->toBe('completed')
+        ->and($stored->agent)->toBe($agent::class)
+        ->and($steps)->toHaveCount(2);
+    expect($steps[0]['tool_calls'][0])->toMatchArray([
         'id' => 'item', 'result_id' => 'call', 'name' => 'WorkflowTool', 'arguments' => ['value' => 'effect-secret'], 'result' => 'effect:effect-secret',
     ]);
     expect(DB::table('agent_conversation_messages')->where('conversation_id', $id)->count())->toBe(4)

@@ -18,8 +18,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Feature\Citations\Fixtures\CitationStaticSwa
 use Illuminate\Config\Repository;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
+use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\Data\UrlCitation;
-use Laravel\Ai\Responses\Data\Usage;
 use Laravel\Ai\Streaming\Events\Citation;
 
 function sourceEvidence(): CitationEvidence
@@ -46,7 +46,7 @@ it('marks heterogeneous contributing evidence partial without revealing hidden c
 
 it('bounds native extraction by complete records and preserves explicit partial state', function () {
     config()->set('swarm.citations.max_count', 1);
-    $native = new AgentResponse('inv', 'text', new Usage, new Meta('fixture', 'model', collect([
+    $native = new AgentResponse('inv', 'text', new TextUsage, new Meta('fixture', 'model', collect([
         new UrlCitation('https://example.com/first', 'first', 1, 7), new UrlCitation('https://example.com/second', 'second'),
     ])));
     $evidence = app(NativeCitationEvidence::class)->response($native, 'run', 0, 'Agent');
@@ -63,7 +63,7 @@ it('reconciles occurrences one for one and never erases event sources with empty
     $second = $mapper->event((new Citation('event2', 'message', $source, 124))->withInvocationId('inv'), 'run', 0, 'Agent');
     $events = $mapper->append($mapper->append(CitationEvidence::available(), $first), $second);
     expect($mapper->append($events, $first)->items)->toHaveCount(2);
-    $terminal = $mapper->response(new AgentResponse('inv', 'text', new Usage, new Meta(citations: collect([$source, $source]))), 'run', 0, 'Agent');
+    $terminal = $mapper->response(new AgentResponse('inv', 'text', new TextUsage, new Meta(citations: collect([$source, $source]))), 'run', 0, 'Agent');
     $result = $mapper->reconcile($events, $terminal);
     expect($result->items)->toHaveCount(2)->and($result->items[0]->eventId)->toBe('event1')->and($result->items[1]->eventId)->toBe('event2')
         ->and($mapper->reconcile($events, CitationEvidence::available())->toArray())->toBe($events->toArray());
@@ -144,7 +144,7 @@ it('fills missing supplied provenance on matched stream occurrences without repl
     $mapper = app(NativeCitationEvidence::class);
     $source = new UrlCitation('https://example.com', 'Title', 1, 8);
     $event = $mapper->event(new Citation('event', 'message', $source, 123), 'run', 0, 'Agent');
-    $terminal = $mapper->response(new AgentResponse('known-invocation', 'text', new Usage, new Meta(citations: collect([$source]))), 'run', 0, 'Agent', 'node');
+    $terminal = $mapper->response(new AgentResponse('known-invocation', 'text', new TextUsage, new Meta(citations: collect([$source]))), 'run', 0, 'Agent', 'node');
     $result = $mapper->reconcile($event, $terminal);
     expect($result->items)->toHaveCount(1)->and($result->items[0]->invocationId)->toBe('known-invocation')
         ->and($result->items[0]->nodeId)->toBe('node')->and($result->items[0]->eventId)->toBe('event')

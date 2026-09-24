@@ -6,11 +6,19 @@ Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabiliti
 
 ### Added
 
-_To be filled in during release wrap-up._
+- Native preliminary function-tool results retain independent event-level denied flags, identity and capture semantics across supported streams. Final-only snapshot pairing keeps cumulative progress out of completed tool history.
+- Durable function-tool storage identities isolate repeated native IDs across nodes and retries without changing public IDs. Existing attempt watermarks exclude stale late results; hot/cold replay and snapshots retain the stored target identity.
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **Breaking:** require official `laravel/ai ^1.0`. Native implementations accept the released richer input signatures and use `TextUsage`; `ScriptedAgent` keeps its string-only reply contract and deprecated Swarm marker.
+- Usage aggregation preserves unknown categories, raw historical report keys and completed workflow work. Mixed legacy/native accounting is unavailable rather than relabeled or partially summed; empty structural groups remain neutral. Native invocation subtotals are retained without claiming completeness across their internal model generations.
+- The native ToolCall field guard now explicitly recognizes `thoughtSignature`. Swarm keeps its pinned serialized fields instead of exporting the entire native DTO: opaque provider continuation state remains owned by Laravel AI. Direct and both-mapper tests guard that boundary.
+- Native middleware fixtures prove per-generation `PendingStep` transformations while retaining original prompt events, workflow guardrails, side-effect and recovery assertions. Exact Laravel 13.16 and moving official development dependency lanes retain the existing coverage, concurrency, analysis and advisory policies.
+
+Upgrade workers and readers together. Older readers may discard preliminary and
+event-level denied evidence; preserve compatible readers and backups before any
+rollback. See [v0.27.0 upgrade guidance](UPGRADING.md#upgrading-to-v0270).
 
 ## v0.26.3 - 2026-09-23
 

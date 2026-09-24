@@ -89,7 +89,7 @@ interface DurableRunStore
     public function markBranchRunning(string $runId, string $branchId, string $executionToken): void;
 
     /**
-     * @param  array<string, int>  $usage
+     * @param  array<string, int|null>  $usage
      */
     public function markBranchCompleted(string $runId, string $branchId, string $executionToken, string $output, array $usage, int $durationMs): void;
 

@@ -51,7 +51,7 @@ final class StreamStepAccumulator
      * `Usage::toArray()`. Empty when the stream was abandoned before `StreamEnd`
      * (a crash mid-node).
      *
-     * @var array<string, int>
+     * @var array<string, int|null>
      */
     public array $stepUsage = [];
 

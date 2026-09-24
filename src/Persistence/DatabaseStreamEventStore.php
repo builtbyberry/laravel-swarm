@@ -52,6 +52,7 @@ class DatabaseStreamEventStore implements StreamEventStore
         foreach ($this->table()->where('run_id', $runId)->where('event_type', '!=', 'swarm_causal_seal_barrier')->orderBy('id')->cursor() as $record) {
             $event = SwarmStreamEvent::fromArray($this->payloads->openPayload($this->decodeJson($record->payload, [])));
             if (! ($event instanceof SwarmUnknownEvent)) {
+                $event->storageEventId = is_string($record->event_uuid ?? null) ? $record->event_uuid : $event->storageEventId;
                 yield $this->withAttemptEpoch($event, $record->attempt_epoch ?? null);
             }
         }
@@ -106,6 +107,7 @@ class DatabaseStreamEventStore implements StreamEventStore
         foreach ($this->table()->where('run_id', $runId)->where('id', '>=', $fromSequence)->orderBy('id')->cursor() as $record) {
             $event = SwarmStreamEvent::fromArray($this->payloads->openPayload($this->decodeJson($record->payload, [])));
             if (! ($event instanceof SwarmUnknownEvent)) {
+                $event->storageEventId = is_string($record->event_uuid ?? null) ? $record->event_uuid : $event->storageEventId;
                 yield $this->withAttemptEpoch($event, $record->attempt_epoch ?? null);
             }
         }

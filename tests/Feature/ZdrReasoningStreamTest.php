@@ -7,23 +7,14 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\ZdrStreamEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalZdrSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeZdrStreamingSwarm;
 
 /**
- * F4 guard for the laravel/ai ^0.8 floor (issue #255).
+ * Exercise the synthetic opaque-field fixture through both streaming paths.
  *
- * 0.8 ships OpenAI ZDR (zero-data-retention): reasoning events arrive with a
- * null `summary` and tool calls carry an opaque `reasoningEncryptedContent`
- * blob. The invariant: a ZDR-shaped reasoning stream round-trips through the
- * runner capture paths without crashing, and the encrypted blob never leaks
- * into swarm's event contract. A 0.7-based suite cannot catch this because 0.7
- * never emits these shapes.
- *
- * The two runners (SequentialRunner, StaticHierarchicalStreamRunner) have
- * independent reasoning/tool-call capture helpers, so the dataset runs the
- * identical assertion block against both — parity by construction, not by a
- * single-runner spot check.
+ * @see ZdrStreamEditor
  */
 dataset('zdr_swarms', [
     'sequential runner' => [fn () => FakeZdrStreamingSwarm::make()],
@@ -57,5 +48,8 @@ test('a ZDR reasoning stream (null summary + encrypted tool call) completes with
 
     // The opaque encrypted-reasoning blob must never reach the serialized swarm
     // event contract (broadcast/persistence).
-    expect(json_encode($toolCalls->first()->toArray()))->not->toContain('OPAQUE_ENCRYPTED_REASONING');
+    expect(json_encode($toolCalls->first()->toArray()))
+        ->not->toContain('OPAQUE_ENCRYPTED_REASONING')
+        ->not->toContain('OPAQUE_THOUGHT_SIGNATURE')
+        ->not->toContain('thought_signature');
 })->with('zdr_swarms');

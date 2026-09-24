@@ -8,10 +8,12 @@ use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Support\Str;
 use Laravel\Ai\Approvals\Decisions;
+use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
-use Laravel\Ai\Responses\Data\Usage;
+use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\QueuedAgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use RuntimeException;
@@ -34,13 +36,9 @@ use RuntimeException;
  *
  * **Deliberately still implements the deprecated
  * {@see Agent} alias — do not migrate this
- * to the vendor contract before v1.0.** Everything else in `src/` moved to
- * `Laravel\Ai\Contracts\Agent` in v0.23.0, so this is the last consumer and
- * reads like an oversight; it is not. Subclasses live in user applications and
- * in the shipped example stubs, and some of those type-hint the marker; keeping
- * it here means those subclasses satisfy both interfaces. Since the marker
- * extends the vendor contract, a `ScriptedAgent` still passes everywhere Swarm
- * now type-hints. Drop this with the alias itself in v1.0.
+ * to the vendor contract before Swarm v1.0.** Keeping the marker here preserves
+ * the interface identity of existing subclasses. See {@see Agent} for the
+ * alias's inheritance and deprecation contract.
  *
  * @phpstan-import-type LaravelAiAgentAttachments from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  * @phpstan-import-type LaravelAiAgentProvider from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
@@ -73,24 +71,20 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function prompt(
-        Decisions|string $prompt,
+        AgentInput|UserMessage|Decisions|string $prompt,
         array $attachments = [],
         Lab|array|string|null $provider = null,
         ?string $model = null,
         ?int $timeout = null,
     ): AgentResponse {
         if (! is_string($prompt)) {
-            // An approval continuation (Decisions) has no scripted reply.
-            // ScriptedAgent does not model human-in-the-loop, so fail loud like
-            // the other unsupported modes rather than silently replying to an
-            // empty prompt.
-            throw new RuntimeException(static::class.': ScriptedAgent does not support human-in-the-loop; prompt() requires a string, not an approval continuation (Decisions).');
+            throw new RuntimeException(static::class.': ScriptedAgent prompt() requires a string; '.get_debug_type($prompt).' input is not supported.');
         }
 
         return new AgentResponse(
             invocationId: 'scripted-'.Str::random(8),
             text: $this->reply($prompt),
-            usage: new Usage,
+            usage: new TextUsage,
             meta: new Meta('scripted-agent', static::class),
         );
     }
@@ -100,7 +94,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function stream(
-        Decisions|string $prompt,
+        AgentInput|UserMessage|Decisions|string $prompt,
         array $attachments = [],
         Lab|array|string|null $provider = null,
         ?string $model = null,
@@ -114,7 +108,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function queue(
-        Decisions|string $prompt,
+        AgentInput|UserMessage|Decisions|string $prompt,
         array $attachments = [],
         Lab|array|string|null $provider = null,
         ?string $model = null,
@@ -128,7 +122,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function broadcast(
-        Decisions|string $prompt,
+        AgentInput|UserMessage|Decisions|string $prompt,
         Channel|array $channels,
         array $attachments = [],
         bool $now = false,
@@ -144,7 +138,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function broadcastNow(
-        Decisions|string $prompt,
+        AgentInput|UserMessage|Decisions|string $prompt,
         Channel|array $channels,
         array $attachments = [],
         Lab|array|string|null $provider = null,
@@ -159,7 +153,7 @@ abstract class ScriptedAgent implements Agent
      * @param  LaravelAiAgentProvider  $provider
      */
     public function broadcastOnQueue(
-        Decisions|string $prompt,
+        AgentInput|UserMessage|Decisions|string $prompt,
         Channel|array $channels,
         array $attachments = [],
         Lab|array|string|null $provider = null,

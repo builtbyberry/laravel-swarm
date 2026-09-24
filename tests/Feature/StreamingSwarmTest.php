@@ -967,14 +967,14 @@ test('final streaming agent usage is captured in stream end event, completed eve
     $lastStepEnd = collect($events)->whereInstanceOf(SwarmStepEnd::class)->last();
 
     expect($streamEnd)->not->toBeNull();
-    expect(array_key_exists('prompt_tokens', $streamEnd->usage))->toBeTrue();
+    expect(array_key_exists('input_tokens', $streamEnd->usage))->toBeTrue();
 
     expect($lastStepEnd)->not->toBeNull();
-    expect(array_key_exists('prompt_tokens', $lastStepEnd->metadata['usage']))->toBeTrue();
+    expect(array_key_exists('input_tokens', $lastStepEnd->metadata['usage']))->toBeTrue();
 
     Event::assertDispatched(
         SwarmCompleted::class,
-        fn (SwarmCompleted $event) => array_key_exists('prompt_tokens', $event->metadata['usage'] ?? []),
+        fn (SwarmCompleted $event) => array_key_exists('input_tokens', $event->metadata['usage'] ?? []),
     );
 });
 
