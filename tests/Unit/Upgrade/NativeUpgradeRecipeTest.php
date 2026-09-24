@@ -88,26 +88,99 @@ test('native recipe refuses unsupported source lines without changing any input 
         ->and(($this->nativeFiles)())->toBe($before);
 })->with(['v0.25.9', 'v0.28.0', '0.26.x-dev', 'dev-main', 'unknown']);
 
-test('present unresolved companions block native recipe including transitive companions', function (string $package, bool $direct): void {
-    if ($direct) {
-        $manifest = json_decode($this->nativeManifest, true, flags: JSON_THROW_ON_ERROR);
-        $manifest['require-dev'][$package] = '^0.1.0';
-        file_put_contents($this->nativeUpgradeRoot.'/composer.json', json_encode($manifest, JSON_THROW_ON_ERROR));
-    }
-    $this->nativePackages[] = ['name' => $package, 'version' => '0.1.0'];
+dataset('native companion versions', [
+    'Pulse' => ['builtbyberry/laravel-swarm-pulse', '0.1.7', '0.1.8'],
+    'Filament' => ['builtbyberry/laravel-swarm-filament', '0.2.3', '0.3.0'],
+    'MCP' => ['builtbyberry/laravel-swarm-mcp', '0.1.2', '0.2.0'],
+    'vector' => ['builtbyberry/laravel-swarm-memory-vector', '0.1.4', '0.2.0'],
+]);
+
+test('native companion targets preserve section style selection and exact backup bytes', function (string $package, string $source, string $target, string $section, string $style): void {
+    $manifest = json_decode($this->nativeManifest, true, flags: JSON_THROW_ON_ERROR);
+    $manifest[$section][$package] = $style.$source;
+    $manifest['description'] = 'Keep '.$style.$source.' café';
+    file_put_contents($this->nativeUpgradeRoot.'/composer.json', json_encode($manifest, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\r\n");
+    $this->nativePackages[] = ['name' => $package, 'version' => 'v'.$source];
     ($this->writeNativeMetadata)();
     $before = ($this->nativeFiles)();
     $report = $this->nativeAssistant->inspect($this->nativeUpgradeRoot);
+    $action = collect($report['actions'])->firstWhere('package', $package);
+    $caretAlreadyPermitsTarget = $package === 'builtbyberry/laravel-swarm-pulse' && $style === '^';
+    expect($report['can_apply'])->toBeTrue()
+        ->and($report['runtime_verified'])->toBeFalse()
+        ->and($report['inventory'][$package])->toMatchArray(['constraint' => $style.$source, 'locked' => 'v'.$source, 'installed' => 'v'.$source, 'recommended_minimum' => $target])
+        ->and(array_column($report['findings'], 'id'))->toContain('resolve:'.$package)->not->toContain('companion-target-unresolved:'.$package)
+        ->and(($this->nativeFiles)())->toBe($before);
+    if ($caretAlreadyPermitsTarget) {
+        expect($action)->toBeNull();
+        $id = 'dependency:builtbyberry/laravel-swarm';
+        $expected = str_replace('"^0.26.3"', '"^0.27.0"', $before[0]);
+    } else {
+        expect($action)->toBe(['id' => 'dependency:'.$package, 'package' => $package, 'section' => $section, 'from' => $style.$source, 'to' => $style.$target]);
+        $id = $action['id'];
+        $expected = str_replace('"'.$package.'": "'.$style.$source.'"', '"'.$package.'": "'.$style.$target.'"', $before[0]);
+    }
+    $applied = $this->nativeAssistant->apply($this->nativeUpgradeRoot, [$id], $report['preview_digest']);
+    expect(($this->nativeFiles)())->toBe([$expected, $before[1], $before[2]])
+        ->and($applied['runtime_verified'])->toBeFalse();
+    $this->nativeAssistant->restore($this->nativeUpgradeRoot, $applied['backup_id']);
+    expect(($this->nativeFiles)())->toBe($before);
+})->with('native companion versions')->with(['require', 'require-dev'])->with(['', '^']);
+
+test('native transitive companions receive inventory and Composer advice without direct addition', function (string $package, string $source, string $target): void {
+    $this->nativePackages[] = ['name' => $package, 'version' => 'v'.$source];
+    ($this->writeNativeMetadata)();
+    $before = ($this->nativeFiles)();
+    $report = $this->nativeAssistant->inspect($this->nativeUpgradeRoot);
+    expect($report['can_apply'])->toBeTrue()
+        ->and($report['inventory'][$package])->toMatchArray(['constraint' => null, 'locked' => 'v'.$source, 'installed' => 'v'.$source, 'recommended_minimum' => $target])
+        ->and(array_column($report['actions'], 'package'))->toBe(['builtbyberry/laravel-swarm', 'laravel/ai'])
+        ->and(array_column($report['findings'], 'id'))->toContain('resolve:'.$package, 'composer-resolution');
+    $this->nativeAssistant->apply($this->nativeUpgradeRoot, array_column($report['actions'], 'id'), $report['preview_digest']);
+    expect(($this->nativeFiles)())->toBe([str_replace(['"^0.26.3"', '"0.11.2"'], ['"^0.27.0"', '"1.0.0"'], $before[0]), $before[1], $before[2]]);
+})->with('native companion versions');
+
+test('native companions preserve current and newer supported target patches', function (string $package, string $source, string $target, bool $newer, string $style): void {
+    $version = $newer ? substr($target, 0, strrpos($target, '.') + 1).'99' : $target;
+    $manifest = json_decode($this->nativeManifest, true, flags: JSON_THROW_ON_ERROR);
+    $manifest['require-dev'][$package] = $style.$version;
+    file_put_contents($this->nativeUpgradeRoot.'/composer.json', json_encode($manifest, JSON_THROW_ON_ERROR));
+    $this->nativePackages[] = ['name' => $package, 'version' => 'v'.$version];
+    ($this->writeNativeMetadata)();
+    $before = ($this->nativeFiles)();
+    $report = $this->nativeAssistant->inspect($this->nativeUpgradeRoot);
+    expect($report['can_apply'])->toBeTrue()
+        ->and(array_column($report['actions'], 'package'))->toBe(['builtbyberry/laravel-swarm', 'laravel/ai'])
+        ->and(array_column($report['findings'], 'level'))->not->toContain('blocker');
+    $this->nativeAssistant->apply($this->nativeUpgradeRoot, ['dependency:builtbyberry/laravel-swarm'], $report['preview_digest']);
+    expect(($this->nativeFiles)())->toBe([str_replace('"^0.26.3"', '"^0.27.0"', $before[0]), $before[1], $before[2]]);
+})->with('native companion versions')->with([false, true])->with(['', '^']);
+
+test('native companion unsupported constraints and source lines refuse without changed bytes', function (string $package, string $source, string $target, string $case): void {
+    $manifest = json_decode($this->nativeManifest, true, flags: JSON_THROW_ON_ERROR);
+    $constraint = match ($case) {
+        'complex' => '^'.$source.' || ^'.$target,
+        'constraint-line' => '^0.9.0',
+        default => '^'.$source,
+    };
+    if ($case !== 'transitive-source') {
+        $manifest['require-dev'][$package] = $constraint;
+    }
+    file_put_contents($this->nativeUpgradeRoot.'/composer.json', json_encode($manifest, JSON_THROW_ON_ERROR));
+    $this->nativePackages[] = ['name' => $package, 'version' => in_array($case, ['source', 'transitive-source'], true) ? 'v0.9.0' : 'v'.$source];
+    ($this->writeNativeMetadata)();
+    $before = ($this->nativeFiles)();
+    $report = $this->nativeAssistant->inspect($this->nativeUpgradeRoot);
+    $finding = match ($case) {
+        'complex' => 'constraint:',
+        'constraint-line' => 'constraint-line:',
+        default => 'source-line:',
+    };
     expect($report['can_apply'])->toBeFalse()
-        ->and($report['inventory'][$package]['recommended_minimum'])->toBeNull()
-        ->and(array_column($report['actions'], 'package'))->not->toContain($package)
-        ->and(array_column($report['findings'], 'id'))->toContain('companion-target-unresolved:'.$package);
+        ->and(array_column($report['findings'], 'id'))->toContain($finding.$package);
     expect(fn () => $this->nativeAssistant->apply($this->nativeUpgradeRoot, ['dependency:builtbyberry/laravel-swarm'], $report['preview_digest']))->toThrow(RuntimeException::class, 'does not permit')
         ->and(($this->nativeFiles)())->toBe($before);
-})->with([
-    'builtbyberry/laravel-swarm-pulse', 'builtbyberry/laravel-swarm-filament',
-    'builtbyberry/laravel-swarm-mcp', 'builtbyberry/laravel-swarm-memory-vector',
-])->with([true, false]);
+})->with('native companion versions')->with(['complex', 'constraint-line', 'source', 'transitive-source']);
 
 test('native recipe never adds missing direct native or companion requirements', function (): void {
     $manifest = json_decode($this->nativeManifest, true, flags: JSON_THROW_ON_ERROR);
@@ -164,3 +237,18 @@ test('new recipe retains unsafe metadata and policy refusals with exact unchange
     expect(fn () => $this->nativeAssistant->apply($this->nativeUpgradeRoot, ['dependency:builtbyberry/laravel-swarm'], $report['preview_digest']))->toThrow(RuntimeException::class, 'does not permit')
         ->and(($this->nativeFiles)())->toBe($before);
 })->with(['repository', 'replace', 'provide', 'aliases', 'version-mismatch', 'source-mismatch', 'invalid-lock', 'invalid-installed', 'constraint', 'constraint-line', 'platform']);
+
+test('resolved native map leaves the default recipe target policy unchanged', function (): void {
+    $default = new UpgradeRecipe;
+    expect($default->target)->toBe('0.26.1')->and($default->packages)->toBe([
+        'builtbyberry/laravel-swarm' => '0.26.1',
+        'laravel/ai' => '0.11.2',
+        'builtbyberry/laravel-swarm-pulse' => '0.1.7',
+        'builtbyberry/laravel-swarm-filament' => '0.2.3',
+        'builtbyberry/laravel-swarm-mcp' => '0.1.2',
+        'builtbyberry/laravel-swarm-memory-vector' => '0.1.4',
+    ]);
+    expect($default->acceptsConstraint('builtbyberry/laravel-swarm-filament', '0.3.0'))->toBeFalse()
+        ->and($default->acceptsConstraint('builtbyberry/laravel-swarm-mcp', '0.2.0'))->toBeFalse()
+        ->and($default->acceptsConstraint('builtbyberry/laravel-swarm-memory-vector', '0.2.0'))->toBeFalse();
+});

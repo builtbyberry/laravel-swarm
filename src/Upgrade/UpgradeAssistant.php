@@ -155,6 +155,10 @@ final class UpgradeAssistant
                 $version = $lockedPackage['version'];
                 if (! is_string($version) || ! preg_match('/\Av?\d+\.\d+\.\d+\z/', $version)) {
                     $add('unstable:'.$package, 'blocker', "{$package} is not locked to an ordinary stable release; inspect its provenance manually.");
+                } elseif ($this->recipe->id === UpgradeRecipe::NATIVE_ONE
+                    && str_starts_with($package, 'builtbyberry/laravel-swarm-')
+                    && ! $this->recipe->acceptsConstraint($package, ltrim($version, 'v'))) {
+                    $add('source-line:'.$package, 'blocker', "{$package} is locked outside this recipe's supported version lines; review its source version manually.");
                 } elseif ($minimum !== null && version_compare(ltrim($version, 'v'), $minimum, '<')) {
                     $add('resolve:'.$package, 'manual', "{$package} is locked below {$minimum}. After reviewing constraints, resolve with Composer and verify the resulting lock and installation.");
                 }

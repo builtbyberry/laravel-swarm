@@ -35,11 +35,10 @@ final readonly class UpgradeRecipe
         ] : [
             'builtbyberry/laravel-swarm' => '0.27.0',
             'laravel/ai' => '1.0.0',
-            // Companion targets are filled only from the reviewed compatibility map.
-            'builtbyberry/laravel-swarm-pulse' => null,
-            'builtbyberry/laravel-swarm-filament' => null,
-            'builtbyberry/laravel-swarm-mcp' => null,
-            'builtbyberry/laravel-swarm-memory-vector' => null,
+            'builtbyberry/laravel-swarm-pulse' => '0.1.8',
+            'builtbyberry/laravel-swarm-filament' => '0.3.0',
+            'builtbyberry/laravel-swarm-mcp' => '0.2.0',
+            'builtbyberry/laravel-swarm-memory-vector' => '0.2.0',
         ];
     }
 
@@ -65,6 +64,9 @@ final readonly class UpgradeRecipe
             return match ($package) {
                 'builtbyberry/laravel-swarm' => in_array($minor, ['0.26', '0.27'], true),
                 'laravel/ai' => $minor === '0.11' || str_starts_with($version, '1.'),
+                'builtbyberry/laravel-swarm-pulse' => $minor === '0.1',
+                'builtbyberry/laravel-swarm-filament' => in_array($minor, ['0.2', '0.3'], true),
+                'builtbyberry/laravel-swarm-mcp', 'builtbyberry/laravel-swarm-memory-vector' => in_array($minor, ['0.1', '0.2'], true),
                 default => false,
             };
         }

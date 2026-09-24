@@ -11,8 +11,9 @@ All companion checks used core candidate
 `48ad4ef690363ca40ba7d3bd50e63e7fbe76ba4b` (C3), official AI 1.0.0
 `101c7ea33cd8569d82570f753fbf38e48b7d3d95`, and temporary Composer candidate
 repositories. Production manifests contain no candidate repository overrides.
-C5 must install the final core candidate and all four sources together in a fresh
-application; these separate package checks do not establish that combined result.
+The [C5 procedure](ai-1-ecosystem-evidence.md) installs the final core candidate
+and all four sources together in a fresh application; these separate package
+checks do not establish that combined result.
 
 | Package | Planned version | Frozen merged source | Component / draft release PR |
 | --- | --- | --- | --- |
@@ -85,9 +86,9 @@ live Bedrock/provider qualification.
 
 ## Remaining phase boundaries
 
-C5 owns the combined fresh candidate installation and final assistant target map.
-Until that implementation lands, the current new recipe still refuses present
-unresolved companion targets. C6 reconciles final evidence for release-wrap.
+The [C5 procedure](ai-1-ecosystem-evidence.md) owns combined fresh candidate
+installation and the final assistant target map. C6 reconciles final evidence for
+release-wrap.
 Separate wrap/readiness and later publication remain required. Publish and observe
 core first, then compatible companions; only a fresh default-Packagist five-package
 installation after all five releases can establish published ecosystem delivery.

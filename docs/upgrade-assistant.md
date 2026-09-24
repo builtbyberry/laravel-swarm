@@ -29,9 +29,20 @@ verification advice with no repeat rewrite or downgrade. Other or unknown source
 lines require manual review with unchanged files. Core targets 0.27.0 and native
 AI targets a minimum 1.0.0; supported newer 1.x requirements are not lowered.
 The tool never adds an absent optional package or direct requirement for a
-transitive dependency. At this candidate stage, present companions have unresolved
-targets and block applying the new recipe until the reviewed compatibility map is
-complete. Their target is reported as unavailable, not an invented release.
+transitive dependency. The reviewed candidate map selects Pulse 0.1.8, Filament
+0.3.0, MCP 0.2.0 and memory-vector 0.2.0. Simple exact/caret constraints retain
+their style and requirement section; a constraint that already permits the target
+is preserved. Supported newer target versions are not lowered. Transitive
+companions receive inventory and Composer verification advice without becoming
+direct requirements. Unsupported source lines and complex constraints require
+manual review with unchanged files.
+
+These are planned candidate targets, not a claim of published availability. The
+[frozen companion sources](ai-1-companion-evidence.md) and
+[integrated proof procedure](ai-1-ecosystem-evidence.md) distinguish temporary
+candidate repositories from later public installation. Review application-owned
+native MCP/provider constraints with Composer as well; the recipe does not silently
+rewrite dependencies outside its explicit package map.
 
 Select only actions from your report and use its digest with the same recipe:
 

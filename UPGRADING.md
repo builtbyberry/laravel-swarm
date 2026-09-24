@@ -19,8 +19,12 @@ restarting production work.
 
 The [upgrade assistant](docs/upgrade-assistant.md#laravel-ai-10-recipe) retains
 its old default. Select `--recipe=0.26-to-0.27` explicitly for this transition.
-Its static report cannot certify native database safety. The [reviewed companion source map](docs/ai-1-companion-evidence.md) is frozen;
-the assistant still blocks present companion targets until C5 implements that map.
+Its static report cannot certify native database safety. The [reviewed companion source map](docs/ai-1-companion-evidence.md) selects
+Pulse 0.1.8, Filament 0.3.0, MCP 0.2.0 and memory-vector 0.2.0. The recipe handles
+present supported optional requirements without adding absent companions. Verify
+the [combined application proof](docs/ai-1-ecosystem-evidence.md) and actual package
+availability before resolving production dependencies; candidate proof is not
+publication.
 
 Follow the [native conversation upgrade procedure](docs/native-conversation-upgrade.md)
 for the application-owned executable migration, pending-turn disposition,
