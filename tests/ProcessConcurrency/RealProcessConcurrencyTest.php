@@ -36,6 +36,8 @@ test('native attachments cross fresh process workers in every concurrent topolog
     $database = sys_get_temp_dir().'/laravel-swarm-native-process-'.getmypid().'.sqlite';
     touch($database);
     $key = (string) config('app.key');
+    $testbenchWorkingPath = dirname(__DIR__, 2);
+    $originalTestbenchWorkingPath = getenv('TESTBENCH_WORKING_PATH');
 
     putenv('APP_KEY='.$key);
     putenv('DB_CONNECTION=sqlite');
@@ -44,6 +46,7 @@ test('native attachments cross fresh process workers in every concurrent topolog
     putenv('SWARM_NATIVE_INPUTS_DISK=local');
     putenv('SWARM_PERSISTENCE_DRIVER=database');
     putenv('SWARM_ENCRYPT_AT_REST=true');
+    putenv('TESTBENCH_WORKING_PATH='.$testbenchWorkingPath);
     $_ENV['APP_KEY'] = $_SERVER['APP_KEY'] = $key;
     $_ENV['DB_CONNECTION'] = $_SERVER['DB_CONNECTION'] = 'sqlite';
     $_ENV['DB_DATABASE'] = $_SERVER['DB_DATABASE'] = $database;
@@ -51,6 +54,7 @@ test('native attachments cross fresh process workers in every concurrent topolog
     $_ENV['SWARM_NATIVE_INPUTS_DISK'] = $_SERVER['SWARM_NATIVE_INPUTS_DISK'] = 'local';
     $_ENV['SWARM_PERSISTENCE_DRIVER'] = $_SERVER['SWARM_PERSISTENCE_DRIVER'] = 'database';
     $_ENV['SWARM_ENCRYPT_AT_REST'] = $_SERVER['SWARM_ENCRYPT_AT_REST'] = 'true';
+    $_ENV['TESTBENCH_WORKING_PATH'] = $_SERVER['TESTBENCH_WORKING_PATH'] = $testbenchWorkingPath;
     SerializableClosure::setSecretKey(base64_decode(substr($key, strlen('base64:')), true));
     config()->set('database.connections.testing.database', $database);
     DB::purge('testing');
@@ -111,6 +115,7 @@ test('native attachments cross fresh process workers in every concurrent topolog
             ->and((string) $static)->toContain('serialization-boundary:process-task:process-document')
             ->and((string) $generated)->toContain('serialization-boundary:process-task:process-document');
     } finally {
+        SerializableClosure::setSecretKey(null);
         Storage::disk('local')->deleteDirectory('swarm/native-inputs/'.$context->runId);
         if (isset($staticContext)) {
             Storage::disk('local')->deleteDirectory('swarm/native-inputs/'.$staticContext->runId);
@@ -126,6 +131,9 @@ test('native attachments cross fresh process workers in every concurrent topolog
         putenv('SWARM_NATIVE_INPUTS_DISK');
         putenv('SWARM_PERSISTENCE_DRIVER');
         putenv('SWARM_ENCRYPT_AT_REST');
+        putenv($originalTestbenchWorkingPath === false
+            ? 'TESTBENCH_WORKING_PATH'
+            : 'TESTBENCH_WORKING_PATH='.$originalTestbenchWorkingPath);
         unset(
             $_ENV['APP_KEY'],
             $_SERVER['APP_KEY'],
@@ -141,7 +149,13 @@ test('native attachments cross fresh process workers in every concurrent topolog
             $_SERVER['SWARM_PERSISTENCE_DRIVER'],
             $_ENV['SWARM_ENCRYPT_AT_REST'],
             $_SERVER['SWARM_ENCRYPT_AT_REST'],
+            $_ENV['TESTBENCH_WORKING_PATH'],
+            $_SERVER['TESTBENCH_WORKING_PATH'],
         );
+
+        if ($originalTestbenchWorkingPath !== false) {
+            $_ENV['TESTBENCH_WORKING_PATH'] = $_SERVER['TESTBENCH_WORKING_PATH'] = $originalTestbenchWorkingPath;
+        }
     }
 });
 
