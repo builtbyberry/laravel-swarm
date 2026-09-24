@@ -99,15 +99,40 @@ import sys
 spec = importlib.util.spec_from_file_location('ecosystem_proof', sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-module.run([sys.executable, '-c', 'import time; print("started", flush=True); time.sleep(5)'], Path(sys.argv[2]), os.environ.copy(), Path(sys.argv[2]) / 'logs', 'bounded', timeout=0.05)
+marker = Path(sys.argv[2]) / 'terminated'
+child = '''
+import signal
+from pathlib import Path
+import sys
+import time
+
+def stop(*_):
+    Path(sys.argv[1]).write_text('terminated')
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+print('grandchild-ready', flush=True)
+time.sleep(30)
+'''
+parent = '''
+import subprocess
+import sys
+import time
+
+subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])
+print('parent-ready', flush=True)
+time.sleep(30)
+'''
+module.run([sys.executable, '-c', parent, child, str(marker)], Path(sys.argv[2]), os.environ.copy(), Path(sys.argv[2]) / 'logs', 'bounded', timeout=1)
 PYTHON;
 
     try {
         $command = new Process(['python3', '-c', $script, $proof, $root]);
         $command->run();
         expect($command->getExitCode())->toBe(1)
-            ->and($command->getErrorOutput())->toContain('timed out after 0.05s')
-            ->and(file_get_contents($root.'/logs/bounded.log'))->toContain('started', 'timeout=0.05');
+            ->and($command->getErrorOutput())->toContain('timed out after 1s')
+            ->and(file_get_contents($root.'/terminated'))->toBe('terminated')
+            ->and(file_get_contents($root.'/logs/bounded.log'))->toContain('parent-ready', 'grandchild-ready', 'timeout=1');
     } finally {
         (new Filesystem)->deleteDirectory($root);
     }

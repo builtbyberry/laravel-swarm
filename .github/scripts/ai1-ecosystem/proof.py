@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -78,17 +79,29 @@ def verify(app, expected):
 
 
 def run(command, app, env, logs, name, accepted=(0,), timeout=300):
+    process = subprocess.Popen(
+        command,
+        cwd=app,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
     try:
-        result = subprocess.run(command, cwd=app, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+        output, _ = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        output = error.stdout or ''
-        if isinstance(output, bytes):
-            output = output.decode(errors='replace')
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            output, _ = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            output, _ = process.communicate()
         (logs / (name + '.log')).write_text('$ ' + ' '.join(command) + '\n' + output + f'\ntimeout={timeout}\n')
         raise RuntimeError(f'{name} timed out after {timeout}s; see {logs / (name + ".log")}') from error
-    (logs / (name + '.log')).write_text('$ ' + ' '.join(command) + '\n' + result.stdout + f'\nexit={result.returncode}\n')
-    check(result.returncode in accepted, f'{name} failed ({result.returncode}); see {logs / (name + ".log")}')
-    return result
+    (logs / (name + '.log')).write_text('$ ' + ' '.join(command) + '\n' + output + f'\nexit={process.returncode}\n')
+    check(process.returncode in accepted, f'{name} failed ({process.returncode}); see {logs / (name + ".log")}')
+    return subprocess.CompletedProcess(command, process.returncode, output)
 
 
 def assistant(app, env, logs, mode):
