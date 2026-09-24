@@ -45,6 +45,15 @@ function nativeApprovalDecisionDigest(Decisions $decisions, string $pendingDiges
     ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
 }
 
+/** @param array<string, array<string, mixed>> $pendingSet */
+function nativeApprovalPendingDigest(array $pendingSet): string
+{
+    return hash('sha256', json_encode(
+        nativeApprovalCanonicalize($pendingSet),
+        JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES,
+    ));
+}
+
 /**
  * @param  array<string, Decision|bool>  $decisionMap
  */
@@ -55,13 +64,21 @@ function nativeApprovalDecisionRaceWorker(
     array $decisionMap,
     string $role = 'ordinary',
 ): Closure {
-    $pendingDigest = hash('sha256', json_encode([
-        'approval-a' => ['arguments' => ['value' => 'a']],
-        'approval-b' => ['arguments' => ['value' => 'b']],
-    ], JSON_THROW_ON_ERROR));
-    $digest = nativeApprovalDecisionDigest(Decisions::from($decisionMap), $pendingDigest);
+    $decisions = Decisions::from($decisionMap);
+    $normalizedDecisions = [];
 
-    return static function () use ($key, $revision, $fence, $pendingDigest, $digest, $role): string {
+    foreach ($decisions->all() as $id => $decision) {
+        $normalizedDecisions[$id] = [
+            'action' => $decision->action,
+            'arguments' => $decision->arguments === null ? null : nativeApprovalCanonicalize($decision->arguments),
+            'result' => $decision->result,
+        ];
+    }
+
+    ksort($normalizedDecisions, SORT_STRING);
+    $decisionIds = array_keys($normalizedDecisions);
+
+    return static function () use ($key, $revision, $fence, $normalizedDecisions, $decisionIds, $role): string {
         $signal = static function (string $name): void {
             $default = DB::getDefaultConnection();
             config()->set('database.connections.native_approval_signal', config("database.connections.{$default}"));
@@ -98,7 +115,7 @@ function nativeApprovalDecisionRaceWorker(
             $signal('contender-ready');
         }
 
-        return DB::transaction(function () use ($key, $revision, $fence, $pendingDigest, $digest, $role, $signal, $await): string {
+        return DB::transaction(function () use ($key, $revision, $fence, $normalizedDecisions, $decisionIds, $role, $signal, $await): string {
             $wait = DB::table('native_approval_race_waits')
                 ->where('tenant_id', 'tenant-a')
                 ->where('run_id', 'race-run')
@@ -111,12 +128,38 @@ function nativeApprovalDecisionRaceWorker(
                 usleep(250_000);
             }
 
+            $canonicalize = static function (array $value) use (&$canonicalize): array {
+                ksort($value, SORT_STRING);
+
+                foreach ($value as $itemKey => $item) {
+                    if (is_array($item)) {
+                        $value[$itemKey] = $canonicalize($item);
+                    }
+                }
+
+                return $value;
+            };
+            $pendingSet = $canonicalize(json_decode($wait->pending_set, true, flags: JSON_THROW_ON_ERROR));
+            $pendingDigest = hash('sha256', json_encode(
+                $pendingSet,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES,
+            ));
+            $pendingIds = array_keys($pendingSet);
+
             if ($wait->state !== 'pending'
                 || (int) $wait->revision !== $revision
                 || (int) $wait->fence !== $fence
                 || $wait->pending_digest !== $pendingDigest) {
                 return 'stale';
             }
+            if ($decisionIds !== $pendingIds) {
+                return 'invalid_set';
+            }
+
+            $digest = hash('sha256', json_encode([
+                'pending_digest' => $pendingDigest,
+                'decisions' => $normalizedDecisions,
+            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
             if ($wait->decision_digest !== null) {
                 if ($role === 'contender') {
                     $signal('contender-acquired');
@@ -172,6 +215,7 @@ test('native approval decision ingress serializes canonical duplicates conflicts
         $table->unsignedInteger('revision');
         $table->unsignedInteger('fence');
         $table->string('state');
+        $table->text('pending_set');
         $table->string('pending_digest');
         $table->string('decision_digest')->nullable();
         $table->primary(['tenant_id', 'run_id']);
@@ -192,16 +236,23 @@ test('native approval decision ingress serializes canonical duplicates conflicts
         $table->timestamp('created_at');
     });
 
-    $pendingDigest = hash('sha256', json_encode([
+    $firstPendingOrder = [
         'approval-a' => ['arguments' => ['value' => 'a']],
         'approval-b' => ['arguments' => ['value' => 'b']],
-    ], JSON_THROW_ON_ERROR));
+    ];
+    $oppositePendingOrder = [
+        'approval-b' => ['arguments' => ['value' => 'b']],
+        'approval-a' => ['arguments' => ['value' => 'a']],
+    ];
+    $pendingDigest = nativeApprovalPendingDigest($firstPendingOrder);
+    expect(nativeApprovalPendingDigest($oppositePendingOrder))->toBe($pendingDigest);
     DB::table('native_approval_race_waits')->insert([
         'tenant_id' => 'tenant-a',
         'run_id' => 'race-run',
         'revision' => 3,
         'fence' => 9,
         'state' => 'pending',
+        'pending_set' => json_encode($oppositePendingOrder, JSON_THROW_ON_ERROR),
         'pending_digest' => $pendingDigest,
     ]);
 
@@ -214,6 +265,15 @@ test('native approval decision ingress serializes canonical duplicates conflicts
         'approval-a' => Decision::approve(),
     ];
     $concurrency = app(ConcurrencyManager::class)->driver('process');
+    expect(nativeApprovalDecisionRaceWorker('partial', 3, 9, [
+        'approval-a' => Decision::approve(),
+    ])())->toBe('invalid_set')
+        ->and(nativeApprovalDecisionRaceWorker('extra', 3, 9, [
+            ...$firstOrder,
+            'approval-c' => Decision::approve(),
+        ])())->toBe('invalid_set')
+        ->and(DB::table('native_approval_race_intents')->count())->toBe(0);
+
     $same = $concurrency->run([
         nativeApprovalDecisionRaceWorker('same-a', 3, 9, $firstOrder, 'holder'),
         nativeApprovalDecisionRaceWorker('same-b', 3, 9, $oppositeOrder, 'contender'),

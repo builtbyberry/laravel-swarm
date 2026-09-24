@@ -379,6 +379,17 @@ function nativeApprovalProofAssertBound(object $wait, object $record, string $ki
     }
 }
 
+function nativeApprovalProofAssertReceiptBound(object $wait, object $receipt): void
+{
+    nativeApprovalProofAssertBound($wait, $receipt, 'Receipt');
+
+    foreach (['participant_type', 'participant_id', 'tool_call_id'] as $field) {
+        if ((string) $receipt->{$field} !== (string) $wait->{$field}) {
+            throw new RuntimeException("Receipt is not bound to the active approval {$field}.");
+        }
+    }
+}
+
 function nativeApprovalProofRecover(): void
 {
     config()->set('tests.native_approval_recovering', true);
@@ -396,7 +407,7 @@ function nativeApprovalProofRecover(): void
         if ($receipt === null) {
             throw new RuntimeException('Checkpoint has no validating receipt.');
         }
-        nativeApprovalProofAssertBound($wait, $receipt, 'Receipt');
+        nativeApprovalProofAssertReceiptBound($wait, $receipt);
         if ($checkpoint->result_digest !== $receipt->result_digest) {
             throw new RuntimeException('Checkpoint and receipt result digests conflict.');
         }
@@ -406,7 +417,7 @@ function nativeApprovalProofRecover(): void
         $resultDigest = hash('sha256', $native->content.'|'.$usage);
 
         if ($receipt !== null) {
-            nativeApprovalProofAssertBound($wait, $receipt, 'Receipt');
+            nativeApprovalProofAssertReceiptBound($wait, $receipt);
             if ($receipt->result_digest !== $resultDigest) {
                 throw new RuntimeException('Receipt does not match the completed native message.');
             }
@@ -629,6 +640,9 @@ if (getenv('SWARM_NATIVE_APPROVAL_CRASH_WORKER') !== false) {
             'tenant_id' => 'tenant-a',
             'conversation_id' => 'conversation',
             'assistant_message_id' => 'assistant',
+            'participant_type' => 'user',
+            'participant_id' => '42',
+            'tool_call_id' => 'approval-call',
             'revision' => 2,
             'fence' => 4,
         ];
@@ -636,12 +650,12 @@ if (getenv('SWARM_NATIVE_APPROVAL_CRASH_WORKER') !== false) {
             ...get_object_vars($wait),
             'decision_digest' => nativeApprovalProofDecisionDigest(),
         ];
-        nativeApprovalProofAssertBound($wait, $bound, 'Receipt');
+        nativeApprovalProofAssertReceiptBound($wait, $bound);
 
-        foreach (['tenant_id', 'conversation_id', 'assistant_message_id', 'revision', 'fence', 'decision_digest'] as $field) {
+        foreach (['run_id', 'tenant_id', 'conversation_id', 'assistant_message_id', 'participant_type', 'participant_id', 'tool_call_id', 'revision', 'fence', 'decision_digest'] as $field) {
             $poisoned = clone $bound;
             $poisoned->{$field} = $field === 'decision_digest' ? str_repeat('0', 64) : 'wrong';
-            expect(fn () => nativeApprovalProofAssertBound($wait, $poisoned, 'Receipt'))
+            expect(fn () => nativeApprovalProofAssertReceiptBound($wait, $poisoned))
                 ->toThrow(RuntimeException::class, "Receipt is not bound to the active approval {$field}");
         }
     });
