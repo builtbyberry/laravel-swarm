@@ -50,6 +50,13 @@ map is allowed. Malformed or ambiguous evidence also refuses before schema chang
 and reports message identity without echoing payloads. Operators must inspect such
 rows under their own access policy. The tool does not resolve or discard them.
 
+The reviewed example also refuses a conversation with more than 10,000 messages
+before DDL. It keeps later-result ownership matching linear by indexing unmatched
+calls by tool ID rather than repeatedly scanning the conversation. Applications
+with larger conversations must benchmark representative data and deliberately
+adapt or split their application-owned migration; do not raise the ceiling during
+an incident without a rehearsed downtime and memory bound.
+
 Backfill transactions cover one conversation's writes on the configured
 connection. **The migration is not portably atomic:** MySQL DDL may commit even
 if a later step fails. Laravel may wrap more of the operation on other engines;

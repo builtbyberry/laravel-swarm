@@ -259,7 +259,7 @@ test('Artisan and standalone share selector errors and describe their native par
         expect($artisan['recipe'])->toBe($standalone['recipe'])->and($artisan['target'])->toBe($standalone['target']);
     }
     $standaloneHelp = swarmUpgradeCli($this->upgradeCommandRoot, ['--help']);
-    expect($standaloneHelp->getExitCode())->toBe(0)->and($standaloneHelp->getOutput())->toContain(UpgradeConsole::HELP, 'Reviewed companion targets remain candidates, not published-install proof.')
+    expect($standaloneHelp->getExitCode())->toBe(0)->and($standaloneHelp->getOutput())->toContain(UpgradeConsole::HELP, 'Candidate compatibility evidence is not published-install proof; verify package availability.')
         ->not->toContain('unresolved companions block apply');
     expect(Artisan::call('help', ['command_name' => 'swarm:upgrade']))->toBe(0);
     expect(Artisan::output())->toContain('0.25-to-0.26', '0.26-to-0.27', 'Standalone refuses repeated options', "Symfony's option parsing");

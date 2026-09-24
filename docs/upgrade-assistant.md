@@ -8,13 +8,14 @@ database readiness.
 
 ## Laravel AI 1.0 recipe
 
-Use the reviewed v0.27 candidate source checkout/archive for candidate rehearsal.
-Keep its `bin` and `src` directories together; no Composer install is needed to
-run the standalone script. The published v0.26.1 script does not contain this new
-recipe. Candidate targets are not proof of published dependency availability.
+Use the v0.27.0 source archive or a reviewed candidate checkout. Keep its `bin`
+and `src` directories together; no Composer install is needed to run the
+standalone script. The published v0.26.1 script does not contain this recipe.
+Verify the required package versions are available before changing a production
+application; candidate evidence is not proof of published dependency availability.
 
 ```bash
-php /path/to/reviewed-swarm-candidate/bin/swarm-upgrade \
+php /path/to/laravel-swarm-v0.27.0/bin/swarm-upgrade \
   --path=/path/to/disposable-application --recipe=0.26-to-0.27 --json
 ```
 
@@ -37,10 +38,10 @@ companions receive inventory and Composer verification advice without becoming
 direct requirements. Unsupported source lines and complex constraints require
 manual review with unchanged files.
 
-These are planned candidate targets, not a claim of published availability. The
+These are the v0.27.0 coordinated targets. The
 [frozen companion sources](ai-1-companion-evidence.md) and
 [integrated proof procedure](ai-1-ecosystem-evidence.md) distinguish temporary
-candidate repositories from later public installation. Review application-owned
+candidate repositories from public installation. Review application-owned
 native MCP/provider constraints with Composer as well; the recipe does not silently
 rewrite dependencies outside its explicit package map.
 

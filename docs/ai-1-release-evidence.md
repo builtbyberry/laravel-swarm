@@ -1,9 +1,9 @@
 # Laravel AI 1.0 adoption evidence
 
-This index records the v0.27.0 adoption candidates and the evidence prepared for
-release-wrap. Component acceptance does not establish release readiness,
-publication or a safe migration of an application's own data. The five release
-PRs remain draft; changelogs remain unreleased.
+This index records the v0.27.0 adoption candidates and the evidence handed into
+release-wrap on 2026-09-24. At that checkpoint the five release PRs were draft
+and their changelogs were unreleased. Component acceptance did not establish
+release readiness, publication or a safe migration of an application's own data.
 
 ## Core component sources
 
@@ -18,10 +18,11 @@ independent configured review and fresh verification.
 | C3: retained workflows and state | [526](https://github.com/builtbyberry/laravel-swarm/pull/526) | `48ad4ef690363ca40ba7d3bd50e63e7fbe76ba4b` |
 | C4: companion coordination | [527](https://github.com/builtbyberry/laravel-swarm/pull/527) | `7076cc6b6d31f4ef98080e98dcc4c9330680407b` |
 | C5: integrated candidate and recipes | [528](https://github.com/builtbyberry/laravel-swarm/pull/528) | `f02ff52f58af9469b801c9780de01405031a2761` |
+| C6: consumer migration and release evidence | [529](https://github.com/builtbyberry/laravel-swarm/pull/529) | `65c188fe0f87fc94d0420ca3ca2cd2eb7418a148` |
 
-C6 is this documentation reconciliation. Its own reviewed head, checks, merge
-identity and Marshall transition are recorded on its component PR after landing;
-the document does not predeclare its own merge. The core release PR is
+C6's reviewed head `c4753d84d6787636ff516c003efed7a5b55f38bd` and merge
+commit above have the same tree. Its independent review, fresh verification and
+final hosted checks are recorded on its component PR. The core release PR is
 [523](https://github.com/builtbyberry/laravel-swarm/pull/523).
 
 ## Combined installed proof
@@ -87,14 +88,15 @@ compatible readers/workers. Native storage has its own capture, encryption and
 retention boundaries. The assistant always reports `runtime_verified=false`.
 No real application database was converted in this program.
 
-The next phase is release-wrap and its configured change/readiness review for
-core and companions. Main merges, tags, GitHub Releases and public installation
-remain outside this handoff. Later authorized shipping must verify exact main
-checks plus the separate post-main moving-development dispatch before tagging;
-publish and observe core first, then companions. Finally run the no-override,
-fresh default-Packagist five-package proof. Report any partial publication state;
-candidate installation does not establish public availability.
+The handoff's next phase was release-wrap and its configured change/readiness
+review for core and companions. Main merges, tags, GitHub Releases and public
+installation were deliberately not claimed by this candidate evidence. Shipping
+must verify exact main checks plus the separate post-main moving-development
+dispatch before tagging; publish and observe core first, then companions. Finally
+run the no-override, fresh default-Packagist five-package proof. Report any partial
+publication state; candidate installation does not establish public availability.
 
-Child correctness remains v0.28.0 and branch chains v0.29.0 with their existing
-tracker/component identities and graphs. Native approval continuation and unrelated
-product work remain outside this adoption release.
+The preserved roadmap is v0.27.0 adoption, v0.28.0 native feature access,
+v0.29.0 child recovery and v0.30.0 branch chains. Their existing release,
+component and graph identities remain authoritative. Native feature implementation,
+including approval continuation, remains outside this adoption release.

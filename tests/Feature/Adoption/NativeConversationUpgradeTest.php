@@ -142,6 +142,23 @@ it('refuses malformed or ambiguous old evidence before schema and row changes', 
         ->and($fixture->native()->getSchemaBuilder()->hasColumn(Fixture::MESSAGES, 'steps'))->toBeFalse();
 })->with(['malformed', 'ambiguous']);
 
+it('fails closed before DDL when one conversation exceeds the documented safety ceiling', function (): void {
+    $fixture = $this->nativeUpgrade;
+    $fixture->legacy();
+    $fixture->seed();
+    $rows = [];
+    for ($number = 12; $number <= 10_001; $number++) {
+        $rows[] = Fixture::row($number);
+    }
+    foreach (array_chunk($rows, 500) as $chunk) {
+        $fixture->native()->table(Fixture::MESSAGES)->insert($chunk);
+    }
+    $before = $fixture->snapshot();
+    expect(fn () => $fixture->upgrade())->toThrow(RuntimeException::class, '10,000-message safety ceiling');
+    expect($fixture->snapshot())->toBe($before)
+        ->and($fixture->native()->getSchemaBuilder()->hasColumn(Fixture::MESSAGES, 'steps'))->toBeFalse();
+});
+
 it('refuses unsupported legacy payloads without erasing their evidence', function (array $values): void {
     $fixture = $this->nativeUpgrade;
     $fixture->legacy();

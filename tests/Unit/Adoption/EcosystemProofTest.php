@@ -85,3 +85,30 @@ it('accepts only exact complete lock and installed ecosystem identities', functi
     'omitted expected companion' => ['incomplete-map', 'Expected exactly five ecosystem packages'],
     'alias' => ['aliases', 'Alias lock'],
 ]);
+
+it('fails a stalled ecosystem command with bounded diagnostic output', function () {
+    $root = sys_get_temp_dir().'/swarm-ecosystem-timeout-'.bin2hex(random_bytes(8));
+    mkdir($root.'/logs', 0777, true);
+    $proof = dirname(__DIR__, 3).'/.github/scripts/ai1-ecosystem/proof.py';
+    $script = <<<'PYTHON'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location('ecosystem_proof', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.run([sys.executable, '-c', 'import time; print("started", flush=True); time.sleep(5)'], Path(sys.argv[2]), os.environ.copy(), Path(sys.argv[2]) / 'logs', 'bounded', timeout=0.05)
+PYTHON;
+
+    try {
+        $command = new Process(['python3', '-c', $script, $proof, $root]);
+        $command->run();
+        expect($command->getExitCode())->toBe(1)
+            ->and($command->getErrorOutput())->toContain('timed out after 0.05s')
+            ->and(file_get_contents($root.'/logs/bounded.log'))->toContain('started', 'timeout=0.05');
+    } finally {
+        (new Filesystem)->deleteDirectory($root);
+    }
+});

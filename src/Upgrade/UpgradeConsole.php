@@ -12,8 +12,8 @@ final class UpgradeConsole
 {
     public const HELP = <<<'TEXT'
 Preview a Swarm upgrade recipe. Default: 0.25-to-0.26, target v0.26.1.
-Explicit 0.26-to-0.27 targets planned v0.27.0 / Laravel AI 1.x.
-Reviewed companion targets remain candidates, not published-install proof.
+Explicit 0.26-to-0.27 targets v0.27.0 / Laravel AI 1.x.
+Candidate compatibility evidence is not published-install proof; verify package availability.
 
   swarm-upgrade [--path=APP] [--recipe=RECIPE] [--json]
   swarm-upgrade --path=APP [--recipe=RECIPE] --apply=ID[,ID] --expect=DIGEST --yes [--json]

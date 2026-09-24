@@ -27,6 +27,12 @@ Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabiliti
 - The native ToolCall field guard now explicitly recognizes `thoughtSignature`. Swarm keeps its pinned serialized fields instead of exporting the entire native DTO: opaque provider continuation state remains owned by Laravel AI. Direct and both-mapper tests guard that boundary.
 - Native middleware fixtures prove per-generation `PendingStep` transformations while retaining original prompt events, workflow guardrails, side-effect and recovery assertions. Exact Laravel 13.16 and moving official development dependency lanes retain the existing coverage, concurrency, analysis and advisory policies.
 
+### Fixed
+
+- Bound the application-owned conversation conversion example to 10,000 messages per conversation and use linear unmatched-tool ownership lookup, failing before DDL when an application needs a separately rehearsed large-conversation strategy.
+- Bound every external command in the published-ecosystem proof and preserve partial timeout output, so a stalled Composer or application process fails with an actionable log instead of hanging indefinitely.
+- Distinguish corrupt upgrade backups from a valid backup created for another recipe/target, without exposing manifest contents.
+
 Upgrade workers and readers together. Older readers may discard preliminary and
 event-level denied evidence; preserve compatible readers and backups before any
 rollback. See [v0.27.0 upgrade guidance](UPGRADING.md#upgrading-to-v0270).

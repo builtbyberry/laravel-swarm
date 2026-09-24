@@ -11,6 +11,8 @@ use Laravel\Ai\Migrations\AiMigration;
 // Application-owned example. Read ../native-conversation-upgrade.md before copying.
 return new class extends AiMigration
 {
+    private const int MAX_MESSAGES_PER_CONVERSATION = 10_000;
+
     public function up(): void
     {
         $table = config('ai.conversations.tables.messages', 'agent_conversation_messages');
@@ -68,9 +70,13 @@ return new class extends AiMigration
     /** @return array<string, array{steps: string, meta?: string}> */
     private function converted(string $table, string $conversationId): array
     {
-        $rows = $this->query($table)->where('conversation_id', $conversationId)->orderBy('id')->get();
+        $rows = $this->query($table)->where('conversation_id', $conversationId)->orderBy('id')
+            ->limit(self::MAX_MESSAGES_PER_CONVERSATION + 1)->get();
+        if ($rows->count() > self::MAX_MESSAGES_PER_CONVERSATION) {
+            throw new RuntimeException("Native conversation {$conversationId} exceeds the 10,000-message safety ceiling. Rehearse and split or adapt the application-owned migration before conversion.");
+        }
         $calls = [];
-        $remaining = [];
+        $pendingById = [];
         $metadata = [];
 
         foreach ($rows as $row) {
@@ -105,26 +111,22 @@ return new class extends AiMigration
                     // Match the old reader's row-local last-result semantics.
                     $ownResults['id:'.$result['id']] = $result;
                 } else {
-                    $remaining[] = ['row' => $row->id, 'result' => $result];
+                    $matches = $pendingById['id:'.$result['id']] ?? [];
+                    if (count($matches) !== 1) {
+                        throw new RuntimeException("Native result ownership is ambiguous or missing at message {$row->id}; review the backup manually before conversion.");
+                    }
+                    $calls[$matches[0]]['result'] = $result;
+                    unset($pendingById['id:'.$result['id']]);
                 }
             }
             foreach ($rowCalls as $call) {
-                $calls[] = ['row' => $row->id, 'call' => $call, 'result' => $ownResults['id:'.$call['id']] ?? null];
-            }
-        }
-
-        foreach ($remaining as $later) {
-            $matches = [];
-            foreach ($calls as $index => $call) {
-                if ($call['result'] === null && $call['call']['id'] === $later['result']['id']
-                    && strcmp($call['row'], $later['row']) < 0) {
-                    $matches[] = $index;
+                $index = count($calls);
+                $result = $ownResults['id:'.$call['id']] ?? null;
+                $calls[] = ['row' => $row->id, 'call' => $call, 'result' => $result];
+                if ($result === null) {
+                    $pendingById['id:'.$call['id']][] = $index;
                 }
             }
-            if (count($matches) !== 1) {
-                throw new RuntimeException("Native result ownership is ambiguous or missing at message {$later['row']}; review the backup manually before conversion.");
-            }
-            $calls[$matches[0]]['result'] = $later['result'];
         }
 
         $answered = [];
