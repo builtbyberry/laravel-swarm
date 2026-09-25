@@ -25,6 +25,7 @@ records preserved contracts, exact removal scope and unsupported new integration
 | Surface | Purpose | Primary documentation |
 | --- | --- | --- |
 | `SwarmResponse` | Synchronous output, steps, usage, artifacts, metadata, and in-process context. | [README: Running A Swarm](../README.md#running-a-swarm) |
+| `SwarmStep` / `NativeStepResult` | Completed step output plus a bounded, versioned projection of the native Laravel AI response. Fresh live completion is independent from capture-shaped persistence; a checkpoint-resumed streamed step reuses the stored capture-shaped projection. | [Native Step Results](native-step-results.md) |
 | `QueuedSwarmResponse` | Queued dispatch handle with `runId` and pending-dispatch proxy methods. | [README: Queueing A Swarm](../README.md#queueing-a-swarm) |
 | `StreamableSwarmResponse` | Lazy iterable and HTTP response for stream events. | [Streaming](streaming.md) |
 | `SwarmProviderToolEvent` | Observed native provider-tool activity with original identity/status and workflow attribution; `causalId()` addresses scoped causal operations. | [Provider-tool activity](provider-tool-events.md) |

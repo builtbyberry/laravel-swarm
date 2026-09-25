@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalFinishNode;
@@ -39,6 +40,7 @@ use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentSettingsAttempt;
+use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -814,7 +816,13 @@ class HierarchicalRunner
         return new DurableHierarchicalStepResult(
             step: $step,
             routeCursor: $cursor,
-            nodeOutput: ['node_id' => $node->id, 'output' => $step->output, 'citation_evidence' => $this->capture->citationEvidence($step->citationEvidence, $state->context)->toArray()],
+            nodeOutput: [
+                'node_id' => $node->id,
+                'output' => $step->output,
+                'citation_evidence' => $this->capture->citationEvidence($step->citationEvidence, $state->context)->toArray(),
+                'native_result_status' => ($capturedNative = $this->capture->nativeResult($step->nativeResult, $state->context))?->status,
+                'native_result' => $capturedNative?->toArray(),
+            ],
             complete: $this->isDurableCursorComplete($cursor),
             clearBranchParentNodeIds: $clearBranchParentNodeIds,
         );
@@ -1017,7 +1025,8 @@ class HierarchicalRunner
                             throw new SwarmException('Ad-hoc hierarchical parallel workers are reconstructed in worker processes, so live instance state cannot be preserved. Declare per-run native settings for every routed node with RunContext::withAgentConfiguration(), or use a container-resolvable authored swarm.');
                         }
                         $attemptIds = $state->nativeSettingsAttempt->ids();
-                        $callbacks[$branchNodeId] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchIndex, $branchNodeId, $citationLimits, $nativeRecipient, $attemptIds, $adHoc): array {
+                        $nativeResultLimits = Container::getInstance()->make(NativeStepResultProjector::class)->resolvedLimits();
+                        $callbacks[$branchNodeId] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchIndex, $branchNodeId, $citationLimits, $nativeResultLimits, $nativeRecipient, $attemptIds, $adHoc): array {
                             $worker = null;
                             $workerSwarm = $adHoc ? null : Container::getInstance()->make($branchSwarmClass);
                             if ($workerSwarm instanceof Swarm) {
@@ -1051,6 +1060,7 @@ class HierarchicalRunner
                                     'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
                                     'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
                                     'native_settings_consumed' => $attempt->ids(),
+                                    'native_result' => NativeStepResultProjector::fromResolvedLimits($nativeResultLimits)->fromResponse($response)->toArray(),
                                 ];
                             } finally {
                                 ActiveRunContext::exit();
@@ -1060,7 +1070,7 @@ class HierarchicalRunner
 
                     $driver = $this->concurrency->driver();
                     $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-                    /** @var array<string, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+                    /** @var array<string, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>, native_settings_consumed: list<string>, native_result: array<string, mixed>}> $results */
                     $results = $this->outcomes->validateConcurrentResults($results);
 
                     foreach ($results as $row) {
@@ -1152,6 +1162,7 @@ class HierarchicalRunner
                             storeContext: false,
                             includeUsageInMetadata: false,
                             citationEvidence: CitationEvidence::fromArray($row['citation_evidence']),
+                            nativeResult: NativeStepResult::fromArray($row['native_result']),
                         );
 
                         $steps[] = $step;
@@ -1696,6 +1707,7 @@ class HierarchicalRunner
             storeContext: $storeContext,
             storeArtifacts: $storeArtifacts,
             citationEvidence: $this->citations->response($response, $state->context->runId, $index, $agent::class, is_string($metadata['node_id'] ?? null) ? $metadata['node_id'] : null),
+            nativeResult: $this->stepsRecorder->nativeResult($response),
         );
     }
 
@@ -1825,6 +1837,7 @@ class HierarchicalRunner
             metadata: $metadata,
             storeContext: false,
             storeArtifacts: false,
+            nativeResult: $accumulator->nativeResult,
         );
 
         // Close the node bracket once the step has fully completed — every event

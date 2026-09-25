@@ -5,6 +5,9 @@ For native provider activity, capture, storage, replay and attempt semantics, se
 
 For final and per-step sources, capture rules, and migration requirements, see [citation evidence](citations.md).
 
+For bounded native response fields on completed steps, capture-shaped storage,
+and schema/rollback requirements, see [native step results](native-step-results.md).
+
 
 Laravel Swarm can persist three kinds of run data:
 

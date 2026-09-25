@@ -5,6 +5,9 @@ For provider-native search/fetch activity, privacy and durable attempt behavior,
 
 For final and per-step sources, capture rules, and migration requirements, see [citation evidence](citations.md).
 
+For the completed step's bounded native response projection and the distinction
+between live access and capture-shaped replay, see [native step results](native-step-results.md).
+
 
 Use `stream()` when a browser, CLI, or other client needs **live typed progress**
 while a swarm runs. The method returns a lazy
@@ -190,7 +193,7 @@ Swarm streams emit typed events, including:
 | `swarm_provider_tool_event` | Captured native [provider-tool activity](provider-tool-events.md) with identity and explicit data availability. |
 | `swarm_provider_tool_attempt_invalidated` | Durable control marker invalidating older provider activity for one node. |
 | `swarm_citation` | Native source occurrence with captured [citation evidence and availability](citations.md). |
-| `swarm_step_end` | Step completion with captured or limited output, usage, and [step citation evidence](citations.md). |
+| `swarm_step_end` | Step completion with captured or limited output, usage, [step citation evidence](citations.md), and a capture-shaped [native step result](native-step-results.md). |
 | `swarm_stream_end` | Terminal completion with final output, aggregate usage, and [final-output citation evidence](citations.md). |
 | `swarm_stream_error` | Terminal failure payload for live failure and persisted replay. |
 | `swarm_node_opened` | A run-structure node opening; self-identifying (`node_id == id`), with its `parent_node_id` and `role`. Recorded before any event tagged with that node id. |

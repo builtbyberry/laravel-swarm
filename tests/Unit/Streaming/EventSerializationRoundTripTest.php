@@ -597,6 +597,9 @@ function event_payload_cases(): array
         if (in_array($case[0], [SwarmStepEnd::class, SwarmStreamEnd::class], true)) {
             $case[1] = ['citation_status' => 'unknown', 'citation_reasons' => [], 'citations' => []] + $case[1];
         }
+        if ($case[0] === SwarmStepEnd::class) {
+            $case[1]['native_result'] = ['format_version' => 1, 'status' => 'unavailable', 'reasons' => ['legacy']];
+        }
     }
     unset($case);
 

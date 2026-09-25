@@ -20,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -56,6 +57,7 @@ class StreamEventMapper
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
         protected ProviderToolEventMapper $providerTools,
+        protected NativeStepResultProjector $nativeResults,
     ) {}
 
     /**
@@ -237,6 +239,7 @@ class StreamEventMapper
         $this->outcomes->validateResponse($response);
         $accumulator->citationEvidence = $this->citations->reconcile($accumulator->citationEvidence,
             $this->citations->response($response, $state->context->runId, $index, $agent::class));
+        $accumulator->nativeResult = $this->nativeResults->fromResponse($response);
     }
 
     /**

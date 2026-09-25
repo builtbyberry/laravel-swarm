@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableNativeStepResults;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -130,7 +131,10 @@ class DurableRunRecorder
         $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $step, $withTransaction, $durableStreaming): void {
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->persistStepArtifacts($runId, $step);
-            $this->durableRuns->checkpointHierarchicalStep(
+            $method = $this->durableRuns instanceof StoresDurableNativeStepResults
+                ? 'checkpointHierarchicalStepWithNativeResult'
+                : 'checkpointHierarchicalStep';
+            $this->durableRuns->{$method}(
                 runId: $runId,
                 executionToken: $token,
                 nextStepIndex: $nextStepIndex,

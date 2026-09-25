@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
@@ -20,6 +21,7 @@ use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentSettingsAttempt;
+use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -69,6 +71,7 @@ class ParallelRunner
         $callbacks = [];
         $citationLimits = ['max_count' => (int) $this->config->get('swarm.citations.max_count', 256),
             'max_bytes' => (int) $this->config->get('swarm.citations.max_bytes', 262144)];
+        $nativeResultLimits = Container::getInstance()->make(NativeStepResultProjector::class)->resolvedLimits();
         $snapshots = [];
         // Constant for the run; forwarded into each worker closure so the
         // ambient run context is reconstructable even when the concurrency
@@ -87,7 +90,7 @@ class ParallelRunner
                 $this->view->present($state->swarm, $state->context, $agent),
             );
 
-            $callbacks[$index] = function () use ($agentClass, $input, $runId, $swarmClass, $contextPayload, $index, $citationLimits, $attemptIds, $adHoc): array {
+            $callbacks[$index] = function () use ($agentClass, $input, $runId, $swarmClass, $contextPayload, $index, $citationLimits, $nativeResultLimits, $attemptIds, $adHoc): array {
                 if ($adHoc) {
                     $agent = Container::getInstance()->make($agentClass);
                 } else {
@@ -133,6 +136,7 @@ class ParallelRunner
                         'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
                         'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
                         'native_settings_consumed' => $attempt->ids(),
+                        'native_result' => NativeStepResultProjector::fromResolvedLimits($nativeResultLimits)->fromResponse($response)->toArray(),
                     ];
                 } finally {
                     ActiveRunContext::exit();
@@ -142,7 +146,7 @@ class ParallelRunner
 
         $driver = $this->concurrency->driver();
         $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-        /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, class: string, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+        /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, class: string, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>, native_settings_consumed: list<string>, native_result: array<string, mixed>}> $results */
         $results = $this->outcomes->validateConcurrentResults($results);
 
         foreach ($results as $row) {
@@ -216,6 +220,7 @@ class ParallelRunner
                 storeContext: false,
                 storeArtifacts: false,
                 citationEvidence: CitationEvidence::fromArray($row['citation_evidence']),
+                nativeResult: NativeStepResult::fromArray($row['native_result']),
             );
 
             $steps[] = $step;

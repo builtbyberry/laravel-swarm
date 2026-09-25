@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Memory\StreamStepCheckpoint;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -55,6 +58,21 @@ class SwarmHealthRecordingAuditSink implements SwarmAuditSink
     public function emit(string $category, array $payload): void
     {
         // no-op: presence of the binding is what the health check verifies.
+    }
+}
+
+class SwarmHealthNativeFailingCheckpointStore implements ChecksNativeStepResultStorage, StreamStepCheckpointStore
+{
+    public function record(string $runId, int $stepIndex, string $output, array $usage): void {}
+
+    public function find(string $runId, int $stepIndex): ?StreamStepCheckpoint
+    {
+        return null;
+    }
+
+    public function assertNativeStepResultStorageReady(): void
+    {
+        throw new SwarmException('native-result readiness was checked');
     }
 }
 
@@ -114,6 +132,17 @@ test('swarm health durable option verifies durable database readiness', function
 
     expect(Artisan::call('swarm:health', ['--durable' => true]))->toBe(1);
     expect(Artisan::output())->toContain('missing_swarm_durable_runs');
+});
+
+test('custom checkpoint citation notes do not bypass native-result readiness failures', function (): void {
+    app()->instance(StreamStepCheckpointStore::class, new SwarmHealthNativeFailingCheckpointStore);
+
+    expect(Artisan::call('swarm:health', ['--json' => true]))->toBe(1);
+    $checkpoint = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks'])
+        ->firstWhere('component', 'Stream checkpoints');
+
+    expect($checkpoint['status'])->toBe('failed')
+        ->and($checkpoint['details'])->toContain('native-result readiness was checked');
 });
 
 test('swarm health json output is structured', function (): void {

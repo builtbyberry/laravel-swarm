@@ -89,6 +89,36 @@ These settings do not propagate into durable child swarms. Child recovery and
 inheritance remain v0.29 work; configure a child explicitly rather than depending
 on parent state.
 
+### Native step result readers and storage
+
+Completed `SwarmStep` values now expose a bounded, versioned
+`NativeStepResult`. Run the v0.28 package migration before upgraded queue or
+durable workers write steps. It adds nullable native-result status/payload
+columns to history steps, durable branches, durable node outputs, and stream
+step checkpoints. Restart long-lived workers after the migration. Existing rows
+read as `unavailable` / `legacy`; custom stores that do not adopt the optional
+native-result capabilities also degrade explicitly rather than fabricating data.
+
+Live result access does not override capture. Full output capture stores the
+bounded projection; Redact removes content and native conversation/message IDs.
+The shipped `SWARM_CAPTURE_OUTPUTS=false` path is Redact, not Skip. Only a custom
+capture policy returning Skip stores an `omitted` status without a payload.
+Database envelopes are sealed when encryption at rest is enabled. Owning history,
+durable, checkpoint, and hot replay rows are pruned normally; application-owned
+cold archives require their own deletion and legal-hold policy.
+
+Code rollback is unsafe after native results have been written while an affected
+identity can resume or retry. An old writer can update output/usage while leaving
+the new nullable native-result columns stale. Stop intake; drain or terminate
+active queued, durable, and streamed work; preserve or deliberately clean the
+evidence; deploy old code everywhere; and restart every long-lived worker before
+resuming. Retaining the columns only makes old readers schema-tolerant. Dropping
+them remains destructive: verify retention and evidence obligations before the
+migration down. Include direct and nested native-result envelopes in APP_KEY
+rotation. See [Native Step Results](docs/native-step-results.md)
+for the field inventory, usage/citation ownership, privacy, bounds, and complete
+rollout/rollback procedure.
+
 ## Upgrading to v0.27.0
 
 The [adoption evidence index](docs/ai-1-release-evidence.md) records the reviewed

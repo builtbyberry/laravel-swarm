@@ -7,14 +7,18 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 /** Composes independent evidence envelopes without changing citation serialization. @internal */
 final class StreamEventPayloadCodec
 {
-    public function __construct(private CitationEvidenceCodec $citations, private ProviderToolPayloadCodec $providerTools) {}
+    public function __construct(
+        private CitationEvidenceCodec $citations,
+        private ProviderToolPayloadCodec $providerTools,
+        private NativeStepResultCodec $nativeResults,
+    ) {}
 
     /** @param array<string, mixed> $payload
      * @return array<string, mixed>
      */
     public function sealPayload(array $payload): array
     {
-        return $this->providerTools->sealPayload($this->citations->sealPayload($payload));
+        return $this->nativeResults->sealPayload($this->providerTools->sealPayload($this->citations->sealPayload($payload)));
     }
 
     /** @param array<string, mixed> $payload
@@ -22,6 +26,6 @@ final class StreamEventPayloadCodec
      */
     public function openPayload(array $payload): array
     {
-        return $this->providerTools->openPayload($this->citations->openPayload($payload));
+        return $this->nativeResults->openPayload($this->providerTools->openPayload($this->citations->openPayload($payload)));
     }
 }

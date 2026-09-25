@@ -8,12 +8,15 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentToolReference;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputRecipient;
+use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RichSerializationBoundaryAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchOne;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchTwo;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\NativeSettingsSerializationParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RichSerializationBoundaryParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryHierarchicalParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryStaticHierarchicalParallelSwarm;
@@ -29,10 +32,36 @@ use Laravel\SerializableClosure\SerializableClosure;
 pest()->group('process-concurrency');
 
 test('parallel swarm crosses the real process concurrency driver without agent instance state', function () {
-    $response = SerializationBoundaryParallelSwarm::make()->run('shared-task');
+    $direct = (new RichSerializationBoundaryAgent)->prompt('shared-task');
+    $expected = app(NativeStepResultProjector::class)->fromResponse($direct)->toArray();
+    $response = RichSerializationBoundaryParallelSwarm::make()->run('shared-task');
 
     expect($response->steps)->toHaveCount(2)
-        ->and((string) $response)->toContain('serialization-boundary:shared-task');
+        ->and(array_map(static fn ($step) => $step->nativeResult?->invocationId, $response->steps))
+        ->toBe(['serialization-boundary-agent', 'serialization-boundary-agent'])
+        ->and(array_map(static fn ($step) => [$step->nativeResult?->provider, $step->nativeResult?->model], $response->steps))
+        ->toBe([['fake', 'test'], ['fake', 'test']])
+        ->and($response->steps[0]->nativeResult?->structured)->toBe(['channel' => 'process', 'typed' => true])
+        ->and($response->steps[0]->nativeResult?->reasoning)->toBe('process-reasoning')
+        ->and($response->steps[0]->nativeResult?->conversationId)->toBe('process-conversation')
+        ->and($response->steps[0]->nativeResult?->generationSteps[0]['structured'])->toBe(['generation' => 'typed'])
+        ->and($response->steps[0]->nativeResult?->tools[0]['status'])->toBe('succeeded')
+        ->and(array_map(static fn ($step) => $step->nativeResult?->toArray(), $response->steps))
+        ->toBe([$expected, $expected]);
+});
+
+test('parallel process workers inherit the parent native-result bounds', function () {
+    config()->set('swarm.native_results.max_bytes', 256);
+    config()->set('swarm.native_results.max_generation_steps', 1);
+    config()->set('swarm.native_results.max_tool_statuses', 1);
+
+    $response = RichSerializationBoundaryParallelSwarm::make()->run('bounded-process-task');
+
+    foreach ($response->steps as $step) {
+        expect(strlen(json_encode($step->nativeResult, JSON_THROW_ON_ERROR)))->toBeLessThanOrEqual(256)
+            ->and($step->nativeResult?->status)->toBe('partial')
+            ->and($step->nativeResult?->reasons)->toContain('limit');
+    }
 });
 
 test('native attachments cross fresh process workers in every concurrent topology', function () {
@@ -229,7 +258,10 @@ test('hierarchical swarm executes parallel group and join under the real process
     expect($parallelSteps)->toHaveCount(2);
 
     foreach ($parallelSteps as $step) {
-        expect($step->metadata['parent_parallel_node_id'])->toBe('parallel_node');
+        expect($step->metadata['parent_parallel_node_id'])->toBe('parallel_node')
+            ->and($step->nativeResult->invocationId)->toBe('serialization-boundary-agent')
+            ->and($step->nativeResult->provider)->toBe('fake')
+            ->and($step->nativeResult->model)->toBe('test');
     }
 });
 

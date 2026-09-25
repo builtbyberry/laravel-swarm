@@ -11,13 +11,16 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted;
 use BuiltByBerry\LaravelSwarm\Memory\SwarmMemoryKeys;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\PayloadLimitResult;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Laravel\Ai\Responses\AgentResponse;
 
 /**
  * @internal
@@ -29,12 +32,18 @@ class SwarmStepRecorder
         protected SwarmPayloadLimits $limits,
         protected SwarmAuditDispatcher $audit,
         protected ConfigRepository $config,
-        protected CitationStorageReadiness $citationStorage,
+        protected StepEvidenceStorageReadiness $evidenceStorage,
+        protected NativeStepResultProjector $nativeResults,
     ) {}
+
+    public function nativeResult(AgentResponse $response): NativeStepResult
+    {
+        return $this->nativeResults->fromResponse($response);
+    }
 
     public function started(SwarmExecutionState $state, int $index, string $agentClass, string $input): void
     {
-        $this->citationStorage->check(
+        $this->evidenceStorage->check(
             durable: $state->executionMode === ExecutionMode::Durable || $state->queueHierarchicalParallelCoordination === 'multi_worker',
             checkpoints: $state->executionMode === ExecutionMode::Stream,
         );
@@ -80,6 +89,7 @@ class SwarmStepRecorder
         bool $includeUsageInMetadata = true,
         ?array $contextUsage = null,
         ?CitationEvidence $citationEvidence = null,
+        ?NativeStepResult $nativeResult = null,
     ): SwarmStep {
         $limitedOutput = $this->capture->capturesOutputs()
             ? $this->limits->output($output)
@@ -109,6 +119,7 @@ class SwarmStepRecorder
             artifacts: [$artifact],
             metadata: $stepMetadata,
             citationEvidence: $citationEvidence,
+            nativeResult: $nativeResult,
         );
 
         if ($updateContext) {
@@ -147,9 +158,9 @@ class SwarmStepRecorder
             $state->context->addArtifact($artifact);
         }
 
-        // Pass the raw (payload-limited) step; the history store routes it
-        // through SwarmCapture::stepToPersistedArray(), which applies the
-        // input/output capture decisions (Skip omits the column entirely).
+        // Build the capture-shaped step before handing it to the configured
+        // history store. Built-in stores then serialize the versioned envelope;
+        // custom stores own their persistence and rehydration behavior.
         $this->verifyOwnership($state);
         $historyStep = new SwarmStep(
             agentClass: $agentClass,
@@ -158,6 +169,7 @@ class SwarmStepRecorder
             artifacts: [$artifact],
             metadata: $stepMetadata,
             citationEvidence: $this->capture->citationEvidence($citationEvidence ?? new CitationEvidence, $state->context),
+            nativeResult: $this->capture->nativeResult($nativeResult, $state->context),
         );
         if ($state->historyStore instanceof RecordsCitationSteps) {
             $state->historyStore->recordStepWithContext($state->context->runId, $historyStep, $state->ttlSeconds,
@@ -189,6 +201,7 @@ class SwarmStepRecorder
             metadata: $stepMetadata,
             artifacts: $this->capture->artifacts($step->artifacts),
             executionMode: $state->executionMode->value,
+            nativeResult: $this->capture->nativeResult($nativeResult, $state->context),
         ));
         $this->audit->emit('step.completed', [
             'run_id' => $state->context->runId,

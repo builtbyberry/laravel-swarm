@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
@@ -739,21 +740,25 @@ class SwarmHealthCommand extends Command
                 throw new \RuntimeException('Readiness check is not available for the resolved store.');
             }
 
+            $notes = [];
             if ($store instanceof ChecksCitationStorage) {
                 $store->assertCitationStorageReady();
             } elseif ($store instanceof StreamStepCheckpointStore) {
-                return [
-                    'component' => $check['component'], 'driver' => $driver, 'store' => $storeName,
-                    'status' => 'note', 'details' => 'custom checkpoint store does not expose citation readiness checks',
-                ];
+                $notes[] = 'custom checkpoint store does not expose citation readiness checks';
+            }
+
+            if ($store instanceof ChecksNativeStepResultStorage) {
+                $store->assertNativeStepResultStorageReady();
+            } elseif ($store instanceof StreamStepCheckpointStore) {
+                $notes[] = 'custom checkpoint store does not expose native-result readiness checks';
             }
 
             return [
                 'component' => $check['component'],
                 'driver' => $driver,
                 'store' => $storeName,
-                'status' => 'ok',
-                'details' => 'ready',
+                'status' => $notes === [] ? 'ok' : 'note',
+                'details' => $notes === [] ? 'ready' : implode('; ', $notes),
             ];
         } catch (Throwable $exception) {
             return [

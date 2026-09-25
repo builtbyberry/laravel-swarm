@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
+use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableNativeStepResults;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
@@ -25,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
 use BuiltByBerry\LaravelSwarm\Runners\NativeCitationEvidence;
@@ -214,7 +216,7 @@ class DurableBranchAdvancer
                             // it runs the unchanged blocking prompt(). The void above already ran for
                             // any pinned run regardless of the kill-switch, so a retraction is never
                             // dropped. Both shapes return [output, usage, snapshot].
-                            [$output, $usage, $snapshot, $citationEvidence] = $this->nodeStream->streamingActive($durableStreaming)
+                            [$output, $usage, $snapshot, $citationEvidence, $nativeResult] = $this->nodeStream->streamingActive($durableStreaming)
                                 ? $this->streamBranchAgent($state, $agent, $branch, $snapshot, $this->nodeStream->sinkFor($runId, $branchNodeId, $branchEpoch))
                                 : $this->promptBranchAgent($state, $agent, $branch, $snapshot);
                         } finally {
@@ -247,12 +249,16 @@ class DurableBranchAdvancer
                             storeContext: false,
                             storeArtifacts: false,
                             citationEvidence: $citationEvidence,
+                            nativeResult: $nativeResult,
                         );
 
                         $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step, $context, $state): void {
                             $evidence = $this->capture->citationEvidence($step->citationEvidence, $context);
+                            $nativeResult = $this->capture->nativeResult($step->nativeResult, $context);
                             if (is_string($branch['node_id'] ?? null)) {
-                                if ($this->durableRuns instanceof StoresDurableCitationEvidence) {
+                                if ($this->durableRuns instanceof StoresDurableNativeStepResults && $nativeResult !== null) {
+                                    $this->durableRuns->storeHierarchicalNodeOutputWithNativeResult($runId, $branch['node_id'], $output, $this->runs->ttlSeconds(), $evidence, $nativeResult);
+                                } elseif ($this->durableRuns instanceof StoresDurableCitationEvidence) {
                                     $this->durableRuns->storeHierarchicalNodeOutputWithCitations($runId, $branch['node_id'], $output, $this->runs->ttlSeconds(), $evidence);
                                 } else {
                                     $this->durableRuns->storeHierarchicalNodeOutput($runId, $branch['node_id'], $output, $this->runs->ttlSeconds());
@@ -260,7 +266,9 @@ class DurableBranchAdvancer
                             }
 
                             $this->persistBranchStepArtifacts($runId, $step);
-                            if ($this->durableRuns instanceof StoresDurableCitationEvidence) {
+                            if ($this->durableRuns instanceof StoresDurableNativeStepResults && $nativeResult !== null) {
+                                $this->durableRuns->markBranchCompletedWithNativeResult($runId, $branchId, $token, $output, $usage, $durationMs, $evidence, $nativeResult);
+                            } elseif ($this->durableRuns instanceof StoresDurableCitationEvidence) {
                                 $this->durableRuns->markBranchCompletedWithCitations($runId, $branchId, $token, $output, $usage, $durationMs, $evidence);
                             } else {
                                 $this->durableRuns->markBranchCompleted($runId, $branchId, $token, $output, $usage, $durationMs);
@@ -330,7 +338,7 @@ class DurableBranchAdvancer
      * unpinned runs and for the operator kill-switch (pinned but emission paused).
      *
      * @param  array<string, mixed>  $branch
-     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot, 3: CitationEvidence}
+     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot, 3: CitationEvidence, 4: NativeStepResult}
      */
     protected function promptBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot): array
     {
@@ -347,7 +355,8 @@ class DurableBranchAdvancer
 
         return [(string) $response, $response->usage->toArray(), $snapshot,
             $this->citations->response($response, $state->context->runId, (int) $branch['step_index'], $agent::class,
-                is_string($branch['node_id'] ?? null) ? $branch['node_id'] : (string) $branch['branch_id'])];
+                is_string($branch['node_id'] ?? null) ? $branch['node_id'] : (string) $branch['branch_id']),
+            $this->stepsRecorder->nativeResult($response)];
     }
 
     /**
@@ -363,7 +372,7 @@ class DurableBranchAdvancer
      *
      * @param  array<string, mixed>  $branch
      * @param  callable(SwarmStreamEvent): void  $sink
-     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot, 3: CitationEvidence}
+     * @return array{0: string, 1: array<string, mixed>, 2: MemorySnapshot, 3: CitationEvidence, 4: NativeStepResult}
      */
     protected function streamBranchAgent(SwarmExecutionState $state, Agent $agent, array $branch, MemorySnapshot $snapshot, callable $sink): array
     {
@@ -421,7 +430,7 @@ class DurableBranchAdvancer
             }
         }
 
-        return [$accumulator->output, $accumulator->stepUsage, $accumulator->snapshot, $accumulator->citationEvidence->withNodeId((string) $branchLabel)];
+        return [$accumulator->output, $accumulator->stepUsage, $accumulator->snapshot, $accumulator->citationEvidence->withNodeId((string) $branchLabel), $accumulator->nativeResult ?? NativeStepResult::unavailable(['malformed'])];
     }
 
     protected function persistBranchStepArtifacts(string $runId, ?SwarmStep $step): void

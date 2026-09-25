@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\ProviderToolData;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
@@ -49,10 +50,15 @@ class SwarmCapture
 {
     public const REDACTED = '[redacted]';
 
+    protected NativeStepResultProjector $nativeResults;
+
     public function __construct(
         protected ConfigRepository $config,
         protected CapturePolicy $policy,
-    ) {}
+        ?NativeStepResultProjector $nativeResults = null,
+    ) {
+        $this->nativeResults = $nativeResults ?? new NativeStepResultProjector($config);
+    }
 
     // ------------------------------------------------------------------
     // Per-category decisions
@@ -278,6 +284,24 @@ class SwarmCapture
         };
     }
 
+    public function nativeResult(?NativeStepResult $result, ?RunContext $context = null): ?NativeStepResult
+    {
+        return $result === null ? null : $this->nativeResults->capture($result, $this->outputsDecision($context));
+    }
+
+    public function nativeResultForStreamEvent(?NativeStepResult $result, ?RunContext $context = null): ?NativeStepResult
+    {
+        $captured = $this->nativeResult($result, $context);
+
+        return $captured === null ? null : $this->nativeResults->forStreamEvent($captured);
+    }
+
+    /** @param array<string, mixed> $payload */
+    public function nativeResultFromPersistedArray(array $payload): NativeStepResult
+    {
+        return $this->nativeResults->fromPersistedArray($payload);
+    }
+
     public function response(SwarmResponse $response): SwarmResponse
     {
         if ($this->capturesInputs() && $this->capturesOutputs() && $this->capturesArtifacts() && $this->outputsDecision($response->context) === CaptureDecision::Full) {
@@ -308,6 +332,7 @@ class SwarmCapture
             artifacts: $this->artifacts($step->artifacts),
             metadata: $step->metadata,
             citationEvidence: $this->citationEvidence($step->citationEvidence, $context),
+            nativeResult: $this->nativeResult($step->nativeResult, $context),
         );
     }
 
@@ -328,6 +353,14 @@ class SwarmCapture
         $array = $step->toArray();
         unset($array['citations'], $array['citation_status'], $array['citation_reasons']);
         $array += $this->citationEvidence($step->citationEvidence, $context)->toArray();
+        unset($array['native_result']);
+        $capturedNativeResult = $this->nativeResult($step->nativeResult, $context);
+        if ($capturedNativeResult !== null) {
+            $array['native_result_status'] = $capturedNativeResult->status;
+            if ($capturedNativeResult->status !== NativeStepResult::OMITTED) {
+                $array['native_result'] = $capturedNativeResult->toArray();
+            }
+        }
 
         $this->applyScalarKey($array, 'input', $step->input, $this->inputsDecision($context));
         $this->applyScalarKey($array, 'output', $step->output, $this->outputsDecision($context));

@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\CitationAwareStreamStepCheckpointStore;
+use BuiltByBerry\LaravelSwarm\Contracts\NativeResultAwareStreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
@@ -15,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\Concerns\RecordsUnknownStreamEvents;
@@ -136,7 +138,9 @@ class SequentialRunner
                 // a completed invocation alone does not guarantee a checkpoint.
                 // The final streamed step is never checkpoint-skipped.
                 $resumeCheckpoint = (! $isFinal && $replayEnabled)
-                    ? $this->checkpoints->find($state->context->runId, $index)
+                    ? ($this->checkpoints instanceof NativeResultAwareStreamStepCheckpointStore
+                        ? $this->checkpoints->findWithNativeResult($state->context->runId, $index)
+                        : $this->checkpoints->find($state->context->runId, $index))
                     : null;
 
                 yield new SwarmStepStart(
@@ -178,6 +182,7 @@ class SequentialRunner
                         durationMs: $durationMs = MonotonicTime::elapsedMilliseconds($startedAt),
                         storeArtifacts: false,
                         citationEvidence: $citationEvidence,
+                        nativeResult: $resumeCheckpoint->nativeResult ?? NativeStepResult::unavailable(['custom_store']),
                     );
                 } elseif ($isFinal) {
                     // Fail loud before begin() swaps the memory binding: a
@@ -263,6 +268,7 @@ class SequentialRunner
                         usage: $stepUsage,
                         durationMs: $durationMs,
                         citationEvidence: $citationEvidence,
+                        nativeResult: $accumulator->nativeResult,
                     );
                 } else {
                     // Non-final, fresh execution: freeze the agent-visible view
@@ -297,6 +303,7 @@ class SequentialRunner
                         usage: $stepUsage,
                         durationMs: $durationMs = MonotonicTime::elapsedMilliseconds($startedAt),
                         citationEvidence: $citationEvidence,
+                        nativeResult: $this->steps->nativeResult($response),
                     );
 
                     // Record the per-step checkpoint AFTER the step fully
@@ -313,7 +320,11 @@ class SequentialRunner
                     // params (the raw output, plaintext when encryption is off).
                     if ($replayEnabled) {
                         try {
-                            if ($this->checkpoints instanceof CitationAwareStreamStepCheckpointStore) {
+                            if ($this->checkpoints instanceof NativeResultAwareStreamStepCheckpointStore && $step->nativeResult !== null) {
+                                $this->checkpoints->recordWithNativeResult($state->context->runId, $index, $output, $stepUsage,
+                                    $this->capture->citationEvidence($step->citationEvidence, $state->context),
+                                    $this->capture->nativeResult($step->nativeResult, $state->context) ?? NativeStepResult::unavailable());
+                            } elseif ($this->checkpoints instanceof CitationAwareStreamStepCheckpointStore) {
                                 $this->checkpoints->recordWithCitations($state->context->runId, $index, $output, $stepUsage,
                                     $this->capture->citationEvidence($step->citationEvidence, $state->context));
                             } else {
@@ -343,6 +354,7 @@ class SequentialRunner
                         'usage' => $stepUsage,
                     ],
                     timestamp: SwarmStreamEvent::timestamp(),
+                    nativeResult: $this->capture->nativeResultForStreamEvent($step->nativeResult, $state->context),
                 );
             }
 
@@ -429,6 +441,7 @@ class SequentialRunner
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             contextUsage: $mergedUsage,
             citationEvidence: $citationEvidence,
+            nativeResult: $this->steps->nativeResult($response),
         );
     }
 
@@ -525,6 +538,7 @@ class SequentialRunner
             durationMs: MonotonicTime::elapsedMilliseconds($startedAt),
             contextUsage: $mergedUsage,
             citationEvidence: $accumulator->citationEvidence,
+            nativeResult: $accumulator->nativeResult,
         );
     }
 
