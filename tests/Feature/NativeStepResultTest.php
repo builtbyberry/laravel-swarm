@@ -445,6 +445,32 @@ it('reapplies native-result bounds to cache-backed persisted reads', function ()
         ->and(json_encode($native, JSON_THROW_ON_ERROR))->not->toContain(str_repeat('x', 64));
 });
 
+it('bounds untrusted reasons while reading cache-backed persisted native results', function () {
+    config()->set('swarm.persistence.driver', 'cache');
+    config()->set('swarm.history.driver', 'cache');
+    config()->set('swarm.native_results.max_bytes', 256);
+    app()->forgetInstance(SwarmCapture::class);
+    app()->forgetInstance(SwarmRunner::class);
+    app()->forgetInstance(RunHistoryStore::class);
+    RichNativeAgent::$response = richNativeStepResponse();
+    $response = RichNativeSequentialSwarm::make()->prompt('cache reasons bound');
+    $key = (string) config('swarm.history.prefix', 'swarm:history:').$response->metadata['run_id'];
+    $cache = Cache::store(config('swarm.history.store'));
+    $raw = $cache->get($key);
+    $raw['steps'][0]['native_result'] = [
+        'format_version' => 1,
+        'status' => 'partial',
+        'reasons' => [str_repeat('untrusted-reason-', 256)],
+    ];
+    $cache->put($key, $raw, 3600);
+
+    $native = app(RunHistoryStore::class)->find($response->metadata['run_id'])['steps'][0]['native_result'];
+
+    expect(strlen(json_encode($native, JSON_THROW_ON_ERROR)))->toBeLessThanOrEqual(256)
+        ->and($native['status'])->toBe(NativeStepResult::PARTIAL)
+        ->and($native['reasons'])->toBe(['limit']);
+});
+
 it('seals persisted native results without hiding them from authorized history reads', function () {
     config()->set('swarm.persistence.encrypt_at_rest', true);
     app()->forgetInstance(RunHistoryStore::class);

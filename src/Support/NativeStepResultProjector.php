@@ -341,9 +341,7 @@ final class NativeStepResultProjector
             }
         }
 
-        $state->reason($reason);
-
-        return new NativeStepResult(status: $limitedStatus ?? NativeStepResult::PARTIAL, reasons: $state->reasons);
+        return new NativeStepResult(status: $limitedStatus ?? NativeStepResult::PARTIAL, reasons: [$reason]);
     }
 
     private function limit(string $key, int $default): int
