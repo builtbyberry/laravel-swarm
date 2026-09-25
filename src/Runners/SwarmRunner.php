@@ -90,6 +90,7 @@ class SwarmRunner
         protected SequentialRunner $sequential,
         protected SequentialStreamRunner $sequentialStream,
         protected ParallelRunner $parallel,
+        protected ParallelStreamRunner $parallelStream,
         protected HierarchicalRunner $hierarchical,
         protected StaticHierarchicalRunner $staticHierarchical,
         protected StaticHierarchicalStreamRunner $staticHierarchicalStream,
@@ -394,6 +395,7 @@ class SwarmRunner
             return match ($topology) {
                 Topology::StaticHierarchical => $this->staticHierarchicalStream->stream($swarm, $context),
                 Topology::Hierarchical => $this->hierarchicalStream->stream($swarm, $context),
+                Topology::Parallel => $this->parallelStream->stream($swarm, $context),
                 default => $this->sequentialStream->stream($swarm, $context),
             };
         } catch (Throwable $exception) {

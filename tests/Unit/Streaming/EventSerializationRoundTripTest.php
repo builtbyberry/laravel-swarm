@@ -24,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmUnknownEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventIdentity;
 
 /**
  * Direct, data-driven serialization coverage for every concrete
@@ -648,6 +649,40 @@ test('every concrete event class has at least one round-trip payload case', func
     foreach (ROUND_TRIP_EVENT_CLASSES as $class) {
         expect($covered)->toHaveKey($class, "Event class [{$class}] has no round-trip payload case.");
     }
+});
+
+test('parallel branch identity round-trips without changing native event identity', function (): void {
+    $event = (new SwarmTextDelta(
+        id: 'reused-native-id',
+        runId: 'run-parallel-identity',
+        stepIndex: 1,
+        agentClass: 'Agent',
+        delta: 'chunk',
+        timestamp: 1710000000,
+    ))->withInvocationId('reused-invocation')
+        ->withNodeId('parallel:1')
+        ->withBranchIdentity('parallel:1', 'attempt-uuid', 7);
+
+    $restored = SwarmStreamEvent::fromArray($event->toArray());
+    $sibling = (new SwarmTextDelta(
+        id: 'reused-native-id',
+        runId: 'run-parallel-identity',
+        stepIndex: 0,
+        agentClass: 'Agent',
+        delta: 'other chunk',
+        timestamp: 1710000000,
+    ))->withInvocationId('reused-invocation')
+        ->withNodeId('parallel:0')
+        ->withBranchIdentity('parallel:0', 'other-attempt-uuid', 7);
+
+    expect($restored->toArray())->toBe($event->toArray())
+        ->and($restored->id)->toBe('reused-native-id')
+        ->and($restored->invocationId)->toBe('reused-invocation')
+        ->and($restored->branchId)->toBe('parallel:1')
+        ->and($restored->attemptId)->toBe('attempt-uuid')
+        ->and($restored->branchSequence)->toBe(7)
+        ->and(StreamEventIdentity::forEvent($restored))->toBe(StreamEventIdentity::forEvent($event))
+        ->and(StreamEventIdentity::forEvent($restored))->not->toBe(StreamEventIdentity::forEvent($sibling));
 });
 
 test('every concrete event class round-trips both a set and a null node_id', function (): void {

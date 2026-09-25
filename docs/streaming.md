@@ -35,7 +35,9 @@ needs background or checkpointed execution.
 ## Topology: Sequential, Static-Hierarchical, and Hierarchical
 
 Streaming is supported for **sequential**, **static-hierarchical**, and
-**hierarchical** (dynamic, coordinator-generated plan) swarms.
+**hierarchical** (dynamic, coordinator-generated plan) swarms. Top-level
+**parallel** live multiplexing is available as a default-off, process-only
+capability; see [Parallel Live Multiplexing](#parallel-live-multiplexing).
 
 Sequential swarms emit step lifecycle events for every agent and stream native
 progress from the final agent. Static-hierarchical swarms stream worker nodes.
@@ -51,6 +53,78 @@ only structural causal-log events are emitted for it:
 then stream normally from step index 1 with `__coordinator__` as their initial
 parent. Budget accounting via `#[MaxAgentSteps(N)]` counts the coordinator as
 step 0, so at most `N - 1` worker steps may execute.
+
+### Parallel live multiplexing
+
+Enable top-level parallel streaming only after every serving worker can use
+Laravel's `process` concurrency driver:
+
+```dotenv
+SWARM_PARALLEL_STREAMING_ENABLED=true
+```
+
+Each branch uses the native Laravel AI stream for its agent. Swarm multiplexes
+the resulting typed events onto the caller's one stream without rewriting native
+event or invocation IDs. Every branch event additionally carries:
+
+- `branch_id`: the stable authored slot (`parallel:0`, `parallel:1`, ...);
+- `node_id`: the branch's current run-structure node (the same slot today, but a
+  separate identity namespace for future branch chains);
+- `attempt_id`: a request-local UUID for this live branch attempt; and
+- `branch_sequence`: a zero-based, strictly increasing order within that attempt.
+
+The tuple `(run_id, branch_id, attempt_id, branch_sequence)` is the transport-
+neutral Swarm identity. Native IDs remain provider provenance and may repeat in
+different branches. Arrival order across branches is scheduler-dependent and is
+**not** a global causal order. Group or render by branch and order only by
+`branch_sequence`. Completed steps and the final combined output remain in the
+authored `agents()` order, regardless of which branch finished first.
+
+The transport uses authenticated, versioned, length-prefixed loopback frames.
+Frames are byte-bounded and atomic; one event is never split. The parent
+acknowledges each event only after the consumer asks for the next event, applying
+backpressure all the way to that branch. The absolute swarm deadline continues
+while a consumer is paused. Branch count, event-frame bytes, and cancellation
+grace are bounded by `swarm.streaming.parallel.*`.
+
+If one branch fails, disconnects, violates the protocol, exceeds a bound, or
+misses the deadline, the run emits its normal terminal stream error, records the
+failure, cancels and reaps sibling processes, and rethrows the original branch
+failure when it can be reconstructed. Events already yielded remain partial
+observations; no branch is recorded successful until every native outcome and
+step guardrail passes. If the consumer abandons the stream, all active branches
+are stopped and reaped. There is no buffered-completion fallback presented as
+live streaming.
+
+The process driver and loopback process transport are required. `sync`, `fork`,
+and custom concurrency drivers expose only buffered completion and therefore
+fail before agent invocation. Use `prompt()` for a truthful buffered aggregate,
+or run the streaming endpoint where the process transport is available.
+
+Capture/redaction, citations, native step results, inclusive usage aggregation,
+replay, and broadcast use their existing owners. Child processes return bounded
+outcomes; the parent alone applies guardrails and writes canonical history,
+snapshots, replay, and terminal state, so retries are not counted twice. Persisted
+replay and broadcast envelopes retain the branch identity fields. Durable
+streaming continues to use its existing node/attempt-epoch causal log; live
+`attempt_id` does not replace or reinterpret durable epochs.
+
+There is intentionally no transaction spanning a child process socket, replay
+store, history store, and broadcast transport. Each yielded event is an observed
+fact and may be persisted or delivered before a later branch fails. Terminal
+history and step evidence are written only by the parent after every branch and
+guardrail succeeds. The frame byte limit protects branch-to-parent transport; it
+is not a promise that an application's WebSocket/SSE infrastructure accepts that
+envelope size, so configure downstream limits separately.
+
+The process-concurrency lane exercises actual simultaneous PHP processes,
+interleaved branches that reuse native event/invocation IDs, output before a slow
+branch finishes, event-level backpressure, absolute deadlines while a consumer
+is paused, partial branch failure with sibling reaping, consumer abandonment,
+capture/redaction, citations, usage, native results, and persisted replay. The
+protocol unit lane separately rejects oversized, truncated, malformed,
+unauthenticated, and duplicate frames. These are provider-free deterministic
+tests; they do not assert a paid provider's network timing.
 
 Swarm tool-call serialization omits opaque provider continuation fields, including
 `reasoning_encrypted_content` and `thought_signature`. Native conversation replay
@@ -124,9 +198,9 @@ broadcasts each event immediately from the worker, and records completion
 through normal swarm history and lifecycle events.
 
 These are stream-event helpers, not lifecycle broadcasting for every topology.
-They use the same sequential, generated hierarchical and static hierarchical
-paths as `stream()` in [SwarmRunner](../src/Runners/SwarmRunner.php); top-level
-parallel live streaming is rejected by [DispatchValidator](../src/Runners/DispatchValidator.php).
+They use the same supported topology paths as `stream()` in
+[SwarmRunner](../src/Runners/SwarmRunner.php), including enabled process-backed
+top-level parallel multiplexing.
 For workflow operational feeds across all modes, listen to Laravel Swarm
 lifecycle events and broadcast your own application events.
 
@@ -204,6 +278,10 @@ Every substantive event also carries a nullable `node_id` tagging the
 run-structure node it belongs to (absent/null = a top-level event with no
 enclosing node). The three `swarm_node_*` events make a run's structure
 first-class on the causal log — "structure as payload".
+
+Parallel branch events add nullable `branch_id`, `attempt_id`, and
+`branch_sequence` fields. They are absent on older rows and non-parallel live
+paths. Consumers must not use array arrival order as a cross-branch causal order.
 
 **Provenance:** For upstream final-agent streamed provider events, Laravel Swarm
 preserves upstream event **IDs** and **timestamps** in typed replay. **Invocation

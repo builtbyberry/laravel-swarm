@@ -243,7 +243,14 @@ It preserves structured data and native identities without serializing raw
 provider responses, and persistence still follows capture controls. See
 [Native Step Results](docs/native-step-results.md).
 
-`stream()` and the broadcast helpers support sequential, generated hierarchical and static hierarchical swarms. The generated coordinator runs synchronously; workers stream. Top-level parallel live streaming is unsupported. See [streaming topology](docs/streaming.md#topology-sequential-static-hierarchical-and-hierarchical). For workflow operations feeds across all modes, use lifecycle events and application-owned broadcasts.
+`stream()` and the broadcast helpers support sequential, generated hierarchical,
+and static hierarchical swarms. Top-level parallel live multiplexing is also
+available behind the default-off `SWARM_PARALLEL_STREAMING_ENABLED` flag when
+Laravel's `process` concurrency driver is active. Parallel events carry explicit
+branch/attempt/sequence identity; their arrival order is deliberately not a
+global workflow order. See [streaming topology](docs/streaming.md#topology-sequential-static-hierarchical-and-hierarchical).
+For workflow operations feeds across all modes, use lifecycle events and
+application-owned broadcasts.
 
 ## Queueing a Swarm
 

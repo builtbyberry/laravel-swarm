@@ -143,10 +143,12 @@ The older [0.11.2 preservation report](ai-0112-preservation-evidence.md) and
   Inline builders remain in-process. Generated queueing defaults to one job;
   opt-in `multi_worker` has branch/join coordination. Static hierarchy does not
   acquire that multi-worker contract.
-- Live streaming and broadcast helpers support sequential, generated hierarchy
+- Live streaming and broadcast helpers support sequential, generated hierarchy,
   and static hierarchy. The generated coordinator prompts synchronously.
-  Top-level parallel live streaming and structured-output streamed workers remain
-  rejected. Native chat protocols do not turn Swarm events into Vercel or AG-UI.
+  Top-level parallel live streaming is default-off, process-only, and carries
+  explicit branch/attempt/sequence identity without a global order. Structured-
+  output streamed workers remain rejected. Native chat protocols do not turn
+  Swarm events into Vercel or AG-UI.
 - Queued/durable execution needs active-context capture. Production capture
   defaults remain off; designated database columns remain sealed by default.
   Native conversation privacy, authorization and retention are independently

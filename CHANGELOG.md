@@ -27,10 +27,23 @@ Native feature access through Laravel Swarm workflows.
   flag maps to Redact, while custom Skip policies write only an omitted status.
   Database envelopes are sealed and bounded. History, durable, checkpoint, and
   hot replay envelopes prune with their owners; cold archives remain application-owned.
+- Default-off, process-backed top-level parallel live streaming and broadcast
+  multiplexing. Native Laravel AI branch streams now deliver concurrently with
+  bounded authenticated frames, per-event acknowledgements/backpressure, an
+  absolute deadline, sibling cancellation, and deterministic process cleanup.
+  Branch events add stable `branch_id`, request-local `attempt_id`, and
+  per-attempt `branch_sequence` without rewriting reusable native IDs or
+  inventing a global cross-branch order. The parent remains the sole owner of
+  guardrails, history, replay, capture/redaction, citation/native-result evidence,
+  and once-only usage accounting. Unsupported concurrency drivers fail before
+  provider invocation; `prompt()` remains the explicit buffered alternative.
 
 ### Changed
 
-- Native input preserves the v0.27.0 topology/mode envelope: it does not add top-level parallel live streaming or background support to inline swarms. Approval `Decisions` remain outside fresh-run input and fail with continuation guidance.
+- Native input preserves the v0.27.0 background envelope for inline swarms and
+  does not itself add an execution mode. P7 separately adds default-off,
+  process-backed top-level parallel live multiplexing. Approval `Decisions`
+  remain outside fresh-run input and fail with continuation guidance.
 - Authored parallel and hierarchical workers now reconstruct the declared swarm and stable slot/node inside concurrency workers, preserving configuration expressed by `agents()`. When native per-run settings admission is enabled, ad-hoc concurrent builders require explicit configuration for every reconstructed slot/node and fail before dispatch instead of silently discarding live instance state.
 - Native settings admission now validates known agent compatibility before queue or concurrency dispatch, applies attachment authorization and byte limits to request-local and recovered one-shot messages, bounds the complete recoverable envelope before persistence, resolves conversation policies per invocation, and rejects recoverable message attachment profiles that Laravel AI cannot reconstruct faithfully.
 - Native step results keep final usage and citations on their existing Swarm

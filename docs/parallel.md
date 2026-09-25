@@ -160,13 +160,23 @@ Each `$step` has:
 - `metadata` — includes `index`, `usage`, and `duration_ms`
 - `artifacts` — any artifacts the agent attached
 
-## Streaming Limitation
+## Live Streaming
 
-Parallel swarms do **not** support `stream()`, `broadcast()`, `broadcastNow()`, or `broadcastOnQueue()`.
+Parallel `stream()`, `broadcast()`, `broadcastNow()`, and `broadcastOnQueue()`
+are available behind `SWARM_PARALLEL_STREAMING_ENABLED=true` when Laravel's
+concurrency driver is `process`. The flag defaults off.
 
-These methods assume a sequential event stream: text delta, then tool call, then next agent starts. With concurrent fan-out, there is no meaningful ordering of tokens across simultaneous agent runs. Emitting interleaved deltas from three agents at once would produce an incoherent stream with no way to demarcate which tokens belong to which agent.
+Events are truly interleaved while branch processes run. Each branch event has
+`branch_id`, `attempt_id`, and a strictly increasing `branch_sequence`; native
+event/invocation IDs pass through unchanged and may repeat across branches.
+There is no global branch order. Render each branch independently, then use the
+authored step order for the completed response. See [Parallel live
+multiplexing](streaming.md#parallel-live-multiplexing) for backpressure, bounds,
+failure, disconnect, replay, broadcast, and rollout behavior.
 
-If you need live progress while parallel work runs, listen to lifecycle events (`SwarmStarted`, `SwarmStepCompleted`, `SwarmCompleted`) from a separate broadcasting layer rather than using the stream methods.
+If the process transport is unavailable, the call fails before invoking an
+agent. Use `prompt()` for buffered completion. Swarm never labels buffered
+completion as a live stream.
 
 ## Timeout
 
@@ -193,8 +203,8 @@ The timeout is checked before the parallel group starts and again after it compl
 |---|---|---|
 | `prompt()` | Yes | Blocks until all agents complete, then returns `SwarmResponse`. |
 | `queue()` | Yes | Dispatches a single background job that runs the parallel group. |
-| `stream()` | No | Not supported. See [Streaming Limitation](#streaming-limitation). |
-| `broadcast()` / `broadcastNow()` / `broadcastOnQueue()` | No | Not supported. Sequential-only stream helpers. |
+| `stream()` | Opt-in | Live process-backed multiplexing; default off. See [Live Streaming](#live-streaming). |
+| `broadcast()` / `broadcastNow()` / `broadcastOnQueue()` | Opt-in | Same live branch stream and identity contract; default off. |
 | `dispatchDurable()` | Yes | Each agent becomes an independent durable branch job. See below. |
 
 ## Durable Parallel Failure Policy

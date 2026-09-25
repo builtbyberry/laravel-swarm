@@ -247,6 +247,10 @@ Controls the optional persisted stream replay feature. Replay is disabled by def
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
+| `swarm.streaming.parallel.enabled` | bool | `false` | `SWARM_PARALLEL_STREAMING_ENABLED` | Enables real top-level parallel live multiplexing. Requires Laravel's `process` concurrency driver and loopback process transport; unsupported drivers fail before agent invocation and never masquerade buffered completion as streaming. |
+| `swarm.streaming.parallel.max_branches` | int | `32` | `SWARM_PARALLEL_STREAMING_MAX_BRANCHES` | Maximum branches/file descriptors admitted to one parallel live stream. Runtime range: 1–256. |
+| `swarm.streaming.parallel.max_frame_bytes` | int | `2097152` | `SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES` | Maximum encoded bytes for one atomic branch event or terminal frame. Events are never split. Runtime range: 1 KiB–4 MiB. |
+| `swarm.streaming.parallel.cancel_grace_milliseconds` | int | `250` | `SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS` | Grace period before active sibling processes are forcibly stopped after branch failure, deadline, protocol failure, or consumer abandonment. Runtime range: 0–10000 ms. |
 | `swarm.streaming.replay.enabled` | bool | `false` | `SWARM_STREAM_REPLAY_ENABLED` | When `true`, all streamed swarm runs are automatically stored for replay via `SwarmHistory::replay($runId)`. Can also be enabled per-run with `storeForReplay()`. |
 | `swarm.streaming.replay.driver` | string\|null | `null` (inherits) | `SWARM_STREAM_REPLAY_DRIVER` | Storage driver for stream replay events. `null` inherits from `swarm.persistence.driver`. |
 | `swarm.streaming.replay.failure_policy` | string | `fail` | `SWARM_STREAM_REPLAY_FAILURE_POLICY` | What happens when writing a replay event fails. `fail` — the stream fails (default). `continue` — the failure is swallowed and partial replay is unavailable. |

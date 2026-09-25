@@ -102,6 +102,91 @@ class ConcurrentAgentResult
     }
 
     /**
+     * Convert a worker failure to JSON-safe constructor data.
+     *
+     * @return array{class: class-string<Throwable>, message: string, parameters: array<string, mixed>, transport_failed: bool}
+     */
+    public static function failureDescriptor(Throwable $failure): array
+    {
+        try {
+            $parameters = [];
+            $reflection = new ReflectionClass($failure);
+            $constructor = $reflection->getConstructor();
+            if ($constructor !== null && $constructor->getDeclaringClass()->getName() === $reflection->getName()) {
+                foreach ($constructor->getParameters() as $parameter) {
+                    if ($parameter->name === 'message') {
+                        $parameters[$parameter->name] = $failure->getMessage();
+
+                        continue;
+                    }
+                    if ($parameter->name === 'code') {
+                        $parameters[$parameter->name] = $failure->getCode();
+
+                        continue;
+                    }
+                    if ($parameter->name === 'previous') {
+                        $parameters[$parameter->name] = null;
+
+                        continue;
+                    }
+
+                    $property = $reflection->hasProperty($parameter->name)
+                        ? $reflection->getProperty($parameter->name)
+                        : null;
+                    $parameters[$parameter->name] = $property !== null
+                        && $property->isPublic()
+                        && $property->isInitialized($failure)
+                            ? $property->getValue($failure)
+                            : null;
+                }
+            }
+
+            /** @var array{class: class-string<Throwable>, message: string, parameters: array<string, mixed>, transport_failed: bool} $descriptor */
+            $descriptor = json_decode(json_encode([
+                'class' => $failure::class,
+                'message' => $failure->getMessage(),
+                'parameters' => $parameters,
+                'transport_failed' => false,
+            ], JSON_THROW_ON_ERROR), true, flags: JSON_THROW_ON_ERROR);
+
+            return $descriptor;
+        } catch (Throwable) {
+            return [
+                'class' => json_decode(json_encode(
+                    $failure::class,
+                    JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR,
+                ), true, flags: JSON_THROW_ON_ERROR),
+                'message' => 'Concurrent agent failure could not be transported.',
+                'parameters' => [],
+                'transport_failed' => true,
+            ];
+        }
+    }
+
+    /** @param array<string, mixed> $descriptor */
+    public static function throwFailureDescriptor(array $descriptor): never
+    {
+        $class = is_string($descriptor['class'] ?? null) && is_a($descriptor['class'], Throwable::class, true)
+            ? $descriptor['class']
+            : SwarmException::class;
+
+        if ($descriptor['transport_failed'] ?? false) {
+            if ($class === UnsupportedNativeApprovalException::class) {
+                throw new UnsupportedNativeApprovalException;
+            }
+            if ($class === ApprovalNotResumableException::class) {
+                throw ApprovalNotResumableException::make();
+            }
+            throw new SwarmException('Concurrent agent failure could not be transported ['.$class.'].');
+        }
+
+        $parameters = is_array($descriptor['parameters'] ?? null) ? $descriptor['parameters'] : [];
+        $message = is_string($descriptor['message'] ?? null) ? $descriptor['message'] : 'Concurrent agent failed.';
+
+        throw new $class(...(! empty(array_filter($parameters, fn ($value) => $value !== null)) ? $parameters : [$message]));
+    }
+
+    /**
      * Transport constructor data without serializing exception traces or captured objects.
      *
      * @see InvokeSerializedClosureCommand
@@ -121,31 +206,7 @@ class ConcurrentAgentResult
             }
         }
 
-        $parameters = [];
-        try {
-            $reflection = new ReflectionClass($this->failure);
-            $constructor = $reflection->getConstructor();
-            if ($constructor !== null && $constructor->getDeclaringClass()->getName() === $reflection->getName()) {
-                foreach ($constructor->getParameters() as $parameter) {
-                    $parameters[$parameter->name] = $this->failure->{$parameter->name} ?? null;
-                }
-            }
-            // Reduce the entire descriptor to JSON-safe data before the outer
-            // PHP transport; neither captured objects nor malformed text escape.
-            $failure = json_decode(json_encode([
-                'class' => $this->failure::class,
-                'message' => $this->failure->getMessage(),
-                'parameters' => $parameters,
-                'transport_failed' => false,
-            ], JSON_THROW_ON_ERROR), true, flags: JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            $failure = [
-                'class' => json_decode(json_encode($this->failure::class, JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR), true),
-                'message' => 'Concurrent agent failure could not be transported.',
-                'parameters' => [],
-                'transport_failed' => true,
-            ];
-        }
+        $failure = self::failureDescriptor($this->failure);
 
         return ['result_wire' => base64_encode(serialize([])), 'failure' => $failure];
     }

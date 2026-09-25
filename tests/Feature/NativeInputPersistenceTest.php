@@ -602,7 +602,7 @@ test('unsupported live parallel streaming rejects before native admission', func
     $message = new UserMessage('inspect', [new Base64Document(base64_encode('secret'))]);
 
     expect(fn () => FakeParallelSwarm::make()->stream($message))
-        ->toThrow(SwarmException::class, 'cannot yield a single ordered live token stream');
+        ->toThrow(SwarmException::class, 'Parallel live multiplexing is default-off');
 
     expect(DB::table('swarm_native_inputs')->count())->toBe(0)
         ->and(Storage::disk('native-inputs-test')->allFiles('swarm/native-inputs'))->toBeEmpty();

@@ -12,6 +12,42 @@ application-layer sealing, and a private `SWARM_NATIVE_INPUTS_DISK`; bind
 provider-file references. See [Native messages and attachments](docs/native-inputs.md)
 for the complete deployment and drain-before-rollback procedure.
 
+### Top-level parallel live streaming
+
+No migration is required. The capability is default-off. Deploy v0.28 code to
+every HTTP and queue worker, configure Laravel's concurrency driver as `process`,
+verify loopback process transport in the serving environment, and only then set
+`SWARM_PARALLEL_STREAMING_ENABLED=true` for endpoints that use a top-level
+parallel swarm's `stream()` or broadcast helpers.
+
+Parallel branch events add nullable `branch_id`, `attempt_id`, and
+`branch_sequence` fields. Update exhaustive event consumers before enabling the
+writer. Order only within one `(branch_id, attempt_id)` by `branch_sequence`;
+arrival order across branches is not a causal order. Native IDs remain unchanged
+and can repeat across branches. Existing replay rows and non-parallel events omit
+the new fields and remain readable.
+
+The live path requires the `process` driver. `sync`, `fork`, and custom drivers
+fail before agent invocation because their public result is buffered. Use
+`prompt()` where process streaming is unavailable. There is no automatic
+buffered fallback. Tune `max_branches`, `max_frame_bytes`, and cancellation grace
+for the worker's file-descriptor and memory budgets; a frame is one atomic event
+and is never split.
+
+On a branch failure, protocol failure, deadline, or client disconnect, partial
+events may already have reached the consumer. The run fails and active siblings
+are canceled/reaped. Retry only under the application's normal effect/idempotency
+policy. Broadcast transport retry remains Laravel/application-owned. Existing
+stream replay retention and `swarm:prune` ownership apply; this feature adds no
+new persistent table, retention hook, or operational command.
+
+Rollback is safe only after active live streams drain. Disable
+`SWARM_PARALLEL_STREAMING_ENABLED`, restart long-lived workers so no new parallel
+streams begin, wait for active HTTP/queued broadcast streams to terminate, then
+deploy the old readers. Retaining replay rows with the nullable identity keys is
+schema-safe, but older consumers may discard those keys and cannot reconstruct
+cross-branch provenance.
+
 The `Runnable` and inline pending-run execution verbs now accept `AgentInput|UserMessage` in
 addition to string, array, and `RunContext`. Applications that override
 `prompt()`, `run()`, `queue()`, `stream()`, broadcast helpers, or
@@ -229,9 +265,10 @@ partial and final results. No new payload size budget or retention policy is
 introduced. See [streaming](docs/streaming.md#tool-calls-including-mcp-tools).
 Older readers can drop the new flags and mistake partials for finals. After this
 evidence is written, retain v0.27-capable readers and backups; a parseable older
-reader is not an evidence-preserving rollback. Native approval continuation,
-top-level parallel live streaming and queued whole-workflow callbacks retain
-their existing unsupported boundaries.
+reader is not an evidence-preserving rollback. Native approval continuation and
+queued whole-workflow callbacks retain their existing unsupported boundaries.
+Top-level parallel live streaming was still unsupported in v0.27; v0.28 adds the
+separately gated process-backed path described above.
 
 ## v0.26.3 provider-tool event readers
 

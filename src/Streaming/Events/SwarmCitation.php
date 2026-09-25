@@ -28,6 +28,7 @@ final class SwarmCitation extends SwarmStreamEvent
             'step_index' => $this->stepIndex, 'agent_class' => $this->agentClass,
             'invocation_id' => $this->invocationId, 'message_id' => $this->messageId,
             'timestamp' => $this->timestamp, 'node_id' => $this->nodeId,
+            ...$this->branchIdentity(),
             ...$evidence->toArray(),
         ];
     }

@@ -123,7 +123,11 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
             }
 
             yield "data: [DONE]\n\n";
-        }, headers: ['Content-Type' => 'text/event-stream']);
+        }, headers: [
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache, no-transform',
+            'X-Accel-Buffering' => 'no',
+        ]);
     }
 
     public function getIterator(): Traversable

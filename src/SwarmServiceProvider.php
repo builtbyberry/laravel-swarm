@@ -128,7 +128,9 @@ use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\LeaseManager;
+use BuiltByBerry\LaravelSwarm\Runners\ParallelAgentResolver;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
+use BuiltByBerry\LaravelSwarm\Runners\ParallelStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialStreamRunner;
@@ -139,6 +141,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
+use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\DenyExternalNativeInputAttachments;
@@ -261,6 +264,9 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(SequentialStreamRunner::class);
 
         $this->app->singleton(ParallelRunner::class);
+        $this->app->singleton(ParallelAgentResolver::class);
+        $this->app->singleton(ParallelProcessStreamTransport::class);
+        $this->app->singleton(ParallelStreamRunner::class);
 
         $this->app->singleton(HierarchicalRunner::class);
         $this->app->singleton(StaticHierarchicalRunner::class);
