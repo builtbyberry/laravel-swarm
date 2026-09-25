@@ -5,14 +5,17 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
+use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableNativeStepResults;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -27,19 +30,34 @@ use Illuminate\Support\Collection;
 /**
  * @internal
  */
-class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore, StoresDurableCitationEvidence
+class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStepResultStorage, DurableRunStore, StoresDurableCitationEvidence, StoresDurableNativeStepResults
 {
     use InteractsWithJsonColumns;
 
     protected CitationEvidenceCodec $citations;
+
+    protected NativeStepResultCodec $nativeResults;
 
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
         protected SwarmPersistenceCipher $cipher,
         ?CitationEvidenceCodec $citations = null,
+        ?NativeStepResultCodec $nativeResults = null,
     ) {
         $this->citations = $citations ?? new CitationEvidenceCodec($cipher, new CitationEvidenceLimits($config));
+        $this->nativeResults = $nativeResults ?? new NativeStepResultCodec($cipher, $config);
+    }
+
+    public function assertNativeStepResultStorageReady(): void
+    {
+        $schema = $this->connection->getSchemaBuilder();
+        foreach (['durable_branches' => 'swarm_durable_branches', 'durable_node_outputs' => 'swarm_durable_node_outputs'] as $key => $default) {
+            $table = (string) $this->config->get('swarm.tables.'.$key, $default);
+            if ($schema->hasTable($table) && ! $schema->hasColumns($table, ['native_result_status', 'native_result'])) {
+                throw new SwarmException("Native step result storage requires [{$table}.native_result_status] and [{$table}.native_result]. Run migrations and restart workers before invoking agents.");
+            }
+        }
     }
 
     public function assertCitationStorageReady(): void
@@ -550,12 +568,18 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
             ->get()
             ->map(function (object $record): array {
                 [$output, $available] = $this->cipher->openForDisplay($record->output === null ? null : (string) $record->output);
+                $native = $this->nativeResults->decode(
+                    $record->native_result ?? null,
+                    is_string($record->native_result_status ?? null) ? $record->native_result_status : null,
+                );
 
                 return [
                     'run_id' => $record->run_id,
                     'node_id' => $record->node_id,
                     'output' => $output,
                     'output_available' => $available,
+                    'native_result_status' => $native->status,
+                    'native_result' => $native->toArray(),
                     'expires_at' => $record->expires_at ?? null,
                     'created_at' => $record->created_at ?? null,
                     'updated_at' => $record->updated_at ?? null,
@@ -584,6 +608,39 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
                 'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
             ],
         ], ['run_id', 'node_id'], ['output', 'citation_evidence', 'updated_at', 'expires_at']);
+    }
+
+    public function storeHierarchicalNodeOutputWithNativeResult(string $runId, string $nodeId, string $output, int $ttlSeconds, CitationEvidence $evidence, NativeStepResult $nativeResult): void
+    {
+        $timestamp = Carbon::now('UTC');
+
+        $this->nodeOutputTable()->upsert([[
+            'run_id' => $runId,
+            'node_id' => $nodeId,
+            'output' => $this->cipher->seal($output),
+            'citation_evidence' => $this->citations->encode($evidence),
+            'native_result_status' => $nativeResult->status,
+            'native_result' => $this->nativeResults->encode($nativeResult),
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
+            'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+        ]], ['run_id', 'node_id'], ['output', 'citation_evidence', 'native_result_status', 'native_result', 'updated_at', 'expires_at']);
+    }
+
+    public function checkpointHierarchicalStepWithNativeResult(
+        string $runId,
+        string $executionToken,
+        int $nextStepIndex,
+        RunContext $context,
+        int $ttlSeconds,
+        array $routeCursor,
+        ?array $routePlan = null,
+        ?array $nodeOutput = null,
+        ?int $totalSteps = null,
+        array $clearBranchParentNodeIds = [],
+    ): void {
+        $this->checkpointHierarchicalStep($runId, $executionToken, $nextStepIndex, $context, $ttlSeconds,
+            $routeCursor, $routePlan, $nodeOutput, $totalSteps, $clearBranchParentNodeIds);
     }
 
     public function checkpointHierarchicalStep(
@@ -619,11 +676,15 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
                         'node_id' => $nodeOutput['node_id'],
                         'output' => $this->cipher->seal((string) $nodeOutput['output']),
                         'citation_evidence' => $this->citations->encode(CitationEvidence::fromArray($nodeOutput['citation_evidence'] ?? [])),
+                        'native_result_status' => is_string($nodeOutput['native_result_status'] ?? null) ? $nodeOutput['native_result_status'] : null,
+                        'native_result' => is_array($nodeOutput['native_result'] ?? null)
+                            ? $this->nativeResults->encode(NativeStepResult::fromArray($nodeOutput['native_result']))
+                            : null,
                         'created_at' => $timestamp,
                         'updated_at' => $timestamp,
                         'expires_at' => $expiresAt,
                     ],
-                ], ['run_id', 'node_id'], ['output', 'citation_evidence', 'updated_at', 'expires_at']);
+                ], ['run_id', 'node_id'], ['output', 'citation_evidence', 'native_result_status', 'native_result', 'updated_at', 'expires_at']);
             }
 
             $contextPayload = $context->toArray();
@@ -807,6 +868,23 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
             'status' => 'completed',
             'output' => $this->cipher->seal($output),
             'citation_evidence' => $this->citations->encode($evidence),
+            'usage' => $this->encodeJson($usage),
+            'duration_ms' => $durationMs,
+            'failure' => null,
+            'finished_at' => Carbon::now('UTC'),
+            'execution_token' => null,
+            'leased_until' => null,
+        ]);
+    }
+
+    public function markBranchCompletedWithNativeResult(string $runId, string $branchId, string $executionToken, string $output, array $usage, int $durationMs, CitationEvidence $evidence, NativeStepResult $nativeResult): void
+    {
+        $this->guardedBranchUpdate($runId, $branchId, $executionToken, [
+            'status' => 'completed',
+            'output' => $this->cipher->seal($output),
+            'citation_evidence' => $this->citations->encode($evidence),
+            'native_result_status' => $nativeResult->status,
+            'native_result' => $this->nativeResults->encode($nativeResult),
             'usage' => $this->encodeJson($usage),
             'duration_ms' => $durationMs,
             'failure' => null,
@@ -2844,8 +2922,15 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, DurableRunStore,
      */
     private function mapBranchBaseFields(object $record): array
     {
+        $native = $this->nativeResults->decode(
+            $record->native_result ?? null,
+            is_string($record->native_result_status ?? null) ? $record->native_result_status : null,
+        );
+
         return [
             'citation_evidence' => $this->citations->decode($record->citation_evidence ?? null)->toArray(),
+            'native_result_status' => $native->status,
+            'native_result' => $native->toArray(),
             'run_id' => $record->run_id,
             'branch_id' => $record->branch_id,
             'step_index' => (int) $record->step_index,

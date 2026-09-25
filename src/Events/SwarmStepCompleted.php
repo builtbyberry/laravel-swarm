@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Events;
 
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 
 class SwarmStepCompleted
@@ -24,5 +25,6 @@ class SwarmStepCompleted
         public readonly array $metadata = [],
         public readonly array $artifacts = [],
         public readonly ?string $executionMode = null,
+        public readonly ?NativeStepResult $nativeResult = null,
     ) {}
 }

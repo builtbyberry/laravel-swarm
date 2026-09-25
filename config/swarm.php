@@ -27,6 +27,21 @@ return [
         'max_bytes' => 262144,
     ],
 
+    // Safe, versioned projection of the Laravel AI response that completed each
+    // step. These bounds apply independently of ordinary output limits and never
+    // permit raw response objects or provider payloads to enter persistence.
+    'native_results' => [
+        'max_bytes' => (int) env('SWARM_NATIVE_RESULTS_MAX_BYTES', 262144),
+        // Native-result bytes carried by one broadcastable stream event. The
+        // hard 8 KiB ceiling leaves framing headroom for supported broadcasters.
+        'max_event_bytes' => (int) env('SWARM_NATIVE_RESULTS_MAX_EVENT_BYTES', 4096),
+        'max_generation_steps' => (int) env('SWARM_NATIVE_RESULTS_MAX_GENERATION_STEPS', 64),
+        'max_tool_statuses' => (int) env('SWARM_NATIVE_RESULTS_MAX_TOOL_STATUSES', 256),
+        'max_structured_depth' => (int) env('SWARM_NATIVE_RESULTS_MAX_STRUCTURED_DEPTH', 32),
+        'max_structured_items' => (int) env('SWARM_NATIVE_RESULTS_MAX_STRUCTURED_ITEMS', 4096),
+        'max_reasoning_bytes' => (int) env('SWARM_NATIVE_RESULTS_MAX_REASONING_BYTES', 65536),
+    ],
+
     // Bound arbitrary provider activity data, retaining identity with an explicit
     // partial/limit marker when data is withheld. Limits do not cap event count.
     'provider_tools' => [

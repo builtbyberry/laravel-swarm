@@ -381,6 +381,7 @@ class SwarmFake implements Swarm
                     durationMs: 0,
                     metadata: $step->metadata,
                     timestamp: SwarmStreamEvent::timestamp(),
+                    nativeResult: $step->nativeResult,
                 );
             }
             yield new SwarmStreamEnd(
@@ -919,7 +920,7 @@ class SwarmFake implements Swarm
         return new SwarmResponse($response->output,
             array_map(static fn (SwarmStep $step): SwarmStep => new SwarmStep(
                 $step->agentClass, $step->input, $step->output, $step->artifacts, $step->metadata,
-                $limits->apply($step->citationEvidence)), $response->steps),
+                $limits->apply($step->citationEvidence), $step->nativeResult), $response->steps),
             $response->usage, $response->context, $response->artifacts, $response->metadata,
             $limits->apply($response->citationEvidence));
     }

@@ -232,6 +232,17 @@ return response()->json($response);
 
 `queue()` and `dispatchDurable()` return dispatch handles with a `runId`. Listen for lifecycle events or inspect persisted history for eventual results.
 
+Every completed step also exposes a bounded native Laravel AI projection:
+
+```php
+$native = ContentPipeline::make()->prompt('Draft it.')->steps[0]->nativeResult;
+$typed = $native?->structured;
+```
+
+It preserves structured data and native identities without serializing raw
+provider responses, and persistence still follows capture controls. See
+[Native Step Results](docs/native-step-results.md).
+
 `stream()` and the broadcast helpers support sequential, generated hierarchical and static hierarchical swarms. The generated coordinator runs synchronously; workers stream. Top-level parallel live streaming is unsupported. See [streaming topology](docs/streaming.md#topology-sequential-static-hierarchical-and-hierarchical). For workflow operations feeds across all modes, use lifecycle events and application-owned broadcasts.
 
 ## Queueing a Swarm

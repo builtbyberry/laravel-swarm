@@ -5,13 +5,17 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\CitationAwareStreamStepCheckpointStore;
+use BuiltByBerry\LaravelSwarm\Contracts\NativeResultAwareStreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\CitationEvidenceCodec;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
+use BuiltByBerry\LaravelSwarm\Persistence\NativeStepResultCodec;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Encryption\DecryptException;
@@ -42,7 +46,7 @@ use Psr\Log\LoggerInterface;
  *
  * @internal
  */
-final class DatabaseStreamStepCheckpointStore implements ChecksCitationStorage, CitationAwareStreamStepCheckpointStore
+final class DatabaseStreamStepCheckpointStore implements ChecksCitationStorage, ChecksNativeStepResultStorage, CitationAwareStreamStepCheckpointStore, NativeResultAwareStreamStepCheckpointStore
 {
     use InteractsWithJsonColumns;
 
@@ -60,7 +64,10 @@ final class DatabaseStreamStepCheckpointStore implements ChecksCitationStorage, 
         protected SwarmPersistenceCipher $cipher,
         protected LoggerInterface $logger,
         protected CitationEvidenceCodec $citations,
-    ) {}
+        protected ?NativeStepResultCodec $nativeResults = null,
+    ) {
+        $this->nativeResults ??= new NativeStepResultCodec($cipher, $config);
+    }
 
     public function record(string $runId, int $stepIndex, string $output, array $usage): void
     {
@@ -73,6 +80,15 @@ final class DatabaseStreamStepCheckpointStore implements ChecksCitationStorage, 
         $schema = $this->connection->getSchemaBuilder();
         if ($schema->hasTable($table) && ! $schema->hasColumn($table, 'citation_evidence')) {
             throw new SwarmException("Citation storage requires [{$table}.citation_evidence]. Run migrations and restart workers before invoking agents.");
+        }
+    }
+
+    public function assertNativeStepResultStorageReady(): void
+    {
+        $table = (string) $this->config->get('swarm.tables.stream_step_checkpoints', 'swarm_stream_step_checkpoints');
+        $schema = $this->connection->getSchemaBuilder();
+        if ($schema->hasTable($table) && ! $schema->hasColumns($table, ['native_result_status', 'native_result'])) {
+            throw new SwarmException("Native step result storage requires [{$table}.native_result_status] and [{$table}.native_result]. Run migrations and restart workers before invoking agents.");
         }
     }
 
@@ -98,6 +114,38 @@ final class DatabaseStreamStepCheckpointStore implements ChecksCitationStorage, 
             ['run_id', 'step_index'],
             ['output', 'usage', 'citation_evidence', 'updated_at'],
         );
+    }
+
+    public function recordWithNativeResult(string $runId, int $stepIndex, string $output, array $usage, CitationEvidence $evidence, NativeStepResult $nativeResult): void
+    {
+        $this->assertCitationStorageReady();
+        $this->assertNativeStepResultStorageReady();
+        if (! $this->ensureTableExists()) {
+            return;
+        }
+
+        $now = CarbonImmutable::now('UTC');
+        $captured = $nativeResult;
+        $this->table()->upsert(
+            [[
+                'run_id' => $runId,
+                'step_index' => $stepIndex,
+                'output' => $this->cipher->seal($output),
+                'citation_evidence' => $this->citations->encode($evidence),
+                'native_result_status' => $captured->status,
+                'native_result' => $this->nativeResults->encode($captured),
+                'usage' => $this->encodeJson($usage),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]],
+            ['run_id', 'step_index'],
+            ['output', 'usage', 'citation_evidence', 'native_result_status', 'native_result', 'updated_at'],
+        );
+    }
+
+    public function findWithNativeResult(string $runId, int $stepIndex): ?StreamStepCheckpoint
+    {
+        return $this->find($runId, $stepIndex);
     }
 
     public function find(string $runId, int $stepIndex): ?StreamStepCheckpoint
@@ -160,6 +208,10 @@ final class DatabaseStreamStepCheckpointStore implements ChecksCitationStorage, 
             usage: $usage,
             recordedAt: $this->normalizeTimestamp($record->created_at ?? null),
             updatedAt: $this->normalizeTimestamp($record->updated_at ?? null),
+            nativeResult: $this->nativeResults->decode(
+                $record->native_result ?? null,
+                is_string($record->native_result_status ?? null) ? $record->native_result_status : null,
+            ),
         );
     }
 

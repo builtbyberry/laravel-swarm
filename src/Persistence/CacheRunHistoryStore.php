@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\RecordsCitationSteps;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ResolvesSwarmCacheStore;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
@@ -71,7 +72,7 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSt
 
     protected function persistStep(string $runId, SwarmStep $step, int $ttlSeconds, ?string $executionToken, ?int $leaseSeconds, ?RunContext $context = null): void
     {
-        $history = $this->find($runId) ?? [];
+        $history = $this->findRaw($runId) ?? [];
         $history['steps'] ??= [];
         $history['steps'][] = $this->capture->stepToPersistedArray($step, $context);
         $history['updated_at'] = Carbon::now('UTC')->toIso8601String();
@@ -81,7 +82,7 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSt
 
     public function complete(string $runId, SwarmResponse $response, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
-        $history = $this->find($runId) ?? [];
+        $history = $this->findRaw($runId) ?? [];
         $history['status'] = 'completed';
         $history = array_replace($history, $this->capture->citationEvidence($response->citationEvidence, $response->context)->toArray());
         $history['output'] = $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $response->output;
@@ -99,7 +100,7 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSt
 
     public function fail(string $runId, Throwable $exception, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
-        $history = $this->find($runId) ?? [];
+        $history = $this->findRaw($runId) ?? [];
         $history['status'] = 'failed';
         $history['error'] = $this->failurePayload($exception);
         $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
@@ -141,14 +142,21 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSt
      */
     public function find(string $runId): ?array
     {
-        /** @var array<string, mixed>|null $history */
-        $history = $this->store()->get($this->key($runId));
+        $history = $this->findRaw($runId);
 
         if ($history !== null) {
             $history += CitationEvidence::fromArray($history)->toArray();
             foreach ($history['steps'] ?? [] as $index => $step) {
                 if (is_array($step)) {
                     $history['steps'][$index] = $step + CitationEvidence::fromArray($step)->toArray();
+                    $native = match (true) {
+                        is_array($history['steps'][$index]['native_result'] ?? null) => $this->capture->nativeResultFromPersistedArray($history['steps'][$index]['native_result']),
+                        ($history['steps'][$index]['native_result_status'] ?? null) === NativeStepResult::OMITTED => NativeStepResult::omitted(),
+                        array_key_exists('native_result_status', $history['steps'][$index]) => NativeStepResult::unavailable(['missing']),
+                        default => NativeStepResult::unavailable(['legacy']),
+                    };
+                    $history['steps'][$index]['native_result_status'] = $native->status;
+                    $history['steps'][$index]['native_result'] = $native->toArray();
                 }
             }
         }
@@ -246,6 +254,14 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSt
     protected function key(string $runId): string
     {
         return (string) $this->config->get('swarm.history.prefix', 'swarm:history:').$runId;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function findRaw(string $runId): ?array
+    {
+        $history = $this->store()->get($this->key($runId));
+
+        return is_array($history) ? $history : null;
     }
 
     protected function swarmIndexKey(string $swarmClass): string

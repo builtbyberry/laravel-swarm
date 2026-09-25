@@ -19,12 +19,27 @@ Native feature access through Laravel Swarm workflows.
   result cannot presently resume the same native turn through a supported public
   operation, defines the minimal upstream requirement and safe operator
   alternative, and keeps the production bridge default-off and blocked.
+- Bounded, versioned native Laravel AI result access on every completed
+  `SwarmStep`, preserving structured values, reasoning, provider/model, native
+  invocation and conversation/message identities, generation evidence, and
+  normalized tool status across sync, process, queue, durable, and supported
+  streaming paths. Full and Redact remain distinct; the shipped false capture
+  flag maps to Redact, while custom Skip policies write only an omitted status.
+  Database envelopes are sealed and bounded. History, durable, checkpoint, and
+  hot replay envelopes prune with their owners; cold archives remain application-owned.
 
 ### Changed
 
 - Native input preserves the v0.27.0 topology/mode envelope: it does not add top-level parallel live streaming or background support to inline swarms. Approval `Decisions` remain outside fresh-run input and fail with continuation guidance.
 - Authored parallel and hierarchical workers now reconstruct the declared swarm and stable slot/node inside concurrency workers, preserving configuration expressed by `agents()`. When native per-run settings admission is enabled, ad-hoc concurrent builders require explicit configuration for every reconstructed slot/node and fail before dispatch instead of silently discarding live instance state.
 - Native settings admission now validates known agent compatibility before queue or concurrency dispatch, applies attachment authorization and byte limits to request-local and recovered one-shot messages, bounds the complete recoverable envelope before persistence, resolves conversation policies per invocation, and rejects recoverable message attachment profiles that Laravel AI cannot reconstruct faithfully.
+- Native step results keep final usage and citations on their existing Swarm
+  surfaces, preserve unknown/mixed historical usage semantics, never serialize
+  raw native responses or unrestricted provider payloads, and do not fabricate
+  absent native identifiers. Deploy the additive schema before writers. Code
+  rollback is unsafe after writes while affected identities can resume or retry:
+  stop intake, drain work, deploy and restart all old workers before resuming,
+  then handle schema removal only after evidence retention is satisfied.
 
 ## v0.27.0 - 2026-09-24
 

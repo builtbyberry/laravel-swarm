@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Streaming;
 
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 
@@ -65,6 +66,8 @@ final class StreamStepAccumulator
     public array $unknownEventClasses = [];
 
     public CitationEvidence $citationEvidence;
+
+    public ?NativeStepResult $nativeResult = null;
 
     public int $providerToolBytes = 0;
 

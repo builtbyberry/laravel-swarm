@@ -137,6 +137,28 @@ variable aliases for these keys.
 
 ---
 
+## Native step results
+
+Completed steps expose a bounded native Laravel AI response projection. These
+limits apply before process/queue serialization and before persistence. See
+[Native Step Results](native-step-results.md) for the field inventory, capture
+behavior, and hard ceilings.
+
+| Key | Type | Default | Env Var |
+| --- | --- | --- | --- |
+| `swarm.native_results.max_bytes` | int | `262144` | `SWARM_NATIVE_RESULTS_MAX_BYTES` |
+| `swarm.native_results.max_event_bytes` | int | `4096` | `SWARM_NATIVE_RESULTS_MAX_EVENT_BYTES` |
+| `swarm.native_results.max_generation_steps` | int | `64` | `SWARM_NATIVE_RESULTS_MAX_GENERATION_STEPS` |
+| `swarm.native_results.max_tool_statuses` | int | `256` | `SWARM_NATIVE_RESULTS_MAX_TOOL_STATUSES` |
+| `swarm.native_results.max_structured_depth` | int | `32` | `SWARM_NATIVE_RESULTS_MAX_STRUCTURED_DEPTH` |
+| `swarm.native_results.max_structured_items` | int | `4096` | `SWARM_NATIVE_RESULTS_MAX_STRUCTURED_ITEMS` |
+| `swarm.native_results.max_reasoning_bytes` | int | `65536` | `SWARM_NATIVE_RESULTS_MAX_REASONING_BYTES` |
+
+Values clamp to the hard ceilings documented in the guide. A limited result is
+explicitly marked `partial`; the projector never stores a truncated JSON string.
+
+---
+
 ## Limits
 
 Hard limits on payload sizes. All limits default to `null` (uncapped). Enforced at run start across all execution modes.

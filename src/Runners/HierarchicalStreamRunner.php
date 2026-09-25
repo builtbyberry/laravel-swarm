@@ -289,7 +289,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
             ActiveRunContext::enter($context->runId, $swarm::class, $context);
 
             try {
-                $this->citationStorage->check();
+                $this->evidenceStorage->check();
                 $invocation = $context->nativeInvocation('generated:coordinator', $context->input, $state->nativeSettingsAttempt);
                 $coordinatorResponse = NativeAgentInvoker::prompt($coordinator, $invocation);
                 $this->outcomes->validateResponse($coordinatorResponse);
@@ -318,6 +318,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                 usage: $coordinatorUsage,
                 durationMs: $coordinatorDurationMs,
                 metadata: $coordinatorStepMetadata,
+                nativeResult: $this->stepsRecorder->nativeResult($coordinatorResponse),
             );
 
             $coordinatorStepOutput = $this->capture->applyOutput((string) ($coordinatorStep->artifacts[0]->content ?? $coordinatorOutput), $context);
@@ -333,6 +334,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                 durationMs: $coordinatorDurationMs,
                 metadata: ['usage' => $coordinatorUsage],
                 timestamp: SwarmStreamEvent::timestamp(),
+                nativeResult: $this->capture->nativeResultForStreamEvent($coordinatorStep->nativeResult, $context),
             ))->withNodeId(static::COORDINATOR_NODE_ID);
             yield $coordinatorStepEndEvent;
             $this->recordStreamTelemetry($swarm, $state, $coordinatorStepEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);

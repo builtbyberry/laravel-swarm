@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RecordsCitationSteps;
@@ -17,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\InteractsWithJsonColumns;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
@@ -33,11 +35,13 @@ use Throwable;
 /**
  * @internal
  */
-class DatabaseRunHistoryStore implements ChecksCitationStorage, ClaimsQueuedRunExecution, ReadableRunHistoryStore, RecordsCitationSteps, RunHistoryStore
+class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStepResultStorage, ClaimsQueuedRunExecution, ReadableRunHistoryStore, RecordsCitationSteps, RunHistoryStore
 {
     use InteractsWithJsonColumns;
 
     protected CitationEvidenceCodec $citations;
+
+    protected NativeStepResultCodec $nativeResults;
 
     public function __construct(
         protected Connection $connection,
@@ -45,8 +49,10 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ClaimsQueuedRunE
         protected SwarmCapture $capture,
         protected SwarmPersistenceCipher $cipher,
         ?CitationEvidenceCodec $citations = null,
+        ?NativeStepResultCodec $nativeResults = null,
     ) {
         $this->citations = $citations ?? new CitationEvidenceCodec($cipher, new CitationEvidenceLimits($config));
+        $this->nativeResults = $nativeResults ?? new NativeStepResultCodec($cipher, $config);
     }
 
     public function start(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, int $ttlSeconds): void
@@ -206,7 +212,7 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ClaimsQueuedRunE
                 $this->stepTable()->upsert(
                     [$payload],
                     ['run_id', 'step_index'],
-                    ['agent_class', 'input', 'output', 'citation_evidence', 'artifacts', 'metadata', 'expires_at', 'updated_at'],
+                    ['agent_class', 'input', 'output', 'citation_evidence', 'native_result_status', 'native_result', 'artifacts', 'metadata', 'expires_at', 'updated_at'],
                 );
             });
 
@@ -219,7 +225,7 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ClaimsQueuedRunE
 
         $updated = $this->update($runId, [
             'steps' => $this->encodeJson(array_map(
-                fn (array $storedStep): array => $this->citations->sealPayload($this->cipher->sealStepIo($storedStep)),
+                fn (array $storedStep): array => $this->nativeResults->sealPayload($this->citations->sealPayload($this->cipher->sealStepIo($storedStep))),
                 $history['steps'],
             )),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
@@ -659,6 +665,15 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ClaimsQueuedRunE
         }
     }
 
+    public function assertNativeStepResultStorageReady(): void
+    {
+        $schema = $this->connection->getSchemaBuilder();
+        $table = (string) $this->config->get('swarm.tables.history_steps', 'swarm_run_steps');
+        if ($schema->hasTable($table) && ! $schema->hasColumns($table, ['native_result_status', 'native_result'])) {
+            throw new SwarmException("Native step result storage requires [{$table}.native_result_status] and [{$table}.native_result]. Run migrations and restart workers before invoking agents.");
+        }
+    }
+
     public function assertReady(): void
     {
         $table = (string) $this->config->get('swarm.tables.history', 'swarm_run_histories');
@@ -784,6 +799,12 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ClaimsQueuedRunE
                 }
 
                 $step += $this->citations->decode($record->citation_evidence ?? null)->toArray();
+                $native = $this->nativeResults->decode(
+                    $record->native_result ?? null,
+                    is_string($record->native_result_status ?? null) ? $record->native_result_status : null,
+                );
+                $step['native_result_status'] = $native->status;
+                $step['native_result'] = $native->toArray();
                 $step['artifacts'] = $this->decodeJson($record->artifacts, []);
                 $step['metadata'] = $this->decodeJson($record->metadata, []);
 
@@ -813,6 +834,10 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ClaimsQueuedRunE
             'input' => $payload['input'] ?? null,
             'output' => $payload['output'] ?? null,
             'citation_evidence' => $this->citations->encode(CitationEvidence::fromArray($payload)),
+            'native_result_status' => $payload['native_result_status'] ?? null,
+            'native_result' => isset($payload['native_result']) && is_array($payload['native_result'])
+                ? $this->nativeResults->encode(NativeStepResult::fromArray($payload['native_result']))
+                : null,
             'artifacts' => $this->encodeJson($payload['artifacts']),
             'metadata' => $this->encodeJson($payload['metadata']),
             'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
@@ -854,8 +879,8 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ClaimsQueuedRunE
             }
 
             $steps[$this->stepSortIndex($step, count($steps))] = $forDisplay
-                ? $this->citations->openPayload($this->cipher->openStepIoForDisplay($step))
-                : $this->citations->openPayload($this->cipher->openStepIo($step));
+                ? $this->nativeResults->openPayload($this->citations->openPayload($this->cipher->openStepIoForDisplay($step)))
+                : $this->nativeResults->openPayload($this->citations->openPayload($this->cipher->openStepIo($step)));
         }
 
         foreach ($steps as &$legacyStep) {
