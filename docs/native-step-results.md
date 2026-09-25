@@ -39,7 +39,7 @@ Format version `1` uses these live properties and wire keys:
 | `provider`, `model` | `provider`, `model` | Native response identity. |
 | `invocationId` | `invocation_id` | Laravel AI invocation identity, separate from Swarm run, node, branch, step, and attempt IDs. |
 | `conversationId`, `userMessageId`, `assistantMessageId` | `conversation_id`, `user_message_id`, `assistant_message_id` | Native row identities, when supplied. Missing IDs stay missing. |
-| `generationSteps` | `generation_steps` | Entries may contain `text`, `structured`, `reasoning`, `finish_reason`, `provider`, `model`, and their own `usage` map. |
+| `generationSteps` | `generation_steps` | Entries may contain `text`, `structured`, `reasoning`, `finish_reason`, `provider`, `model`, and their own `usage` map. Usage admits only integer-or-null `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens`, and `reasoning_tokens`; unknown or non-scalar usage fields are omitted rather than treated as provider payload. |
 | `tools` | `tools` | Entries contain `call_id`, `result_id`, `name`, and `status` (`pending`, `succeeded`, `denied`, or `failed`). |
 
 `status` is one of `available`, `partial`, `redacted`, `omitted`, or

@@ -371,10 +371,16 @@ it('reapplies configured bounds while writing and reading persisted envelopes', 
         'status' => 'available',
         'tools' => [['call_id' => 'call', 'status' => 'succeeded', 'raw_provider_payload' => ['secret' => true]]],
     ], JSON_THROW_ON_ERROR);
+    $unrestrictedUsage = json_encode([
+        'format_version' => 1,
+        'status' => 'available',
+        'generation_steps' => [['usage' => ['raw' => ['raw_provider_payload' => 'secret']]]],
+    ], JSON_THROW_ON_ERROR);
 
     expect($codec->decode($stored)->toArray())->toBe(NativeStepResult::unavailable(['limit'])->toArray())
         ->and($codec->decode($deep)->toArray())->toBe(NativeStepResult::unavailable(['limit'])->toArray())
-        ->and($codec->decode($unrestricted)->toArray())->toBe(NativeStepResult::unavailable(['malformed'])->toArray());
+        ->and($codec->decode($unrestricted)->toArray())->toBe(NativeStepResult::unavailable(['malformed'])->toArray())
+        ->and($codec->decode($unrestrictedUsage)->toArray())->toBe(NativeStepResult::unavailable(['malformed'])->toArray());
 });
 
 it('caps native results carried by broadcastable stream events', function () {
@@ -469,6 +475,81 @@ it('bounds untrusted reasons while reading cache-backed persisted native results
     expect(strlen(json_encode($native, JSON_THROW_ON_ERROR)))->toBeLessThanOrEqual(256)
         ->and($native['status'])->toBe(NativeStepResult::PARTIAL)
         ->and($native['reasons'])->toBe(['limit']);
+});
+
+it('canonicalizes unavailable cache-backed persisted native results before returning them', function () {
+    config()->set('swarm.persistence.driver', 'cache');
+    config()->set('swarm.history.driver', 'cache');
+    config()->set('swarm.native_results.max_bytes', 256);
+    app()->forgetInstance(SwarmCapture::class);
+    app()->forgetInstance(SwarmRunner::class);
+    app()->forgetInstance(RunHistoryStore::class);
+    RichNativeAgent::$response = richNativeStepResponse();
+    $response = RichNativeSequentialSwarm::make()->prompt('cache unavailable bound');
+    $key = (string) config('swarm.history.prefix', 'swarm:history:').$response->metadata['run_id'];
+    $cache = Cache::store(config('swarm.history.store'));
+    $raw = $cache->get($key);
+    $raw['steps'][0]['native_result'] = [
+        'format_version' => 1,
+        'status' => 'unavailable',
+        'reasons' => [str_repeat('untrusted-reason-', 256)],
+        'structured' => ['raw_provider_payload' => str_repeat('secret-', 512)],
+    ];
+    $cache->put($key, $raw, 3600);
+
+    $native = app(RunHistoryStore::class)->find($response->metadata['run_id'])['steps'][0]['native_result'];
+
+    expect(strlen(json_encode($native, JSON_THROW_ON_ERROR)))->toBeLessThanOrEqual(256)
+        ->and($native)->toBe(NativeStepResult::unavailable(['limit'])->toArray())
+        ->and(json_encode($native, JSON_THROW_ON_ERROR))->not->toContain('raw_provider_payload', 'secret');
+});
+
+it('rejects arbitrary objects in cache-backed persisted generation usage', function () {
+    config()->set('swarm.persistence.driver', 'cache');
+    config()->set('swarm.history.driver', 'cache');
+    app()->forgetInstance(SwarmCapture::class);
+    app()->forgetInstance(SwarmRunner::class);
+    app()->forgetInstance(RunHistoryStore::class);
+    RichNativeAgent::$response = richNativeStepResponse();
+    $response = RichNativeSequentialSwarm::make()->prompt('cache usage shape');
+    $key = (string) config('swarm.history.prefix', 'swarm:history:').$response->metadata['run_id'];
+    $cache = Cache::store(config('swarm.history.store'));
+    $raw = $cache->get($key);
+    $raw['steps'][0]['native_result'] = [
+        'format_version' => 1,
+        'status' => 'available',
+        'generation_steps' => [[
+            'usage' => ['raw' => (object) ['raw_provider_payload' => 'secret']],
+        ]],
+    ];
+    $cache->put($key, $raw, 3600);
+
+    $native = app(RunHistoryStore::class)->find($response->metadata['run_id'])['steps'][0]['native_result'];
+
+    expect($native['status'])->toBe(NativeStepResult::PARTIAL)
+        ->and($native['reasons'])->toContain('unsupported_type')
+        ->and($native['generation_steps'][0])->not->toHaveKey('usage')
+        ->and(json_encode($native, JSON_THROW_ON_ERROR))->not->toContain('raw_provider_payload', 'secret');
+});
+
+it('does not let persisted Redact or Skip statuses reauthorize withheld content', function () {
+    $projector = app(NativeStepResultProjector::class);
+    $payload = [
+        'format_version' => 1,
+        'structured' => ['secret' => true],
+        'reasoning' => 'reasoning-secret',
+        'conversation_id' => 'conversation-secret',
+        'generation_steps' => [['text' => 'generation-secret', 'usage' => ['input_tokens' => 2, 'output_tokens' => 1]]],
+    ];
+
+    $redacted = $projector->fromPersistedArray([...$payload, 'status' => 'redacted']);
+    $omitted = $projector->fromPersistedArray([...$payload, 'status' => 'omitted']);
+
+    expect($redacted->status)->toBe(NativeStepResult::REDACTED)
+        ->and($redacted->toArray())->not->toHaveKeys(['structured', 'reasoning', 'conversation_id'])
+        ->and($redacted->generationSteps[0])->not->toHaveKeys(['text', 'structured', 'reasoning'])
+        ->and($omitted->toArray())->toBe(NativeStepResult::omitted()->toArray())
+        ->and(json_encode([$redacted, $omitted], JSON_THROW_ON_ERROR))->not->toContain('secret');
 });
 
 it('seals persisted native results without hiding them from authorized history reads', function () {

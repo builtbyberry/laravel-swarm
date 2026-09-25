@@ -18,6 +18,13 @@ use Laravel\Ai\Responses\StructuredAgentResponse;
 /** Builds the safe plain-data projection; never serializes a native object. @internal */
 final class NativeStepResultProjector
 {
+    private const MAX_PERSISTED_REASONS = 16;
+
+    private const MAX_PERSISTED_REASON_BYTES = 64;
+
+    /** @var list<string> */
+    private const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_write_input_tokens', 'reasoning_tokens'];
+
     public function __construct(private ConfigRepository $config) {}
 
     public function fromResponse(AgentResponse $response): NativeStepResult
@@ -102,10 +109,13 @@ final class NativeStepResultProjector
     {
         $result = NativeStepResult::fromArray($payload);
         if ($result->status === NativeStepResult::UNAVAILABLE) {
-            return $result;
+            return NativeStepResult::unavailable($this->persistedReasons($result->reasons, ['malformed']));
+        }
+        if ($result->status === NativeStepResult::OMITTED) {
+            return NativeStepResult::omitted();
         }
 
-        $state = new NativeStepResultProjectionState($result->reasons);
+        $state = new NativeStepResultProjectionState($this->persistedReasons($result->reasons));
         $generationSteps = [];
         foreach (array_slice($result->generationSteps, 0, $this->limit('max_generation_steps', 64)) as $step) {
             $reasoning = is_string($step['reasoning'] ?? null)
@@ -118,7 +128,7 @@ final class NativeStepResultProjector
                 'finish_reason' => is_string($step['finish_reason'] ?? null) ? $step['finish_reason'] : null,
                 'provider' => is_string($step['provider'] ?? null) ? $step['provider'] : null,
                 'model' => is_string($step['model'] ?? null) ? $step['model'] : null,
-                'usage' => is_array($step['usage'] ?? null) ? $step['usage'] : null,
+                'usage' => $this->usage($step['usage'] ?? null, $state),
             ], static fn (mixed $value): bool => $value !== null);
         }
         if (count($result->generationSteps) > count($generationSteps)) {
@@ -151,6 +161,10 @@ final class NativeStepResultProjector
             tools: $tools,
             reasons: $state->reasons,
         );
+
+        if ($result->status === NativeStepResult::REDACTED) {
+            return $this->capture($normalized, CaptureDecision::Redact);
+        }
 
         return $this->applyTotalLimit($normalized, $state, $this->limit('max_bytes', 262144), $result->status === NativeStepResult::REDACTED ? NativeStepResult::REDACTED : null);
     }
@@ -202,7 +216,7 @@ final class NativeStepResultProjector
             'finish_reason' => $step->finishReason->value,
             'provider' => $step->meta->provider,
             'model' => $step->meta->model,
-            'usage' => $step->usage->toArray(),
+            'usage' => $this->usage($step->usage->toArray(), $state),
         ], static fn (mixed $value): bool => $value !== null);
     }
 
@@ -312,6 +326,62 @@ final class NativeStepResultProjector
         $state->reason('limit');
 
         return function_exists('mb_strcut') ? mb_strcut($value, 0, $maxBytes, 'UTF-8') : substr($value, 0, $maxBytes);
+    }
+
+    /**
+     * @param  list<string>  $reasons
+     * @param  list<string>  $fallback
+     * @return list<string>
+     */
+    private function persistedReasons(array $reasons, array $fallback = []): array
+    {
+        if (count($reasons) > self::MAX_PERSISTED_REASONS) {
+            return ['limit'];
+        }
+
+        $normalized = [];
+        foreach ($reasons as $reason) {
+            if (strlen($reason) > self::MAX_PERSISTED_REASON_BYTES) {
+                return ['limit'];
+            }
+            if ($reason !== '' && ! in_array($reason, $normalized, true)) {
+                $normalized[] = $reason;
+            }
+        }
+
+        return $normalized === [] ? $fallback : $normalized;
+    }
+
+    /** @return array<string, int|null>|null */
+    private function usage(mixed $usage, NativeStepResultProjectionState $state): ?array
+    {
+        if ($usage === null) {
+            return null;
+        }
+        if (! is_array($usage)) {
+            $state->reason('unsupported_type');
+
+            return null;
+        }
+
+        if (array_diff(array_keys($usage), self::USAGE_KEYS) !== []) {
+            $state->reason('unsupported_type');
+        }
+
+        $normalized = [];
+        foreach (self::USAGE_KEYS as $key) {
+            if (! array_key_exists($key, $usage)) {
+                continue;
+            }
+            if (! is_int($usage[$key]) && $usage[$key] !== null) {
+                $state->reason('unsupported_type');
+
+                continue;
+            }
+            $normalized[$key] = $usage[$key];
+        }
+
+        return $normalized === [] ? null : $normalized;
     }
 
     private function applyTotalLimit(NativeStepResult $result, NativeStepResultProjectionState $state, int $max, ?string $limitedStatus = null, string $reason = 'limit'): NativeStepResult
