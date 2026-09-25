@@ -290,7 +290,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
 
             try {
                 $this->citationStorage->check();
-                $invocation = $context->nativeInvocation('generated:coordinator', $context->input);
+                $invocation = $context->nativeInvocation('generated:coordinator', $context->input, $state->nativeSettingsAttempt);
                 $coordinatorResponse = NativeAgentInvoker::prompt($coordinator, $invocation);
                 $this->outcomes->validateResponse($coordinatorResponse);
             } finally {
@@ -424,7 +424,13 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
 
             $capturedResponse = $this->limits->response($this->capture->response($response));
             $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
-            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
+            $this->nativeInputs->commitTerminal(
+                $context,
+                $state->nativeSettingsAttempt,
+                function () use ($context, $capturedResponse, $contextTtl): void {
+                    $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
+                },
+            );
             $this->events->dispatch(new SwarmCompleted(
                 runId: $context->runId,
                 swarmClass: $swarm::class,

@@ -26,9 +26,12 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingActorException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeAgentSettingsSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeAgentSettingsSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
@@ -41,7 +44,9 @@ use BuiltByBerry\LaravelSwarm\Support\AdHocParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManifest;
 use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
 use BuiltByBerry\LaravelSwarm\Support\PendingSwarmRun;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -437,9 +442,11 @@ class SwarmRunner
             $this->nativeInputs->admit($context, $topology, ExecutionMode::Queue);
             $this->assertNativeRecipientsExist($swarm, $topology, $context);
             $this->guardrails->validateInput($swarm, $context);
-            $job = $context->nativeInputReference() === null
-                ? new InvokeSwarm($swarm::class, $context->toQueuePayload())
-                : new InvokeNativeInputSwarm($swarm::class, $context->toQueuePayload());
+            $job = match ($context->nativeInput()?->formatVersion()) {
+                NativeInputManifest::SETTINGS_VERSION => new InvokeNativeAgentSettingsSwarm($swarm::class, $context->toQueuePayload()),
+                NativeInputManifest::VERSION => new InvokeNativeInputSwarm($swarm::class, $context->toQueuePayload()),
+                default => new InvokeSwarm($swarm::class, $context->toQueuePayload()),
+            };
         } catch (Throwable $exception) {
             if ($exception instanceof GuardrailViolation) {
                 $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Queue, $exception);
@@ -450,7 +457,7 @@ class SwarmRunner
         }
         $pendingDispatch = new PendingDispatch($job);
 
-        if ($job instanceof InvokeNativeInputSwarm) {
+        if ($job instanceof InvokeNativeInputSwarm || $job instanceof InvokeNativeAgentSettingsSwarm) {
             $pendingDispatch->afterCommit();
         }
 
@@ -485,9 +492,11 @@ class SwarmRunner
             $this->nativeInputs->admit($context, $topology, ExecutionMode::Queue);
             $this->assertNativeRecipientsExist($swarm, $topology, $context);
             $this->guardrails->validateInput($swarm, $context);
-            $job = $context->nativeInputReference() === null
-                ? new BroadcastSwarm($swarm::class, $context->toQueuePayload(), $channels)
-                : new BroadcastNativeInputSwarm($swarm::class, $context->toQueuePayload(), $channels);
+            $job = match ($context->nativeInput()?->formatVersion()) {
+                NativeInputManifest::SETTINGS_VERSION => new BroadcastNativeAgentSettingsSwarm($swarm::class, $context->toQueuePayload(), $channels),
+                NativeInputManifest::VERSION => new BroadcastNativeInputSwarm($swarm::class, $context->toQueuePayload(), $channels),
+                default => new BroadcastSwarm($swarm::class, $context->toQueuePayload(), $channels),
+            };
         } catch (Throwable $exception) {
             if ($exception instanceof GuardrailViolation) {
                 $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Queue, $exception);
@@ -498,7 +507,7 @@ class SwarmRunner
         }
         $pendingDispatch = new PendingDispatch($job);
 
-        if ($job instanceof BroadcastNativeInputSwarm) {
+        if ($job instanceof BroadcastNativeInputSwarm || $job instanceof BroadcastNativeAgentSettingsSwarm) {
             $pendingDispatch->afterCommit();
         }
 
@@ -527,7 +536,7 @@ class SwarmRunner
         $this->validator->ensureDatabaseDurableInfrastructure($swarm);
 
         if ($topology === Topology::Parallel) {
-            $this->parallel->ensureAgentsAreContainerResolvable($swarm->agents(), $swarm::class);
+            $this->parallel->ensureAgentsAreContainerResolvable($swarm);
         }
 
         if ($topology === Topology::Hierarchical) {
@@ -562,7 +571,7 @@ class SwarmRunner
         }
 
         $pendingDispatch = new PendingDispatch($start->job);
-        if ($start->job instanceof AdvanceNativeInputDurableSwarm) {
+        if ($start->job instanceof AdvanceNativeInputDurableSwarm || $start->job instanceof AdvanceNativeAgentSettingsDurableSwarm) {
             $pendingDispatch->afterCommit();
         }
 
@@ -571,12 +580,35 @@ class SwarmRunner
 
     protected function assertNativeRecipientsExist(Swarm $swarm, Topology $topology, RunContext $context): void
     {
+        if ($topology === Topology::Hierarchical) {
+            $coordinator = $swarm->agents()[0] ?? null;
+            $recipient = $context->nativeRecipient('generated:coordinator');
+            if ($coordinator instanceof Agent && $recipient !== null) {
+                NativeAgentInvoker::assertCompatible($coordinator, $recipient);
+            }
+
+            return;
+        }
+
+        if ($topology === Topology::StaticHierarchical) {
+            $this->staticHierarchical->assertNativeSettingsCompatible($swarm, $context);
+
+            return;
+        }
+
         if (! in_array($topology, [Topology::Sequential, Topology::Parallel], true)) {
             return;
         }
 
         $slotCount = min(count($swarm->agents()), $this->resolver->resolveMaxAgentExecutions($swarm));
         $context->assertNativeSlotRecipients($topology->value.':', $slotCount);
+
+        foreach (array_slice($swarm->agents(), 0, $slotCount) as $index => $agent) {
+            $recipient = $context->nativeRecipient($topology->value.":{$index}");
+            if ($recipient !== null) {
+                NativeAgentInvoker::assertCompatible($agent, $recipient);
+            }
+        }
     }
 
     /**
@@ -828,7 +860,13 @@ class SwarmRunner
         $capturedResponse = $this->limits->response($this->capture->response($response));
 
         try {
-            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
+            $this->nativeInputs->commitTerminal(
+                $context,
+                $state->nativeSettingsAttempt,
+                function () use ($context, $capturedResponse, $contextTtl, $state): void {
+                    $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
+                },
+            );
         } catch (LostSwarmLeaseException) {
             return null;
         }

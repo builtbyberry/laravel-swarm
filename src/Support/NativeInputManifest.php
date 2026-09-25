@@ -7,15 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use Illuminate\Contracts\Support\Arrayable;
 use Laravel\Ai\Enums\Lab;
-use Laravel\Ai\Files\Audio;
-use Laravel\Ai\Files\Base64Audio;
-use Laravel\Ai\Files\Base64Document;
-use Laravel\Ai\Files\Base64Image;
-use Laravel\Ai\Files\Base64Video;
-use Laravel\Ai\Files\Document;
 use Laravel\Ai\Files\File;
-use Laravel\Ai\Files\Image;
-use Laravel\Ai\Files\Video;
 use Laravel\Ai\Messages\UserMessage;
 use Laravel\SerializableClosure\SerializableClosure;
 use ReflectionProperty;
@@ -24,12 +16,15 @@ final class NativeInputManifest
 {
     public const VERSION = 1;
 
+    public const SETTINGS_VERSION = 2;
+
     /**
      * @param  list<File>  $attachments
      * @param  list<NativeInputRecipient>  $recipients
      * @param  array<int, string>  $attachmentHashes
      * @param  list<int>  $ownedAttachmentIndexes
      * @param  array<int, array<string, array{headers: array<string, string>, provider_options: array<string, mixed>}>>  $attachmentInvocationOptions
+     * @param  list<string>  $consumedMessageConfigurationIds
      */
     public function __construct(
         public string $text,
@@ -38,6 +33,7 @@ final class NativeInputManifest
         public array $attachmentHashes = [],
         public array $ownedAttachmentIndexes = [],
         public array $attachmentInvocationOptions = [],
+        public array $consumedMessageConfigurationIds = [],
     ) {}
 
     public function messageFor(string $recipient, string $topologyText): string|UserMessage
@@ -45,7 +41,7 @@ final class NativeInputManifest
         return $this->invocationFor($recipient, $topologyText)->prompt;
     }
 
-    public function invocationFor(string $recipient, string $topologyText): NativeAgentInvocation
+    public function invocationFor(string $recipient, string $topologyText, ?NativeAgentSettingsAttempt $attempt = null): NativeAgentInvocation
     {
         $selection = null;
 
@@ -75,12 +71,24 @@ final class NativeInputManifest
                     throw new SwarmException("Native attachment [{$index}] failed its content identity check.");
                 }
 
-                $attachment = $this->materializeVerifiedAttachment($attachment, $content);
+                $attachment = NativeAttachmentMaterializer::fromVerifiedContent($attachment, $content);
             }
 
             $attachment = $this->applyInvocationOptions($attachment, $index, $selection);
 
             $verified[] = $attachment;
+        }
+
+        $configurationId = $selection->settingsId();
+        $consumed = in_array($configurationId, $this->consumedMessageConfigurationIds, true)
+            || $attempt?->consumed($configurationId) === true;
+        $messages = $consumed ? [] : $selection->messages;
+        if ($messages !== []) {
+            $attempt?->stage($configurationId);
+            if ($attempt === null) {
+                $this->consumedMessageConfigurationIds[] = $configurationId;
+                $this->consumedMessageConfigurationIds = array_values(array_unique($this->consumedMessageConfigurationIds));
+            }
         }
 
         return new NativeAgentInvocation(
@@ -91,14 +99,31 @@ final class NativeInputManifest
             provider: $selection->provider,
             model: $selection->model,
             timeout: $selection->timeout,
+            tools: array_values(array_filter($selection->tools, static fn (mixed $tool): bool => $tool instanceof NativeAgentToolReference)),
+            messages: $messages,
+            conversation: $selection->conversation,
+            configurationId: $selection->hasNativeSettings() ? $configurationId : null,
+            toolsConfigured: $selection->toolsConfigured,
+            messagesConfigured: $selection->messagesConfigured && (! $consumed || $selection->messages === []),
         );
+    }
+
+    public function formatVersion(): int
+    {
+        foreach ($this->recipients as $recipient) {
+            if ($recipient->hasNativeSettings()) {
+                return self::SETTINGS_VERSION;
+            }
+        }
+
+        return self::VERSION;
     }
 
     /** @return array<string, mixed> */
     public function toArray(): array
     {
         return [
-            'version' => self::VERSION,
+            'version' => $this->formatVersion(),
             'text' => $this->text,
             'attachments' => array_map(function (File $file, int $index): array {
                 if (! $file instanceof Arrayable) {
@@ -122,6 +147,7 @@ final class NativeInputManifest
                 return $payload;
             }, $this->attachments, array_keys($this->attachments)),
             'recipients' => array_map(static fn (NativeInputRecipient $recipient): array => $recipient->toArray(), $this->recipients),
+            'consumed_message_configuration_ids' => $this->consumedMessageConfigurationIds,
         ];
     }
 
@@ -186,7 +212,28 @@ final class NativeInputManifest
             attachmentHashes: $hashes,
             ownedAttachmentIndexes: $owned,
             attachmentInvocationOptions: $invocationOptions,
+            consumedMessageConfigurationIds: self::consumedIds($payload),
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<string>
+     */
+    protected static function consumedIds(array $payload): array
+    {
+        $ids = $payload['consumed_message_configuration_ids'] ?? [];
+        if (! is_array($ids) || ! array_is_list($ids)
+            || array_filter($ids, static fn (mixed $id): bool => ! is_string($id) || $id === '') !== []) {
+            throw new SwarmException('Native input envelope contains invalid consumed message configuration IDs.');
+        }
+
+        $normalized = [];
+        foreach ($ids as $id) {
+            $normalized[] = $id;
+        }
+
+        return array_values(array_unique($normalized));
     }
 
     public function captureRecoverableInvocationOptions(): void
@@ -231,24 +278,15 @@ final class NativeInputManifest
         }
     }
 
-    protected function materializeVerifiedAttachment(File $attachment, string $content): File
+    public static function assertMessageAttachmentIsReconstructible(File $attachment): void
     {
-        $mime = $attachment->mimeType();
-        $materialized = match (true) {
-            $attachment instanceof Image => new Base64Image(base64_encode($content), $mime),
-            $attachment instanceof Document => new Base64Document(base64_encode($content), $mime),
-            $attachment instanceof Audio => new Base64Audio(base64_encode($content), $mime),
-            $attachment instanceof Video => new Base64Video(base64_encode($content), $mime),
-            default => $attachment,
-        };
+        $headers = self::rawSetting($attachment, 'headers');
+        $providerOptions = self::rawSetting($attachment, 'providerOptions');
 
-        if ($materialized === $attachment) {
-            return $attachment;
+        if ($headers instanceof SerializableClosure || $providerOptions instanceof SerializableClosure
+            || $headers !== [] || $providerOptions !== []) {
+            throw new SwarmException('Recoverable withMessages attachments cannot carry headers or provider options. Use top-level native input attachments for explicitly frozen invocation profiles, or remove those options before dispatch.');
         }
-
-        $materialized->as($attachment->name());
-
-        return $materialized;
     }
 
     protected function applyInvocationOptions(File $attachment, int|false $index, NativeInputRecipient $selection): File

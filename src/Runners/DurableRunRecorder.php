@@ -94,13 +94,16 @@ class DurableRunRecorder
         ]);
     }
 
-    public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null): void
+    public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null, ?callable $withTransaction = null): void
     {
-        $this->connection->transaction(function () use ($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step): void {
+        $this->connection->transaction(function () use ($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step, $withTransaction): void {
             $this->persistStepArtifacts($runId, $step);
             $this->durableRuns->markCompleted($runId, $token);
             $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             $this->historyStore->complete($runId, $capturedResponse, $this->ttlSeconds(), $token, $stepLeaseSeconds);
+            if ($withTransaction !== null) {
+                ($withTransaction)();
+            }
         });
         $this->audit->emit('durable.completed', [
             'run_id' => $runId,

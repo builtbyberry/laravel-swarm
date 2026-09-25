@@ -1573,11 +1573,11 @@ test('durable workers stop cleanly when lease ownership is lost before terminal 
                 protected string $runId,
             ) {}
 
-            public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null): void
+            public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null, ?callable $withTransaction = null): void
             {
                 stealDurableLease($this->runId);
 
-                $this->inner->complete($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step);
+                $this->inner->complete($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step, $withTransaction);
             }
         };
     });

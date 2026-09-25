@@ -71,6 +71,8 @@ before rollback.
 | `swarm.native_inputs.retention_seconds` | int | `86400` | `SWARM_NATIVE_INPUTS_RETENTION_SECONDS` | Envelope retention and execution deadline. Size beyond the longest queue plus durable recovery window. |
 | `swarm.native_inputs.max_attachments` | int | `8` | `SWARM_NATIVE_INPUTS_MAX_ATTACHMENTS` | Maximum attachment count admitted for one native message. |
 | `swarm.native_inputs.max_attachment_bytes` | int | `10485760` | `SWARM_NATIVE_INPUTS_MAX_ATTACHMENT_BYTES` | Maximum bytes admitted for each locally readable or configured-disk attachment. |
+| `swarm.native_agent_settings.enabled` | bool | `false` | `SWARM_NATIVE_AGENT_SETTINGS_ENABLED` | Admit new v2 per-run tool, message-history and conversation settings. Requires `swarm.native_inputs.enabled=true`; existing v2 references remain readable while this layered writer is disabled. Enable only after every worker has v2 readers. |
+| `swarm.native_agent_settings.tool_factories` | array | `[]` | none | Application-owned stable identifier to `NativeAgentToolFactory` class map. Factories expand once at admission into sealed reconstructible tool references. |
 | `swarm.tables.native_inputs` | string | `swarm_native_inputs` | `SWARM_NATIVE_INPUTS_TABLE` | Operational envelope table. A custom name requires a matching published migration. |
 
 Recoverable native input also requires database persistence and

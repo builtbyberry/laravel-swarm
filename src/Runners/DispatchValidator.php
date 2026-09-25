@@ -216,7 +216,7 @@ class DispatchValidator
         $this->resolver->resolveMaxAgentExecutions($swarm);
 
         if ($topology === Topology::Parallel) {
-            $this->parallel->ensureAgentsAreContainerResolvable($swarm->agents(), $swarm::class);
+            $this->parallel->ensureAgentsAreContainerResolvable($swarm);
         }
 
         if ($topology === Topology::Hierarchical) {

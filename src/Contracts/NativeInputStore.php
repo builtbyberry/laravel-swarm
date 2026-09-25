@@ -12,7 +12,7 @@ interface NativeInputStore
     public function put(string $id, string $runId, array $payload, string $hash, int $expiresAt): void;
 
     /**
-     * @return array{run_id: string, payload: array<string, mixed>, hash: string, state: string, expires_at: int}|null
+     * @return array{run_id: string, format_version?: int, payload: array<string, mixed>, hash: string, state: string, expires_at: int}|null
      */
     public function find(string $id): ?array;
 

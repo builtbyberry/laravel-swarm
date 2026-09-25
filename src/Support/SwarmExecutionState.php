@@ -18,6 +18,8 @@ use Illuminate\Contracts\Events\Dispatcher;
  */
 class SwarmExecutionState
 {
+    public readonly NativeAgentSettingsAttempt $nativeSettingsAttempt;
+
     public function __construct(
         public readonly Swarm $swarm,
         public readonly Topology $topology,
@@ -38,5 +40,8 @@ class SwarmExecutionState
          * coordinated branch jobs instead of in-process execution.
          */
         public readonly ?string $queueHierarchicalParallelCoordination = null,
-    ) {}
+        ?NativeAgentSettingsAttempt $nativeSettingsAttempt = null,
+    ) {
+        $this->nativeSettingsAttempt = $nativeSettingsAttempt ?? new NativeAgentSettingsAttempt;
+    }
 }

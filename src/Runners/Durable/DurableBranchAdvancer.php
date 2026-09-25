@@ -38,6 +38,7 @@ use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -82,6 +83,7 @@ class DurableBranchAdvancer
         protected StreamEventMapper $mapper,
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
+        protected NativeInputManager $nativeInputs,
     ) {}
 
     public function advanceBranch(string $runId, string $branchId): void
@@ -247,7 +249,7 @@ class DurableBranchAdvancer
                             citationEvidence: $citationEvidence,
                         );
 
-                        $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step, $context): void {
+                        $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step, $context, $state): void {
                             $evidence = $this->capture->citationEvidence($step->citationEvidence, $context);
                             if (is_string($branch['node_id'] ?? null)) {
                                 if ($this->durableRuns instanceof StoresDurableCitationEvidence) {
@@ -263,6 +265,7 @@ class DurableBranchAdvancer
                             } else {
                                 $this->durableRuns->markBranchCompleted($runId, $branchId, $token, $output, $usage, $durationMs);
                             }
+                            $this->nativeInputs->commitConsumedMessages($context, $state->nativeSettingsAttempt);
                         });
                     } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                         return false;
@@ -334,7 +337,7 @@ class DurableBranchAdvancer
         $recipient = is_string($branch['node_id'] ?? null)
             ? ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branch['node_id']
             : 'parallel:'.(int) $branch['step_index'];
-        $invocation = $state->context->nativeInvocation($recipient, (string) $branch['input']);
+        $invocation = $state->context->nativeInvocation($recipient, (string) $branch['input'], $state->nativeSettingsAttempt);
         $response = NativeAgentInvoker::prompt($agent, $invocation);
         $this->outcomes->validateResponse($response);
 
@@ -379,7 +382,7 @@ class DurableBranchAdvancer
             $recipient = is_string($branch['node_id'] ?? null)
                 ? ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branch['node_id']
                 : 'parallel:'.(int) $branch['step_index'];
-            $invocation = $state->context->nativeInvocation($recipient, (string) $branch['input']);
+            $invocation = $state->context->nativeInvocation($recipient, (string) $branch['input'], $state->nativeSettingsAttempt);
             $stream = NativeAgentInvoker::stream($agent, $invocation);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, (int) $branch['step_index'], $agent, $accumulator);

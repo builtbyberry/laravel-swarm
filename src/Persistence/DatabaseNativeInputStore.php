@@ -4,14 +4,15 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
+use BuiltByBerry\LaravelSwarm\Contracts\ConsumesNativeInputMessages;
 use BuiltByBerry\LaravelSwarm\Contracts\NativeInputStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
-use BuiltByBerry\LaravelSwarm\Support\NativeInputManifest;
+use Closure;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use JsonException;
 
-final class DatabaseNativeInputStore implements NativeInputStore
+final class DatabaseNativeInputStore implements ConsumesNativeInputMessages, NativeInputStore
 {
     public function __construct(
         protected Connection $connection,
@@ -40,7 +41,7 @@ final class DatabaseNativeInputStore implements NativeInputStore
         $this->connection->table($this->table())->insert([
             'id' => $id,
             'run_id' => $runId,
-            'format_version' => NativeInputManifest::VERSION,
+            'format_version' => (int) ($payload['version'] ?? 0),
             'state' => 'staged',
             'payload' => $sealed,
             'payload_hash' => hash('sha256', $sealed),
@@ -67,6 +68,7 @@ final class DatabaseNativeInputStore implements NativeInputStore
 
         return [
             'run_id' => (string) $row->run_id,
+            'format_version' => (int) $row->format_version,
             'payload' => is_array($decoded) ? $decoded : [],
             'hash' => hash('sha256', json_encode($decoded, JSON_THROW_ON_ERROR)),
             'state' => (string) $row->state,
@@ -88,6 +90,77 @@ final class DatabaseNativeInputStore implements NativeInputStore
         if ($updated !== 1) {
             throw new SwarmException("Native input envelope [{$id}] is unavailable for run [{$runId}].");
         }
+    }
+
+    public function consumeMessages(string $id, string $runId, array $configurationIds): void
+    {
+        if ($configurationIds === []) {
+            return;
+        }
+
+        $row = $this->connection->table($this->table())
+            ->where('id', $id)->where('run_id', $runId)->lockForUpdate()->first();
+        if ($row === null || (string) $row->state !== 'active') {
+            throw new SwarmException("Native input envelope [{$id}] is unavailable for run [{$runId}].");
+        }
+
+        $sealed = (string) $row->payload;
+        if (! str_starts_with($sealed, SwarmPersistenceCipher::PREFIX)
+            || ! hash_equals((string) $row->payload_hash, hash('sha256', $sealed))) {
+            throw new SwarmException("Native input envelope [{$id}] failed its sealed content identity check.");
+        }
+
+        $payload = json_decode((string) $this->cipher->openStrict($sealed), true, 512, JSON_THROW_ON_ERROR);
+        if (! is_array($payload)) {
+            throw new SwarmException("Native input envelope [{$id}] contains an invalid payload.");
+        }
+
+        $known = [];
+        foreach ($payload['recipients'] ?? [] as $recipient) {
+            if (is_array($recipient) && is_string($recipient['configuration_id'] ?? null)) {
+                $known[] = $recipient['configuration_id'];
+            }
+        }
+        foreach ($configurationIds as $configurationId) {
+            if (! is_string($configurationId) || ! in_array($configurationId, $known, true)) {
+                $label = is_scalar($configurationId) ? (string) $configurationId : get_debug_type($configurationId);
+                throw new SwarmException("Native input envelope [{$id}] cannot consume unknown configuration ID [{$label}].");
+            }
+        }
+
+        $existing = is_array($payload['consumed_message_configuration_ids'] ?? null)
+            ? $payload['consumed_message_configuration_ids'] : [];
+        $payload['consumed_message_configuration_ids'] = array_values(array_unique(array_merge($existing, $configurationIds)));
+
+        $encoded = json_encode($payload, JSON_THROW_ON_ERROR);
+        $updatedSealed = $this->cipher->seal($encoded);
+        if (! is_string($updatedSealed) || ! str_starts_with($updatedSealed, SwarmPersistenceCipher::PREFIX)) {
+            throw new SwarmException('Native input operational envelopes must remain sealed during one-shot message consumption.');
+        }
+
+        $updated = $this->connection->table($this->table())
+            ->where('id', $id)->where('run_id', $runId)
+            ->where('payload_hash', (string) $row->payload_hash)
+            ->update([
+                'payload' => $updatedSealed,
+                'payload_hash' => hash('sha256', $updatedSealed),
+                'updated_at' => now(),
+            ]);
+
+        if ($updated !== 1) {
+            throw new SwarmException("Native input envelope [{$id}] changed while consuming one-shot message configuration.");
+        }
+    }
+
+    /**
+     * @template TCallbackReturnType
+     *
+     * @param  Closure(): TCallbackReturnType  $callback
+     * @return TCallbackReturnType
+     */
+    public function transaction(Closure $callback): mixed
+    {
+        return $this->connection->transaction($callback);
     }
 
     protected function transition(string $id, string $runId, string $state): void

@@ -3,18 +3,21 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentToolReference;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputRecipient;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchOne;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchTwo;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\NativeSettingsSerializationParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryHierarchicalParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryStaticHierarchicalParallelSwarm;
-use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Tools\NativeSettingsTool;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -43,16 +46,20 @@ test('native attachments cross fresh process workers in every concurrent topolog
     putenv('DB_CONNECTION=sqlite');
     putenv('DB_DATABASE='.$database);
     putenv('SWARM_NATIVE_INPUTS_ENABLED=true');
+    putenv('SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true');
     putenv('SWARM_NATIVE_INPUTS_DISK=local');
     putenv('SWARM_PERSISTENCE_DRIVER=database');
+    putenv('SWARM_HISTORY_DRIVER=database');
     putenv('SWARM_ENCRYPT_AT_REST=true');
     putenv('TESTBENCH_WORKING_PATH='.$testbenchWorkingPath);
     $_ENV['APP_KEY'] = $_SERVER['APP_KEY'] = $key;
     $_ENV['DB_CONNECTION'] = $_SERVER['DB_CONNECTION'] = 'sqlite';
     $_ENV['DB_DATABASE'] = $_SERVER['DB_DATABASE'] = $database;
     $_ENV['SWARM_NATIVE_INPUTS_ENABLED'] = $_SERVER['SWARM_NATIVE_INPUTS_ENABLED'] = 'true';
+    $_ENV['SWARM_NATIVE_AGENT_SETTINGS_ENABLED'] = $_SERVER['SWARM_NATIVE_AGENT_SETTINGS_ENABLED'] = 'true';
     $_ENV['SWARM_NATIVE_INPUTS_DISK'] = $_SERVER['SWARM_NATIVE_INPUTS_DISK'] = 'local';
     $_ENV['SWARM_PERSISTENCE_DRIVER'] = $_SERVER['SWARM_PERSISTENCE_DRIVER'] = 'database';
+    $_ENV['SWARM_HISTORY_DRIVER'] = $_SERVER['SWARM_HISTORY_DRIVER'] = 'database';
     $_ENV['SWARM_ENCRYPT_AT_REST'] = $_SERVER['SWARM_ENCRYPT_AT_REST'] = 'true';
     $_ENV['TESTBENCH_WORKING_PATH'] = $_SERVER['TESTBENCH_WORKING_PATH'] = $testbenchWorkingPath;
     SerializableClosure::setSecretKey(base64_decode(substr($key, strlen('base64:')), true));
@@ -62,8 +69,10 @@ test('native attachments cross fresh process workers in every concurrent topolog
     Artisan::call('migrate:fresh', ['--database' => 'testing', '--force' => true]);
 
     config()->set('swarm.native_inputs.enabled', true);
+    config()->set('swarm.native_agent_settings.enabled', true);
     config()->set('swarm.native_inputs.disk', 'local');
     config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.history.driver', 'database');
     config()->set('swarm.persistence.encrypt_at_rest', true);
 
     $message = new UserMessage('process-task', [new Base64Document(base64_encode('process-document'), 'text/plain')]);
@@ -110,10 +119,24 @@ test('native attachments cross fresh process workers in every concurrent topolog
         ]);
         $generated = SerializationBoundaryHierarchicalParallelSwarm::make()->run($generatedContext);
 
+        $settingsContext = RunContext::fromTask('settings-task')->withAgentConfiguration([
+            NativeInputRecipient::parallel(0)
+                ->withInvocation('openai', 'gpt-process', 19)
+                ->withTools([new NativeAgentToolReference(NativeSettingsTool::class, ['tenant' => 'tenant-a'])])
+                ->withMessages([new UserMessage('history-a')]),
+            NativeInputRecipient::parallel(1)
+                ->withInvocation('anthropic', 'claude-process', 23)
+                ->withTools([new NativeAgentToolReference(NativeSettingsTool::class, ['tenant' => 'tenant-b'])])
+                ->withMessages([new UserMessage('history-b')]),
+        ]);
+        $settings = NativeSettingsSerializationParallelSwarm::make()->run($settingsContext);
+
         expect($parallel->steps)->toHaveCount(2)
             ->and((string) $parallel)->toContain('serialization-boundary:process-task:process-document')
             ->and((string) $static)->toContain('serialization-boundary:process-task:process-document')
-            ->and((string) $generated)->toContain('serialization-boundary:process-task:process-document');
+            ->and((string) $generated)->toContain('serialization-boundary:process-task:process-document')
+            ->and((string) $settings)->toContain('native-settings:settings-task:history-a:tenant-a:openai:gpt-process:19')
+            ->and((string) $settings)->toContain('native-settings:settings-task:history-b:tenant-b:anthropic:claude-process:23');
     } finally {
         SerializableClosure::setSecretKey(null);
         Storage::disk('local')->deleteDirectory('swarm/native-inputs/'.$context->runId);
@@ -128,8 +151,10 @@ test('native attachments cross fresh process workers in every concurrent topolog
         putenv('DB_CONNECTION');
         putenv('DB_DATABASE');
         putenv('SWARM_NATIVE_INPUTS_ENABLED');
+        putenv('SWARM_NATIVE_AGENT_SETTINGS_ENABLED');
         putenv('SWARM_NATIVE_INPUTS_DISK');
         putenv('SWARM_PERSISTENCE_DRIVER');
+        putenv('SWARM_HISTORY_DRIVER');
         putenv('SWARM_ENCRYPT_AT_REST');
         putenv($originalTestbenchWorkingPath === false
             ? 'TESTBENCH_WORKING_PATH'
@@ -143,10 +168,14 @@ test('native attachments cross fresh process workers in every concurrent topolog
             $_SERVER['DB_DATABASE'],
             $_ENV['SWARM_NATIVE_INPUTS_ENABLED'],
             $_SERVER['SWARM_NATIVE_INPUTS_ENABLED'],
+            $_ENV['SWARM_NATIVE_AGENT_SETTINGS_ENABLED'],
+            $_SERVER['SWARM_NATIVE_AGENT_SETTINGS_ENABLED'],
             $_ENV['SWARM_NATIVE_INPUTS_DISK'],
             $_SERVER['SWARM_NATIVE_INPUTS_DISK'],
             $_ENV['SWARM_PERSISTENCE_DRIVER'],
             $_SERVER['SWARM_PERSISTENCE_DRIVER'],
+            $_ENV['SWARM_HISTORY_DRIVER'],
+            $_SERVER['SWARM_HISTORY_DRIVER'],
             $_ENV['SWARM_ENCRYPT_AT_REST'],
             $_SERVER['SWARM_ENCRYPT_AT_REST'],
             $_ENV['TESTBENCH_WORKING_PATH'],
@@ -204,9 +233,11 @@ test('hierarchical swarm executes parallel group and join under the real process
     }
 });
 
-test('parallel swarm agents must be container resolvable before process concurrency dispatch', function () {
-    expect(fn () => UnresolvableParallelSwarm::make()->run('shared-task'))
-        ->toThrow(SwarmException::class, UnresolvableParallelSwarm::class.': parallel agent ['.UnresolvableParallelAgent::class.'] must be container-resolvable because Laravel Concurrency serializes worker callbacks.');
+test('ad-hoc parallel agents must be container resolvable before process concurrency dispatch', function () {
+    expect(fn () => app(SwarmRunner::class)->parallel([
+        new UnresolvableParallelAgent('runtime-only'),
+    ])->run('shared-task'))
+        ->toThrow(SwarmException::class, 'must be container-resolvable because Laravel Concurrency serializes worker callbacks');
 });
 
 test('static hierarchical parallel prompt() crosses the real process concurrency driver without agent instance state', function () {

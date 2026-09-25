@@ -123,6 +123,7 @@ class SwarmHealthCommand extends Command
     protected function runNativeInputCheck(Application $app, ConfigRepository $config, Connection $connection): array
     {
         $enabled = (bool) $config->get('swarm.native_inputs.enabled', false);
+        $settingsEnabled = (bool) $config->get('swarm.native_agent_settings.enabled', false);
         $table = (string) $config->get('swarm.tables.native_inputs', 'swarm_native_inputs');
         $contextTable = (string) $config->get('swarm.tables.contexts', 'swarm_contexts');
         $schema = $connection->getSchemaBuilder();
@@ -141,6 +142,9 @@ class SwarmHealthCommand extends Command
         if (! $schema->hasTable($contextTable) || ! $schema->hasColumn($contextTable, 'native_input_ref')) {
             $problems[] = "context table [{$contextTable}] is missing native_input_ref";
         }
+        if ($settingsEnabled && ! $enabled) {
+            $problems[] = 'swarm.native_agent_settings.enabled requires swarm.native_inputs.enabled';
+        }
 
         $disk = $config->get('swarm.native_inputs.disk');
         if (! is_string($disk) || $disk === '') {
@@ -153,8 +157,22 @@ class SwarmHealthCommand extends Command
             }
         }
 
+        $hasStateTable = $schema->hasTable($table) && $schema->hasColumn($table, 'state');
+        $hasVersionedTable = $hasStateTable && $schema->hasColumn($table, 'format_version');
+        $activeV2 = $hasVersionedTable
+            ? (int) $connection->table($table)->where('format_version', 2)->where('state', 'active')->count()
+            : null;
+        $remainingV2 = $hasVersionedTable
+            ? (int) $connection->table($table)->where('format_version', 2)->count()
+            : null;
+        $settingsStatus = $activeV2 === null || $remainingV2 === null
+            ? 'v2 drain cannot be verified because the table is absent'
+            : ($settingsEnabled
+                ? "v2 writer enabled; {$activeV2} active and {$remainingV2} total v2 envelope(s) remain"
+                : "v2 writer disabled; {$activeV2} active and {$remainingV2} total v2 envelope(s) remain; prune to zero before removing v2 readers");
+
         if (! $enabled) {
-            $active = $schema->hasTable($table)
+            $active = $hasStateTable
                 ? (int) $connection->table($table)->where('state', 'active')->count()
                 : null;
             $drain = $active === null
@@ -163,15 +181,16 @@ class SwarmHealthCommand extends Command
                     ? 'no active native input envelopes remain'
                     : "{$active} active native input envelope(s) must drain before removing readers");
             $preflight = $problems === []
-                ? "sealed v1 envelope table and private disk [{$disk}] are ready"
+                ? "sealed v1/v2 envelope table and private disk [{$disk}] are ready"
                 : 'pre-enable readiness: '.implode('; ', $problems);
 
             return [
                 'component' => 'Native inputs',
                 'driver' => 'disabled',
                 'store' => $table,
-                'status' => is_string($disk) && $disk !== '' && $problems !== [] ? 'failed' : 'note',
-                'details' => "writer disabled; {$drain}; {$preflight}",
+                'status' => $settingsEnabled
+                    || (is_string($disk) && $disk !== '' && $problems !== []) ? 'failed' : 'note',
+                'details' => "writer disabled; {$drain}; {$settingsStatus}; {$preflight}",
             ];
         }
 
@@ -181,7 +200,7 @@ class SwarmHealthCommand extends Command
             'store' => $table,
             'status' => $problems === [] ? 'ok' : 'failed',
             'details' => $problems === []
-                ? "sealed v1 envelope table and private disk [{$disk}] are ready"
+                ? "sealed v1/v2 envelope table and private disk [{$disk}] are ready; {$settingsStatus}"
                 : implode('; ', $problems),
         ];
     }
