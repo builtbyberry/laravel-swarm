@@ -17,9 +17,10 @@ use Laravel\Ai\Messages\UserMessage;
 
 pest()->group('process-concurrency', 'skip-locked-real-db');
 
-function nativeSettingsConsumptionWorker(string $reference, string $runId, string $configurationId): Closure
+function nativeSettingsConsumptionWorker(string $reference, string $runId, string $configurationId, string $appKey): Closure
 {
-    return static function () use ($reference, $runId, $configurationId): string {
+    return static function () use ($reference, $runId, $configurationId, $appKey): string {
+        config()->set('app.key', $appKey);
         config()->set('swarm.native_inputs.enabled', true);
         config()->set('swarm.native_agent_settings.enabled', true);
         config()->set('swarm.native_inputs.disk', 'local');
@@ -62,11 +63,12 @@ test('concurrent real-database one-shot consumption preserves every recipient ch
 
     $reference = (string) $context->nativeInputReference();
     $runId = $context->runId;
+    $appKey = (string) config('app.key');
     $callbacks = [];
     foreach (['recipient:parallel:0', 'recipient:parallel:1'] as $configurationId) {
         // The free-function factory keeps Pest's generated test-case class out of
         // the serialized closure scope so Laravel's child process can resolve it.
-        $callbacks[] = nativeSettingsConsumptionWorker($reference, $runId, $configurationId);
+        $callbacks[] = nativeSettingsConsumptionWorker($reference, $runId, $configurationId, $appKey);
     }
 
     $results = app(ConcurrencyManager::class)->driver('process')->run($callbacks);
