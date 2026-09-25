@@ -16,6 +16,20 @@ use Laravel\Ai\Messages\UserMessage;
 
 pest()->group('process-concurrency', 'skip-locked-real-db');
 
+function nativeSettingsConsumptionWorker(string $reference, string $runId, string $configurationId): Closure
+{
+    return static function () use ($reference, $runId, $configurationId): string {
+        $store = app(NativeInputStore::class);
+        if (! $store instanceof ConsumesNativeInputMessages) {
+            throw new RuntimeException('Native input store cannot consume messages.');
+        }
+
+        $store->transaction(fn () => $store->consumeMessages($reference, $runId, [$configurationId]));
+
+        return $configurationId;
+    };
+}
+
 test('concurrent real-database one-shot consumption preserves every recipient checkpoint', function () {
     if (! in_array(DB::connection()->getDriverName(), ['mysql', 'pgsql'], true)) {
         $this->markTestSkipped('Native settings row locking requires the real MySQL/Postgres lane.');
@@ -39,16 +53,9 @@ test('concurrent real-database one-shot consumption preserves every recipient ch
     $runId = $context->runId;
     $callbacks = [];
     foreach (['recipient:parallel:0', 'recipient:parallel:1'] as $configurationId) {
-        $callbacks[] = static function () use ($reference, $runId, $configurationId): string {
-            $store = app(NativeInputStore::class);
-            if (! $store instanceof ConsumesNativeInputMessages) {
-                throw new RuntimeException('Native input store cannot consume messages.');
-            }
-
-            $store->transaction(fn () => $store->consumeMessages($reference, $runId, [$configurationId]));
-
-            return $configurationId;
-        };
+        // The free-function factory keeps Pest's generated test-case class out of
+        // the serialized closure scope so Laravel's child process can resolve it.
+        $callbacks[] = nativeSettingsConsumptionWorker($reference, $runId, $configurationId);
     }
 
     $results = app(ConcurrencyManager::class)->driver('process')->run($callbacks);
