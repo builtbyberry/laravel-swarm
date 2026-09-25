@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputRecipient;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +20,16 @@ pest()->group('process-concurrency', 'skip-locked-real-db');
 function nativeSettingsConsumptionWorker(string $reference, string $runId, string $configurationId): Closure
 {
     return static function () use ($reference, $runId, $configurationId): string {
+        config()->set('swarm.native_inputs.enabled', true);
+        config()->set('swarm.native_agent_settings.enabled', true);
+        config()->set('swarm.native_inputs.disk', 'local');
+        config()->set('swarm.persistence.driver', 'database');
+        config()->set('swarm.persistence.encrypt_at_rest', true);
+
+        if (! app()->providerIsLoaded(SwarmServiceProvider::class)) {
+            app()->register(SwarmServiceProvider::class);
+        }
+
         $store = app(NativeInputStore::class);
         if (! $store instanceof ConsumesNativeInputMessages) {
             throw new RuntimeException('Native input store cannot consume messages.');
