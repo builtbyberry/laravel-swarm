@@ -24,12 +24,15 @@ final class NativeInputManifest
 {
     public const VERSION = 1;
 
+    public const SETTINGS_VERSION = 2;
+
     /**
      * @param  list<File>  $attachments
      * @param  list<NativeInputRecipient>  $recipients
      * @param  array<int, string>  $attachmentHashes
      * @param  list<int>  $ownedAttachmentIndexes
      * @param  array<int, array<string, array{headers: array<string, string>, provider_options: array<string, mixed>}>>  $attachmentInvocationOptions
+     * @param  list<string>  $consumedMessageConfigurationIds
      */
     public function __construct(
         public string $text,
@@ -38,6 +41,7 @@ final class NativeInputManifest
         public array $attachmentHashes = [],
         public array $ownedAttachmentIndexes = [],
         public array $attachmentInvocationOptions = [],
+        public array $consumedMessageConfigurationIds = [],
     ) {}
 
     public function messageFor(string $recipient, string $topologyText): string|UserMessage
@@ -45,7 +49,7 @@ final class NativeInputManifest
         return $this->invocationFor($recipient, $topologyText)->prompt;
     }
 
-    public function invocationFor(string $recipient, string $topologyText): NativeAgentInvocation
+    public function invocationFor(string $recipient, string $topologyText, ?NativeAgentSettingsAttempt $attempt = null): NativeAgentInvocation
     {
         $selection = null;
 
@@ -83,6 +87,18 @@ final class NativeInputManifest
             $verified[] = $attachment;
         }
 
+        $configurationId = $selection->settingsId();
+        $consumed = in_array($configurationId, $this->consumedMessageConfigurationIds, true)
+            || $attempt?->consumed($configurationId) === true;
+        $messages = $consumed ? [] : $selection->messages;
+        if ($messages !== []) {
+            $attempt?->stage($configurationId);
+            if ($attempt === null) {
+                $this->consumedMessageConfigurationIds[] = $configurationId;
+                $this->consumedMessageConfigurationIds = array_values(array_unique($this->consumedMessageConfigurationIds));
+            }
+        }
+
         return new NativeAgentInvocation(
             prompt: new UserMessage(
                 $selection->textSource === 'original' ? $this->text : $topologyText,
@@ -91,14 +107,30 @@ final class NativeInputManifest
             provider: $selection->provider,
             model: $selection->model,
             timeout: $selection->timeout,
+            tools: array_values(array_filter($selection->tools, static fn (mixed $tool): bool => $tool instanceof NativeAgentToolReference)),
+            messages: $messages,
+            conversation: $selection->conversation,
+            configurationId: $selection->hasNativeSettings() ? $configurationId : null,
+            clearMessages: $selection->messages !== [] && $consumed,
         );
+    }
+
+    public function formatVersion(): int
+    {
+        foreach ($this->recipients as $recipient) {
+            if ($recipient->hasNativeSettings()) {
+                return self::SETTINGS_VERSION;
+            }
+        }
+
+        return self::VERSION;
     }
 
     /** @return array<string, mixed> */
     public function toArray(): array
     {
         return [
-            'version' => self::VERSION,
+            'version' => $this->formatVersion(),
             'text' => $this->text,
             'attachments' => array_map(function (File $file, int $index): array {
                 if (! $file instanceof Arrayable) {
@@ -122,6 +154,7 @@ final class NativeInputManifest
                 return $payload;
             }, $this->attachments, array_keys($this->attachments)),
             'recipients' => array_map(static fn (NativeInputRecipient $recipient): array => $recipient->toArray(), $this->recipients),
+            'consumed_message_configuration_ids' => $this->consumedMessageConfigurationIds,
         ];
     }
 
@@ -186,7 +219,28 @@ final class NativeInputManifest
             attachmentHashes: $hashes,
             ownedAttachmentIndexes: $owned,
             attachmentInvocationOptions: $invocationOptions,
+            consumedMessageConfigurationIds: self::consumedIds($payload),
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<string>
+     */
+    protected static function consumedIds(array $payload): array
+    {
+        $ids = $payload['consumed_message_configuration_ids'] ?? [];
+        if (! is_array($ids) || ! array_is_list($ids)
+            || array_filter($ids, static fn (mixed $id): bool => ! is_string($id) || $id === '') !== []) {
+            throw new SwarmException('Native input envelope contains invalid consumed message configuration IDs.');
+        }
+
+        $normalized = [];
+        foreach ($ids as $id) {
+            $normalized[] = $id;
+        }
+
+        return array_values(array_unique($normalized));
     }
 
     public function captureRecoverableInvocationOptions(): void

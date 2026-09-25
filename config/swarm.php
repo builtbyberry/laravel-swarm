@@ -133,6 +133,19 @@ return [
     ],
 
     /*
+     * Per-run Laravel AI tools, messages, and conversation bindings use the
+     * sealed native-input envelope but have an independent writer flag so a
+     * mixed fleet can keep writers off until every worker understands v2.
+     */
+    'native_agent_settings' => [
+        // Admit new v2 settings envelopes. Readers continue draining existing v2 references when false.
+        'enabled' => filter_var(env('SWARM_NATIVE_AGENT_SETTINGS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+
+        // Stable application identifier => class implementing NativeAgentToolFactory.
+        'tool_factories' => [],
+    ],
+
+    /*
      * Capture controls what is persisted into history, context, and response payloads.
      * Defaults are conservative: opt in when you want full prompts and outputs stored.
      */

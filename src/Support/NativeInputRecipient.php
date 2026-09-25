@@ -6,12 +6,16 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Messages\Message;
 
 final readonly class NativeInputRecipient
 {
     /**
      * @param  list<int>|null  $attachments
      * @param  Lab|array<string, mixed>|string|null  $provider
+     * @param  list<NativeAgentToolReference|NativeAgentToolFactoryReference>  $tools
+     * @param  list<Message>  $messages
+     * @param  array<int, array<int, array{sha256?: string, owned?: bool, mime?: string}>>  $messageAttachmentMetadata
      */
     public function __construct(
         public string $recipient,
@@ -20,6 +24,11 @@ final readonly class NativeInputRecipient
         public Lab|array|string|null $provider = null,
         public ?string $model = null,
         public ?int $timeout = null,
+        public array $tools = [],
+        public array $messages = [],
+        public ?NativeAgentConversation $conversation = null,
+        public ?string $configurationId = null,
+        protected array $messageAttachmentMetadata = [],
     ) {
         if (! in_array($textSource, ['topology', 'original'], true)) {
             throw new SwarmException('Native input textSource must be [topology] or [original].');
@@ -43,12 +52,98 @@ final readonly class NativeInputRecipient
         if ($timeout !== null && $timeout <= 0) {
             throw new SwarmException('Native input provider timeout must be a positive integer.');
         }
+
+        foreach ($tools as $tool) {
+            if (! $tool instanceof NativeAgentToolReference && ! $tool instanceof NativeAgentToolFactoryReference) {
+                throw new SwarmException('Native agent tools must be reconstructible tool references or registered factory references. Closures and live container services cannot cross worker boundaries.');
+            }
+        }
+
+        foreach ($messages as $message) {
+            if (! $message instanceof Message) {
+                throw new SwarmException('Native agent message overrides must be Laravel AI Message instances or values accepted by Message::tryFrom().');
+            }
+        }
+
+        if ($messages !== [] && $conversation !== null) {
+            throw new SwarmException('Laravel AI native conversations cannot be combined with one-shot withMessages history for the same recipient.');
+        }
+
+        if ($configurationId !== null && trim($configurationId) === '') {
+            throw new SwarmException('Native agent configuration IDs must be non-empty strings.');
+        }
     }
 
     /** @param Lab|array<string, mixed>|string|null $provider */
     public function withInvocation(Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): self
     {
-        return new self($this->recipient, $this->textSource, $this->attachments, $provider, $model, $timeout);
+        return new self($this->recipient, $this->textSource, $this->attachments, $provider, $model, $timeout, $this->tools, $this->messages, $this->conversation, $this->configurationId, $this->messageAttachmentMetadata);
+    }
+
+    /** @param list<NativeAgentToolReference|NativeAgentToolFactoryReference> $tools */
+    public function withTools(array $tools): self
+    {
+        return new self($this->recipient, $this->textSource, $this->attachments, $this->provider, $this->model, $this->timeout, array_values($tools), $this->messages, $this->conversation, $this->configurationId, $this->messageAttachmentMetadata);
+    }
+
+    /** @param iterable<int, mixed> $messages */
+    public function withMessages(iterable $messages): self
+    {
+        $normalized = [];
+        foreach ($messages as $message) {
+            $normalized[] = Message::tryFrom($message);
+        }
+
+        return new self($this->recipient, $this->textSource, $this->attachments, $this->provider, $this->model, $this->timeout, $this->tools, $normalized, $this->conversation, $this->configurationId);
+    }
+
+    public function withConversation(NativeAgentConversation $conversation): self
+    {
+        return new self($this->recipient, $this->textSource, $this->attachments, $this->provider, $this->model, $this->timeout, $this->tools, $this->messages, $conversation, $this->configurationId, $this->messageAttachmentMetadata);
+    }
+
+    /**
+     * @param  list<NativeAgentToolReference|NativeAgentToolFactoryReference>  $tools
+     * @param  list<Message>|null  $messages
+     * @param  array<int, array<int, array{sha256?: string, owned?: bool, mime?: string}>>|null  $messageAttachmentMetadata
+     *
+     * @internal Freeze a factory-expanded recipient for sealed transport.
+     */
+    public function withResolvedSettings(
+        array $tools,
+        ?string $configurationId = null,
+        ?array $messages = null,
+        ?array $messageAttachmentMetadata = null,
+    ): self {
+        return new self(
+            $this->recipient,
+            $this->textSource,
+            $this->attachments,
+            $this->provider,
+            $this->model,
+            $this->timeout,
+            array_values($tools),
+            array_values($messages ?? $this->messages),
+            $this->conversation,
+            $configurationId ?? $this->settingsId(),
+            $messageAttachmentMetadata ?? $this->messageAttachmentMetadata,
+        );
+    }
+
+    public function hasNativeSettings(): bool
+    {
+        return $this->tools !== [] || $this->messages !== [] || $this->conversation !== null;
+    }
+
+    public function settingsId(): string
+    {
+        return $this->configurationId ?? 'recipient:'.$this->recipient;
+    }
+
+    /** @internal */
+    public function ownsMessageAttachment(int $messageIndex, int $attachmentIndex): bool
+    {
+        return ($this->messageAttachmentMetadata[$messageIndex][$attachmentIndex]['owned'] ?? false) === true;
     }
 
     /** @param list<int>|null $attachments */
@@ -105,6 +200,23 @@ final readonly class NativeInputRecipient
             'provider' => $this->provider instanceof Lab ? $this->provider->value : $this->provider,
             'model' => $this->model,
             'timeout' => $this->timeout,
+            'configuration_id' => $this->hasNativeSettings() ? $this->settingsId() : null,
+            'tools' => array_map(static function (NativeAgentToolReference|NativeAgentToolFactoryReference $tool): array {
+                if ($tool instanceof NativeAgentToolFactoryReference) {
+                    throw new SwarmException('Native agent tool factories must be expanded before the operational envelope is sealed.');
+                }
+
+                return $tool->toArray();
+            }, $this->tools),
+            'messages' => array_map(
+                fn (Message $message, int $index): array => NativeMessageCodec::encode(
+                    $message,
+                    $this->messageAttachmentMetadata[$index] ?? [],
+                ),
+                $this->messages,
+                array_keys($this->messages),
+            ),
+            'conversation' => $this->conversation?->toArray(),
         ];
     }
 
@@ -141,6 +253,15 @@ final readonly class NativeInputRecipient
             throw new SwarmException('Native input recipient descriptor contains an invalid timeout.');
         }
 
+        $tools = $payload['tools'] ?? [];
+        $messages = $payload['messages'] ?? [];
+        $conversation = $payload['conversation'] ?? null;
+        $configurationId = $payload['configuration_id'] ?? null;
+        if (! is_array($tools) || ! is_array($messages) || ($conversation !== null && ! is_array($conversation))
+            || ($configurationId !== null && ! is_string($configurationId))) {
+            throw new SwarmException('Native input recipient descriptor contains invalid native agent settings.');
+        }
+
         return new self(
             recipient: $payload['recipient'],
             textSource: $payload['text_source'],
@@ -148,6 +269,28 @@ final readonly class NativeInputRecipient
             provider: $payload['provider'],
             model: $payload['model'],
             timeout: $payload['timeout'],
+            tools: array_map(static function (mixed $tool): NativeAgentToolReference {
+                if (! is_array($tool)) {
+                    throw new SwarmException('Native agent tool descriptor is invalid.');
+                }
+
+                return NativeAgentToolReference::fromArray($tool);
+            }, array_values($tools)),
+            messages: array_map(static function (mixed $message): Message {
+                if (! is_array($message)) {
+                    throw new SwarmException('Native agent message descriptor is invalid.');
+                }
+
+                return NativeMessageCodec::decode($message);
+            }, array_values($messages)),
+            conversation: is_array($conversation) ? NativeAgentConversation::fromArray($conversation) : null,
+            configurationId: $configurationId,
+            messageAttachmentMetadata: array_map(
+                static fn (mixed $message): array => is_array($message)
+                    ? NativeMessageCodec::attachmentMetadata($message)
+                    : [],
+                array_values($messages),
+            ),
         );
     }
 

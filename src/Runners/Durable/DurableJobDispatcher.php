@@ -5,12 +5,17 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\NativeInputStore;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeAgentSettingsQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeInputQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManifest;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Foundation\Bus\PendingDispatch;
@@ -23,6 +28,7 @@ class DurableJobDispatcher
     public function __construct(
         protected ConfigRepository $config,
         protected ?ContextStore $contexts = null,
+        protected ?NativeInputStore $nativeInputs = null,
     ) {}
 
     public function dispatchStep(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): PendingDispatch
@@ -57,11 +63,13 @@ class DurableJobDispatcher
 
     public function makeStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): AdvanceDurableSwarm
     {
-        $job = $this->requiresNativeInputReader($runId)
-            ? new AdvanceNativeInputDurableSwarm($runId, $stepIndex)
-            : new AdvanceDurableSwarm($runId, $stepIndex);
+        $job = match ($this->nativeInputVersion($runId)) {
+            NativeInputManifest::SETTINGS_VERSION => new AdvanceNativeAgentSettingsDurableSwarm($runId, $stepIndex),
+            NativeInputManifest::VERSION => new AdvanceNativeInputDurableSwarm($runId, $stepIndex),
+            default => new AdvanceDurableSwarm($runId, $stepIndex),
+        };
 
-        if ($job instanceof AdvanceNativeInputDurableSwarm) {
+        if ($job instanceof AdvanceNativeInputDurableSwarm || $job instanceof AdvanceNativeAgentSettingsDurableSwarm) {
             $job->afterCommit();
         }
 
@@ -78,11 +86,13 @@ class DurableJobDispatcher
 
     public function makeBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): AdvanceDurableBranch
     {
-        $job = $this->requiresNativeInputReader($runId)
-            ? new AdvanceNativeInputDurableBranch($runId, $branchId)
-            : new AdvanceDurableBranch($runId, $branchId);
+        $job = match ($this->nativeInputVersion($runId)) {
+            NativeInputManifest::SETTINGS_VERSION => new AdvanceNativeAgentSettingsDurableBranch($runId, $branchId),
+            NativeInputManifest::VERSION => new AdvanceNativeInputDurableBranch($runId, $branchId),
+            default => new AdvanceDurableBranch($runId, $branchId),
+        };
 
-        if ($job instanceof AdvanceNativeInputDurableBranch) {
+        if ($job instanceof AdvanceNativeInputDurableBranch || $job instanceof AdvanceNativeAgentSettingsDurableBranch) {
             $job->afterCommit();
         }
 
@@ -99,11 +109,13 @@ class DurableJobDispatcher
 
     public function makeQueuedResumeJob(string $runId, ?string $connection = null, ?string $queue = null): ResumeQueuedHierarchicalSwarm
     {
-        $job = $this->requiresNativeInputReader($runId)
-            ? new ResumeNativeInputQueuedHierarchicalSwarm($runId)
-            : new ResumeQueuedHierarchicalSwarm($runId);
+        $job = match ($this->nativeInputVersion($runId)) {
+            NativeInputManifest::SETTINGS_VERSION => new ResumeNativeAgentSettingsQueuedHierarchicalSwarm($runId),
+            NativeInputManifest::VERSION => new ResumeNativeInputQueuedHierarchicalSwarm($runId),
+            default => new ResumeQueuedHierarchicalSwarm($runId),
+        };
 
-        if ($job instanceof ResumeNativeInputQueuedHierarchicalSwarm) {
+        if ($job instanceof ResumeNativeInputQueuedHierarchicalSwarm || $job instanceof ResumeNativeAgentSettingsQueuedHierarchicalSwarm) {
             $job->afterCommit();
         }
 
@@ -118,10 +130,17 @@ class DurableJobDispatcher
         return $job;
     }
 
-    protected function requiresNativeInputReader(string $runId): bool
+    protected function nativeInputVersion(string $runId): ?int
     {
         $context = ($this->contexts ?? Container::getInstance()->make(ContextStore::class))->find($runId);
 
-        return is_string($context['native_input_ref'] ?? null);
+        $reference = $context['native_input_ref'] ?? null;
+        if (! is_string($reference)) {
+            return null;
+        }
+
+        $row = ($this->nativeInputs ?? Container::getInstance()->make(NativeInputStore::class))->find($reference);
+
+        return is_array($row) ? (int) ($row['format_version'] ?? 0) : NativeInputManifest::VERSION;
     }
 }

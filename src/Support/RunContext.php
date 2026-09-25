@@ -220,6 +220,37 @@ class RunContext implements ArrayAccess
         return $this;
     }
 
+    /**
+     * Bind reconstructible Laravel AI per-run settings without replacing the task text.
+     *
+     * @param  list<NativeInputRecipient>  $recipients
+     */
+    public function withAgentConfiguration(array $recipients): self
+    {
+        if ($recipients === []) {
+            throw new SwarmException('Native agent configuration requires at least one explicit recipient.');
+        }
+
+        foreach ($recipients as $recipient) {
+            if (! $recipient instanceof NativeInputRecipient) {
+                throw new SwarmException('Native agent configuration recipients must be NativeInputRecipient instances.');
+            }
+        }
+
+        $existing = $this->nativeInput;
+        $this->nativeInput = new NativeInputManifest(
+            text: $existing === null ? $this->input : $existing->text,
+            attachments: $existing === null ? [] : $existing->attachments,
+            recipients: array_values($recipients),
+            attachmentHashes: $existing === null ? [] : $existing->attachmentHashes,
+            ownedAttachmentIndexes: $existing === null ? [] : $existing->ownedAttachmentIndexes,
+            attachmentInvocationOptions: $existing === null ? [] : $existing->attachmentInvocationOptions,
+            consumedMessageConfigurationIds: $existing === null ? [] : $existing->consumedMessageConfigurationIds,
+        );
+
+        return $this;
+    }
+
     public function nativeInput(): ?NativeInputManifest
     {
         return $this->nativeInput;
@@ -235,6 +266,25 @@ class RunContext implements ArrayAccess
     public function nativeInputReference(): ?string
     {
         return $this->nativeInputReference;
+    }
+
+    public function hasNativeSettingsFor(string $recipient): bool
+    {
+        if ($this->nativeInput === null && $this->nativeInputReference !== null) {
+            $this->nativePrompt('__settings_validation__', $this->input);
+        }
+
+        if ($this->nativeInput === null) {
+            return false;
+        }
+
+        foreach ($this->nativeInput->recipients as $selection) {
+            if ($selection->recipient === $recipient && $selection->hasNativeSettings()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function setNativeInputReference(?string $reference): self
@@ -258,14 +308,14 @@ class RunContext implements ArrayAccess
             ->message($this, $recipient, $topologyText);
     }
 
-    public function nativeInvocation(string $recipient, string $topologyText): NativeAgentInvocation
+    public function nativeInvocation(string $recipient, string $topologyText, ?NativeAgentSettingsAttempt $attempt = null): NativeAgentInvocation
     {
         if ($this->nativeInput === null && $this->nativeInputReference === null) {
             return new NativeAgentInvocation($topologyText);
         }
 
         return Container::getInstance()->make(NativeInputManager::class)
-            ->invocation($this, $recipient, $topologyText);
+            ->invocation($this, $recipient, $topologyText, $attempt);
     }
 
     /** @param list<string> $nodeIds */

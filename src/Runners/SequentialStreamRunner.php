@@ -28,6 +28,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -64,6 +65,7 @@ class SequentialStreamRunner
         protected SwarmGuardrailRunner $guardrails,
         protected LoggerInterface $logger,
         protected ContextGrowthGovernor $growthGovernor,
+        protected NativeInputManager $nativeInputs,
     ) {}
 
     /**
@@ -256,6 +258,7 @@ class SequentialStreamRunner
             $capturedResponse = $this->limits->response($this->capture->response($response));
             $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
             $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
+            $this->nativeInputs->commitConsumedMessages($context, $state->nativeSettingsAttempt);
             $this->events->dispatch(new SwarmCompleted(
                 runId: $context->runId,
                 swarmClass: $swarm::class,

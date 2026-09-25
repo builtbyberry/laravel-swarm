@@ -5,33 +5,53 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Contracts\AuthorizesNativeAgentConversation;
 use BuiltByBerry\LaravelSwarm\Contracts\AuthorizesNativeInputAttachment;
+use BuiltByBerry\LaravelSwarm\Contracts\ConsumesNativeInputMessages;
+use BuiltByBerry\LaravelSwarm\Contracts\NativeAgentToolFactory;
 use BuiltByBerry\LaravelSwarm\Contracts\NativeInputStore;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Contracts\Filesystem\Factory as FilesystemFactory;
 use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Support\Str;
+use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\ConversationStore;
 use Laravel\Ai\Contracts\Files\StorableFile;
+use Laravel\Ai\Contracts\Tool;
+use Laravel\Ai\Contracts\VerifiesConversationOwnership;
 use Laravel\Ai\Files\File;
 use Laravel\Ai\Files\StoredAudio;
 use Laravel\Ai\Files\StoredDocument;
 use Laravel\Ai\Files\StoredImage;
 use Laravel\Ai\Files\StoredVideo;
 use Laravel\Ai\Messages\UserMessage;
+use Laravel\Ai\Models\Conversation;
+use Laravel\Ai\Providers\Tools\ProviderTool;
 use Throwable;
 
 final class NativeInputManager
 {
+    protected AuthorizesNativeAgentConversation $conversationAuthorizer;
+
+    protected Container $container;
+
     public function __construct(
         protected ConfigRepository $config,
         protected NativeInputStore $store,
         protected FilesystemFactory $filesystems,
         protected AuthorizesNativeInputAttachment $authorizer,
         protected SwarmAuditDispatcher $audit,
-    ) {}
+        ?AuthorizesNativeAgentConversation $conversationAuthorizer = null,
+        ?Container $container = null,
+    ) {
+        $this->container = $container ?? \Illuminate\Container\Container::getInstance();
+        $this->conversationAuthorizer = $conversationAuthorizer
+            ?? $this->container->make(AuthorizesNativeAgentConversation::class);
+    }
 
     public function admit(RunContext $context, Topology $topology, ExecutionMode $mode): void
     {
@@ -53,7 +73,15 @@ final class NativeInputManager
             throw new SwarmException('Native swarm input is disabled. Enable [swarm.native_inputs.enabled] only after the v1 readers and migration are deployed to every worker.');
         }
 
+        if (! $hasOperationalReference && $this->hasSettings($manifest)
+            && ! (bool) $this->config->get('swarm.native_agent_settings.enabled', false)) {
+            throw new SwarmException('Native per-run agent settings are disabled. Enable [swarm.native_agent_settings.enabled] only after v2-capable readers are deployed to every worker.');
+        }
+
         $this->applyDefaultRecipient($manifest, $topology);
+        if (! $hasOperationalReference) {
+            $this->freezeToolFactories($manifest);
+        }
         $this->validateRecipients($manifest, $topology);
         $this->validateAttachmentLimits($manifest->attachments);
         $requiresOperationalReference = $this->requiresOperationalReference($manifest, $topology, $mode);
@@ -61,6 +89,7 @@ final class NativeInputManager
             $this->assertRecoverableSources($manifest->attachments);
         }
         $this->authorizeExternalAttachments($manifest, $context);
+        $this->validateNativeSettings($manifest, $context, $requiresOperationalReference);
 
         if (! $requiresOperationalReference) {
             return;
@@ -77,6 +106,7 @@ final class NativeInputManager
 
         $manifest->captureRecoverableInvocationOptions();
         [$manifest->attachments, $manifest->attachmentHashes, $manifest->ownedAttachmentIndexes, $promotions] = $this->planRecoverable($manifest->attachments, $context->runId);
+        $promotions = array_merge($promotions, $this->planRecoverableMessages($manifest, $context->runId));
         $payload = $manifest->toArray();
         $payload['authorization'] = [
             'actor' => $context->metadata['actor'] ?? null,
@@ -113,7 +143,7 @@ final class NativeInputManager
         return $this->invocation($context, $recipient, $topologyText)->prompt;
     }
 
-    public function invocation(RunContext $context, string $recipient, string $topologyText): NativeAgentInvocation
+    public function invocation(RunContext $context, string $recipient, string $topologyText, ?NativeAgentSettingsAttempt $attempt = null): NativeAgentInvocation
     {
         $manifest = $context->nativeInput();
 
@@ -134,18 +164,26 @@ final class NativeInputManager
             }
 
             $version = $row['payload']['version'] ?? 0;
-            if ($version !== NativeInputManifest::VERSION) {
+            if (! in_array($version, [NativeInputManifest::VERSION, NativeInputManifest::SETTINGS_VERSION], true)) {
                 throw new SwarmException("Native input envelope [{$reference}] has unsupported format version [{$version}]. Upgrade every worker before enabling new native input writers.");
+            }
+            $columnVersion = $row['format_version'] ?? $version;
+            if ($columnVersion !== $version) {
+                throw new SwarmException("Native input envelope [{$reference}] format column [{$columnVersion}] does not match sealed payload version [{$version}].");
             }
 
             $this->validateRecoveredDescriptors($row['payload'], $context->runId);
             $manifest = NativeInputManifest::fromArray($row['payload']);
             $this->validateAttachmentLimits($manifest->attachments);
             $this->authorizeExternalAttachments($manifest, $context);
+            $this->validateNativeSettings($manifest, $context, true);
             $context->setNativeInput($manifest);
         }
 
-        $invocation = $manifest?->invocationFor($recipient, $topologyText) ?? new NativeAgentInvocation($topologyText);
+        $invocation = $manifest?->invocationFor($recipient, $topologyText, $attempt) ?? new NativeAgentInvocation($topologyText);
+        if ($invocation->conversation !== null) {
+            $this->authorizeConversation($invocation->conversation, $context);
+        }
         if ($invocation->prompt instanceof UserMessage) {
             $this->audit->emit('native_input.released', [
                 'run_id' => $context->runId,
@@ -158,6 +196,21 @@ final class NativeInputManager
         }
 
         return $invocation;
+    }
+
+    public function commitConsumedMessages(RunContext $context, NativeAgentSettingsAttempt $attempt): void
+    {
+        $reference = $context->nativeInputReference();
+        $ids = $attempt->ids();
+        if ($reference === null || $ids === []) {
+            return;
+        }
+
+        if (! $this->store instanceof ConsumesNativeInputMessages) {
+            throw new SwarmException('The configured native input store cannot commit one-shot withMessages state. Use the database native input store for recoverable execution.');
+        }
+
+        $this->store->consumeMessages($reference, $context->runId, $ids);
     }
 
     /**
@@ -255,6 +308,61 @@ final class NativeInputManager
         return [$recoverable, $hashes, $owned, $promotions];
     }
 
+    /**
+     * Promote user-message attachments through the same sealed, private-disk
+     * path as top-level native input attachments.
+     *
+     * @return list<array{disk: string, path: string, content: string, options: array<string, string>}>
+     */
+    protected function planRecoverableMessages(NativeInputManifest $manifest, string $runId): array
+    {
+        $promotions = [];
+
+        foreach ($manifest->recipients as $recipientIndex => $recipient) {
+            $messages = [];
+            $metadata = [];
+            foreach ($recipient->messages as $messageIndex => $message) {
+                if (! $message instanceof UserMessage || $message->attachments->isEmpty()) {
+                    $messages[] = $message;
+
+                    continue;
+                }
+
+                $originalAttachments = $this->messageAttachments($message);
+                [$attachments, $hashes, $owned, $planned] = $this->planRecoverable(
+                    $originalAttachments,
+                    $runId,
+                );
+                $messages[] = new UserMessage($message->content, $attachments);
+                foreach ($attachments as $attachmentIndex => $_attachment) {
+                    $row = [];
+                    if (is_string($hashes[$attachmentIndex] ?? null)) {
+                        $row['sha256'] = $hashes[$attachmentIndex];
+                    }
+                    if (in_array($attachmentIndex, $owned, true)) {
+                        $row['owned'] = true;
+                    }
+                    $mime = $originalAttachments[$attachmentIndex]->mimeType();
+                    if (is_string($mime) && $mime !== '') {
+                        $row['mime'] = $mime;
+                    }
+                    if ($row !== []) {
+                        $metadata[$messageIndex][$attachmentIndex] = $row;
+                    }
+                }
+                $promotions = array_merge($promotions, $planned);
+            }
+
+            $manifest->recipients[$recipientIndex] = $recipient->withResolvedSettings(
+                $recipient->tools,
+                messages: $messages,
+                messageAttachmentMetadata: $metadata,
+            );
+        }
+
+        return $promotions;
+    }
+
     /** @param list<File> $attachments */
     protected function validateAttachmentLimits(array $attachments): void
     {
@@ -337,7 +445,19 @@ final class NativeInputManager
     protected function validateRecoveredDescriptors(array $payload, string $runId): void
     {
         $disk = $this->config->get('swarm.native_inputs.disk');
-        foreach ($payload['attachments'] ?? [] as $index => $attachment) {
+        $descriptors = $payload['attachments'] ?? [];
+        foreach ($payload['recipients'] ?? [] as $recipient) {
+            if (! is_array($recipient)) {
+                continue;
+            }
+            foreach ($recipient['messages'] ?? [] as $message) {
+                if (is_array($message) && ($message['type'] ?? null) === 'user' && is_array($message['attachments'] ?? null)) {
+                    $descriptors = array_merge($descriptors, $message['attachments']);
+                }
+            }
+        }
+
+        foreach ($descriptors as $index => $attachment) {
             if (! is_array($attachment)) {
                 throw new SwarmException("Native attachment descriptor [{$index}] is invalid.");
             }
@@ -408,7 +528,18 @@ final class NativeInputManager
 
             $this->store->revoke($reference, $context->runId);
             $locations = [];
-            foreach ($row['payload']['attachments'] ?? [] as $attachment) {
+            $attachments = $row['payload']['attachments'] ?? [];
+            foreach ($row['payload']['recipients'] ?? [] as $recipient) {
+                if (! is_array($recipient)) {
+                    continue;
+                }
+                foreach ($recipient['messages'] ?? [] as $message) {
+                    if (is_array($message) && ($message['type'] ?? null) === 'user' && is_array($message['attachments'] ?? null)) {
+                        $attachments = array_merge($attachments, $message['attachments']);
+                    }
+                }
+            }
+            foreach ($attachments as $attachment) {
                 if (! is_array($attachment) || ($attachment['swarm_owned'] ?? false) !== true) {
                     continue;
                 }
@@ -468,6 +599,165 @@ final class NativeInputManager
                 }
             }
         }
+
+        $configurationIds = [];
+        foreach ($manifest->recipients as $recipient) {
+            if (! $recipient->hasNativeSettings()) {
+                continue;
+            }
+
+            $id = $recipient->settingsId();
+            if (isset($configurationIds[$id])) {
+                throw new SwarmException("Native agent configuration ID [{$id}] is declared more than once.");
+            }
+            $configurationIds[$id] = true;
+        }
+
+        foreach ($manifest->consumedMessageConfigurationIds as $id) {
+            if (! isset($configurationIds[$id])) {
+                throw new SwarmException("Native input envelope contains unknown consumed message configuration ID [{$id}].");
+            }
+        }
+    }
+
+    protected function hasSettings(NativeInputManifest $manifest): bool
+    {
+        return array_filter(
+            $manifest->recipients,
+            static fn (NativeInputRecipient $recipient): bool => $recipient->hasNativeSettings(),
+        ) !== [];
+    }
+
+    protected function freezeToolFactories(NativeInputManifest $manifest): void
+    {
+        foreach ($manifest->recipients as $index => $recipient) {
+            $references = [];
+            foreach ($recipient->tools as $tool) {
+                if ($tool instanceof NativeAgentToolReference) {
+                    $references[] = $tool;
+
+                    continue;
+                }
+
+                if (! $tool instanceof NativeAgentToolFactoryReference) {
+                    throw new SwarmException('Native agent tools must use reconstructible references or registered factories.');
+                }
+
+                $factories = $this->config->get('swarm.native_agent_settings.tool_factories', []);
+                $factoryClass = is_array($factories) ? ($factories[$tool->factory] ?? null) : null;
+                if (! is_string($factoryClass) || $factoryClass === '') {
+                    throw new SwarmException("Native agent tool factory [{$tool->factory}] is not registered in [swarm.native_agent_settings.tool_factories].");
+                }
+
+                $factory = $this->container->make($factoryClass);
+                if (! $factory instanceof NativeAgentToolFactory) {
+                    throw new SwarmException("Native agent tool factory [{$tool->factory}] must implement NativeAgentToolFactory.");
+                }
+
+                foreach ($factory->references($tool->arguments) as $reference) {
+                    if (! $reference instanceof NativeAgentToolReference) {
+                        throw new SwarmException("Native agent tool factory [{$tool->factory}] must return only NativeAgentToolReference values.");
+                    }
+                    $references[] = $reference;
+                }
+            }
+
+            $manifest->recipients[$index] = $recipient->withResolvedSettings($references);
+        }
+    }
+
+    protected function validateNativeSettings(NativeInputManifest $manifest, RunContext $context, bool $recoverable): void
+    {
+        foreach ($manifest->recipients as $recipient) {
+            foreach ($recipient->tools as $reference) {
+                if (! $reference instanceof NativeAgentToolReference || ! class_exists($reference->class)) {
+                    throw new SwarmException("Native agent configuration [{$recipient->settingsId()}] contains a tool class that cannot be reconstructed.");
+                }
+
+                try {
+                    $resolved = $this->container->makeWith($reference->class, $reference->arguments);
+                } catch (Throwable $exception) {
+                    throw new SwarmException("Native agent tool [{$reference->class}] cannot be reconstructed from its declared arguments.", previous: $exception);
+                }
+                if (! $resolved instanceof Agent && ! $resolved instanceof Tool && ! $resolved instanceof ProviderTool) {
+                    throw new SwarmException("Native agent tool [{$reference->class}] must resolve to a Laravel AI Agent, Tool, or ProviderTool.");
+                }
+            }
+
+            foreach ($recipient->messages as $messageIndex => $message) {
+                NativeMessageCodec::encode($message);
+                if ($recoverable && $message instanceof UserMessage) {
+                    $attachments = $this->messageAttachments($message);
+                    $this->assertRecoverableSources($attachments);
+                    $this->validateAttachmentLimits($attachments);
+
+                    foreach ($attachments as $attachmentIndex => $attachment) {
+                        if ($recipient->ownsMessageAttachment($messageIndex, $attachmentIndex)
+                            || ! $attachment instanceof Arrayable) {
+                            continue;
+                        }
+                        $type = (string) ($attachment->toArray()['type'] ?? '');
+                        if ((str_starts_with($type, 'stored-') || str_starts_with($type, 'provider-'))
+                            && ! $this->authorizer->authorize($attachment, $context)) {
+                            throw new SwarmException("Native withMessages attachment [{$attachmentIndex}] is not authorized for this actor or tenant.");
+                        }
+                    }
+                }
+            }
+
+            if ($recipient->conversation === null) {
+                continue;
+            }
+
+            if ($recoverable && $recipient->conversation->conversationId === null) {
+                throw new SwarmException("Native agent configuration [{$recipient->settingsId()}] starts a new Laravel AI conversation, whose generated ID cannot be reconstructed after retry. Background, process, queued, durable, and routed execution require an existing conversation ID; create or obtain it in the application first.");
+            }
+            if ($recoverable) {
+                $recipient->conversation->toArray();
+            }
+
+            $this->authorizeConversation($recipient->conversation, $context);
+        }
+    }
+
+    protected function authorizeConversation(NativeAgentConversation $conversation, RunContext $context): void
+    {
+        $participant = $conversation->participant();
+        if (! $this->conversationAuthorizer->authorize($conversation->conversationId, $participant, $context)) {
+            throw new SwarmException('Native Laravel AI conversation access is not authorized for this actor or tenant. Bind AuthorizesNativeAgentConversation to an application policy.');
+        }
+
+        if ($conversation->conversationId === null) {
+            return;
+        }
+
+        $store = $this->container->bound(VerifiesConversationOwnership::class)
+            ? $this->container->make(VerifiesConversationOwnership::class)
+            : $this->container->make(ConversationStore::class);
+        if (! $store instanceof VerifiesConversationOwnership) {
+            throw new SwarmException('Native conversation continuation requires Laravel AI conversation storage that implements VerifiesConversationOwnership.');
+        }
+        if (! $store->conversationBelongsTo(
+            $conversation->conversationId,
+            Conversation::participantType($participant),
+            Conversation::participantKey($participant),
+        )) {
+            throw new SwarmException('The native Laravel AI conversation does not belong to the declared participant.');
+        }
+    }
+
+    /** @return list<File> */
+    protected function messageAttachments(UserMessage $message): array
+    {
+        $attachments = [];
+        foreach ($message->attachments as $attachment) {
+            if (! $attachment instanceof File) {
+                throw new SwarmException('Native withMessages user attachments must be reconstructible Laravel AI files.');
+            }
+            $attachments[] = $attachment;
+        }
+
+        return $attachments;
     }
 
     protected function requiresOperationalReference(NativeInputManifest $manifest, Topology $topology, ExecutionMode $mode): bool

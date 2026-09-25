@@ -310,7 +310,18 @@ class SwarmPruneCommand extends Command
 
                     $payload = json_decode((string) $cipher->openStrict($sealed), true, 512, JSON_THROW_ON_ERROR);
                     $allDeleted = true;
-                    foreach ($payload['attachments'] ?? [] as $attachment) {
+                    $attachments = $payload['attachments'] ?? [];
+                    foreach ($payload['recipients'] ?? [] as $recipient) {
+                        if (! is_array($recipient)) {
+                            continue;
+                        }
+                        foreach ($recipient['messages'] ?? [] as $message) {
+                            if (is_array($message) && ($message['type'] ?? null) === 'user' && is_array($message['attachments'] ?? null)) {
+                                $attachments = array_merge($attachments, $message['attachments']);
+                            }
+                        }
+                    }
+                    foreach ($attachments as $attachment) {
                         if (! is_array($attachment) || ($attachment['swarm_owned'] ?? false) !== true) {
                             continue;
                         }

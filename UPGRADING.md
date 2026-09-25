@@ -27,6 +27,51 @@ Before rotating `APP_KEY`, drain or re-encrypt active `swarm_native_inputs.paylo
 values along with the existing sealed operational inventory. These envelopes use
 strict decryption and cannot be reconstructed with the wrong key.
 
+### Native per-run agent settings
+
+Deploy this release's v2 readers and restart every queue, durable and concurrency
+worker before setting `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true`. This flag is
+independent from `SWARM_NATIVE_INPUTS_ENABLED`: v2 settings require the native-input
+store, but disabling the v2 writer does not stop already-admitted v2 references
+from draining. Roll out in this order:
+
+1. Run the P1 migration and deploy v1/v2-capable readers with both writer flags off.
+2. Enable `SWARM_NATIVE_INPUTS_ENABLED=true` if native message input is required.
+3. After every worker is on v0.28, enable `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true`.
+4. Before rollback, disable the settings writer first and drain active native-input
+   envelopes before removing v2 readers.
+
+`RunContext::withAgentConfiguration()` accepts topology-stable
+`NativeInputRecipient` values. Laravel AI `withTools()` configuration persists for
+each recipient invocation; `withMessages()` is one-shot and is consumed only with
+the owning successful step/checkpoint transaction. Recoverable message attachments
+use the same private-disk promotion, content verification and prune path as direct
+native input. Operational settings stay in the cipher-sealed native-input envelope
+even when capture is disabled; they are not history or audit evidence.
+
+Do not pass closures, resolved container services or runtime tool objects. Use
+`NativeAgentToolReference`, or register a `NativeAgentToolFactory` under
+`swarm.native_agent_settings.tool_factories` and pass a
+`NativeAgentToolFactoryReference`. Factory output is expanded once at admission
+and the resulting class/argument descriptors are sealed.
+
+Authored concurrent swarms reconstruct the swarm definition and select the same
+stable slot/node. With the settings writer enabled, ad-hoc concurrent builders must
+declare settings for every reconstructed recipient; otherwise dispatch fails with
+guidance instead of dropping live instance state. This may expose unsafe ad-hoc
+parallel construction that previously happened to work. Keep the writer disabled
+until those call sites use explicit recipient settings or an authored swarm.
+
+Native conversation continuation is denied by default. Bind
+`AuthorizesNativeAgentConversation`; recoverable execution also requires an existing
+conversation ID, an Eloquent participant and a Laravel AI conversation store that
+verifies ownership. New conversations remain request-local. A recipient cannot
+combine `withMessages()` and a native conversation.
+
+These settings do not propagate into durable child swarms. Child recovery and
+inheritance remain v0.29 work; configure a child explicitly rather than depending
+on parent state.
+
 ## Upgrading to v0.27.0
 
 The [adoption evidence index](docs/ai-1-release-evidence.md) records the reviewed

@@ -81,6 +81,138 @@ NativeInputRecipient::parallel(0, attachments: [0])
 Absent values are not synthesized; the agent/provider declarations remain in
 control. The timeout is a provider-call timeout, not a hard workflow cancel.
 
+## Per-run native agent settings
+
+The same topology-stable recipient can carry Laravel AI's native tools, ad-hoc
+message history or conversation selection through worker reconstruction. This is
+a separate default-off v2 writer:
+
+```env
+SWARM_NATIVE_INPUTS_ENABLED=true
+SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true
+```
+
+```php
+use App\Ai\Tools\SearchTenantCatalog;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentToolReference;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputRecipient;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use Laravel\Ai\Messages\UserMessage;
+
+$context = RunContext::fromTask('Find the matching products')
+    ->withAgentConfiguration([
+        NativeInputRecipient::parallel(0)
+            ->withInvocation(provider: 'openai', model: 'gpt-5-mini', timeout: 45)
+            ->withTools([
+                new NativeAgentToolReference(
+                    SearchTenantCatalog::class,
+                    ['tenantId' => $tenant->getKey()],
+                ),
+            ])
+            ->withMessages([
+                new UserMessage('The customer prefers repairable products.'),
+            ]),
+    ]);
+```
+
+Swarm applies these values through Laravel AI's `withTools()`, `withMessages()`,
+conversation, provider, model and timeout APIs. It does not copy private agent
+properties or invent a parallel settings API.
+
+The behavior is deliberately different for the two native mutators:
+
+- Tools are persistent recipient configuration. They are reconstructed for every
+  invocation, loop pass, retry and recovery step.
+- Messages are one-shot history. They are staged for one execution attempt and
+  consumed only when that recipient's owning step or terminal completion commits.
+  A provider failure, lease loss or rolled-back checkpoint receives them again.
+  Later successful invocations explicitly clear them so an authored agent's own
+  runtime state cannot replay the history.
+
+Full Laravel AI `UserMessage`, `AssistantMessage` and `ToolResultMessage` fields are
+preserved, including tool calls/results and provider replay blocks. User-message
+attachments use the same recoverable promotion, authorization, content-identity
+and prune rules as top-level native input.
+
+Settings work across sequential, real process-parallel, queued, durable,
+generated/static routed-worker, retry and recovered execution within the existing
+execution matrix. They do not add an unsupported topology/mode combination.
+
+### Reconstructible tools
+
+`NativeAgentToolReference` accepts a class name and plain constructor arguments.
+The worker resolves it with Laravel's container and requires the result to be a
+Laravel AI `Agent`, `Tool` or `ProviderTool`. Closures, already-resolved services
+and live tool objects are rejected rather than serialized.
+
+For application-owned dynamic selection, register a stable factory identifier:
+
+```php
+// config/swarm.php
+'native_agent_settings' => [
+    'enabled' => env('SWARM_NATIVE_AGENT_SETTINGS_ENABLED', false),
+    'tool_factories' => [
+        'tenant-catalog' => App\Ai\TenantCatalogToolFactory::class,
+    ],
+],
+```
+
+The class implements `NativeAgentToolFactory::references(array $arguments)` and
+returns `NativeAgentToolReference` values. Swarm runs the factory once during
+admission, validates its output, and seals only the frozen class/argument
+descriptors. A worker never reruns the factory against changed tenant state.
+
+```php
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentToolFactoryReference;
+
+$recipient->withTools([
+    new NativeAgentToolFactoryReference('tenant-catalog', [
+        'tenantId' => $tenant->getKey(),
+    ]),
+]);
+```
+
+### Native conversations
+
+Laravel AI native conversations are separate from Swarm memory's
+`RunContext::withConversationId()`. Bind an application policy before enabling
+native conversation access:
+
+```php
+use BuiltByBerry\LaravelSwarm\Contracts\AuthorizesNativeAgentConversation;
+
+$this->app->bind(
+    AuthorizesNativeAgentConversation::class,
+    App\Ai\NativeConversationPolicy::class,
+);
+```
+
+The policy is checked at admission and immediately before every invocation. The
+Laravel AI conversation store must also implement `VerifiesConversationOwnership`
+for continuation. Recoverable process, queue, durable and routed execution requires
+`NativeAgentConversation::continue($id, $eloquentParticipant)`: the existing ID and
+Eloquent model reference can be reconstructed after a crash. Starting a new native
+conversation is request-local because its generated ID is not available before
+dispatch. A recipient cannot combine a conversation with one-shot `withMessages()`.
+
+### Reconstruction safety and isolation
+
+Authored concurrent swarms are re-resolved in each worker and select the same
+declared slot or unique routed node. This preserves configuration intentionally
+declared by `agents()`, including native `withTools()` and `withMessages()` state.
+When the v2 writer is enabled, ad-hoc concurrent builders must declare settings for
+every reconstructed slot/node. Swarm fails before concurrency dispatch with an
+actionable message rather than silently discarding live instance state.
+
+Per-run settings are applied to a clone of the reconstructed agent. Long-lived
+workers therefore do not retain one tenant's tools, history, provider or model for
+the next request. The sealed settings envelope is operational recovery state, not
+capture evidence: `swarm.capture.*` can remain off without replacing settings with
+redactions, and capture/history output does not expose the operational descriptor.
+
+Durable child swarms do not inherit these settings. Configure the child explicitly;
+child recovery and inheritance remain outside v0.28 and are planned separately.
+
 ## Operational storage and ownership
 
 Request-local sequential/coordinator input can retain Laravel AI file objects in
@@ -123,8 +255,9 @@ still controls what the final native request may contain.
 Each envelope binds its run, actor/tenant projection, recipient, expiry and
 content hash. Missing, revoked, expired, wrong-run, wrong-actor/tenant, unknown
 version and mutated-file reads fail before the agent call. `swarm:prune` removes
-expired envelopes and only the temporary files Swarm itself promoted; it never
-deletes application-owned stored files.
+expired envelopes and only the temporary files Swarm itself promoted, including
+files attached to one-shot message history; it never deletes application-owned
+stored files.
 
 `SWARM_NATIVE_INPUTS_RETENTION_SECONDS` is an execution deadline as well as a
 retention setting. Size it beyond the longest queue delay plus the longest
@@ -135,10 +268,13 @@ disabled, whether active envelopes still need to drain.
 
 ## Deployment and rollback
 
-1. Deploy the additive migration and v1 readers to every worker.
-2. Configure the protected database store/private disk and leave the feature off.
-3. Restart workers, then enable `SWARM_NATIVE_INPUTS_ENABLED=true`.
-4. Before rollback, disable new admission. Existing opaque references remain
+1. Deploy the additive migration and v1/v2 readers to every worker.
+2. Configure the protected database store/private disk and leave both writer flags off.
+3. Restart workers, then enable `SWARM_NATIVE_INPUTS_ENABLED=true` if needed.
+4. Enable `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true` only after every worker can
+   identify the v2 capability-marker jobs and sealed envelope.
+5. Before rollback, disable settings admission and then native-input admission.
+   Existing opaque references remain
    readable while the flag is off; confirm `swarm:health` reports zero active
    envelopes before removing readers or rolling back the migration.
 
