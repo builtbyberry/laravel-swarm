@@ -7,10 +7,6 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Support\Collection;
-use Laravel\Ai\Files\Base64Audio;
-use Laravel\Ai\Files\Base64Document;
-use Laravel\Ai\Files\Base64Image;
-use Laravel\Ai\Files\Base64Video;
 use Laravel\Ai\Files\File;
 use Laravel\Ai\Messages\AssistantMessage;
 use Laravel\Ai\Messages\Message;
@@ -113,7 +109,7 @@ final class NativeMessageCodec
                 if (! hash_equals($expected, hash('sha256', $content))) {
                     throw new SwarmException('Native withMessages attachment failed its content identity check.');
                 }
-                $file = self::materialize($file, $content);
+                $file = NativeAttachmentMaterializer::fromVerifiedContent($file, $content);
             }
             $attachments[] = $file;
         }
@@ -213,21 +209,5 @@ final class NativeMessageCodec
         }
 
         return $metadata;
-    }
-
-    protected static function materialize(File $file, string $content): File
-    {
-        $mime = $file->mimeType();
-        $base64 = base64_encode($content);
-        $materialized = match (true) {
-            str_contains($file::class, 'Image') => new Base64Image($base64, $mime),
-            str_contains($file::class, 'Document') => new Base64Document($base64, $mime),
-            str_contains($file::class, 'Audio') => new Base64Audio($base64, $mime),
-            str_contains($file::class, 'Video') => new Base64Video($base64, $mime),
-            default => $file,
-        };
-        $materialized->as($file->name());
-
-        return $materialized;
     }
 }

@@ -57,10 +57,15 @@ This is the most important thing to understand about Parallel swarms before you 
 
 **Why it exists:** Laravel Swarm runs parallel agents through Laravel's `ConcurrencyManager`, which dispatches work to separate PHP worker processes. The only information a worker receives is a serialized closure. PHP's serializer cannot capture arbitrary runtime state — objects instantiated outside the closure, references to service instances, or class properties that hold database connections, HTTP clients, or closures will either serialize incorrectly or fail to unserialize in the worker process.
 
-Laravel Swarm's `ParallelRunner` solves this by extracting only the agent's class name from each instance you return in `agents()`, then re-resolving a fresh instance from the container inside each worker. This means:
+Laravel Swarm's `ParallelRunner` re-resolves an authored swarm inside each worker
+and selects the same stable agent slot. If the parent selected a different agent
+class for that slot, that class is resolved directly from the container. Ad-hoc
+parallel builders always resolve each agent class directly. This means:
 
 1. Each agent **must be resolvable by class name** from the service container in the worker process.
-2. The agent **must be stateless** — any state you attach to the agent instance in `agents()` will be discarded; the worker creates a new instance.
+2. Runtime state must be declared by the authored swarm or through
+   `RunContext::withAgentConfiguration()`. Ad-hoc instance mutations are not a
+   transport and are rejected while native-settings admission is enabled.
 3. Constructor dependencies **must be bindable through the container** (interfaces need normal `AppServiceProvider` bindings; concrete classes work by default).
 
 **What does not work:**

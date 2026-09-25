@@ -44,6 +44,7 @@ use BuiltByBerry\LaravelSwarm\Support\AdHocParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\NativeInputManifest;
 use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
@@ -579,12 +580,35 @@ class SwarmRunner
 
     protected function assertNativeRecipientsExist(Swarm $swarm, Topology $topology, RunContext $context): void
     {
+        if ($topology === Topology::Hierarchical) {
+            $coordinator = $swarm->agents()[0] ?? null;
+            $recipient = $context->nativeRecipient('generated:coordinator');
+            if ($coordinator instanceof Agent && $recipient !== null) {
+                NativeAgentInvoker::assertCompatible($coordinator, $recipient);
+            }
+
+            return;
+        }
+
+        if ($topology === Topology::StaticHierarchical) {
+            $this->staticHierarchical->assertNativeSettingsCompatible($swarm, $context);
+
+            return;
+        }
+
         if (! in_array($topology, [Topology::Sequential, Topology::Parallel], true)) {
             return;
         }
 
         $slotCount = min(count($swarm->agents()), $this->resolver->resolveMaxAgentExecutions($swarm));
         $context->assertNativeSlotRecipients($topology->value.':', $slotCount);
+
+        foreach (array_slice($swarm->agents(), 0, $slotCount) as $index => $agent) {
+            $recipient = $context->nativeRecipient($topology->value.":{$index}");
+            if ($recipient !== null) {
+                NativeAgentInvoker::assertCompatible($agent, $recipient);
+            }
+        }
     }
 
     /**
@@ -836,8 +860,13 @@ class SwarmRunner
         $capturedResponse = $this->limits->response($this->capture->response($response));
 
         try {
-            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
-            $this->nativeInputs->commitConsumedMessages($context, $state->nativeSettingsAttempt);
+            $this->nativeInputs->commitTerminal(
+                $context,
+                $state->nativeSettingsAttempt,
+                function () use ($context, $capturedResponse, $contextTtl, $state): void {
+                    $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
+                },
+            );
         } catch (LostSwarmLeaseException) {
             return null;
         }

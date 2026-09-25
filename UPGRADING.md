@@ -30,16 +30,17 @@ strict decryption and cannot be reconstructed with the wrong key.
 ### Native per-run agent settings
 
 Deploy this release's v2 readers and restart every queue, durable and concurrency
-worker before setting `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true`. This flag is
-independent from `SWARM_NATIVE_INPUTS_ENABLED`: v2 settings require the native-input
-store, but disabling the v2 writer does not stop already-admitted v2 references
-from draining. Roll out in this order:
+worker before setting `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true`. The v2 flag is a
+layered writer: `SWARM_NATIVE_INPUTS_ENABLED=true` is required first because v2
+settings use the base sealed native-input envelope. Disabling only the v2 writer
+does not stop already-admitted v2 references from draining. Roll out in this order:
 
-1. Run the P1 migration and deploy v1/v2-capable readers with both writer flags off.
-2. Enable `SWARM_NATIVE_INPUTS_ENABLED=true` if native message input is required.
+1. Run the v0.28 native-input migration and deploy v1/v2-capable readers with both writer flags off.
+2. Enable `SWARM_NATIVE_INPUTS_ENABLED=true` before admitting native input or settings.
 3. After every worker is on v0.28, enable `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true`.
-4. Before rollback, disable the settings writer first and drain active native-input
-   envelopes before removing v2 readers.
+4. Before rollback, disable the settings writer, restart long-lived workers, drain
+   active v2 envelopes, wait through retention, run `swarm:prune`, and confirm
+   `swarm:health` reports zero total v2 envelopes before removing v2 readers.
 
 `RunContext::withAgentConfiguration()` accepts topology-stable
 `NativeInputRecipient` values. Laravel AI `withTools()` configuration persists for
@@ -55,6 +56,15 @@ Do not pass closures, resolved container services or runtime tool objects. Use
 `NativeAgentToolFactoryReference`. Factory output is expanded once at admission
 and the resulting class/argument descriptors are sealed.
 
+An explicit empty override remains meaningful: `withTools([])` disables declared
+agent tools and `withMessages([])` applies empty ad-hoc history. Recoverable
+non-empty messages require `swarm.history.driver=database`; otherwise admission
+fails because terminal history and one-shot consumption cannot commit atomically.
+Custom `NativeInputStore` implementations that support these messages must also
+implement `ConsumesNativeInputMessages`, including the same-connection transaction
+callback. Legacy/custom readers may omit `format_version` from `find()` while
+upgrading; v0.28 derives it from the sealed payload.
+
 Authored concurrent swarms reconstruct the swarm definition and select the same
 stable slot/node. With the settings writer enabled, ad-hoc concurrent builders must
 declare settings for every reconstructed recipient; otherwise dispatch fails with
@@ -66,7 +76,14 @@ Native conversation continuation is denied by default. Bind
 `AuthorizesNativeAgentConversation`; recoverable execution also requires an existing
 conversation ID, an Eloquent participant and a Laravel AI conversation store that
 verifies ownership. New conversations remain request-local. A recipient cannot
-combine `withMessages()` and a native conversation.
+combine `withMessages()` and a native conversation, and Laravel AI
+`Conversational` agents cannot receive `withMessages()` at all.
+
+Request-local message attachments now enforce the same authorization and size/count
+limits as background work. Recoverable message attachments with headers or provider
+options fail before dispatch; move those files to top-level native input when their
+invocation profile must be frozen. The complete encoded operational envelope is
+also bounded by `swarm.limits.max_input_bytes` before persistence or file promotion.
 
 These settings do not propagate into durable child swarms. Child recovery and
 inheritance remain v0.29 work; configure a child explicitly rather than depending

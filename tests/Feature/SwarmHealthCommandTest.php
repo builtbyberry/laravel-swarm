@@ -160,6 +160,40 @@ test('configured pre-enable native-input rollout fails health when migrations ar
         ->toContain('missing required columns');
 });
 
+test('native-input health reports v2 writer and drain state independently', function (): void {
+    config()->set('swarm.native_inputs.enabled', true);
+    config()->set('swarm.native_agent_settings.enabled', false);
+    config()->set('swarm.native_inputs.disk', 'local');
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+
+    foreach (['active', 'revoked'] as $index => $state) {
+        DB::table('swarm_native_inputs')->insert([
+            'id' => 'health-v2-'.$index,
+            'run_id' => 'health-v2-run-'.$index,
+            'format_version' => 2,
+            'state' => $state,
+            'payload' => 'sealed-placeholder',
+            'payload_hash' => hash('sha256', 'sealed-placeholder'),
+            'expires_at' => now()->addHour(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    Artisan::call('swarm:health', ['--json' => true]);
+    $native = collect(json_decode(Artisan::output(), true)['checks'])->firstWhere('component', 'Native inputs');
+
+    expect($native['details'])->toContain('v2 writer disabled')
+        ->and($native['details'])->toContain('1 active and 2 total v2 envelope(s) remain')
+        ->and($native['details'])->toContain('prune to zero before removing v2 readers');
+
+    config()->set('swarm.native_inputs.enabled', false);
+    config()->set('swarm.native_agent_settings.enabled', true);
+    expect(Artisan::call('swarm:health'))->toBe(1);
+    expect(Artisan::output())->toContain('native_agent_settings.enabled requires swarm.native_inputs.enabled');
+});
+
 test('swarm health identifies failing cache component', function (): void {
     config()->set('swarm.context.store', 'swarm-health-failing');
     app()->forgetInstance(ContextStore::class);

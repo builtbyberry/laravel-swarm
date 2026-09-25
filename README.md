@@ -55,9 +55,10 @@ For background execution, streaming, and durable workflows, see [Choosing an Exe
 
 Laravel AI `UserMessage` or message-bearing `AgentInput` input and explicitly
 routed image/document/audio/video attachments are available behind the default-off
-v0.28 rollout controls. A separate v2 flag enables reconstructible per-run native
-tools, one-shot message history, conversations, provider, model and timeout across
-worker reconstruction. Approval decisions remain outside this input surface. See
+v0.28 rollout controls. A layered v2 flag enables reconstructible per-run native
+tools, one-shot message history and conversations across worker reconstruction;
+provider, model and timeout remain part of the base recipient envelope. Approval
+decisions remain outside this input surface. See
 [Native messages and attachments](docs/native-inputs.md).
 
 ## Requirements

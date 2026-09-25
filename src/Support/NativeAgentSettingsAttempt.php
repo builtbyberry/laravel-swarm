@@ -4,12 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
-/**
- * Attempt-local one-shot state. It is deliberately never part of RunContext,
- * capture, history, queue payloads, or the sealed operational envelope.
- *
- * @internal
- */
+/** @internal Attempt-local one-shot consumption staged until its owning checkpoint commits. */
 final class NativeAgentSettingsAttempt
 {
     /** @var array<string, true> */

@@ -141,6 +141,10 @@ class DurableJobDispatcher
 
         $row = ($this->nativeInputs ?? Container::getInstance()->make(NativeInputStore::class))->find($reference);
 
-        return is_array($row) ? (int) ($row['format_version'] ?? 0) : NativeInputManifest::VERSION;
+        if (! is_array($row)) {
+            return NativeInputManifest::VERSION;
+        }
+
+        return (int) ($row['format_version'] ?? ($row['payload']['version'] ?? NativeInputManifest::VERSION));
     }
 }

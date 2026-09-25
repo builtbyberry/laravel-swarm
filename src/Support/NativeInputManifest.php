@@ -7,15 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use Illuminate\Contracts\Support\Arrayable;
 use Laravel\Ai\Enums\Lab;
-use Laravel\Ai\Files\Audio;
-use Laravel\Ai\Files\Base64Audio;
-use Laravel\Ai\Files\Base64Document;
-use Laravel\Ai\Files\Base64Image;
-use Laravel\Ai\Files\Base64Video;
-use Laravel\Ai\Files\Document;
 use Laravel\Ai\Files\File;
-use Laravel\Ai\Files\Image;
-use Laravel\Ai\Files\Video;
 use Laravel\Ai\Messages\UserMessage;
 use Laravel\SerializableClosure\SerializableClosure;
 use ReflectionProperty;
@@ -79,7 +71,7 @@ final class NativeInputManifest
                     throw new SwarmException("Native attachment [{$index}] failed its content identity check.");
                 }
 
-                $attachment = $this->materializeVerifiedAttachment($attachment, $content);
+                $attachment = NativeAttachmentMaterializer::fromVerifiedContent($attachment, $content);
             }
 
             $attachment = $this->applyInvocationOptions($attachment, $index, $selection);
@@ -111,7 +103,8 @@ final class NativeInputManifest
             messages: $messages,
             conversation: $selection->conversation,
             configurationId: $selection->hasNativeSettings() ? $configurationId : null,
-            clearMessages: $selection->messages !== [] && $consumed,
+            toolsConfigured: $selection->toolsConfigured,
+            messagesConfigured: $selection->messagesConfigured && (! $consumed || $selection->messages === []),
         );
     }
 
@@ -285,24 +278,15 @@ final class NativeInputManifest
         }
     }
 
-    protected function materializeVerifiedAttachment(File $attachment, string $content): File
+    public static function assertMessageAttachmentIsReconstructible(File $attachment): void
     {
-        $mime = $attachment->mimeType();
-        $materialized = match (true) {
-            $attachment instanceof Image => new Base64Image(base64_encode($content), $mime),
-            $attachment instanceof Document => new Base64Document(base64_encode($content), $mime),
-            $attachment instanceof Audio => new Base64Audio(base64_encode($content), $mime),
-            $attachment instanceof Video => new Base64Video(base64_encode($content), $mime),
-            default => $attachment,
-        };
+        $headers = self::rawSetting($attachment, 'headers');
+        $providerOptions = self::rawSetting($attachment, 'providerOptions');
 
-        if ($materialized === $attachment) {
-            return $attachment;
+        if ($headers instanceof SerializableClosure || $providerOptions instanceof SerializableClosure
+            || $headers !== [] || $providerOptions !== []) {
+            throw new SwarmException('Recoverable withMessages attachments cannot carry headers or provider options. Use top-level native input attachments for explicitly frozen invocation profiles, or remove those options before dispatch.');
         }
-
-        $materialized->as($attachment->name());
-
-        return $materialized;
     }
 
     protected function applyInvocationOptions(File $attachment, int|false $index, NativeInputRecipient $selection): File

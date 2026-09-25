@@ -1006,8 +1006,14 @@ class HierarchicalRunner
                         $branchSwarmClass = $state->swarm::class;
                         $branchContextPayload = $state->context->toQueuePayload();
                         $nativeRecipient = ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branchNodeId;
+                        $nativeSelection = $state->context->nativeRecipient($nativeRecipient);
+                        if ($nativeSelection !== null) {
+                            NativeAgentInvoker::assertCompatible($worker, $nativeSelection);
+                        }
                         $adHoc = $state->swarm instanceof AdHocSwarm;
-                        if ($adHoc && ! $state->context->hasNativeSettingsFor($nativeRecipient)) {
+                        if ($adHoc
+                            && (bool) $this->config->get('swarm.native_agent_settings.enabled', false)
+                            && ! $state->context->hasNativeSettingsFor($nativeRecipient)) {
                             throw new SwarmException('Ad-hoc hierarchical parallel workers are reconstructed in worker processes, so live instance state cannot be preserved. Declare per-run native settings for every routed node with RunContext::withAgentConfiguration(), or use a container-resolvable authored swarm.');
                         }
                         $attemptIds = $state->nativeSettingsAttempt->ids();

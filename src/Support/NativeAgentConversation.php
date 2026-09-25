@@ -57,10 +57,15 @@ final class NativeAgentConversation
             throw new SwarmException('Recoverable native conversations require an Eloquent participant. Use an existing conversation ID and an Eloquent participant, or keep the run request-local.');
         }
 
+        $key = $participant->getKey();
+        if (! is_string($key) && ! is_int($key)) {
+            throw new SwarmException('Recoverable native conversations require a persisted Eloquent participant with a primary key. Save the participant before dispatch.');
+        }
+
         return [
             'conversation_id' => $this->conversationId,
             'participant_class' => $participant::class,
-            'participant_key' => $participant->getKey(),
+            'participant_key' => $key,
         ];
     }
 

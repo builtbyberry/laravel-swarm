@@ -134,8 +134,9 @@ return [
 
     /*
      * Per-run Laravel AI tools, messages, and conversation bindings use the
-     * sealed native-input envelope but have an independent writer flag so a
-     * mixed fleet can keep writers off until every worker understands v2.
+     * sealed native-input envelope and require its base writer to be enabled.
+     * The additional v2 writer flag lets a mixed fleet keep settings admission
+     * off until every worker understands v2.
      */
     'native_agent_settings' => [
         // Admit new v2 settings envelopes. Readers continue draining existing v2 references when false.

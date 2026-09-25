@@ -8,8 +8,6 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use Illuminate\Container\Container;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
-use Laravel\Ai\Contracts\Tool;
-use Laravel\Ai\Providers\Tools\ProviderTool;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use ReflectionClass;
@@ -61,29 +59,29 @@ final class NativeAgentInvoker
             return $agent;
         }
 
-        if (! (new ReflectionClass($agent))->isCloneable()) {
-            throw new SwarmException("Native agent configuration [{$invocation->configurationId}] requires a cloneable agent so per-run state cannot leak across requests.");
-        }
+        self::assertConfigurationCompatible(
+            $agent,
+            $invocation->configurationId,
+            $invocation->toolsConfigured,
+            $invocation->messagesConfigured,
+            $invocation->conversation,
+        );
         $agent = clone $agent;
 
-        if ($invocation->tools !== []) {
+        if ($invocation->toolsConfigured) {
             if (! method_exists($agent, 'withTools')) {
                 throw new SwarmException("Native agent configuration [{$invocation->configurationId}] targets an agent without Laravel AI's withTools API.");
             }
 
-            $tools = array_map(static function (NativeAgentToolReference $reference): Agent|Tool|ProviderTool {
-                $tool = Container::getInstance()->makeWith($reference->class, $reference->arguments);
-                if (! $tool instanceof Agent && ! $tool instanceof Tool && ! $tool instanceof ProviderTool) {
-                    throw new SwarmException("Native agent tool [{$reference->class}] must resolve to a Laravel AI Agent, Tool, or ProviderTool.");
-                }
-
-                return $tool;
-            }, $invocation->tools);
+            $tools = array_map(
+                static fn (NativeAgentToolReference $reference): mixed => NativeAgentToolResolver::resolve($reference, Container::getInstance()),
+                $invocation->tools,
+            );
 
             $agent->withTools($tools);
         }
 
-        if ($invocation->messages !== [] || $invocation->clearMessages) {
+        if ($invocation->messagesConfigured) {
             if (! method_exists($agent, 'withMessages')) {
                 throw new SwarmException("Native agent configuration [{$invocation->configurationId}] targets an agent without Laravel AI's withMessages API.");
             }
@@ -107,5 +105,46 @@ final class NativeAgentInvoker
         }
 
         return $agent;
+    }
+
+    public static function assertCompatible(Agent $agent, NativeInputRecipient $recipient): void
+    {
+        if (! $recipient->hasNativeSettings()) {
+            return;
+        }
+
+        self::assertConfigurationCompatible(
+            $agent,
+            $recipient->settingsId(),
+            $recipient->toolsConfigured,
+            $recipient->messagesConfigured,
+            $recipient->conversation,
+        );
+    }
+
+    protected static function assertConfigurationCompatible(
+        Agent $agent,
+        string $configurationId,
+        bool $toolsConfigured,
+        bool $messagesConfigured,
+        ?NativeAgentConversation $conversation,
+    ): void {
+        if (! (new ReflectionClass($agent))->isCloneable()) {
+            throw new SwarmException("Native agent configuration [{$configurationId}] requires a cloneable agent so per-run state cannot leak across requests.");
+        }
+        if ($toolsConfigured && ! method_exists($agent, 'withTools')) {
+            throw new SwarmException("Native agent configuration [{$configurationId}] targets an agent without Laravel AI's withTools API.");
+        }
+        if ($messagesConfigured && $agent instanceof Conversational) {
+            throw new SwarmException("Native agent configuration [{$configurationId}] cannot apply withMessages to a Laravel AI Conversational agent. Use NativeAgentConversation instead.");
+        }
+        if ($messagesConfigured && ! method_exists($agent, 'withMessages')) {
+            throw new SwarmException("Native agent configuration [{$configurationId}] targets an agent without Laravel AI's withMessages API.");
+        }
+        if ($conversation !== null && (! $agent instanceof Conversational
+            || ! method_exists($agent, 'forParticipant')
+            || ! method_exists($agent, 'continue'))) {
+            throw new SwarmException("Native agent configuration [{$configurationId}] targets an agent that does not expose Laravel AI's native conversation APIs.");
+        }
     }
 }

@@ -210,11 +210,38 @@ class RunContext implements ArrayAccess
             $attachments[] = $attachment;
         }
 
+        $existing = $this->nativeInput;
+        if ($existing !== null && $recipients === [] && $existing->recipients !== []) {
+            throw new SwarmException('Combining native agent configuration with implicit attachment routing is ambiguous. Pass explicit NativeInputRecipient values to withAgentInput() so attachment recipients remain intentional.');
+        }
+
+        $existingByRecipient = [];
+        foreach ($existing->recipients ?? [] as $recipient) {
+            $existingByRecipient[$recipient->recipient] = $recipient;
+        }
+
+        $mergedRecipients = [];
+        $seen = [];
+        foreach ($recipients as $recipient) {
+            $previous = $existingByRecipient[$recipient->recipient] ?? null;
+            $mergedRecipients[] = $previous instanceof NativeInputRecipient
+                ? $previous
+                    ->withInputRouting($recipient->textSource, $recipient->attachments)
+                    ->withConfigurationFrom($recipient)
+                : $recipient;
+            $seen[$recipient->recipient] = true;
+        }
+        foreach ($existingByRecipient as $identity => $recipient) {
+            if (! isset($seen[$identity]) && $recipient->hasExplicitConfiguration()) {
+                $mergedRecipients[] = $recipient->withInputRouting($recipient->textSource, []);
+            }
+        }
+
         $this->input = $input->content;
         $this->nativeInput = new NativeInputManifest(
             text: $input->content,
             attachments: $attachments,
-            recipients: array_values($recipients),
+            recipients: $mergedRecipients,
         );
 
         return $this;
@@ -235,13 +262,37 @@ class RunContext implements ArrayAccess
             if (! $recipient instanceof NativeInputRecipient) {
                 throw new SwarmException('Native agent configuration recipients must be NativeInputRecipient instances.');
             }
+            if (! $recipient->hasExplicitConfiguration()) {
+                throw new SwarmException("Native agent configuration recipient [{$recipient->recipient}] must declare tools, messages, a conversation, provider, model, or timeout.");
+            }
         }
 
         $existing = $this->nativeInput;
+        if ($existing !== null && $existing->attachments !== [] && $existing->recipients === []) {
+            throw new SwarmException('Combining native agent configuration with implicit attachment routing is ambiguous. Declare explicit recipients in withAgentInput() before applying per-run settings.');
+        }
+
+        $configurationByRecipient = [];
+        foreach ($recipients as $recipient) {
+            $configurationByRecipient[$recipient->recipient] = $recipient;
+        }
+
+        $mergedRecipients = [];
+        foreach ($existing->recipients ?? [] as $recipient) {
+            $configuration = $configurationByRecipient[$recipient->recipient] ?? null;
+            $mergedRecipients[] = $configuration instanceof NativeInputRecipient
+                ? $recipient->withConfigurationFrom($configuration)
+                : $recipient;
+            unset($configurationByRecipient[$recipient->recipient]);
+        }
+        foreach ($configurationByRecipient as $recipient) {
+            $mergedRecipients[] = $recipient->withInputRouting($recipient->textSource, []);
+        }
+
         $this->nativeInput = new NativeInputManifest(
             text: $existing === null ? $this->input : $existing->text,
             attachments: $existing === null ? [] : $existing->attachments,
-            recipients: array_values($recipients),
+            recipients: $mergedRecipients,
             attachmentHashes: $existing === null ? [] : $existing->attachmentHashes,
             ownedAttachmentIndexes: $existing === null ? [] : $existing->ownedAttachmentIndexes,
             attachmentInvocationOptions: $existing === null ? [] : $existing->attachmentInvocationOptions,
@@ -279,12 +330,27 @@ class RunContext implements ArrayAccess
         }
 
         foreach ($this->nativeInput->recipients as $selection) {
-            if ($selection->recipient === $recipient && $selection->hasNativeSettings()) {
+            if ($selection->recipient === $recipient && $selection->hasExplicitConfiguration()) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    public function nativeRecipient(string $recipient): ?NativeInputRecipient
+    {
+        if ($this->nativeInput === null && $this->nativeInputReference !== null) {
+            $this->nativePrompt('__settings_validation__', $this->input);
+        }
+
+        foreach ($this->nativeInput->recipients ?? [] as $selection) {
+            if ($selection->recipient === $recipient) {
+                return $selection;
+            }
+        }
+
+        return null;
     }
 
     public function setNativeInputReference(?string $reference): self

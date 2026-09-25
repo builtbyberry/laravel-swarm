@@ -126,13 +126,19 @@ The behavior is deliberately different for the two native mutators:
 - Messages are one-shot history. They are staged for one execution attempt and
   consumed only when that recipient's owning step or terminal completion commits.
   A provider failure, lease loss or rolled-back checkpoint receives them again.
-  Later successful invocations explicitly clear them so an authored agent's own
-  runtime state cannot replay the history.
+  Later successful invocations omit the per-run message override. Calling
+  `withMessages([])` is distinct: the explicit empty override is preserved and
+  clears an authored agent's declared messages for that invocation.
+- Calling `withTools([])` is likewise an explicit persistent override and disables
+  an authored agent's declared tools for that recipient.
 
 Full Laravel AI `UserMessage`, `AssistantMessage` and `ToolResultMessage` fields are
 preserved, including tool calls/results and provider replay blocks. User-message
-attachments use the same recoverable promotion, authorization, content-identity
-and prune rules as top-level native input.
+attachments use the same authorization, byte-limit, content-identity and prune
+rules as top-level native input. Recoverable message attachments cannot carry
+headers or provider options because Laravel AI's message descriptor does not retain
+those profiles; use a top-level attachment when an invocation profile must be
+frozen across workers.
 
 Settings work across sequential, real process-parallel, queued, durable,
 generated/static routed-worker, retry and recovered execution within the existing
@@ -191,7 +197,8 @@ The policy is checked at admission and immediately before every invocation. The
 Laravel AI conversation store must also implement `VerifiesConversationOwnership`
 for continuation. Recoverable process, queue, durable and routed execution requires
 `NativeAgentConversation::continue($id, $eloquentParticipant)`: the existing ID and
-Eloquent model reference can be reconstructed after a crash. Starting a new native
+saved Eloquent model reference can be reconstructed after a crash. Unsaved models
+fail during admission. Starting a new native
 conversation is request-local because its generated ID is not available before
 dispatch. A recipient cannot combine a conversation with one-shot `withMessages()`.
 
@@ -209,6 +216,9 @@ workers therefore do not retain one tenant's tools, history, provider or model f
 the next request. The sealed settings envelope is operational recovery state, not
 capture evidence: `swarm.capture.*` can remain off without replacing settings with
 redactions, and capture/history output does not expose the operational descriptor.
+Audit events expose only structural facts such as whether an override was present
+and its item count; they never include tool arguments, messages, conversation IDs,
+or the sealed reference.
 
 Durable child swarms do not inherit these settings. Configure the child explicitly;
 child recovery and inheritance remain outside v0.28 and are planned separately.
@@ -233,6 +243,14 @@ SWARM_ENCRYPT_AT_REST=true
 SWARM_NATIVE_INPUTS_DISK=private
 ```
 
+Recoverable one-shot `withMessages()` additionally requires the database history
+driver. Terminal history and message consumption then commit in the same database
+transaction, so a failed or rolled-back completion leaves the history available
+for retry. A custom native-input store used for recoverable messages must implement
+`ConsumesNativeInputMessages`, including its transaction boundary. Custom store
+rows may omit the denormalized `format_version`; readers fall back to the version
+inside the sealed payload.
+
 The named disk is application-owned and must be private. Local and base64
 image/document/audio/video attachments are copied there before dispatch. Existing
 stored files must already use that disk. Provider file references remain bound to
@@ -248,9 +266,14 @@ $this->app->bind(AuthorizesNativeInputAttachment::class, App\Ai\NativeFilePolicy
 ```
 
 The policy is re-evaluated in every worker before the attachment is released to
-an agent. Remote URLs are request-local; recoverable dispatch refuses them rather
-than adding an unbounded server-side fetch. Provider support for each modality
-still controls what the final native request may contain.
+an agent, including attachments embedded in one-shot messages. Remote URLs are
+request-local; recoverable dispatch refuses them rather than adding an unbounded
+server-side fetch. Provider support for each modality still controls what the
+final native request may contain.
+
+The existing `swarm.limits.max_input_bytes` limit applies to the complete encoded
+operational envelope before any database row or promoted file is written. This is
+in addition to the per-attachment and attachment-count limits.
 
 Each envelope binds its run, actor/tenant projection, recipient, expiry and
 content hash. Missing, revoked, expired, wrong-run, wrong-actor/tenant, unknown
@@ -263,8 +286,11 @@ stored files.
 retention setting. Size it beyond the longest queue delay plus the longest
 durable workflow/recovery window. Schedule `swarm:prune`; rows whose owned-file
 cleanup fails are retained for a later retry instead of losing the retry locator.
-`swarm:health` reports whether native readers are ready and, while admission is
-disabled, whether active envelopes still need to drain.
+`swarm:health` reports whether native readers are ready, rejects the invalid state
+where the settings writer is on while the base native-input writer is off, and
+reports active and retained v2 envelope counts. Before removing v2 readers, disable
+settings admission, let active work drain, run `swarm:prune` after the retention
+window, and require the total v2 count to reach zero.
 
 ## Deployment and rollback
 
@@ -274,9 +300,10 @@ disabled, whether active envelopes still need to drain.
 4. Enable `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true` only after every worker can
    identify the v2 capability-marker jobs and sealed envelope.
 5. Before rollback, disable settings admission and then native-input admission.
-   Existing opaque references remain
-   readable while the flag is off; confirm `swarm:health` reports zero active
-   envelopes before removing readers or rolling back the migration.
+   Existing opaque references remain readable while the flags are off. Restart
+   workers, let active work drain, allow the retention window to pass, run
+   `swarm:prune`, and confirm `swarm:health` reports zero active and zero retained
+   v2 envelopes before removing v2 readers or rolling back the migration.
 
 Recoverable native admission must begin outside an open database transaction.
 Swarm stages the sealed cleanup locator before promoting file bytes, then activates

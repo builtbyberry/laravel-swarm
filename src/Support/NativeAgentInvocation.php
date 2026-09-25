@@ -24,6 +24,7 @@ final readonly class NativeAgentInvocation
         public array $messages = [],
         public ?NativeAgentConversation $conversation = null,
         public ?string $configurationId = null,
-        public bool $clearMessages = false,
+        public bool $toolsConfigured = false,
+        public bool $messagesConfigured = false,
     ) {}
 }

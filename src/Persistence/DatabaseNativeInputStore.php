@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Contracts\ConsumesNativeInputMessages;
 use BuiltByBerry\LaravelSwarm\Contracts\NativeInputStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use Closure;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use JsonException;
@@ -149,6 +150,17 @@ final class DatabaseNativeInputStore implements ConsumesNativeInputMessages, Nat
         if ($updated !== 1) {
             throw new SwarmException("Native input envelope [{$id}] changed while consuming one-shot message configuration.");
         }
+    }
+
+    /**
+     * @template TCallbackReturnType
+     *
+     * @param  Closure(): TCallbackReturnType  $callback
+     * @return TCallbackReturnType
+     */
+    public function transaction(Closure $callback): mixed
+    {
+        return $this->connection->transaction($callback);
     }
 
     protected function transition(string $id, string $runId, string $state): void

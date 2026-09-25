@@ -327,6 +327,7 @@ test('queued multi-worker reconstruction preserves and transactionally consumes 
     config()->set('swarm.native_inputs.enabled', true);
     config()->set('swarm.native_agent_settings.enabled', true);
     config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.history.driver', 'database');
     config()->set('swarm.native_inputs.disk', 'local');
     app()->forgetInstance(NativeInputManager::class);
 

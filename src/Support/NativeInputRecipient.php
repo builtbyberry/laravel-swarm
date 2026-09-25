@@ -29,6 +29,8 @@ final readonly class NativeInputRecipient
         public ?NativeAgentConversation $conversation = null,
         public ?string $configurationId = null,
         protected array $messageAttachmentMetadata = [],
+        public bool $toolsConfigured = false,
+        public bool $messagesConfigured = false,
     ) {
         if (! in_array($textSource, ['topology', 'original'], true)) {
             throw new SwarmException('Native input textSource must be [topology] or [original].');
@@ -77,13 +79,13 @@ final readonly class NativeInputRecipient
     /** @param Lab|array<string, mixed>|string|null $provider */
     public function withInvocation(Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): self
     {
-        return new self($this->recipient, $this->textSource, $this->attachments, $provider, $model, $timeout, $this->tools, $this->messages, $this->conversation, $this->configurationId, $this->messageAttachmentMetadata);
+        return new self($this->recipient, $this->textSource, $this->attachments, $provider, $model, $timeout, $this->tools, $this->messages, $this->conversation, $this->configurationId, $this->messageAttachmentMetadata, $this->toolsConfigured, $this->messagesConfigured);
     }
 
     /** @param list<NativeAgentToolReference|NativeAgentToolFactoryReference> $tools */
     public function withTools(array $tools): self
     {
-        return new self($this->recipient, $this->textSource, $this->attachments, $this->provider, $this->model, $this->timeout, array_values($tools), $this->messages, $this->conversation, $this->configurationId, $this->messageAttachmentMetadata);
+        return new self($this->recipient, $this->textSource, $this->attachments, $this->provider, $this->model, $this->timeout, array_values($tools), $this->messages, $this->conversation, $this->configurationId, $this->messageAttachmentMetadata, true, $this->messagesConfigured);
     }
 
     /** @param iterable<int, mixed> $messages */
@@ -94,12 +96,12 @@ final readonly class NativeInputRecipient
             $normalized[] = Message::tryFrom($message);
         }
 
-        return new self($this->recipient, $this->textSource, $this->attachments, $this->provider, $this->model, $this->timeout, $this->tools, $normalized, $this->conversation, $this->configurationId);
+        return new self($this->recipient, $this->textSource, $this->attachments, $this->provider, $this->model, $this->timeout, $this->tools, $normalized, $this->conversation, $this->configurationId, [], $this->toolsConfigured, true);
     }
 
     public function withConversation(NativeAgentConversation $conversation): self
     {
-        return new self($this->recipient, $this->textSource, $this->attachments, $this->provider, $this->model, $this->timeout, $this->tools, $this->messages, $conversation, $this->configurationId, $this->messageAttachmentMetadata);
+        return new self($this->recipient, $this->textSource, $this->attachments, $this->provider, $this->model, $this->timeout, $this->tools, $this->messages, $conversation, $this->configurationId, $this->messageAttachmentMetadata, $this->toolsConfigured, $this->messagesConfigured);
     }
 
     /**
@@ -127,12 +129,81 @@ final readonly class NativeInputRecipient
             $this->conversation,
             $configurationId ?? $this->settingsId(),
             $messageAttachmentMetadata ?? $this->messageAttachmentMetadata,
+            $this->toolsConfigured,
+            $this->messagesConfigured,
         );
     }
 
     public function hasNativeSettings(): bool
     {
-        return $this->tools !== [] || $this->messages !== [] || $this->conversation !== null;
+        return $this->toolsConfigured || $this->messagesConfigured || $this->conversation !== null;
+    }
+
+    public function hasExplicitConfiguration(): bool
+    {
+        return $this->hasNativeSettings()
+            || $this->provider !== null
+            || $this->model !== null
+            || $this->timeout !== null;
+    }
+
+    /** @param list<int>|null $attachments */
+    public function withInputRouting(string $textSource, ?array $attachments): self
+    {
+        return new self(
+            $this->recipient,
+            $textSource,
+            $attachments,
+            $this->provider,
+            $this->model,
+            $this->timeout,
+            $this->tools,
+            $this->messages,
+            $this->conversation,
+            $this->configurationId,
+            $this->messageAttachmentMetadata,
+            $this->toolsConfigured,
+            $this->messagesConfigured,
+        );
+    }
+
+    public function withConfigurationFrom(self $configuration): self
+    {
+        $tools = $configuration->toolsConfigured ? $configuration->tools : $this->tools;
+        $toolsConfigured = $configuration->toolsConfigured || $this->toolsConfigured;
+
+        if ($configuration->messagesConfigured) {
+            $messages = $configuration->messages;
+            $messageAttachmentMetadata = $configuration->messageAttachmentMetadata;
+            $messagesConfigured = true;
+            $conversation = $configuration->conversation;
+        } elseif ($configuration->conversation !== null) {
+            $messages = [];
+            $messageAttachmentMetadata = [];
+            $messagesConfigured = false;
+            $conversation = $configuration->conversation;
+        } else {
+            $messages = $this->messages;
+            $messageAttachmentMetadata = $this->messageAttachmentMetadata;
+            $messagesConfigured = $this->messagesConfigured;
+            $conversation = $this->conversation;
+        }
+
+        return new self(
+            $this->recipient,
+            $this->textSource,
+            $this->attachments,
+            $configuration->provider ?? $this->provider,
+            $configuration->model ?? $this->model,
+            $configuration->timeout ?? $this->timeout,
+            $tools,
+            $messages,
+            $conversation,
+            $configuration->hasNativeSettings() ? $configuration->configurationId : $this->configurationId,
+            $messageAttachmentMetadata,
+            $toolsConfigured,
+            $messagesConfigured,
+        );
     }
 
     public function settingsId(): string
@@ -201,6 +272,8 @@ final readonly class NativeInputRecipient
             'model' => $this->model,
             'timeout' => $this->timeout,
             'configuration_id' => $this->hasNativeSettings() ? $this->settingsId() : null,
+            'tools_configured' => $this->toolsConfigured,
+            'messages_configured' => $this->messagesConfigured,
             'tools' => array_map(static function (NativeAgentToolReference|NativeAgentToolFactoryReference $tool): array {
                 if ($tool instanceof NativeAgentToolFactoryReference) {
                     throw new SwarmException('Native agent tool factories must be expanded before the operational envelope is sealed.');
@@ -257,8 +330,11 @@ final readonly class NativeInputRecipient
         $messages = $payload['messages'] ?? [];
         $conversation = $payload['conversation'] ?? null;
         $configurationId = $payload['configuration_id'] ?? null;
+        $toolsConfigured = $payload['tools_configured'] ?? ($tools !== []);
+        $messagesConfigured = $payload['messages_configured'] ?? ($messages !== []);
         if (! is_array($tools) || ! is_array($messages) || ($conversation !== null && ! is_array($conversation))
-            || ($configurationId !== null && ! is_string($configurationId))) {
+            || ($configurationId !== null && ! is_string($configurationId))
+            || ! is_bool($toolsConfigured) || ! is_bool($messagesConfigured)) {
             throw new SwarmException('Native input recipient descriptor contains invalid native agent settings.');
         }
 
@@ -291,6 +367,8 @@ final readonly class NativeInputRecipient
                     : [],
                 array_values($messages),
             ),
+            toolsConfigured: $toolsConfigured,
+            messagesConfigured: $messagesConfigured,
         );
     }
 

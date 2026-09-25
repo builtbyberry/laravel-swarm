@@ -49,6 +49,7 @@ test('native attachments cross fresh process workers in every concurrent topolog
     putenv('SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true');
     putenv('SWARM_NATIVE_INPUTS_DISK=local');
     putenv('SWARM_PERSISTENCE_DRIVER=database');
+    putenv('SWARM_HISTORY_DRIVER=database');
     putenv('SWARM_ENCRYPT_AT_REST=true');
     putenv('TESTBENCH_WORKING_PATH='.$testbenchWorkingPath);
     $_ENV['APP_KEY'] = $_SERVER['APP_KEY'] = $key;
@@ -58,6 +59,7 @@ test('native attachments cross fresh process workers in every concurrent topolog
     $_ENV['SWARM_NATIVE_AGENT_SETTINGS_ENABLED'] = $_SERVER['SWARM_NATIVE_AGENT_SETTINGS_ENABLED'] = 'true';
     $_ENV['SWARM_NATIVE_INPUTS_DISK'] = $_SERVER['SWARM_NATIVE_INPUTS_DISK'] = 'local';
     $_ENV['SWARM_PERSISTENCE_DRIVER'] = $_SERVER['SWARM_PERSISTENCE_DRIVER'] = 'database';
+    $_ENV['SWARM_HISTORY_DRIVER'] = $_SERVER['SWARM_HISTORY_DRIVER'] = 'database';
     $_ENV['SWARM_ENCRYPT_AT_REST'] = $_SERVER['SWARM_ENCRYPT_AT_REST'] = 'true';
     $_ENV['TESTBENCH_WORKING_PATH'] = $_SERVER['TESTBENCH_WORKING_PATH'] = $testbenchWorkingPath;
     SerializableClosure::setSecretKey(base64_decode(substr($key, strlen('base64:')), true));
@@ -70,6 +72,7 @@ test('native attachments cross fresh process workers in every concurrent topolog
     config()->set('swarm.native_agent_settings.enabled', true);
     config()->set('swarm.native_inputs.disk', 'local');
     config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.history.driver', 'database');
     config()->set('swarm.persistence.encrypt_at_rest', true);
 
     $message = new UserMessage('process-task', [new Base64Document(base64_encode('process-document'), 'text/plain')]);
@@ -151,6 +154,7 @@ test('native attachments cross fresh process workers in every concurrent topolog
         putenv('SWARM_NATIVE_AGENT_SETTINGS_ENABLED');
         putenv('SWARM_NATIVE_INPUTS_DISK');
         putenv('SWARM_PERSISTENCE_DRIVER');
+        putenv('SWARM_HISTORY_DRIVER');
         putenv('SWARM_ENCRYPT_AT_REST');
         putenv($originalTestbenchWorkingPath === false
             ? 'TESTBENCH_WORKING_PATH'
@@ -170,6 +174,8 @@ test('native attachments cross fresh process workers in every concurrent topolog
             $_SERVER['SWARM_NATIVE_INPUTS_DISK'],
             $_ENV['SWARM_PERSISTENCE_DRIVER'],
             $_SERVER['SWARM_PERSISTENCE_DRIVER'],
+            $_ENV['SWARM_HISTORY_DRIVER'],
+            $_SERVER['SWARM_HISTORY_DRIVER'],
             $_ENV['SWARM_ENCRYPT_AT_REST'],
             $_SERVER['SWARM_ENCRYPT_AT_REST'],
             $_ENV['TESTBENCH_WORKING_PATH'],

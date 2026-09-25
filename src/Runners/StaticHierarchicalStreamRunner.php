@@ -407,8 +407,13 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
             $capturedResponse = $this->limits->response($this->capture->response($response));
             $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
-            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
-            $this->nativeInputs->commitConsumedMessages($context, $state->nativeSettingsAttempt);
+            $this->nativeInputs->commitTerminal(
+                $context,
+                $state->nativeSettingsAttempt,
+                function () use ($context, $capturedResponse, $contextTtl): void {
+                    $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
+                },
+            );
             $this->events->dispatch(new SwarmCompleted(
                 runId: $context->runId,
                 swarmClass: $swarm::class,
