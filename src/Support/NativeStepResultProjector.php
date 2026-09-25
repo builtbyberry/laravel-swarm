@@ -25,6 +25,9 @@ final class NativeStepResultProjector
     /** @var list<string> */
     private const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_write_input_tokens', 'reasoning_tokens'];
 
+    /** @var list<string> */
+    private const TOOL_STATUSES = ['pending', 'succeeded', 'denied', 'failed'];
+
     public function __construct(private ConfigRepository $config) {}
 
     public function fromResponse(AgentResponse $response): NativeStepResult
@@ -118,16 +121,17 @@ final class NativeStepResultProjector
         $state = new NativeStepResultProjectionState($this->persistedReasons($result->reasons));
         $generationSteps = [];
         foreach (array_slice($result->generationSteps, 0, $this->limit('max_generation_steps', 64)) as $step) {
-            $reasoning = is_string($step['reasoning'] ?? null)
-                ? $this->boundedString($step['reasoning'], $this->limit('max_reasoning_bytes', 65536), $state)
-                : null;
+            $reasoning = $this->persistedString($step['reasoning'] ?? null, $state);
+            if ($reasoning !== null) {
+                $reasoning = $this->boundedString($reasoning, $this->limit('max_reasoning_bytes', 65536), $state);
+            }
             $generationSteps[] = array_filter([
-                'text' => is_string($step['text'] ?? null) ? $step['text'] : null,
+                'text' => $this->persistedString($step['text'] ?? null, $state),
                 'structured' => is_array($step['structured'] ?? null) ? $this->normalizeStructured($step['structured'], $state) : null,
                 'reasoning' => $reasoning,
-                'finish_reason' => is_string($step['finish_reason'] ?? null) ? $step['finish_reason'] : null,
-                'provider' => is_string($step['provider'] ?? null) ? $step['provider'] : null,
-                'model' => is_string($step['model'] ?? null) ? $step['model'] : null,
+                'finish_reason' => $this->persistedString($step['finish_reason'] ?? null, $state),
+                'provider' => $this->persistedString($step['provider'] ?? null, $state),
+                'model' => $this->persistedString($step['model'] ?? null, $state),
                 'usage' => $this->usage($step['usage'] ?? null, $state),
             ], static fn (mixed $value): bool => $value !== null);
         }
@@ -135,11 +139,11 @@ final class NativeStepResultProjector
             $state->reason('limit');
         }
 
-        $tools = array_map(static fn (array $tool): array => array_filter([
-            'call_id' => is_string($tool['call_id'] ?? null) ? $tool['call_id'] : null,
-            'result_id' => is_string($tool['result_id'] ?? null) ? $tool['result_id'] : null,
-            'name' => is_string($tool['name'] ?? null) ? $tool['name'] : null,
-            'status' => is_string($tool['status'] ?? null) ? $tool['status'] : null,
+        $tools = array_map(fn (array $tool): array => array_filter([
+            'call_id' => $this->persistedString($tool['call_id'] ?? null, $state),
+            'result_id' => $this->persistedString($tool['result_id'] ?? null, $state),
+            'name' => $this->persistedString($tool['name'] ?? null, $state),
+            'status' => $this->persistedToolStatus($tool['status'] ?? null, $state),
         ], static fn (mixed $value): bool => $value !== null), array_slice($result->tools, 0, $this->limit('max_tool_statuses', 256)));
         if (count($result->tools) > count($tools)) {
             $state->reason('limit');
@@ -326,6 +330,35 @@ final class NativeStepResultProjector
         $state->reason('limit');
 
         return function_exists('mb_strcut') ? mb_strcut($value, 0, $maxBytes, 'UTF-8') : substr($value, 0, $maxBytes);
+    }
+
+    private function persistedString(mixed $value, NativeStepResultProjectionState $state): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (is_string($value)) {
+            return $value;
+        }
+
+        $state->reason('unsupported_type');
+
+        return null;
+    }
+
+    private function persistedToolStatus(mixed $value, NativeStepResultProjectionState $state): ?string
+    {
+        $status = $this->persistedString($value, $state);
+        if ($status === null) {
+            return null;
+        }
+        if (in_array($status, self::TOOL_STATUSES, true)) {
+            return $status;
+        }
+
+        $state->reason('unsupported_type');
+
+        return null;
     }
 
     /**

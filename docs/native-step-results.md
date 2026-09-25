@@ -42,6 +42,10 @@ Format version `1` uses these live properties and wire keys:
 | `generationSteps` | `generation_steps` | Entries may contain `text`, `structured`, `reasoning`, `finish_reason`, `provider`, `model`, and their own `usage` map. Usage admits only integer-or-null `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_write_input_tokens`, and `reasoning_tokens`; unknown or non-scalar usage fields are omitted rather than treated as provider payload. |
 | `tools` | `tools` | Entries contain `call_id`, `result_id`, `name`, and `status` (`pending`, `succeeded`, `denied`, or `failed`). |
 
+All generation text/identity fields and tool identity/status fields are strings
+when present. Persisted values with other types or undocumented tool statuses
+are rejected or omitted as unsupported rather than serialized as provider data.
+
 `status` is one of `available`, `partial`, `redacted`, `omitted`, or
 `unavailable`. `reasons` explains limits, capture policy, malformed data,
 unsupported versions, decryption failure, or legacy/custom storage gaps.

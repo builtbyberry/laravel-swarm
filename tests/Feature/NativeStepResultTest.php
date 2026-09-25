@@ -376,11 +376,32 @@ it('reapplies configured bounds while writing and reading persisted envelopes', 
         'status' => 'available',
         'generation_steps' => [['usage' => ['raw' => ['raw_provider_payload' => 'secret']]]],
     ], JSON_THROW_ON_ERROR);
-
     expect($codec->decode($stored)->toArray())->toBe(NativeStepResult::unavailable(['limit'])->toArray())
         ->and($codec->decode($deep)->toArray())->toBe(NativeStepResult::unavailable(['limit'])->toArray())
         ->and($codec->decode($unrestricted)->toArray())->toBe(NativeStepResult::unavailable(['malformed'])->toArray())
         ->and($codec->decode($unrestrictedUsage)->toArray())->toBe(NativeStepResult::unavailable(['malformed'])->toArray());
+});
+
+it('rejects non-scalar generation and tool fields in persisted envelopes', function () {
+    $codec = new NativeStepResultCodec(app(SwarmPersistenceCipher::class), config());
+    $unrestrictedScalars = new NativeStepResult(
+        generationSteps: [[
+            'text' => (object) ['raw_provider_payload' => 'generation-text-secret'],
+            'provider' => (object) ['raw_provider_payload' => 'generation-provider-secret'],
+        ]],
+        tools: [[
+            'name' => (object) ['raw_provider_payload' => 'tool-name-secret'],
+            'status' => (object) ['raw_provider_payload' => 'tool-status-secret'],
+        ]],
+    );
+    $undocumentedToolStatus = json_encode([
+        'format_version' => 1,
+        'status' => 'available',
+        'tools' => [['call_id' => 'call', 'status' => 'provider-private-status']],
+    ], JSON_THROW_ON_ERROR);
+
+    expect($codec->decode($codec->encode($unrestrictedScalars))->toArray())->toBe(NativeStepResult::unavailable(['malformed'])->toArray())
+        ->and($codec->decode($undocumentedToolStatus)->toArray())->toBe(NativeStepResult::unavailable(['malformed'])->toArray());
 });
 
 it('caps native results carried by broadcastable stream events', function () {
@@ -530,6 +551,41 @@ it('rejects arbitrary objects in cache-backed persisted generation usage', funct
         ->and($native['reasons'])->toContain('unsupported_type')
         ->and($native['generation_steps'][0])->not->toHaveKey('usage')
         ->and(json_encode($native, JSON_THROW_ON_ERROR))->not->toContain('raw_provider_payload', 'secret');
+});
+
+it('rejects arbitrary objects and undocumented tool statuses in cache-backed persisted fields', function () {
+    config()->set('swarm.persistence.driver', 'cache');
+    config()->set('swarm.history.driver', 'cache');
+    app()->forgetInstance(SwarmCapture::class);
+    app()->forgetInstance(SwarmRunner::class);
+    app()->forgetInstance(RunHistoryStore::class);
+    RichNativeAgent::$response = richNativeStepResponse();
+    $response = RichNativeSequentialSwarm::make()->prompt('cache scalar shape');
+    $key = (string) config('swarm.history.prefix', 'swarm:history:').$response->metadata['run_id'];
+    $cache = Cache::store(config('swarm.history.store'));
+    $raw = $cache->get($key);
+    $raw['steps'][0]['native_result'] = [
+        'format_version' => 1,
+        'status' => 'available',
+        'generation_steps' => [[
+            'text' => (object) ['raw_provider_payload' => 'generation-text-secret'],
+            'provider' => (object) ['raw_provider_payload' => 'generation-provider-secret'],
+        ]],
+        'tools' => [[
+            'name' => (object) ['raw_provider_payload' => 'tool-name-secret'],
+            'status' => 'provider-private-status',
+        ]],
+    ];
+    $cache->put($key, $raw, 3600);
+
+    $native = app(RunHistoryStore::class)->find($response->metadata['run_id'])['steps'][0]['native_result'];
+    $encoded = json_encode($native, JSON_THROW_ON_ERROR);
+
+    expect($native['status'])->toBe(NativeStepResult::PARTIAL)
+        ->and($native['reasons'])->toContain('unsupported_type')
+        ->and($native['generation_steps'][0])->not->toHaveKeys(['text', 'provider'])
+        ->and($native['tools'][0])->not->toHaveKeys(['name', 'status'])
+        ->and($encoded)->not->toContain('raw_provider_payload', 'secret', 'provider-private-status');
 });
 
 it('does not let persisted Redact or Skip statuses reauthorize withheld content', function () {

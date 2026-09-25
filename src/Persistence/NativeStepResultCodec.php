@@ -18,6 +18,9 @@ final class NativeStepResultCodec
     /** @var list<string> */
     private const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_write_input_tokens', 'reasoning_tokens'];
 
+    /** @var list<string> */
+    private const TOOL_STATUSES = ['pending', 'succeeded', 'denied', 'failed'];
+
     public function __construct(private SwarmPersistenceCipher $cipher, private ConfigRepository $config) {}
 
     public function encode(?NativeStepResult $result): ?string
@@ -124,6 +127,13 @@ final class NativeStepResultCodec
         if (array_diff(array_keys($payload), $allowed) !== []) {
             return 'malformed';
         }
+        if (($payload['format_version'] ?? null) !== NativeStepResult::FORMAT_VERSION) {
+            return 'unsupported_version';
+        }
+        $status = $payload['status'] ?? null;
+        if (! is_string($status) || ! in_array($status, [NativeStepResult::AVAILABLE, NativeStepResult::PARTIAL, NativeStepResult::REDACTED, NativeStepResult::OMITTED, NativeStepResult::UNAVAILABLE], true)) {
+            return 'malformed';
+        }
         try {
             $encoded = json_encode($payload, JSON_THROW_ON_ERROR);
         } catch (JsonException) {
@@ -149,7 +159,6 @@ final class NativeStepResultCodec
             }
         }
 
-        $status = $payload['status'] ?? null;
         if (in_array($status, [NativeStepResult::OMITTED, NativeStepResult::UNAVAILABLE], true)
             && array_diff(array_keys($payload), ['format_version', 'status', 'reasons']) !== []) {
             return 'malformed';
@@ -179,6 +188,11 @@ final class NativeStepResultCodec
             if (array_diff(array_keys($step), $generationAllowed) !== []) {
                 return 'malformed';
             }
+            foreach (['text', 'reasoning', 'finish_reason', 'provider', 'model'] as $key) {
+                if (array_key_exists($key, $step) && ! is_string($step[$key])) {
+                    return 'malformed';
+                }
+            }
             if ($status === NativeStepResult::REDACTED
                 && array_diff(array_keys($step), ['finish_reason', 'provider', 'model', 'usage']) !== []) {
                 return 'malformed';
@@ -198,6 +212,14 @@ final class NativeStepResultCodec
         $toolAllowed = ['call_id', 'result_id', 'name', 'status'];
         foreach ($tools as $tool) {
             if (array_diff(array_keys($tool), $toolAllowed) !== []) {
+                return 'malformed';
+            }
+            foreach (['call_id', 'result_id', 'name'] as $key) {
+                if (array_key_exists($key, $tool) && ! is_string($tool[$key])) {
+                    return 'malformed';
+                }
+            }
+            if (! isset($tool['status']) || ! is_string($tool['status']) || ! in_array($tool['status'], self::TOOL_STATUSES, true)) {
                 return 'malformed';
             }
         }
