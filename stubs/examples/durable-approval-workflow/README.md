@@ -49,9 +49,10 @@ php artisan swarm:example:approval-workflow status 01HXY...
 
 ## Plug in a real model
 
-`PolicyDraftAgent` and `PolicyFinalizeAgent` extend `ScriptedAgent`. To use a
-live LLM, swap each to a normal Laravel AI agent that uses `Promptable`. The
-swarm class, the wait declaration, and the runner command stay identical.
+Generate native agents with `php artisan make:agent PolicyDraftAgent` and
+`php artisan make:agent PolicyFinalizeAgent`, then port the application-owned
+instructions. Keep the deterministic offline classes until callers and tests
+have moved; the generator never rewrites them.
 
 ## Next step
 

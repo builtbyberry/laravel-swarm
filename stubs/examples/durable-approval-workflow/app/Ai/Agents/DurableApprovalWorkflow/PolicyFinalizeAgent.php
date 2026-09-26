@@ -22,7 +22,7 @@ class PolicyFinalizeAgent extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent to use a live model.
+        // For model behavior, generate PolicyFinalizeAgent with make:agent and port these instructions.
         return <<<FINAL
             Final policy (scripted finalize output):
 

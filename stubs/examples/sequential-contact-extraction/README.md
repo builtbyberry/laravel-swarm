@@ -41,44 +41,13 @@ agents are on a fully supported path — the `stream()` guard for
 
 ## Plug in a real model
 
-Each agent under `app/Ai/Agents/SequentialContactExtraction/` extends
-`ScriptedAgent` and already declares its structured-output `schema()`. To use a
-live LLM, swap the base for the normal Laravel AI shape while **keeping** the
-`HasStructuredOutput` interface and `schema()` method:
+Generate each native schema-backed agent through Laravel AI, then port the
+starter's instructions and schema:
 
-```php
-use Laravel\Ai\Contracts\Agent;
-use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Laravel\Ai\Attributes\Model;
-use Laravel\Ai\Attributes\Provider;
-use Laravel\Ai\Contracts\HasStructuredOutput;
-use Laravel\Ai\Enums\Lab;
-use Laravel\Ai\Promptable;
-
-#[Provider(Lab::Anthropic)]
-#[Model('claude-haiku-4-5-20251001')]
-class FieldExtractor implements Agent, HasStructuredOutput
-{
-    use Promptable;
-
-    public function instructions(): string
-    {
-        return 'Extract the contact from the message as a JSON object.';
-    }
-
-    public function schema(JsonSchema $schema): array
-    {
-        return [
-            'name' => $schema->string()->nullable(),
-            'email' => $schema->string()->nullable(),
-            'phone' => $schema->string()->nullable(),
-            'company' => $schema->string()->nullable(),
-        ];
-    }
-}
+```bash
+php artisan make:agent FieldExtractor --structured
+php artisan make:agent RecordNormalizer --structured
 ```
-
-The swarm class itself does not change.
 
 > **Note:** a `HasStructuredOutput` agent cannot be *streamed* — it produces one
 > parsed object, not a token stream. Run structured-output nodes with

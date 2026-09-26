@@ -24,8 +24,8 @@ use Laravel\Ai\Contracts\HasStructuredOutput;
  * This example ships as a `ScriptedAgent` so the whole swarm runs end-to-end
  * with no live model. The classification here is a deterministic keyword match
  * over the request text; a real coordinator would let the model fill the schema.
- * Swap this for a `Promptable` agent (keeping `HasStructuredOutput`) to route
- * with a live model.
+ * For model routing, generate RequestClassifier with `make:agent --structured`
+ * and port the application-owned instructions and route-plan schema.
  */
 class RequestClassifier extends ScriptedAgent implements HasStructuredOutput
 {
@@ -69,8 +69,8 @@ class RequestClassifier extends ScriptedAgent implements HasStructuredOutput
      */
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent (keep
-        // HasStructuredOutput) to let a live model fill the route plan.
+        // For model behavior, generate RequestClassifier with make:agent
+        // --structured and port these instructions and the route-plan schema.
         [$agent, $prompt, $category] = $this->classify($prompt);
 
         return (string) json_encode([

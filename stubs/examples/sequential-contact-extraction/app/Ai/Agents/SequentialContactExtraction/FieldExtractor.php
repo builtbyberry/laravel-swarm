@@ -17,12 +17,10 @@ use Laravel\Ai\Contracts\HasStructuredOutput;
  * single parsed object matching that shape — not free-form prose. That is what
  * makes this STRUCTURED output rather than text.
  *
- * Extends ScriptedAgent so the example runs end-to-end with no provider
- * configured: the scripted {@see reply()} returns the same JSON string a
- * structured provider would. To plug in a live model, replace
- * `extends ScriptedAgent` with `implements Agent` + `use Promptable;`, keep the
- * `HasStructuredOutput` interface and `schema()`, and add `#[Provider]` /
- * `#[Model]` — the swarm wiring stays identical.
+ * Extends ScriptedAgent so the deterministic offline example runs with no
+ * provider configured. For model behavior, generate FieldExtractor with
+ * Laravel AI's `make:agent --structured` command and port the application-owned
+ * instructions and schema.
  */
 class FieldExtractor extends ScriptedAgent implements HasStructuredOutput
 {
@@ -48,8 +46,8 @@ class FieldExtractor extends ScriptedAgent implements HasStructuredOutput
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable + HasStructuredOutput
-        // agent to have a live model fill this schema. This scripted reply does a
+        // For model behavior, generate FieldExtractor with make:agent --structured
+        // and port this schema. This deterministic offline reply does a
         // light regex pull from the blurb so the demo genuinely reflects its
         // input; a real provider returns the same shape — a single JSON object,
         // not prose.

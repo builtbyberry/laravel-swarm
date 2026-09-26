@@ -22,7 +22,7 @@ class MarketScout extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent to use a live model.
+        // For model behavior, generate MarketScout with make:agent and port these instructions.
         return "[MarketScout] Market notes for: {$prompt}\n"
             .'- Adjacent vendors: a few public ones, a long tail of private ones.'."\n"
             .'- Buyers are mid-market ops teams, slightly price sensitive.';

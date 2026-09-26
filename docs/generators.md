@@ -1,24 +1,18 @@
 # Generators
 
-Laravel Swarm ships Artisan generator commands that scaffold the classes
-you write to build a swarm: the **swarm** (the orchestration shell), the
-**agents** that compose it, and custom **memory tools** an agent can call
-mid-prompt. They produce code that matches the shape of the runnable
-starter examples shipped under `stubs/examples/` and the shipped `Recall` /
-`Remember` tools — so what you generate looks like what the framework
-ships.
-
-If you already have a Laravel AI app, this is the same generator
-ergonomics as `php artisan make:agent` — same Laravel conventions, same
-`app/Ai/` namespace, same publishable stubs.
+Laravel AI owns model-agent generation through `make:agent`; Laravel Swarm
+owns swarm orchestration shells, complete offline blueprints, and custom memory
+tools. Keeping those responsibilities separate means Swarm does not clone or
+drift from Laravel AI's agent generator.
 
 ## At a glance
 
 | Command | Output path | Stub | When to use |
 |---|---|---|---|
+| `php artisan make:agent <Name>` | `app/Ai/Agents/<Name>.php` | Laravel AI `agent.stub` or `structured-agent.stub` | **Normal model-agent path.** Add instructions and tools, or pass `--structured` for schema-backed output. |
 | `php artisan make:swarm:swarm <Name>` | `app/Ai/Swarms/<Name>.php` | `swarm.stub` (plus topology variants) | You're building a new swarm from an empty shell. |
 | `php artisan make:swarm:blueprint <Name>` | `app/Ai/Swarms/<Name>/`, `app/Ai/Agents/<Name>/`, `app/Console/Commands/` | a curated tree from `stubs/examples/` | You want a **complete, runnable** swarm for a use-case (swarm + agents + command), renamed as your own. |
-| `php artisan make:swarm:agent <Name>` | `app/Ai/Agents/<Name>.php` | `swarm.agent.stub` | You're adding a new agent to a swarm. |
+| `php artisan make:swarm:agent <Name>` | `app/Ai/Agents/<Name>.php` | `swarm.agent.stub` | Compatibility path for a deterministic offline `ScriptedAgent`. Existing command and published-stub behavior is preserved. |
 | `php artisan make:memory-tool <Name>` | `app/Ai/Tools/<Name>.php` | `swarm.memory-tool.stub` (plus a `--vector` variant) | You're building a custom `Recall`/`Remember` memory tool. |
 | `php artisan make:swarm <Name>` | `app/Ai/Agents/<Name>.php` **or** `app/Ai/Swarms/<Name>.php` | `swarm.single-agent.stub` or (delegates to `make:swarm:swarm`) | **Deprecated but guided** — the friendly front door. Interactively asks whether to scaffold a single agent or a swarm; still prints a migration hint. Will be removed in a future major release. |
 
@@ -122,12 +116,28 @@ can't prompt.
 > out the setup. The other five run end-to-end on the in-memory driver with no
 > configuration.
 
-## `make:swarm:agent`
+## Native model agents: `make:agent`
 
-Scaffolds a swarm agent under `app/Ai/Agents/`. The output extends
-`BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent` so it runs end-to-end
-with no provider configured — exactly the shape used by the starter
-examples in `stubs/examples/`.
+Use Laravel AI's generator for normal model-backed agents:
+
+```bash
+php artisan make:agent OutlineWriter
+php artisan make:agent ContactExtractor --structured
+```
+
+The command owns the generated namespace, interfaces, `Promptable` behavior,
+tool declarations, and structured schema conventions. Add the generated class
+to a swarm's `agents()` array without a Swarm-specific adapter. Structured-output
+agents are invoked with non-streaming execution because Laravel AI does not stream
+structured responses. See [Native Agent Onboarding](native-agent-onboarding.md)
+for a tools-and-streaming example tested without an external provider request.
+
+## `make:swarm:agent` compatibility path
+
+Scaffolds a deterministic offline helper under `app/Ai/Agents/`. The output
+extends `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent`, preserving the command,
+namespace, class shape, and application-published `stubs/swarm.agent.stub`
+customizations from earlier releases.
 
 ```bash
 php artisan make:swarm:agent OutlineWriter
@@ -138,19 +148,10 @@ Slash-separated names produce nested namespaces (`App\Ai\Agents\BlogPipeline\Dra
 This is the same convention as `make:job`, `make:event`, and the rest of
 the Laravel generator family.
 
-### Swapping in a real LLM
-
-The generated class is intentionally runnable without provider config so
-you can wire up the swarm and prove the topology works before you spend
-API credit. When you want a real model:
-
-1. Replace `extends ScriptedAgent` with `implements Agent` and `use Promptable;`.
-2. Add `#[Provider(...)]` and `#[Model(...)]` PHP attributes.
-3. Delete the `reply()` method — Laravel AI's `Promptable` trait owns the
-   provider round-trip from here.
-4. (Optional) Keep `instructions()` as-is — that contract carries over.
-
-The rest of the swarm wiring stays identical. Drop-in.
+Do not hand-convert that class to imitate the native generator. Generate a new
+native class with `make:agent`, then port only application-owned instructions,
+tools, and schema. Swarm never rewrites an existing generated file or a published
+custom stub.
 
 ## `make:memory-tool`
 
@@ -209,7 +210,7 @@ for its exact public surface.
 
 ## Customizing the stubs
 
-Publish the shipped stubs into your application to customize them:
+Publish the Swarm-owned stubs into your application to customize Swarm generators:
 
 ```bash
 php artisan vendor:publish --tag=swarm-stubs
@@ -221,6 +222,16 @@ This drops the stub files (`swarm.stub`, `swarm.parallel.stub`,
 `swarm.memory-tool.vector.stub`) into your project's `stubs/` directory.
 Every generator checks for a published copy first and falls back to the
 shipped stub if none is present.
+
+Laravel AI agent stubs are a separate family owned by Laravel AI:
+
+```bash
+php artisan vendor:publish --tag=ai-stubs
+```
+
+Publishing or editing `stubs/swarm.agent.stub` does not change `make:agent`, and
+publishing `agent.stub` or `structured-agent.stub` does not change
+`make:swarm:agent`.
 
 ## `make:swarm` — the guided front door
 
@@ -236,18 +247,19 @@ flags and it first asks what you want to build:
 ```bash
 php artisan make:swarm Summarizer
 # ? What would you like to scaffold?
-#   › A single agent — run it instantly with Swarm::agent(), no swarm class
+#   › A deterministic offline agent — run it with Swarm::agent(), no swarm class
 #     A multi-agent swarm — choose a topology
 ```
 
-- **Single agent** scaffolds an agent under `app/Ai/Agents/<Name>.php` from
+- **Single agent** preserves the deterministic offline compatibility scaffold
+  under `app/Ai/Agents/<Name>.php` from
   `swarm.single-agent.stub`. Its docblock demonstrates the
   [`Swarm::agent()`](execution-modes.md#single-agent-swarmagent) front door —
   the full governed pipeline (audit, guardrails, capture, telemetry) for one
   agent, no swarm class required — and points at the inline
   `Swarm::sequential()` / `parallel()` / `hierarchical()`
   [builders](execution-modes.md#inline-swarms-swarmsequential--parallel--hierarchical)
-  for when one agent is no longer enough.
+  for when one agent is no longer enough. Use `make:agent` for a model agent.
 - **Multi-agent swarm** falls through to the same topology prompt as
   `make:swarm:swarm`, scaffolding a swarm class under `app/Ai/Swarms/`.
 

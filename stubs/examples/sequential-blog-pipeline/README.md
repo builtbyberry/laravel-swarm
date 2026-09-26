@@ -30,31 +30,17 @@ minimum viable swarm.
 
 ## Plug in a real model
 
-Each agent under `app/Ai/Agents/SequentialBlogPipeline/` extends
-`ScriptedAgent`. To use a live LLM, swap that base for the normal Laravel AI
-shape:
+Generate one native Laravel AI class per model agent, then port the starter's
+instructions:
 
-```php
-use Laravel\Ai\Contracts\Agent;
-use Laravel\Ai\Attributes\Model;
-use Laravel\Ai\Attributes\Provider;
-use Laravel\Ai\Enums\Lab;
-use Laravel\Ai\Promptable;
-
-#[Provider(Lab::Anthropic)]
-#[Model('claude-haiku-4-5-20251001')]
-class OutlineWriter implements Agent
-{
-    use Promptable;
-
-    public function instructions(): string
-    {
-        return 'Draft a five-point outline for a blog post on the given topic.';
-    }
-}
+```bash
+php artisan make:agent OutlineWriter
+php artisan make:agent Drafter
+php artisan make:agent Polisher
 ```
 
-The swarm class itself does not change.
+Reference those generated classes from the swarm. See
+`docs/native-agent-onboarding.md` for the native fake and streaming path.
 
 ## Next step
 

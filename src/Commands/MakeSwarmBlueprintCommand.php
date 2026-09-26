@@ -362,6 +362,6 @@ class MakeSwarmBlueprintCommand extends Command
         }
 
         $this->newLine();
-        $this->components->info('Next: open the generated files, swap the ScriptedAgent stubs for real agents, and edit the docblocks.');
+        $this->components->info('Next: keep ScriptedAgent for deterministic offline runs; for model behavior, generate native agents with `php artisan make:agent`, then port the application-owned instructions, tools, and schemas.');
     }
 }

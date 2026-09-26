@@ -190,34 +190,14 @@ class BlogPipeline implements Swarm
 }
 ```
 
-Every agent extends `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent` — a
-runnable, provider-free agent base class that returns canned text. That is
+Every starter agent extends `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent` — a
+deterministic offline helper that returns canned text. That is
 what lets the starter execute on a fresh install with no API key, no
 provider configured, and no environment setup beyond the installer.
 
-Each agent file carries a `TODO` comment pointing at the one-line edit that
-swaps `ScriptedAgent` for a real `Promptable` Laravel AI agent (the swarm
-class, the runner command, and any tests keep working unchanged):
-
-```php
-use Laravel\Ai\Contracts\Agent;
-use Laravel\Ai\Attributes\Model;
-use Laravel\Ai\Attributes\Provider;
-use Laravel\Ai\Enums\Lab;
-use Laravel\Ai\Promptable;
-
-#[Provider(Lab::Anthropic)]
-#[Model('claude-haiku-4-5-20251001')]
-class OutlineWriter implements Agent
-{
-    use Promptable;
-
-    public function instructions(): string
-    {
-        return 'Draft a five-point outline for a blog post on the given topic.';
-    }
-}
-```
+For model behavior, generate a native Laravel AI agent with `make:agent`, then
+port the starter's application-owned instructions, tools, or schema. Do not
+hand-convert the offline class and recreate the native generator by inspection.
 
 The starter pack ships two more examples covering Parallel topology and the
 durable human-in-the-loop pattern. See [Starter Examples](./examples.md) for
@@ -229,17 +209,20 @@ Once you have run a starter swarm end-to-end, generate your own:
 
 ```bash
 php artisan make:swarm:swarm ContentPipeline
-php artisan make:swarm:agent ArticlePlanner
+php artisan make:agent ArticlePlanner
 ```
 
 `make:swarm:swarm` scaffolds a swarm class under `app/Ai/Swarms/` and
 accepts `--topology=sequential|parallel|hierarchical|static-hierarchical`
-(defaults to `sequential`). `make:swarm:agent` scaffolds an agent under
-`app/Ai/Agents/` extending `ScriptedAgent` (the same shape the starter
-examples use), with `TODO` markers pointing at the upgrade path for
-plugging in a real LLM.
+(defaults to `sequential`). Laravel AI's `make:agent` command scaffolds the
+native model-agent conventions under `app/Ai/Agents/`; pass `--structured` for
+schema-backed output. The retained `make:swarm:agent` command creates a
+deterministic offline compatibility helper and honors existing published
+`stubs/swarm.agent.stub` customizations.
 
-See [Generators](./generators.md) for the full generator surface.
+See [Native Agent Onboarding](./native-agent-onboarding.md) for the provider-free
+tools-and-streaming test path and [Generators](./generators.md) for the full
+generator surface.
 
 Not every workflow needs a class. For a single agent or a one-off multi-agent
 composition, `Swarm::agent()` and the inline `Swarm::sequential()` /

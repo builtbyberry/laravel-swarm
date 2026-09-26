@@ -66,9 +66,9 @@ completion, and replays each node's streamed text from the persisted log.
 3. **The streamed text is scripted, not model-generated.** `ScriptedStreamingEditor`
    yields a fixed sequence of token deltas offline — no provider, no API key. It
    shows the *shape* of a durable stream (the same "show the shape" caveat as
-   `ScriptedAgent`, applied to token deltas). Swap it for a real Laravel AI agent
-   whose `stream()` yields live model deltas and the swarm and runner stay
-   identical.
+   `ScriptedAgent`, applied to token deltas). For model behavior, generate a
+   native Laravel AI agent with `make:agent`, then port the application-owned
+   instructions and update the swarm's agent reference.
 
 ## Next step
 
