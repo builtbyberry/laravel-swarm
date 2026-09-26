@@ -94,7 +94,7 @@ class DurableBoundaryCoordinator
     }
 
     /**
-     * @param  SwarmTaskInput  $task
+     * @param  string|array<string, mixed>|RunContext  $task
      */
     protected function dispatchChildSwarm(string $parentRunId, string $childSwarmClass, string|array|RunContext $task, ?string $dedupeKey): DurableChildRun
     {

@@ -30,6 +30,7 @@ use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -61,6 +62,10 @@ use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentSettingsAttempt;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
+use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -72,6 +77,8 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Events\Dispatcher;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\AgentInput;
+use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
 use Laravel\Ai\Streaming\Events\Citation;
@@ -133,6 +140,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         SwarmGuardrailRunner $guardrails,
         LoggerInterface $logger,
         ContextGrowthGovernor $growthGovernor,
+        NativeInputManager $nativeInputs,
         protected HierarchicalRoutePlanner $planner,
         protected ConcurrencyManager $concurrency,
         protected SwarmStepRecorder $stepsRecorder,
@@ -141,7 +149,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         protected MemoryReplayCoordinator $coordinator,
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
-        protected CitationStorageReadiness $citationStorage,
+        protected StepEvidenceStorageReadiness $evidenceStorage,
         protected ProviderToolEventMapper $providerTools,
     ) {
         parent::__construct(
@@ -160,13 +168,14 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             $guardrails,
             $logger,
             $growthGovernor,
+            $nativeInputs,
         );
     }
 
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
+    public function stream(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task): StreamableSwarmResponse
     {
         if (! $swarm instanceof HasRoutePlan) {
             throw new SwarmException(
@@ -205,6 +214,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         ]);
 
         $plan = $this->planner->fromStaticPlan($agents, $swarm->plan(), $swarm::class);
+        $context->assertNativeNodeRecipients('static:', $plan->workerNodeIds());
 
         // Enforce execution budget before any LLM call
         $required = $plan->reachableWorkerCount();
@@ -399,7 +409,13 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
             $capturedResponse = $this->limits->response($this->capture->response($response));
             $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
-            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
+            $this->nativeInputs->commitTerminal(
+                $context,
+                $state->nativeSettingsAttempt,
+                function () use ($context, $capturedResponse, $contextTtl): void {
+                    $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
+                },
+            );
             $this->events->dispatch(new SwarmCompleted(
                 runId: $context->runId,
                 swarmClass: $swarm::class,
@@ -561,7 +577,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 // override lands on the same frame the agent reads through.
                 // The node id is threaded in so every deliberation event the
                 // node streams (text/reasoning/tool deltas) carries its tag.
-                ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence] = yield from $this->streamAgentEvents(
+                ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence, 'native_result' => $nativeResult] = yield from $this->streamAgentEvents(
                     $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart, $node->id,
                 );
 
@@ -582,6 +598,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     durationMs: $durationMs,
                     citationEvidence: $citationEvidence->withNodeId($node->id),
                     metadata: $stepMetadata,
+                    nativeResult: $nativeResult,
                 );
 
                 $nodeOutputs[$node->id] = $output;
@@ -603,6 +620,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     durationMs: $durationMs,
                     metadata: ['usage' => $stepUsage],
                     timestamp: SwarmStreamEvent::timestamp(),
+                    nativeResult: $this->capture->nativeResultForStreamEvent($step->nativeResult, $context),
                 ))->withNodeId($node->id);
                 yield $stepEndEvent;
                 $this->recordStreamTelemetry($swarm, $state, $stepEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
@@ -719,7 +737,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                         // The snapshot is frozen (or replayed) inside
                         // streamAgentEvents, after the run frame is entered.
-                        ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence] = yield from $this->streamAgentEvents(
+                        ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence, 'native_result' => $nativeResult] = yield from $this->streamAgentEvents(
                             $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart,
                         );
 
@@ -749,6 +767,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             metadata: array_merge($branch->metadata, ['node_id' => $branch->id, 'parent_parallel_node_id' => $node->id], $branchLoopMeta),
                             updateContext: false,
                             storeContext: false,
+                            nativeResult: $nativeResult,
                         );
 
                         $nodeOutputs[$branch->id] = $output;
@@ -770,6 +789,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             durationMs: $durationMs,
                             metadata: ['usage' => $stepUsage],
                             timestamp: SwarmStreamEvent::timestamp(),
+                            nativeResult: $this->capture->nativeResultForStreamEvent($step->nativeResult, $context),
                         );
                         yield $branchEndEvent;
                         $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
@@ -788,6 +808,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $callbacks = [];
                     $citationLimits = ['max_count' => (int) $this->config->get('swarm.citations.max_count', 256),
                         'max_bytes' => (int) $this->config->get('swarm.citations.max_bytes', 262144)];
+                    $nativeResultLimits = Container::getInstance()->make(NativeStepResultProjector::class)->resolvedLimits();
 
                     foreach ($node->branches as $ordinal => $branchNodeId) {
                         /** @var HierarchicalWorkerNode $branch */
@@ -829,6 +850,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         $branchSwarmClass = $state->swarm::class;
                         $branchContextPayload = $state->context->toQueuePayload();
                         $branchStepIndex = $nextIndex + $ordinal;
+                        $nativeRecipientPrefix = $this->nativeRecipientPrefix();
+                        $attemptIds = $state->nativeSettingsAttempt->ids();
                         // A `static` closure that resolves every collaborator
                         // from the container — it MUST NOT bind `$this`. The
                         // real ProcessDriver serializes this callback with
@@ -839,9 +862,19 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         // MemoryReplayCoordinator are both re-resolved from the
                         // child's container instead, mirroring how the worker
                         // agent is resolved below.
-                        $callbacks[$ordinal] = static function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchStepIndex, $citationLimits): array {
+                        $callbacks[$ordinal] = static function () use ($agentClass, $input, $branchNodeId, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchStepIndex, $citationLimits, $nativeResultLimits, $nativeRecipientPrefix, $attemptIds): array {
                             $container = Container::getInstance();
-                            $worker = $container->make($agentClass);
+                            $worker = null;
+                            $workerSwarm = $container->make($branchSwarmClass);
+                            if ($workerSwarm instanceof Swarm) {
+                                foreach ($workerSwarm->agents() as $candidate) {
+                                    if ($candidate::class === $agentClass) {
+                                        $worker = $candidate;
+                                        break;
+                                    }
+                                }
+                            }
+                            $worker ??= $container->make($agentClass);
 
                             if (! $worker instanceof Agent) {
                                 throw new SwarmException("Static hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
@@ -885,7 +918,10 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                             try {
                                 $branchStartedAt = MonotonicTime::now();
-                                $response = $worker->prompt($input);
+                                $branchContext = RunContext::fromPayload($branchContextPayload, $branchRunId);
+                                $attempt = new NativeAgentSettingsAttempt($attemptIds);
+                                $invocation = $branchContext->nativeInvocation($nativeRecipientPrefix.$branchNodeId, $input, $attempt);
+                                $response = NativeAgentInvoker::prompt($worker, $invocation);
                                 Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
@@ -894,6 +930,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                     'usage' => $response->usage->toArray(),
                                     'duration_ms' => MonotonicTime::elapsedMilliseconds($branchStartedAt),
                                     'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
+                                    'native_settings_consumed' => $attempt->ids(),
+                                    'native_result' => NativeStepResultProjector::fromResolvedLimits($nativeResultLimits)->fromResponse($response)->toArray(),
                                 ];
                             } finally {
                                 if ($coordinator !== null && $boundary !== null) {
@@ -906,8 +944,12 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                     $driver = $this->concurrency->driver();
                     $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-                    /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+                    /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>, native_settings_consumed: list<string>, native_result: array<string, mixed>}> $results */
                     $results = $this->outcomes->validateConcurrentResults($results);
+
+                    foreach ($results as $row) {
+                        $state->nativeSettingsAttempt->merge(is_array($row['native_settings_consumed'] ?? null) ? $row['native_settings_consumed'] : []);
+                    }
 
                     $policy = GuardrailParallelFailurePolicy::tryFrom((string) $this->config->get(
                         'swarm.guardrails.parallel_failure_policy',
@@ -979,6 +1021,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             storeContext: false,
                             includeUsageInMetadata: false,
                             citationEvidence: CitationEvidence::fromArray($row['citation_evidence'])->withNodeId($branch->id),
+                            nativeResult: NativeStepResult::fromArray($row['native_result']),
                         );
 
                         $mergedUsage = $this->mergeUsageReport($mergedUsage, $row['usage']);
@@ -999,6 +1042,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             durationMs: $row['duration_ms'],
                             metadata: ['usage' => $row['usage']],
                             timestamp: SwarmStreamEvent::timestamp(),
+                            nativeResult: $this->capture->nativeResultForStreamEvent($step->nativeResult, $context),
                         );
                         yield $branchEndEvent;
                         $this->recordStreamTelemetry($swarm, $state, $branchEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
@@ -1059,7 +1103,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
      * Returns the accumulated text output and step usage so the caller can record the step,
      * run guardrails, and emit SwarmStepEnd without duplicating the inner event loop.
      *
-     * @return \Generator<int, SwarmStreamEvent, null, array{output: string, citation_evidence: CitationEvidence, usage: array<string, int|null>}>
+     * @return \Generator<int, SwarmStreamEvent, null, array{output: string, citation_evidence: CitationEvidence, usage: array<string, int|null>, native_result: NativeStepResult}>
      */
     protected function streamAgentEvents(
         Agent $agent,
@@ -1072,11 +1116,12 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
         float $streamTelemetryStart,
         ?string $nodeId = null,
     ): \Generator {
-        $this->citationStorage->check();
+        $this->evidenceStorage->check();
         $citationEvidence = CitationEvidence::available();
         $providerToolBytes = 0;
         $output = '';
         $stepUsage = [];
+        $nativeResult = NativeStepResult::unavailable(['malformed']);
         /** @var array<string, ToolCallData> $pendingToolCalls */
         $pendingToolCalls = [];
         /** @var array<string, true> $unknownStreamEventClasses */
@@ -1109,7 +1154,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
         $nativeStreamFailure = null;
         try {
-            $stream = $agent->stream($input);
+            $invocation = $context->nativeInvocation($this->nativeRecipientPrefix().($nodeId ?? $stepIndex), $input, $state->nativeSettingsAttempt);
+            $stream = NativeAgentInvoker::stream($agent, $invocation);
             foreach ($stream as $event) {
                 $this->outcomes->validateEvent($event);
                 if ($event instanceof TextDelta) {
@@ -1251,13 +1297,14 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     $unknownStreamEventClasses[get_debug_type($event)] = true;
                 }
             }
-            $stream->then(function ($response) use (&$citationEvidence, $context, $stepIndex, $agent, $nodeId): void {
+            $stream->then(function ($response) use (&$citationEvidence, &$nativeResult, $context, $stepIndex, $agent, $nodeId): void {
                 $this->outcomes->validateResponse($response);
                 $citationEvidence = $this->citations->reconcile($citationEvidence,
                     $this->citations->response($response, $context->runId, $stepIndex, $agent::class, $nodeId));
+                $nativeResult = $this->stepsRecorder->nativeResult($response);
             });
 
-            return ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence];
+            return ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence, 'native_result' => $nativeResult];
         } catch (Throwable $exception) {
             $nativeStreamFailure = $exception;
             throw $exception;
@@ -1294,6 +1341,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 NativeOutcomeValidator::rethrowIfUnsupported($nativeStreamFailure);
             }
         }
+    }
+
+    protected function nativeRecipientPrefix(): string
+    {
+        return 'static:';
     }
 
     /**

@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.28.0 - unreleased
+
+Native feature access through Laravel Swarm workflows.
+
+### Added
+
+- Default-off native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input, with decisions-first approval rejection, explicit topology-stable attachment recipients, original-versus-predecessor text selection, and optional per-recipient provider/model/timeout overrides.
+- Versioned, cipher-sealed native-input operational envelopes for queue, concurrency and durable recovery. Queue payloads carry opaque references; staged envelopes record planned paths before private local/base64 attachments are promoted to an application-selected disk, recoverable headers/provider options are preserved as plain resolved values, content identity and authorization are rechecked, and `swarm:prune` owns only Swarm-created temporary files.
+- Default-off native per-run agent settings through `RunContext::withAgentConfiguration()`. Topology-stable recipients preserve Laravel AI `withTools()`, one-shot `withMessages()`, conversations, provider, model and timeout across sequential, real process-parallel, queued, durable, routed-worker, retry and recovered execution. Explicit empty tools/messages remain meaningful overrides; input routing and settings compose in either order. Tools use reconstructible class references or registered factories; recoverable conversations require an existing native conversation and a saved Eloquent participant.
+- Atomic one-shot history consumption and v2 capability-marker jobs. Database-backed terminal history and consumption commit together, so a failed attempt or rolled-back checkpoint receives the history again while a committed step does not; tools remain available at every invocation. `swarm:health` reports active and retained v2 envelopes for rollout and reader removal. Sealed operational settings remain separate from capture evidence, whose audit shape exposes counts and presence only, and existing v2 work drains while new v2 admission is disabled.
+- Deterministic direct-native versus through-Swarm wire parity coverage using Laravel AI's real mocked HTTP request construction, plus legacy payload, capture-independent reconstruction, mixed-version, expiry/revocation/mutation and confidentiality guards.
+- Executable proof of Laravel AI's public native approval pause, inspection,
+  ownership, decision, and continuation contracts, including exact controlled
+  provider wire, approve/reject/edit behavior, repeated pauses, and fresh-process
+  `SIGKILL` crash and recovery classification at every named boundary. Unsafe
+  effect windows remain explicitly non-automatable. The proof documents that a saved
+  result cannot presently resume the same native turn through a supported public
+  operation, defines the minimal upstream requirement and safe operator
+  alternative, and keeps the production bridge default-off and blocked.
+- Bounded, versioned native Laravel AI result access on every completed
+  `SwarmStep`, preserving structured values, reasoning, provider/model, native
+  invocation and conversation/message identities, generation evidence, and
+  normalized tool status across sync, process, queue, durable, and supported
+  streaming paths. Full and Redact remain distinct; the shipped false capture
+  flag maps to Redact, while custom Skip policies write only an omitted status.
+  Database envelopes are sealed and bounded. History, durable, checkpoint, and
+  hot replay envelopes prune with their owners; cold archives remain application-owned.
+- Default-off, process-backed top-level parallel live streaming and broadcast
+  multiplexing. Native Laravel AI branch streams now deliver concurrently with
+  bounded authenticated frames, per-event acknowledgements/backpressure, an
+  absolute deadline, sibling cancellation, and deterministic process cleanup.
+  Branch events add stable `branch_id`, request-local `attempt_id`, and
+  per-attempt `branch_sequence` without rewriting reusable native IDs or
+  inventing a global cross-branch order. The parent remains the sole owner of
+  guardrails, history, replay, capture/redaction, citation/native-result evidence,
+  and once-only usage accounting. Unsupported concurrency drivers fail before
+  provider invocation; `prompt()` remains the explicit buffered alternative.
+  `swarm:health --parallel-streaming` exercises the real provider-free child and
+  authenticated loopback handshake before enablement. SSE responses send
+  advisory no-transform/no-buffering headers, while operators remain responsible
+  for verifying end-to-end proxy/CDN flushing and application-wide process
+  capacity (`concurrent live streams × max_branches`, with several descriptors
+  per branch).
+
+### Changed
+
+- Native input preserves the v0.27.0 background envelope for inline swarms and
+  does not itself add an execution mode. Top-level parallel streaming separately adds default-off,
+  process-backed top-level parallel live multiplexing. Approval `Decisions`
+  remain outside fresh-run input and fail with continuation guidance.
+- Authored parallel and hierarchical workers now reconstruct the declared swarm and stable slot/node inside concurrency workers, preserving configuration expressed by `agents()`. When native per-run settings admission is enabled, ad-hoc concurrent builders require explicit configuration for every reconstructed slot/node and fail before dispatch instead of silently discarding live instance state.
+- Native settings admission now validates known agent compatibility before queue or concurrency dispatch, applies attachment authorization and byte limits to request-local and recovered one-shot messages, bounds the complete recoverable envelope before persistence, resolves conversation policies per invocation, and rejects recoverable message attachment profiles that Laravel AI cannot reconstruct faithfully.
+- Native step results keep final usage and citations on their existing Swarm
+  surfaces, preserve unknown/mixed historical usage semantics, never serialize
+  raw native responses or unrestricted provider payloads, and do not fabricate
+  absent native identifiers. Deploy the additive schema before writers. Code
+  rollback is unsafe after writes while affected identities can resume or retry:
+  stop intake, drain work, deploy and restart all old workers before resuming,
+  then handle schema removal only after evidence retention is satisfied.
+
 ## v0.27.0 - 2026-09-24
 
 Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabilities.

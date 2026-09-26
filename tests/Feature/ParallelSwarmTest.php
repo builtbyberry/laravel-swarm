@@ -52,9 +52,11 @@ test('parallel swarm rejects empty agent lists', function () {
         ->toThrow(SwarmException::class, 'EmptyParallelSwarm: swarm has no agents. Add at least one agent to agents().');
 });
 
-test('parallel swarm agents must be container resolvable for concurrency workers', function () {
-    expect(fn () => UnresolvableParallelSwarm::make()->run('shared-task'))
-        ->toThrow(SwarmException::class, UnresolvableParallelSwarm::class.': parallel agent ['.UnresolvableParallelAgent::class.'] must be container-resolvable because Laravel Concurrency serializes worker callbacks.');
+test('authored parallel swarms reconstruct configured agent slots through the swarm definition', function () {
+    UnresolvableParallelAgent::fake(['authored-slot']);
+
+    expect((string) UnresolvableParallelSwarm::make()->run('shared-task'))
+        ->toBe('authored-slot');
 });
 
 test('parallel swarm crosses the concurrency serialization boundary without agent instance state', function () {

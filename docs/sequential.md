@@ -112,7 +112,7 @@ class EditorAgent implements Agent
 
 When you call `prompt()` (or any execution mode), here is what happens step by step:
 
-1. Your task — a string, array, or `RunContext` — becomes the prompt for the first agent (`ResearchAgent`).
+1. Your task — a string, array, `RunContext`, native `UserMessage`, or message-bearing Laravel AI `AgentInput` — becomes the prompt for the first agent (`ResearchAgent`). Native attachments default only to this entry slot; later slots require [explicit recipients](native-inputs.md#explicit-recipients). Approval decisions are rejected before message extraction and remain with the owning agent continuation flow.
 2. `ResearchAgent` runs and returns a text response. That text becomes the prompt for `WriterAgent`.
 3. `WriterAgent` runs and returns its response. That text becomes the prompt for `EditorAgent`.
 4. `EditorAgent` runs and returns the final text.
@@ -223,7 +223,11 @@ foreach (ContentPipelineSwarm::make()->stream(['topic' => 'Laravel queues']) as 
 }
 ```
 
-Streaming is supported for **sequential swarms only**. See [Streaming](streaming.md) for the full event type reference, SSE integration, and persisted replay.
+Sequential swarms are one supported live-streaming topology. Generated and
+static hierarchical swarms are also supported, and top-level parallel live
+multiplexing is available behind its default-off process-transport flag. See
+[Streaming](streaming.md) for the complete topology contract, event reference,
+SSE integration, and persisted replay.
 
 ### `dispatchDurable()` — durable background execution
 

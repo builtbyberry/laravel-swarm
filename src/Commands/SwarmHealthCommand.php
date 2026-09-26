@@ -9,15 +9,21 @@ use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
+use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamLimits;
 use Carbon\CarbonInterface;
+use Illuminate\Concurrency\ConcurrencyManager;
+use Illuminate\Concurrency\ProcessDriver;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Filesystem\Factory;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Connection;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -28,10 +34,11 @@ class SwarmHealthCommand extends Command
 {
     protected $signature = 'swarm:health
                             {--durable : Also verify durable database runtime tables}
+                            {--parallel-streaming : Exercise the provider-free live parallel process transport}
                             {--audit : Run only the audit outbox checks (skips persistence and durable)}
                             {--json : Output machine-readable health results}';
 
-    protected $description = 'Verify Laravel Swarm persistence readiness';
+    protected $description = 'Verify Laravel Swarm persistence and runtime readiness';
 
     public function handle(
         Application $app,
@@ -39,9 +46,22 @@ class SwarmHealthCommand extends Command
         Connection $connection,
         CommandOverlapGuard $overlapGuard,
     ): int {
+        $concurrency = $app->make(ConcurrencyManager::class);
+        $parallelStreamTransport = $app->make(ParallelProcessStreamTransport::class);
+        $parallelStreamLimits = $app->make(ParallelStreamLimits::class);
         $auditOnly = $this->option('audit') === true;
 
         $results = [];
+
+        if ($auditOnly && $this->option('parallel-streaming') === true) {
+            $results[] = [
+                'component' => 'Command options',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => '--audit cannot be combined with --parallel-streaming; run the readiness checks separately.',
+            ];
+        }
 
         if (! $auditOnly) {
             $checks = [
@@ -60,6 +80,7 @@ class SwarmHealthCommand extends Command
                 fn (array $check): array => $this->runCheck($app, $config, $check),
                 $checks,
             );
+            $results[] = $this->runNativeInputCheck($app, $config, $connection);
 
             if ($this->option('durable') === true) {
                 $results[] = $this->runActiveContextCaptureCheck($config);
@@ -82,6 +103,11 @@ class SwarmHealthCommand extends Command
             $results[] = $this->runGuardrailResolutionCheck($app, $config);
             $results[] = $this->runAuditSinkCheck($app);
             $results[] = $this->runCapturePolicyCheck($app);
+
+            if ($this->option('parallel-streaming') === true
+                || (bool) $config->get('swarm.streaming.parallel.enabled', false)) {
+                $results[] = $this->runParallelStreamingCheck($config, $concurrency, $parallelStreamTransport, $parallelStreamLimits);
+            }
         }
 
         // Audit outbox checks run by default (the audit lane is on by default in v0.5)
@@ -113,6 +139,138 @@ class SwarmHealthCommand extends Command
         return $hasFailure
             ? self::FAILURE
             : self::SUCCESS;
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runParallelStreamingCheck(
+        ConfigRepository $config,
+        ConcurrencyManager $concurrency,
+        ParallelProcessStreamTransport $transport,
+        ParallelStreamLimits $limits,
+    ): array {
+        $enabled = (bool) $config->get('swarm.streaming.parallel.enabled', false);
+        if (! $concurrency->driver() instanceof ProcessDriver) {
+            return [
+                'component' => 'Parallel live streaming',
+                'driver' => get_debug_type($concurrency->driver()),
+                'store' => 'loopback',
+                'status' => 'failed',
+                'details' => 'Laravel concurrency.default must resolve to the process driver before parallel live streaming is enabled.',
+            ];
+        }
+
+        try {
+            $resolved = $limits->resolve();
+            $transport->assertReady($resolved['max_frame_bytes'], $resolved['cancel_grace_milliseconds']);
+
+            return [
+                'component' => 'Parallel live streaming',
+                'driver' => 'process',
+                'store' => 'loopback',
+                'status' => 'ok',
+                'details' => ($enabled ? 'writer enabled; ' : 'writer disabled; ')
+                    .'provider-free child bootstrap and authenticated loopback handshake passed; '
+                    ."max_branches={$resolved['max_branches']}, max_frame_bytes={$resolved['max_frame_bytes']}, cancel_grace_milliseconds={$resolved['cancel_grace_milliseconds']}",
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Parallel live streaming',
+                'driver' => 'process',
+                'store' => 'loopback',
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runNativeInputCheck(Application $app, ConfigRepository $config, Connection $connection): array
+    {
+        $enabled = (bool) $config->get('swarm.native_inputs.enabled', false);
+        $settingsEnabled = (bool) $config->get('swarm.native_agent_settings.enabled', false);
+        $table = (string) $config->get('swarm.tables.native_inputs', 'swarm_native_inputs');
+        $contextTable = (string) $config->get('swarm.tables.contexts', 'swarm_contexts');
+        $schema = $connection->getSchemaBuilder();
+
+        $problems = [];
+        if ($config->get('swarm.persistence.driver') !== 'database') {
+            $problems[] = 'swarm.persistence.driver must be database';
+        }
+        if (! (bool) $config->get('swarm.persistence.encrypt_at_rest', false)) {
+            $problems[] = 'swarm.persistence.encrypt_at_rest must be enabled';
+        }
+        if (! $schema->hasTable($table)
+            || ! $schema->hasColumns($table, ['id', 'run_id', 'format_version', 'state', 'payload', 'payload_hash', 'expires_at'])) {
+            $problems[] = "native input table [{$table}] is missing required columns";
+        }
+        if (! $schema->hasTable($contextTable) || ! $schema->hasColumn($contextTable, 'native_input_ref')) {
+            $problems[] = "context table [{$contextTable}] is missing native_input_ref";
+        }
+        if ($settingsEnabled && ! $enabled) {
+            $problems[] = 'swarm.native_agent_settings.enabled requires swarm.native_inputs.enabled';
+        }
+
+        $disk = $config->get('swarm.native_inputs.disk');
+        if (! is_string($disk) || $disk === '') {
+            $problems[] = 'swarm.native_inputs.disk is not configured';
+        } else {
+            try {
+                $app->make(Factory::class)->disk($disk);
+            } catch (Throwable $exception) {
+                $problems[] = "native input disk [{$disk}] cannot be resolved: {$exception->getMessage()}";
+            }
+        }
+
+        $hasStateTable = $schema->hasTable($table) && $schema->hasColumn($table, 'state');
+        $hasVersionedTable = $hasStateTable && $schema->hasColumn($table, 'format_version');
+        $activeV2 = $hasVersionedTable
+            ? (int) $connection->table($table)->where('format_version', 2)->where('state', 'active')->count()
+            : null;
+        $remainingV2 = $hasVersionedTable
+            ? (int) $connection->table($table)->where('format_version', 2)->count()
+            : null;
+        $settingsStatus = $activeV2 === null || $remainingV2 === null
+            ? 'v2 drain cannot be verified because the table is absent'
+            : ($settingsEnabled
+                ? "v2 writer enabled; {$activeV2} active and {$remainingV2} total v2 envelope(s) remain"
+                : "v2 writer disabled; {$activeV2} active and {$remainingV2} total v2 envelope(s) remain; prune to zero before removing v2 readers");
+
+        if (! $enabled) {
+            $active = $hasStateTable
+                ? (int) $connection->table($table)->where('state', 'active')->count()
+                : null;
+            $drain = $active === null
+                ? 'active envelope drain cannot be verified because the table is absent'
+                : ($active === 0
+                    ? 'no active native input envelopes remain'
+                    : "{$active} active native input envelope(s) must drain before removing readers");
+            $preflight = $problems === []
+                ? "sealed v1/v2 envelope table and private disk [{$disk}] are ready"
+                : 'pre-enable readiness: '.implode('; ', $problems);
+
+            return [
+                'component' => 'Native inputs',
+                'driver' => 'disabled',
+                'store' => $table,
+                'status' => $settingsEnabled
+                    || (is_string($disk) && $disk !== '' && $problems !== []) ? 'failed' : 'note',
+                'details' => "writer disabled; {$drain}; {$settingsStatus}; {$preflight}",
+            ];
+        }
+
+        return [
+            'component' => 'Native inputs',
+            'driver' => 'database',
+            'store' => $table,
+            'status' => $problems === [] ? 'ok' : 'failed',
+            'details' => $problems === []
+                ? "sealed v1/v2 envelope table and private disk [{$disk}] are ready; {$settingsStatus}"
+                : implode('; ', $problems),
+        ];
     }
 
     /**
@@ -649,21 +807,25 @@ class SwarmHealthCommand extends Command
                 throw new \RuntimeException('Readiness check is not available for the resolved store.');
             }
 
+            $notes = [];
             if ($store instanceof ChecksCitationStorage) {
                 $store->assertCitationStorageReady();
             } elseif ($store instanceof StreamStepCheckpointStore) {
-                return [
-                    'component' => $check['component'], 'driver' => $driver, 'store' => $storeName,
-                    'status' => 'note', 'details' => 'custom checkpoint store does not expose citation readiness checks',
-                ];
+                $notes[] = 'custom checkpoint store does not expose citation readiness checks';
+            }
+
+            if ($store instanceof ChecksNativeStepResultStorage) {
+                $store->assertNativeStepResultStorageReady();
+            } elseif ($store instanceof StreamStepCheckpointStore) {
+                $notes[] = 'custom checkpoint store does not expose native-result readiness checks';
             }
 
             return [
                 'component' => $check['component'],
                 'driver' => $driver,
                 'store' => $storeName,
-                'status' => 'ok',
-                'details' => 'ready',
+                'status' => $notes === [] ? 'ok' : 'note',
+                'details' => $notes === [] ? 'ready' : implode('; ', $notes),
             ];
         } catch (Throwable $exception) {
             return [

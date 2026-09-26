@@ -135,9 +135,10 @@ instead.
   receives a `QueuedSwarmResponse` immediately and the run completes in the
   background. No streaming and no checkpointing.
 
-- **`stream()`** — sequential swarms only; returns a lazy `StreamableSwarmResponse`
-  that emits typed token events as the final agent produces output. Supports
-  in-memory and persisted replay.
+- **`stream()`** — returns a lazy `StreamableSwarmResponse` for sequential,
+  generated hierarchical, static hierarchical, and explicitly enabled
+  process-backed parallel swarms. It supports in-memory and persisted replay;
+  parallel events are branch-ordered and do not invent a global order.
 
 - **`broadcast()` / `broadcastOnQueue()`** — stream events are broadcast over
   Laravel broadcasting channels as they are emitted, so browser clients can

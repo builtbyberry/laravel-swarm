@@ -44,8 +44,10 @@ can inspect counts while pruning is disabled.
 The command prunes the history, context, artifact, stream replay, durable
 runtime, durable node state, durable run state, durable node-output, durable
 branch, signal, wait, label, detail, progress, child-run, and durable webhook
-idempotency tables in bounded chunks to avoid long-running table locks on large
-datasets.
+idempotency tables, plus expired native-input operational envelopes, in bounded
+chunks to avoid long-running table locks on large datasets. Native-input cleanup
+deletes only Swarm-promoted files and retains the envelope for retry if any file
+delete fails.
 
 Laravel Swarm protects active runs across persistence stores. While a run is
 `pending`, `running`, `waiting`, or `paused`, its history, context, artifact,
@@ -148,6 +150,17 @@ swarm execution:
 ```bash
 php artisan swarm:health
 ```
+
+Before enabling top-level parallel live streaming, exercise its actual
+provider-free child bootstrap and authenticated loopback transport:
+
+```bash
+php artisan swarm:health --parallel-streaming
+```
+
+Require the `Parallel live streaming` row to report `ok`. The check validates
+the effective branch/frame/cancellation limits and cannot be combined with the
+audit-only option. After the writer is enabled, bare `swarm:health` runs it too.
 
 For deployments using `dispatchDurable()` or coordinated multi-worker
 hierarchical queueing, include the durable runtime tables:

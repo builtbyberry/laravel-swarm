@@ -11,12 +11,14 @@ use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\StructuredOutputStreamingException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalFinishNode;
@@ -33,8 +35,12 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentSettingsAttempt;
+use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -113,6 +119,7 @@ class HierarchicalRunner
         $mergedUsage = $this->mergeUsageReport($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
 
         $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorStep->output, $state->swarm::class);
+        $state->context->assertNativeNodeRecipients('generated:', $plan->workerNodeIds());
         $this->ensurePlanWithinExecutionBudget($state, $plan);
 
         $deferral = null;
@@ -210,6 +217,7 @@ class HierarchicalRunner
         $mergedUsage = $this->mergeUsageReport($mergedUsage, (array) ($coordinatorStep->metadata['usage'] ?? []));
 
         $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorStep->output, $state->swarm::class);
+        $state->context->assertNativeNodeRecipients('generated:', $plan->workerNodeIds());
         $this->ensurePlanWithinExecutionBudget($state, $plan);
 
         $deferral = null;
@@ -561,6 +569,7 @@ class HierarchicalRunner
         );
 
         $plan = $this->planner->fromCoordinatorOutput($coordinator, $workers, $coordinatorStep->output, $state->swarm::class);
+        $state->context->assertNativeNodeRecipients('generated:', $plan->workerNodeIds());
         $this->ensurePlanWithinExecutionBudget($state, $plan);
 
         $cursor = $this->buildDurableCursor($plan, $coordinator::class);
@@ -807,7 +816,13 @@ class HierarchicalRunner
         return new DurableHierarchicalStepResult(
             step: $step,
             routeCursor: $cursor,
-            nodeOutput: ['node_id' => $node->id, 'output' => $step->output, 'citation_evidence' => $this->capture->citationEvidence($step->citationEvidence, $state->context)->toArray()],
+            nodeOutput: [
+                'node_id' => $node->id,
+                'output' => $step->output,
+                'citation_evidence' => $this->capture->citationEvidence($step->citationEvidence, $state->context)->toArray(),
+                'native_result_status' => ($capturedNative = $this->capture->nativeResult($step->nativeResult, $state->context))?->status,
+                'native_result' => $capturedNative?->toArray(),
+            ],
             complete: $this->isDurableCursorComplete($cursor),
             clearBranchParentNodeIds: $clearBranchParentNodeIds,
         );
@@ -998,18 +1013,44 @@ class HierarchicalRunner
                         $branchRunId = $state->context->runId;
                         $branchSwarmClass = $state->swarm::class;
                         $branchContextPayload = $state->context->toQueuePayload();
-                        $callbacks[$branchNodeId] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchIndex, $branchNodeId, $citationLimits): array {
-                            $worker = Container::getInstance()->make($agentClass);
+                        $nativeRecipient = ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').$branchNodeId;
+                        $nativeSelection = $state->context->nativeRecipient($nativeRecipient);
+                        if ($nativeSelection !== null) {
+                            NativeAgentInvoker::assertCompatible($worker, $nativeSelection);
+                        }
+                        $adHoc = $state->swarm instanceof AdHocSwarm;
+                        if ($adHoc
+                            && (bool) $this->config->get('swarm.native_agent_settings.enabled', false)
+                            && ! $state->context->hasNativeSettingsFor($nativeRecipient)) {
+                            throw new SwarmException('Ad-hoc hierarchical parallel workers are reconstructed in worker processes, so live instance state cannot be preserved. Declare per-run native settings for every routed node with RunContext::withAgentConfiguration(), or use a container-resolvable authored swarm.');
+                        }
+                        $attemptIds = $state->nativeSettingsAttempt->ids();
+                        $nativeResultLimits = Container::getInstance()->make(NativeStepResultProjector::class)->resolvedLimits();
+                        $callbacks[$branchNodeId] = function () use ($agentClass, $input, $branchRunId, $branchSwarmClass, $branchContextPayload, $branchIndex, $branchNodeId, $citationLimits, $nativeResultLimits, $nativeRecipient, $attemptIds, $adHoc): array {
+                            $worker = null;
+                            $workerSwarm = $adHoc ? null : Container::getInstance()->make($branchSwarmClass);
+                            if ($workerSwarm instanceof Swarm) {
+                                foreach ($workerSwarm->agents() as $candidate) {
+                                    if ($candidate::class === $agentClass) {
+                                        $worker = $candidate;
+                                        break;
+                                    }
+                                }
+                            }
+                            $worker ??= Container::getInstance()->make($agentClass);
 
                             if (! $worker instanceof Agent) {
                                 throw new SwarmException("Hierarchical parallel worker [{$agentClass}] must resolve to a Laravel AI agent.");
                             }
 
-                            ActiveRunContext::enter($branchRunId, $branchSwarmClass, RunContext::fromPayload($branchContextPayload, $branchRunId));
+                            $branchContext = RunContext::fromPayload($branchContextPayload, $branchRunId);
+                            $attempt = new NativeAgentSettingsAttempt($attemptIds);
+                            ActiveRunContext::enter($branchRunId, $branchSwarmClass, $branchContext);
 
                             try {
                                 $startedAt = MonotonicTime::now();
-                                $response = $worker->prompt($input);
+                                $invocation = $branchContext->nativeInvocation($nativeRecipient, $input, $attempt);
+                                $response = NativeAgentInvoker::prompt($worker, $invocation);
                                 Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
@@ -1018,6 +1059,8 @@ class HierarchicalRunner
                                     'usage' => $response->usage->toArray(),
                                     'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
                                     'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
+                                    'native_settings_consumed' => $attempt->ids(),
+                                    'native_result' => NativeStepResultProjector::fromResolvedLimits($nativeResultLimits)->fromResponse($response)->toArray(),
                                 ];
                             } finally {
                                 ActiveRunContext::exit();
@@ -1027,8 +1070,12 @@ class HierarchicalRunner
 
                     $driver = $this->concurrency->driver();
                     $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-                    /** @var array<string, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>}> $results */
+                    /** @var array<string, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: array<int, array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>, native_settings_consumed: list<string>, native_result: array<string, mixed>}> $results */
                     $results = $this->outcomes->validateConcurrentResults($results);
+
+                    foreach ($results as $row) {
+                        $state->nativeSettingsAttempt->merge(is_array($row['native_settings_consumed'] ?? null) ? $row['native_settings_consumed'] : []);
+                    }
 
                     foreach ($results as $branchNodeId => $rowData) {
                         if (! isset($branchSnapshots[$branchNodeId])) {
@@ -1115,6 +1162,7 @@ class HierarchicalRunner
                             storeContext: false,
                             includeUsageInMetadata: false,
                             citationEvidence: CitationEvidence::fromArray($row['citation_evidence']),
+                            nativeResult: NativeStepResult::fromArray($row['native_result']),
                         );
 
                         $steps[] = $step;
@@ -1625,7 +1673,11 @@ class HierarchicalRunner
         ActiveRunContext::enter($state->context->runId, $state->swarm::class, $state->context);
 
         try {
-            $response = $agent->prompt($input);
+            $recipient = ($metadata['node_role'] ?? null) === 'coordinator'
+                ? 'generated:coordinator'
+                : ($state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:').(string) ($metadata['node_id'] ?? $index);
+            $invocation = $state->context->nativeInvocation($recipient, $input, $state->nativeSettingsAttempt);
+            $response = NativeAgentInvoker::prompt($agent, $invocation);
             $this->outcomes->validateResponse($response);
         } finally {
             ActiveRunContext::exit();
@@ -1655,6 +1707,7 @@ class HierarchicalRunner
             storeContext: $storeContext,
             storeArtifacts: $storeArtifacts,
             citationEvidence: $this->citations->response($response, $state->context->runId, $index, $agent::class, is_string($metadata['node_id'] ?? null) ? $metadata['node_id'] : null),
+            nativeResult: $this->stepsRecorder->nativeResult($response),
         );
     }
 
@@ -1735,7 +1788,9 @@ class HierarchicalRunner
 
         $nativeStreamFailure = null;
         try {
-            $stream = $agent->stream($input);
+            $prefix = $state->topology === Topology::StaticHierarchical ? 'static:' : 'generated:';
+            $invocation = $state->context->nativeInvocation($prefix.$nodeId, $input, $state->nativeSettingsAttempt);
+            $stream = NativeAgentInvoker::stream($agent, $invocation);
             foreach ($stream as $event) {
                 $swarmEvent = $this->mapper->map($event, $state, $index, $agent, $accumulator);
 
@@ -1782,6 +1837,7 @@ class HierarchicalRunner
             metadata: $metadata,
             storeContext: false,
             storeArtifacts: false,
+            nativeResult: $accumulator->nativeResult,
         );
 
         // Close the node bracket once the step has fully completed — every event

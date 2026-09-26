@@ -34,8 +34,7 @@ final class SwarmStreamEnd extends SwarmStreamEvent
         return [
             ...$this->citationEvidence->toArray(),
             'id' => $this->id,
-            'invocation_id' => $this->invocationId,
-            'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'type' => 'swarm_stream_end',
             'run_id' => $this->runId,
             'output' => $this->output,

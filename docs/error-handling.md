@@ -8,7 +8,7 @@ Every swarm run can fail at multiple points — input validation, agent executio
 - **Agent execution** — during an individual agent's LLM call; provider errors, tool call failures, and malformed responses surface here
 - **Step guardrail** — after an agent completes, before that step is recorded; blocks before the output is persisted
 - **Output guardrail** — after the last agent, before the run is marked completed; blocks before `SwarmCompleted` fires
-- **Timeout** — orchestration deadline exceeded; checked between steps, not mid-generation
+- **Timeout** — orchestration deadline exceeded; ordinary modes check at step boundaries, while process-backed top-level parallel streams also enforce it during live multiplexing
 - **Lease loss** — a durable or queued run lost its database lease; handled by recovery for durable runs
 - **Provider error** — network or API error from the AI provider; surfaces as a `SwarmStreamProviderException` in stream mode or as a plain exception in other modes
 
@@ -230,7 +230,8 @@ class ComplianceReviewSwarm implements Swarm
 
 **How the deadline works:**
 
-- The deadline is checked **between steps**, not mid-generation. An in-progress LLM call is never hard-cancelled.
+- Ordinary prompt, queue, sequential-stream, hierarchical, and durable paths check the deadline at their documented step boundaries; an in-progress remote LLM call is not hard-cancelled.
+- Opt-in top-level parallel live streaming also checks the absolute deadline while polling sockets and waiting for consumer acknowledgement. It terminates and reaps local branch processes on expiry, but cannot guarantee cancellation of remote provider work already accepted.
 - When the deadline is exceeded at a step boundary, the step that was in progress completes normally, and then the run fails with `SwarmTimeoutException`.
 - Run history is written with a `failed` status and `SwarmFailed` fires.
 - For `prompt()`, the exception propagates to the caller.

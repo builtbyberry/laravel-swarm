@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 
 final class SwarmStepEnd extends SwarmStreamEvent
 {
@@ -24,6 +25,7 @@ final class SwarmStepEnd extends SwarmStreamEvent
         public array $metadata,
         public int $timestamp,
         ?CitationEvidence $citationEvidence = null,
+        public ?NativeStepResult $nativeResult = null,
     ) {
         $this->citationEvidence = $citationEvidence ?? new CitationEvidence;
     }
@@ -36,8 +38,7 @@ final class SwarmStepEnd extends SwarmStreamEvent
         return [
             ...$this->citationEvidence->toArray(),
             'id' => $this->id,
-            'invocation_id' => $this->invocationId,
-            'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'type' => 'swarm_step_end',
             'run_id' => $this->runId,
             'step_index' => $this->stepIndex,
@@ -47,6 +48,7 @@ final class SwarmStepEnd extends SwarmStreamEvent
             'duration_ms' => $this->durationMs,
             'metadata' => $this->metadata,
             'timestamp' => $this->timestamp,
+            ...($this->nativeResult !== null ? ['native_result' => $this->nativeResult->toArray()] : []),
         ];
     }
 
@@ -66,6 +68,9 @@ final class SwarmStepEnd extends SwarmStreamEvent
             durationMs: self::nullableIntValue($payload, 'duration_ms'),
             metadata: self::arrayValue($payload, 'metadata'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
+            nativeResult: is_array($payload['native_result'] ?? null)
+                ? NativeStepResult::fromArray($payload['native_result'])
+                : NativeStepResult::unavailable(['legacy']),
         );
     }
 }

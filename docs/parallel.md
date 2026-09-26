@@ -57,10 +57,15 @@ This is the most important thing to understand about Parallel swarms before you 
 
 **Why it exists:** Laravel Swarm runs parallel agents through Laravel's `ConcurrencyManager`, which dispatches work to separate PHP worker processes. The only information a worker receives is a serialized closure. PHP's serializer cannot capture arbitrary runtime state — objects instantiated outside the closure, references to service instances, or class properties that hold database connections, HTTP clients, or closures will either serialize incorrectly or fail to unserialize in the worker process.
 
-Laravel Swarm's `ParallelRunner` solves this by extracting only the agent's class name from each instance you return in `agents()`, then re-resolving a fresh instance from the container inside each worker. This means:
+Laravel Swarm's `ParallelRunner` re-resolves an authored swarm inside each worker
+and selects the same stable agent slot. If the parent selected a different agent
+class for that slot, that class is resolved directly from the container. Ad-hoc
+parallel builders always resolve each agent class directly. This means:
 
 1. Each agent **must be resolvable by class name** from the service container in the worker process.
-2. The agent **must be stateless** — any state you attach to the agent instance in `agents()` will be discarded; the worker creates a new instance.
+2. Runtime state must be declared by the authored swarm or through
+   `RunContext::withAgentConfiguration()`. Ad-hoc instance mutations are not a
+   transport and are rejected while native-settings admission is enabled.
 3. Constructor dependencies **must be bindable through the container** (interfaces need normal `AppServiceProvider` bindings; concrete classes work by default).
 
 **What does not work:**
@@ -155,13 +160,23 @@ Each `$step` has:
 - `metadata` — includes `index`, `usage`, and `duration_ms`
 - `artifacts` — any artifacts the agent attached
 
-## Streaming Limitation
+## Live Streaming
 
-Parallel swarms do **not** support `stream()`, `broadcast()`, `broadcastNow()`, or `broadcastOnQueue()`.
+Parallel `stream()`, `broadcast()`, `broadcastNow()`, and `broadcastOnQueue()`
+are available behind `SWARM_PARALLEL_STREAMING_ENABLED=true` when Laravel's
+concurrency driver is `process`. The flag defaults off.
 
-These methods assume a sequential event stream: text delta, then tool call, then next agent starts. With concurrent fan-out, there is no meaningful ordering of tokens across simultaneous agent runs. Emitting interleaved deltas from three agents at once would produce an incoherent stream with no way to demarcate which tokens belong to which agent.
+Events are truly interleaved while branch processes run. Each branch event has
+`branch_id`, `attempt_id`, and a strictly increasing `branch_sequence`; native
+event/invocation IDs pass through unchanged and may repeat across branches.
+There is no global branch order. Render each branch independently, then use the
+authored step order for the completed response. See [Parallel live
+multiplexing](streaming.md#parallel-live-multiplexing) for backpressure, bounds,
+failure, disconnect, replay, broadcast, and rollout behavior.
 
-If you need live progress while parallel work runs, listen to lifecycle events (`SwarmStarted`, `SwarmStepCompleted`, `SwarmCompleted`) from a separate broadcasting layer rather than using the stream methods.
+If the process transport is unavailable, the call fails before invoking an
+agent. Use `prompt()` for buffered completion. Swarm never labels buffered
+completion as a live stream.
 
 ## Timeout
 
@@ -180,7 +195,12 @@ class ResearchSwarm implements Swarm
 }
 ```
 
-The timeout is checked before the parallel group starts and again after it completes. If the deadline has passed at either check, a `SwarmTimeoutException` is thrown and the run fails. The timeout does not hard-cancel an in-flight provider call — it is an orchestration deadline, not a process kill signal.
+For `prompt()` and `queue()`, the timeout is checked before the parallel group
+starts and again after it completes. It does not hard-cancel an in-flight
+provider call. The opt-in process-backed `stream()` path additionally enforces
+the absolute deadline while multiplexing and terminates/reaps its local branch
+processes. That local process termination cannot guarantee cancellation of a
+remote provider effect the provider already accepted.
 
 ## Execution Modes
 
@@ -188,8 +208,8 @@ The timeout is checked before the parallel group starts and again after it compl
 |---|---|---|
 | `prompt()` | Yes | Blocks until all agents complete, then returns `SwarmResponse`. |
 | `queue()` | Yes | Dispatches a single background job that runs the parallel group. |
-| `stream()` | No | Not supported. See [Streaming Limitation](#streaming-limitation). |
-| `broadcast()` / `broadcastNow()` / `broadcastOnQueue()` | No | Not supported. Sequential-only stream helpers. |
+| `stream()` | Opt-in | Live process-backed multiplexing; default off. See [Live Streaming](#live-streaming). |
+| `broadcast()` / `broadcastNow()` / `broadcastOnQueue()` | Opt-in | Same live branch stream and identity contract; default off. |
 | `dispatchDurable()` | Yes | Each agent becomes an independent durable branch job. See below. |
 
 ## Durable Parallel Failure Policy
@@ -247,11 +267,24 @@ The fake verifies that your application code invokes the swarm correctly. It doe
 composer test:process-concurrency
 ```
 
+Before enabling top-level parallel live streaming in a serving environment, run
+`php artisan swarm:health --parallel-streaming` and require the `Parallel live
+streaming` row to report `ok`. Its `max_branches` setting limits branch processes
+per stream, not application-wide processes or raw file descriptors. Budget
+aggregate capacity as concurrent live streams times `max_branches`, allow several
+descriptors per branch, and enforce that bound in the application's serving or
+queue concurrency controls.
+
+Process workers do not inherit request-local tenant globals. Carry tenant
+identity in `RunContext` (and Laravel `Context` when your child bootstrap reads
+it); the child enters the reconstructed active run context before resolving its
+agent. Application tenancy bindings must initialize from that explicit identity.
+
 See [Testing](testing.md) for the full testing guide, including lifecycle event assertions and persisted run assertions.
 
 ## Related
 
 - [examples/parallel-research-swarm](../examples/parallel-research-swarm/README.md) — working example with market, competitor, and customer researcher agents
 - [Durable Execution](durable-execution.md) — checkpointed background execution including durable parallel branches
-- [Streaming](streaming.md) — supports sequential and both hierarchical topologies; not top-level Parallel swarms
+- [Streaming](streaming.md) — includes the default-off, process-backed top-level parallel live contract
 - [Testing](testing.md) — fakes, assertions, and process-concurrency test lane

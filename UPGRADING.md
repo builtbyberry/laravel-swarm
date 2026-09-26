@@ -1,5 +1,194 @@
 # Upgrading Laravel Swarm
 
+## Upgrading to v0.28.0
+
+Native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input is
+additive and default-off. An `AgentInput` carrying approval decisions is rejected
+before its message is read; approval continuation remains a separate workflow. Run
+the package migration and deploy v0.28 readers to every queue and durable worker
+before setting `SWARM_NATIVE_INPUTS_ENABLED=true`. Configure database persistence,
+application-layer sealing, and a private `SWARM_NATIVE_INPUTS_DISK`; bind
+`AuthorizesNativeInputAttachment` before admitting application-owned stored or
+provider-file references. See [Native messages and attachments](docs/native-inputs.md)
+for the complete deployment and drain-before-rollback procedure.
+
+### Top-level parallel live streaming
+
+No migration is required. The capability is default-off. Deploy v0.28 code to
+every HTTP and queue worker, configure Laravel's concurrency driver as `process`,
+run `php artisan swarm:health --parallel-streaming` in the serving environment,
+require the `Parallel live streaming` row to report `ok`, and only then set
+`SWARM_PARALLEL_STREAMING_ENABLED=true` for endpoints that use a top-level
+parallel swarm's `stream()` or broadcast helpers.
+
+If your application has published `config/swarm.php`, Laravel's package config
+merge will not add nested keys beneath an existing `streaming` array. Merge this
+complete block into the published file before enabling the environment flag
+(or carefully republish with `--force` after preserving local customizations):
+
+```php
+'parallel' => [
+    'enabled' => filter_var(env('SWARM_PARALLEL_STREAMING_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+    'max_branches' => (int) env('SWARM_PARALLEL_STREAMING_MAX_BRANCHES', 32),
+    'max_frame_bytes' => (int) env('SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES', 2097152),
+    'cancel_grace_milliseconds' => (int) env('SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS', 250),
+],
+```
+
+Place it inside the published `streaming` array. Confirm
+`config('swarm.streaming.parallel.enabled')` reflects the environment after
+clearing and rebuilding the application's configuration cache.
+
+Parallel branch events add optional wire keys. Existing replay rows and
+non-parallel events omit them; branch-scoped events contain string `branch_id`,
+string `attempt_id`, and integer `branch_sequence`. The PHP object properties
+remain nullable for compatibility. Update exhaustive event consumers before
+enabling the writer. Order only within one `(branch_id, attempt_id)` by
+`branch_sequence`; arrival order across branches is not a causal order. Native
+IDs remain unchanged and can repeat across branches.
+
+The live path requires the `process` driver. `sync`, `fork`, and custom drivers
+fail before agent invocation because their public result is buffered. Use
+`prompt()` where process streaming is unavailable. There is no automatic
+buffered fallback. Tune `max_branches`, `max_frame_bytes`, and cancellation grace
+for the worker's process and memory budgets; a frame is one atomic event and is
+never split. `max_branches` is a per-stream branch-process admission limit, not a
+raw file-descriptor or application-wide ceiling. Each branch owns several
+descriptors, so budget aggregate capacity as concurrent live streams times
+`max_branches` and enforce that capacity through application HTTP/queue
+concurrency controls or a rate limiter.
+
+On a branch failure, protocol failure, deadline, or client disconnect, partial
+events may already have reached the consumer. The run fails and active siblings
+are canceled/reaped. Retry only under the application's normal effect/idempotency
+policy. Broadcast transport retry remains Laravel/application-owned. Existing
+stream replay retention and `swarm:prune` ownership apply; this feature adds no
+new persistent table, retention hook, or standalone command. It extends the
+existing `swarm:health` command with `--parallel-streaming`; after the feature is
+enabled, bare `swarm:health` runs the same provider-free transport check.
+
+Stream responses add advisory `Cache-Control: no-cache, no-transform` and
+`X-Accel-Buffering: no` headers. Verify application-server, FastCGI/proxy, and
+CDN flushing end to end before treating browser delivery as live.
+
+Rollback is safe only after active live streams drain. Disable
+`SWARM_PARALLEL_STREAMING_ENABLED`, restart long-lived workers so no new parallel
+streams begin, stop or drain the queue that owns queued broadcasts, and wait for
+the serving layer to report zero active streaming requests and the broadcast
+queue to report zero active/reserved jobs before deploying old readers.
+`swarm:history --status=running` can identify known persisted runs, but it is
+advisory rather than an authoritative active-connection count; use the HTTP
+server/load balancer and queue worker as the rollback stop condition. Retaining
+replay rows with the optional identity keys is schema-safe, but older consumers
+may discard the optional keys and cannot reconstruct cross-branch provenance.
+
+The `Runnable` and inline pending-run execution verbs now accept `AgentInput|UserMessage` in
+addition to string, array, and `RunContext`. Applications that override
+`prompt()`, `run()`, `queue()`, `stream()`, broadcast helpers, or
+`dispatchDurable()` with the old narrower parameter union must add both types
+to remain PHP-signature-compatible. `SwarmPruneCommand::handle()` retains its
+existing public signature so command subclasses are not forced to change.
+
+Recoverable native input must be admitted outside an open database transaction.
+The staged sealed envelope is the failure-recovery locator for promoted files;
+an outer rollback after a filesystem write would destroy that invariant.
+
+Before rotating `APP_KEY`, drain or re-encrypt active `swarm_native_inputs.payload`
+values along with the existing sealed operational inventory. These envelopes use
+strict decryption and cannot be reconstructed with the wrong key.
+
+### Native per-run agent settings
+
+Deploy this release's v2 readers and restart every queue, durable and concurrency
+worker before setting `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true`. The v2 flag is a
+layered writer: `SWARM_NATIVE_INPUTS_ENABLED=true` is required first because v2
+settings use the base sealed native-input envelope. Disabling only the v2 writer
+does not stop already-admitted v2 references from draining. Roll out in this order:
+
+1. Run the v0.28 native-input migration and deploy v1/v2-capable readers with both writer flags off.
+2. Enable `SWARM_NATIVE_INPUTS_ENABLED=true` before admitting native input or settings.
+3. After every worker is on v0.28, enable `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true`.
+4. Before rollback, disable the settings writer, restart long-lived workers, drain
+   active v2 envelopes, wait through retention, run `swarm:prune`, and confirm
+   `swarm:health` reports zero total v2 envelopes before removing v2 readers.
+
+`RunContext::withAgentConfiguration()` accepts topology-stable
+`NativeInputRecipient` values. Laravel AI `withTools()` configuration persists for
+each recipient invocation; `withMessages()` is one-shot and is consumed only with
+the owning successful step/checkpoint transaction. Recoverable message attachments
+use the same private-disk promotion, content verification and prune path as direct
+native input. Operational settings stay in the cipher-sealed native-input envelope
+even when capture is disabled; they are not history or audit evidence.
+
+Do not pass closures, resolved container services or runtime tool objects. Use
+`NativeAgentToolReference`, or register a `NativeAgentToolFactory` under
+`swarm.native_agent_settings.tool_factories` and pass a
+`NativeAgentToolFactoryReference`. Factory output is expanded once at admission
+and the resulting class/argument descriptors are sealed.
+
+An explicit empty override remains meaningful: `withTools([])` disables declared
+agent tools and `withMessages([])` applies empty ad-hoc history. Recoverable
+non-empty messages require `swarm.history.driver=database`; otherwise admission
+fails because terminal history and one-shot consumption cannot commit atomically.
+Custom `NativeInputStore` implementations that support these messages must also
+implement `ConsumesNativeInputMessages`, including the same-connection transaction
+callback. Legacy/custom readers may omit `format_version` from `find()` while
+upgrading; v0.28 derives it from the sealed payload.
+
+Authored concurrent swarms reconstruct the swarm definition and select the same
+stable slot/node. With the settings writer enabled, ad-hoc concurrent builders must
+declare settings for every reconstructed recipient; otherwise dispatch fails with
+guidance instead of dropping live instance state. This may expose unsafe ad-hoc
+parallel construction that previously happened to work. Keep the writer disabled
+until those call sites use explicit recipient settings or an authored swarm.
+
+Native conversation continuation is denied by default. Bind
+`AuthorizesNativeAgentConversation`; recoverable execution also requires an existing
+conversation ID, an Eloquent participant and a Laravel AI conversation store that
+verifies ownership. New conversations remain request-local. A recipient cannot
+combine `withMessages()` and a native conversation, and Laravel AI
+`Conversational` agents cannot receive `withMessages()` at all.
+
+Request-local message attachments now enforce the same authorization and size/count
+limits as background work. Recoverable message attachments with headers or provider
+options fail before dispatch; move those files to top-level native input when their
+invocation profile must be frozen. The complete encoded operational envelope is
+also bounded by `swarm.limits.max_input_bytes` before persistence or file promotion.
+
+These settings do not propagate into durable child swarms. Child recovery and
+inheritance remain v0.29 work; configure a child explicitly rather than depending
+on parent state.
+
+### Native step result readers and storage
+
+Completed `SwarmStep` values now expose a bounded, versioned
+`NativeStepResult`. Run the v0.28 package migration before upgraded queue or
+durable workers write steps. It adds nullable native-result status/payload
+columns to history steps, durable branches, durable node outputs, and stream
+step checkpoints. Restart long-lived workers after the migration. Existing rows
+read as `unavailable` / `legacy`; custom stores that do not adopt the optional
+native-result capabilities also degrade explicitly rather than fabricating data.
+
+Live result access does not override capture. Full output capture stores the
+bounded projection; Redact removes content and native conversation/message IDs.
+The shipped `SWARM_CAPTURE_OUTPUTS=false` path is Redact, not Skip. Only a custom
+capture policy returning Skip stores an `omitted` status without a payload.
+Database envelopes are sealed when encryption at rest is enabled. Owning history,
+durable, checkpoint, and hot replay rows are pruned normally; application-owned
+cold archives require their own deletion and legal-hold policy.
+
+Code rollback is unsafe after native results have been written while an affected
+identity can resume or retry. An old writer can update output/usage while leaving
+the new nullable native-result columns stale. Stop intake; drain or terminate
+active queued, durable, and streamed work; preserve or deliberately clean the
+evidence; deploy old code everywhere; and restart every long-lived worker before
+resuming. Retaining the columns only makes old readers schema-tolerant. Dropping
+them remains destructive: verify retention and evidence obligations before the
+migration down. Include direct and nested native-result envelopes in APP_KEY
+rotation. See [Native Step Results](docs/native-step-results.md)
+for the field inventory, usage/citation ownership, privacy, bounds, and complete
+rollout/rollback procedure.
+
 ## Upgrading to v0.27.0
 
 The [adoption evidence index](docs/ai-1-release-evidence.md) records the reviewed
@@ -110,9 +299,10 @@ partial and final results. No new payload size budget or retention policy is
 introduced. See [streaming](docs/streaming.md#tool-calls-including-mcp-tools).
 Older readers can drop the new flags and mistake partials for finals. After this
 evidence is written, retain v0.27-capable readers and backups; a parseable older
-reader is not an evidence-preserving rollback. Native approval continuation,
-top-level parallel live streaming and queued whole-workflow callbacks retain
-their existing unsupported boundaries.
+reader is not an evidence-preserving rollback. Native approval continuation and
+queued whole-workflow callbacks retain their existing unsupported boundaries.
+Top-level parallel live streaming was still unsupported in v0.27; v0.28 adds the
+separately gated process-backed path described above.
 
 ## v0.26.3 provider-tool event readers
 

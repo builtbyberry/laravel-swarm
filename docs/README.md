@@ -18,6 +18,8 @@ The recommended reading path for new users.
 - [Generators](generators.md) — `make:swarm:swarm` and `make:swarm:agent` for scaffolding new swarms and agents
 - [Choosing an Execution Mode](execution-modes.md) — prompt, queue, stream, or durable: when to use each
 - [Structured Input](structured-input.md)
+- [Native Messages and Attachments](native-inputs.md) — default-off `UserMessage` input, explicit recipients, operational storage, deployment and rollback
+- [Native Step Results](native-step-results.md) — bounded native response fields on each completed step, with capture-aware persistence
 - [Testing](testing.md)
 - [Upgrading to v0.27.0 / Laravel AI 1.0](../UPGRADING.md#upgrading-to-v0270) — dependency, reader, usage and rollback boundaries
 - [Native Conversation Upgrade](native-conversation-upgrade.md) — application-owned migration, rehearsal, authorization and restore procedure
@@ -50,6 +52,8 @@ The recommended reading path for new users.
 - [RunContext](run-context.md) — the envelope that carries input, identity, and carry-forward data through a run
 - [Artifacts](artifacts.md) — named content attached to runs and steps
 - [Structured Input](structured-input.md) — passing arrays and typed input to swarms
+- [Native Messages and Attachments](native-inputs.md) — Laravel AI messages and explicitly routed file input
+- [Native Step Results](native-step-results.md) — structured values, native identity, generation evidence, privacy, storage, and rollback
 - [Persistence & History](persistence-and-history.md) — how run history is stored and queried
 
 ---
