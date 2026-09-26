@@ -2,6 +2,33 @@
 
 ## Upgrading to v0.28.0
 
+### Native agent authoring
+
+Use Laravel AI's `php artisan make:agent <Name>` command for new model-backed
+agents. Pass `--structured` when the agent returns schema-backed output, and add
+the generated class directly to a swarm. See
+[Native Agent Onboarding](docs/native-agent-onboarding.md) for the tool and
+streaming tutorial that uses `Agent::fake()` without an external provider
+request.
+
+This transition is non-breaking. `make:swarm:agent` and deprecated
+`make:swarm --single` keep their existing command names, arguments, namespaces,
+`ScriptedAgent` inheritance, and published-stub precedence. The upgrade does not
+rewrite existing agent classes or application-published `stubs/swarm.agent.stub`
+and `stubs/swarm.single-agent.stub` files. Those commands now describe their
+actual supported purpose: deterministic offline helpers and compatibility
+scaffolds.
+
+Laravel AI and Swarm stubs remain independent. Publish Swarm generator stubs with
+`vendor:publish --tag=swarm-stubs`; publish Laravel AI's native agent and
+structured-agent stubs with `vendor:publish --tag=ai-stubs`. If replacing an
+offline helper with a model agent, generate a new native class and port only the
+application-owned instructions, tools, and schema before changing callers.
+
+No migration, feature flag, config key, persistence, pruning, transaction,
+recovery, or operational command change is introduced by this authoring update.
+Rollback is a code revert; consumer files remain untouched.
+
 Native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input is
 additive and default-off. An `AgentInput` carrying approval decisions is rejected
 before its message is read; approval continuation remains a separate workflow. Run

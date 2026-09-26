@@ -22,7 +22,7 @@ class PolicyDraftAgent extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent to use a live model.
+        // For model behavior, generate PolicyDraftAgent with make:agent and port these instructions.
         return <<<DRAFT
             Proposed policy change (scripted draft):
 

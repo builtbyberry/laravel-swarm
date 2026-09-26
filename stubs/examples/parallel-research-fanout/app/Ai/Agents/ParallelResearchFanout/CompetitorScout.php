@@ -15,7 +15,7 @@ class CompetitorScout extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent to use a live model.
+        // For model behavior, generate CompetitorScout with make:agent and port these instructions.
         return "[CompetitorScout] Competitor notes for: {$prompt}\n"
             .'- Two direct competitors, both bundle a dashboard.'."\n"
             .'- One indirect competitor wins on integrations breadth.';

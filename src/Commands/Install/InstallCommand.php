@@ -754,6 +754,7 @@ class InstallCommand extends Command
         $this->newLine();
         $this->components->info('Next steps');
         $this->line('  • Verify the install: <comment>php artisan swarm:health</comment>');
+        $this->line('  • Generate a native Laravel AI agent: <comment>php artisan make:agent ArticlePlanner</comment>');
         $this->line('  • Scaffold your first swarm: <comment>php artisan make:swarm:swarm ContentPipeline</comment>');
         $this->line('  • Getting started guide: <comment>docs/getting-started.md</comment>');
     }

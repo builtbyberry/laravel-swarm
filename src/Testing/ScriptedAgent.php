@@ -19,20 +19,18 @@ use Laravel\Ai\Responses\StreamableAgentResponse;
 use RuntimeException;
 
 /**
- * A runnable, provider-free agent that returns scripted text.
+ * A deterministic offline helper that returns scripted text.
  *
- * Intended for starter examples, smoke tests, and "show the shape" demos
- * that need to execute end-to-end without configuring a Laravel AI provider
- * or burning API credit. Real applications swap subclasses out for normal
- * Laravel AI agents that use the `Promptable` trait.
+ * Intended for starter examples, smoke tests, and non-model workflows that
+ * need to execute end-to-end without an external provider. Model-backed agents
+ * should be generated with Laravel AI's `make:agent` command and tested with
+ * that agent's `fake()` method.
  *
  * Subclasses override {@see reply()} to compose the scripted response from
  * the incoming prompt. The shipped `prompt()` implementation wraps the reply
- * in a standard `AgentResponse` so the swarm runner treats it identically to
- * a real provider response. `stream()`, `queue()`, and broadcast helpers
- * raise so callers get a clear signal when they try to use a streaming or
- * queued execution mode against a scripted agent — those modes need a real
- * provider, or a `Promptable` agent with `Agent::fake()` set up in the test.
+ * in a standard `AgentResponse`. Its unsupported execution methods fail with
+ * explicit exceptions below; see `docs/testing.md` for native-agent fake and
+ * streaming examples.
  *
  * **Deliberately still implements the deprecated
  * {@see Agent} alias — do not migrate this

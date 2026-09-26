@@ -21,8 +21,8 @@ use function Laravel\Prompts\select;
  * on top so newcomers have a single friendly entry point. Run it in a real
  * terminal with no flags and it asks what you want to build:
  *
- *  - a **single agent**, whose scaffold demonstrates the `Swarm::agent()`
- *    front door — the full governed pipeline for one agent, no swarm class;
+ *  - a **single deterministic offline agent**, whose compatibility scaffold
+ *    demonstrates the `Swarm::agent()` front door with no swarm class;
  *  - a **multi-agent swarm**, which then prompts for a topology exactly as
  *    `make:swarm:swarm` does.
  *
@@ -32,8 +32,8 @@ use function Laravel\Prompts\select;
  * (sequential) unless `--single` is given.
  *
  * A deprecation notice still prints to stderr (so it never contaminates
- * piped JSON or stdout) to nudge callers toward `make:swarm:swarm` /
- * `make:swarm:agent`. Slated for removal in a future major release; track
+ * piped JSON or stdout) to nudge callers toward `make:swarm:swarm` and
+ * Laravel AI's `make:agent`. Slated for removal in a future major release; track
  * #91 for the deprecation window.
  */
 #[AsCommand(name: 'make:swarm')]
@@ -51,7 +51,7 @@ class MakeSwarmCommand extends MakeSwarmSwarmCommand
      *
      * @var string
      */
-    protected $description = '[Deprecated] Guided alias for make:swarm:swarm / make:swarm:agent. Prefer those directly.';
+    protected $description = '[Deprecated] Guided compatibility alias. Use make:swarm:swarm and Laravel AI make:agent.';
 
     /**
      * Whether this run scaffolds a single agent (the `Swarm::agent()` path)
@@ -73,7 +73,7 @@ class MakeSwarmCommand extends MakeSwarmSwarmCommand
         // in production (writes to stderr) and to the same buffer in tests
         // (which use BufferedOutput). Keeps the warning out of piped stdout.
         $this->output->getErrorStyle()->writeln(
-            '<comment>make:swarm is deprecated. Use `make:swarm:swarm` to scaffold a swarm class or `make:swarm:agent` to scaffold an agent class. See docs/generators.md.</comment>'
+            '<comment>make:swarm is deprecated. Use `make:swarm:swarm` for swarm classes, Laravel AI `make:agent` for model agents, or `make:swarm:agent` for deterministic offline compatibility helpers. See docs/generators.md.</comment>'
         );
 
         $this->single = $this->resolveSingleAgentMode();
@@ -118,7 +118,7 @@ class MakeSwarmCommand extends MakeSwarmSwarmCommand
         $choice = select(
             label: 'What would you like to scaffold?',
             options: [
-                'single' => 'A single agent — run it instantly with Swarm::agent(), no swarm class',
+                'single' => 'A deterministic offline agent — run it with Swarm::agent(), no swarm class',
                 'swarm' => 'A multi-agent swarm — choose a topology',
             ],
             default: 'swarm',
@@ -192,7 +192,7 @@ class MakeSwarmCommand extends MakeSwarmSwarmCommand
     protected function getOptions(): array
     {
         return array_merge(parent::getOptions(), [
-            ['single', null, InputOption::VALUE_NONE, 'Scaffold a single agent (the Swarm::agent() front door) instead of a swarm class'],
+            ['single', null, InputOption::VALUE_NONE, 'Scaffold a deterministic offline agent for Swarm::agent() instead of a swarm class'],
         ]);
     }
 }

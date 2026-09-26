@@ -36,39 +36,12 @@ keyword match so the demo is reproducible.
 
 ## Plug in a real model
 
-The coordinator under `app/Ai/Agents/HierarchicalSupportTriage/` is a
-`ScriptedAgent` that also implements `HasStructuredOutput`. To route with a live
-model, swap it to the Laravel AI shape while keeping the structured-output
-contract:
-
-```php
-use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Laravel\Ai\Contracts\Agent;
-use Laravel\Ai\Contracts\HasStructuredOutput;
-use Laravel\Ai\Promptable;
-
-class RequestClassifier implements Agent, HasStructuredOutput
-{
-    use Promptable;
-
-    public function instructions(): string
-    {
-        return 'Classify the request, then route it to exactly one handler.';
-    }
-
-    public function schema(JsonSchema $schema): array
-    {
-        return [
-            'start_at' => $schema->string()->required(),
-            'nodes' => $schema->object()->required(),
-        ];
-    }
-}
-```
+Generate the coordinator with
+`php artisan make:agent RequestClassifier --structured`, then port the route
+schema and instructions. Generate each model-backed handler with `make:agent`.
 
 The coordinator **must** implement `HasStructuredOutput` and declare the
-route-plan shape. The handler agents can move to plain `Promptable` agents
-independently. See `docs/hierarchical-routing.md`.
+route-plan shape. See `docs/hierarchical-routing.md`.
 
 ## Next step
 

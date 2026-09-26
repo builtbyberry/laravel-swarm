@@ -55,42 +55,10 @@ is needed here; it is worth knowing the guarantee holds.
 
 ## Plug in a real model
 
-Each agent under `app/Ai/Agents/SequentialConversationMemory/` extends
-`ScriptedAgent`. To use a live LLM, swap the base for the normal Laravel AI
-shape and expose the memory tool so the model can call it:
-
-```php
-use Laravel\Ai\Contracts\Agent;
-use BuiltByBerry\LaravelSwarm\Tools\Remember;
-use Laravel\Ai\Attributes\Model;
-use Laravel\Ai\Attributes\Provider;
-use Laravel\Ai\Enums\Lab;
-use Laravel\Ai\Promptable;
-
-#[Provider(Lab::Anthropic)]
-#[Model('claude-haiku-4-5-20251001')]
-class RequestListener implements Agent
-{
-    use Promptable;
-
-    public function instructions(): string
-    {
-        return 'Read the customer message, identify the subject, and remember it for the reply step.';
-    }
-
-    /**
-     * @return array<int, \Laravel\Ai\Contracts\Tool>
-     */
-    public function tools(): array
-    {
-        return [new Remember];
-    }
-}
-```
-
-`ReplyWriter` is the mirror image with `[new Recall]`. The swarm class itself
-does not change — the model now decides when to call `remember` / `recall`,
-where the scripted version calls them for you.
+Generate native `RequestListener` and `ReplyWriter` classes with
+`php artisan make:agent`, then port the instructions and expose `[new Remember]`
+or `[new Recall]` from their generated `tools()` methods. The model then decides
+when to call those tools; the deterministic offline starter calls them directly.
 
 ## Next step
 

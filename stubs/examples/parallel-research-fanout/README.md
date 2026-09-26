@@ -31,23 +31,8 @@ immediately after install.
 
 ## Plug in a real model
 
-Each scout under `app/Ai/Agents/ParallelResearchFanout/` extends
-`ScriptedAgent`. To use live LLMs, swap to the Laravel AI shape:
-
-```php
-use Laravel\Ai\Contracts\Agent;
-use Laravel\Ai\Promptable;
-
-class MarketScout implements Agent
-{
-    use Promptable;
-
-    public function instructions(): string
-    {
-        return 'Research the market landscape for the given topic.';
-    }
-}
-```
+Generate native Laravel AI agents with `php artisan make:agent MarketScout`
+(and the other scout names), then port the starter's instructions.
 
 Parallel agents must stay **stateless** and **container-resolvable** — the
 constructor cannot require runtime arguments. See `docs/parallel.md`.

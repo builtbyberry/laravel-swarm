@@ -34,8 +34,8 @@ class ReplyWriter extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent and expose Recall
-        // via a tools() method so a live model calls `recall` itself. This
+        // For model behavior, generate ReplyWriter with make:agent and expose Recall
+        // through its tools() method so a live model calls `recall` itself. This
         // scripted reply invokes the same tool and composes from what it returns.
         $recalled = (new Recall)->handle(new Request([
             'key' => RequestListener::SUBJECT_KEY,

@@ -9,10 +9,9 @@ use BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent;
 /**
  * Step 1 of the sequential-blog-pipeline starter example.
  *
- * Extends ScriptedAgent so this example runs end-to-end with no provider
- * configured. To plug in a real LLM, replace `extends ScriptedAgent` with
- * `implements Agent` + `use Promptable;` and add `#[Provider]` / `#[Model]`
- * attributes — the rest of the swarm wiring stays identical.
+ * Extends ScriptedAgent so this deterministic offline example runs with no
+ * provider configured. For model behavior, generate OutlineWriter with Laravel
+ * AI's `make:agent` command and port the application-owned instructions.
  */
 class OutlineWriter extends ScriptedAgent
 {
@@ -23,7 +22,7 @@ class OutlineWriter extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent to use a live model.
+        // For model behavior, generate OutlineWriter with make:agent and port these instructions.
         return <<<OUTLINE
             Outline for: {$prompt}
             - Why this matters to the reader

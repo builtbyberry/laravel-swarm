@@ -43,8 +43,18 @@ Native feature access through Laravel Swarm workflows.
   for verifying end-to-end proxy/CDN flushing and application-wide process
   capacity (`concurrent live streams × max_branches`, with several descriptors
   per branch).
+- Native Laravel AI agent onboarding through the upstream `make:agent` command,
+  including structured-output generation and an executable provider-free test
+  that drives a native tool call and Swarm stream with `Agent::fake()`.
 
 ### Changed
+
+- Installation, generator, starter, example, testing, README, and upgrade
+  guidance now present native Laravel AI agents as the normal model-agent path.
+  `make:swarm:agent` and deprecated `make:swarm --single` remain deterministic
+  offline compatibility scaffolds with their existing arguments, namespaces,
+  class shapes, and application-published stub precedence. Existing classes and
+  published `swarm.agent.stub` / `swarm.single-agent.stub` files are not rewritten.
 
 - Native input preserves the v0.27.0 background envelope for inline swarms and
   does not itself add an execution mode. Top-level parallel streaming separately adds default-off,
