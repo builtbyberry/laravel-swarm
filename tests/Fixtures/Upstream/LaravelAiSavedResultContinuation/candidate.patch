@@ -199,7 +199,7 @@ new file mode 100644
 index 0000000..5c57a92
 --- /dev/null
 +++ b/src/Contracts/ContinuesConversations.php
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,94 @@
 +<?php
 +
 +namespace Laravel\Ai\Contracts;
@@ -211,6 +211,49 @@ index 0000000..5c57a92
 +use Laravel\Ai\Responses\AgentResponse;
 +use Throwable;
 +
++/**
++ * @phpstan-type ContinuationClaim array{
++ *     conversation: string,
++ *     turn: string,
++ *     owner: string,
++ *     request_revision: int,
++ *     ordinary: bool,
++ *     stop: bool,
++ *     prior_status: string,
++ *     offset: int
++ * }
++ * @phpstan-type ContinuationReceipt array{
++ *     invocation_id: string,
++ *     text: string,
++ *     structured: array<string, mixed>|null,
++ *     usage: array<string, mixed>,
++ *     meta: array<string, mixed>,
++ *     reasoning: list<mixed>,
++ *     tool_calls: list<mixed>,
++ *     tool_results: list<mixed>,
++ *     steps: list<mixed>,
++ *     conversation_id: string|null,
++ *     assistant_message_id: string|null
++ * }
++ * @phpstan-type ContinuationState array{
++ *     version: int,
++ *     revision: int,
++ *     status: string,
++ *     owner: string|null,
++ *     provider: string,
++ *     provider_class: class-string,
++ *     model: string,
++ *     agent: class-string,
++ *     generation_attempts: int,
++ *     requested_stop?: bool,
++ *     ordinary?: bool,
++ *     prior_status?: string,
++ *     head_at_claim?: string|int|null,
++ *     receipt_revision?: int,
++ *     receipt?: array<string, mixed>,
++ *     reconciliation?: string
++ * }
++ */
 +interface ContinuesConversations extends ConversationStore
 +{
 +    public function storeContinuationUserMessage(string $conversationId, ?string $participantType, string|int|null $participantId, string $agent, UserMessage $message, ?string $continuationOwner): string;
@@ -219,24 +262,36 @@ index 0000000..5c57a92
 +
 +    public function storeContinuationApprovalResults(string $conversationId, array $toolResults, ?string $continuationOwner): void;
 +
-+    /** @return array<string, mixed>|null */
++    /** @return ContinuationClaim|null */
 +    public function claimTurn(AgentPrompt $prompt): ?array;
 +
-+    /** Persist the response and its native receipt atomically, without remote I/O. */
++    /**
++     * Persist the response and its native receipt atomically, without remote I/O.
++     *
++     * @param  ContinuationClaim  $claim
++     */
 +    public function finishTurn(array $claim, AgentResponse $response, Closure $persist): void;
 +
++    /** @param ContinuationClaim $claim */
 +    public function interruptTurn(array $claim): void;
 +
++    /** @param ContinuationClaim $claim */
 +    public function assertTurnOwner(array $claim): void;
 +
++    /** @param ContinuationClaim $claim */
 +    public function advanceTurn(array $claim): void;
 +
++    /** @return ContinuationState */
 +    public function continuationState(Continuation $turn, ?object $participant): array;
 +
 +    /** Caller attests recovery safety after reconciling all effects and fencing the previous owner. */
 +    public function reconcileTurn(Continuation $turn, ?object $participant, string $previousOwner, string $evidence): Continuation;
 +
-+    /** Read a native completion receipt without executing the agent or application callbacks. */
++    /**
++     * Read a native completion receipt without executing the agent or application callbacks.
++     *
++     * @return ContinuationReceipt
++     */
 +    public function continuationReceipt(Continuation $turn, ?object $participant): array;
 +}
 diff --git a/src/Exceptions/ContinuationConflictException.php b/src/Exceptions/ContinuationConflictException.php

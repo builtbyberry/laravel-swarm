@@ -74,9 +74,9 @@ database-specific concurrency lane.
 
 | Boundary | Executable disposition |
 | --- | --- |
-| Provider, model, agent and account | Persisted identity must match before provider I/O. Configured providers use their stable provider name. An on-demand `Ai::build()` provider receives a deterministic configuration-derived account identity, and changed credentials fail closed. Credential rotation under the same configured provider name remains the same configured account. |
-| Tools and options | The original declared tools and generation options are reconstructed. Continuation rejects runtime tool, message-history, or attachment replacement. Forced tool choice is not renewed after the approval step. The remaining maximum-step budget is preserved. |
-| Middleware and structured output | Step middleware runs for the recovered generation, and the final response and durable receipt preserve the structured schema result. |
+| Provider, model, agent and account | Persisted agent class, provider name/class, model, participant and revision must match before provider I/O. An on-demand `Ai::build()` provider receives a deterministic configuration-derived account identity, so changed inline credentials fail closed. A named configured provider is identified only by its stable name; credential or account rotation behind that name is not detected. |
+| Tools and options | The recovered generation reconstructs the currently deployed agent's declared tools and generation options. Continuation rejects runtime tool, message-history, or attachment replacement. Forced tool choice is not renewed after the approval step, and the remaining maximum-step budget is retained. Equivalent reconstruction is proved only while the agent source and configuration are unchanged. |
+| Middleware and structured output | The currently deployed step middleware runs for the recovered generation, and the final response and durable receipt retain the structured schema result. The candidate does not fingerprint middleware or schema declarations across deployments. |
 | Provider replay | Anthropic signatures, Gemini thought signatures, and OpenAI encrypted reasoning/function blocks retain ordered replay. OpenAI deliberately sends full replay after process loss and omits stale `previous_response_id`. |
 | Streaming | A completed continuation records a receipt and replays original event IDs. A partially consumed stream and provider failure remain interrupted. Application callback failure after native completion does not erase the receipt. |
 | Events, usage and folding | Only fresh-generation events are emitted on recovery; persisted prior usage is folded once into the original assistant turn, with one user message. |
@@ -95,6 +95,25 @@ Reconciliation is also intentionally caller-owned. The public store method
 requires the previous owner and evidence, but the fixture cannot prove an
 application's external effect reconciliation, authorization policy, audit
 retention, or fencing system. Those remain production-bridge responsibilities.
+
+## Deployment and configuration boundary
+
+This candidate proves a persisted continuation only when the agent source and
+its named provider configuration remain unchanged between interruption and
+recovery. It does not fingerprint declared tools, middleware, generation
+options, structured-output schemas, or the credentials/account behind a named
+configured provider. A deployment or configuration rotation can therefore
+change those inputs without tripping the persisted identity checks.
+
+The affected mode is any native continuation that spans such a source deploy,
+provider-account rotation, or configuration change. Before one of those
+changes, operators must drain, cancel, or explicitly reconcile active native
+continuations. Versioned agent identities and new provider names are viable
+alternatives when old and new configurations must coexist. P6 owns an explicit
+fingerprint/version contract for this boundary, targeted before P6 may be
+claimed or implemented; this proof does not silently supply one. Any published
+or equivalent upstream implementation must revalidate this boundary against
+its actual identity contract.
 
 ## Reproduce the evidence
 

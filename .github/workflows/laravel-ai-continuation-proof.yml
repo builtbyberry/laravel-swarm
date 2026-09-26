@@ -15,9 +15,13 @@ permissions:
 
 jobs:
   upstream-proof:
-    name: Exact upstream candidate
+    name: Exact upstream candidate (PHP ${{ matrix.php }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
 
     steps:
       - name: Checkout Laravel Swarm
@@ -26,7 +30,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.5'
+          php-version: ${{ matrix.php }}
           tools: composer:v2
           coverage: none
           ini-values: memory_limit=1G

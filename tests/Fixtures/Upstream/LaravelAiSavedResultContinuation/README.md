@@ -22,3 +22,7 @@ P5B_MUTATION=disable-ownership-check \
 The mutation run succeeds only when the targeted upstream test fails. Neither
 path uses a paid provider, modifies an installed dependency, or publishes the
 candidate upstream.
+
+Hosted proof runs the exact candidate on the PHP 8.4 and 8.5 versions supported
+by Laravel Swarm. This fixture does not claim compatibility with PHP versions
+outside Swarm's supported range.

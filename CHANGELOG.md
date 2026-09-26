@@ -50,8 +50,11 @@ Native feature access through Laravel Swarm workflows.
   against an exact Laravel AI `1.x` commit. The isolated candidate survives a
   real `SIGKILL` after a durable approved result, resumes the same native turn
   in a fresh process without rerunning the tool or adding a user message, and
-  preserves identity, structured output, middleware, streaming, usage, folding,
-  provider replay, ownership, and trait-independent result recording. A
+  demonstrates identity, structured output, middleware, streaming, usage,
+  folding, provider replay, ownership, and trait-independent result recording
+  while agent source and named provider configuration remain unchanged. The
+  proof documents that tool, middleware, option, schema, and configured-account
+  drift are not fingerprinted and must be resolved before P6. A
   deliberate ownership-check mutation proves the targeted tests fail. This is
   proof-only: no Laravel Swarm runtime bridge or patched dependency ships, and
   P6 remains blocked pending independent acceptance and an explicitly authorized
