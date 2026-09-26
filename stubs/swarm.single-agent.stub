@@ -15,9 +15,11 @@ use BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent;
  *   use BuiltByBerry\LaravelSwarm\Facades\Swarm;
  *
  *   Swarm::agent(new {{ class }})->prompt($task);   // synchronous SwarmResponse
- * For a model-backed agent, generate a native Laravel AI class instead:
  *
- *   php artisan make:agent {{ class }}
+ * For a model-backed agent, generate a separate native Laravel AI class,
+ * port the application-owned behavior, then update callers:
+ *
+ *   php artisan make:agent {{ class }}Native
  *
  * Then pass that class to `Swarm::agent()` or a named swarm. Streaming and
  * other execution contracts are documented in `docs/execution-modes.md`.

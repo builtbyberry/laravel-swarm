@@ -15,7 +15,7 @@ test('make swarm still works as a deprecated alias that prints a migration hint'
     File::ensureDirectoryExists(dirname($path));
 
     $this->artisan('make:swarm', ['name' => 'DeprecatedAliasSwarm', '--topology' => 'sequential'])
-        ->expectsOutputToContain('make:swarm is deprecated')
+        ->expectsOutputToContain('make:swarm is deprecated. Use `make:swarm:swarm` for swarm classes, Laravel AI `make:agent` for model agents, or `make:swarm:agent` for deterministic offline compatibility helpers.')
         ->assertExitCode(0);
 
     // Old command still produced the file under the original path.
@@ -240,7 +240,7 @@ test('make swarm scaffolds a single agent under app ai agents when --single is p
         ->toContain('namespace App\Ai\Agents;')
         ->toContain('class Summarizer extends ScriptedAgent')
         ->toContain('Swarm::agent(new Summarizer)->prompt($task)')
-        ->toContain('php artisan make:agent Summarizer')
+        ->toContain('php artisan make:agent SummarizerNative')
         ->toContain('deterministic offline behavior')
         // It is NOT a swarm class.
         ->not->toContain('implements Swarm');

@@ -11,6 +11,7 @@ are exercised:
 
 ```php
 use App\Ai\Agents\ReleaseNoteWriter;
+use App\Ai\Swarms\ReleaseNotesSwarm;
 use Laravel\Ai\Responses\Data\ToolCall;
 
 ReleaseNoteWriter::fake([

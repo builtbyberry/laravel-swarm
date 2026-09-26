@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 
@@ -28,7 +29,7 @@ test('make:swarm:agent generates an agent class in app/Ai/Agents', function () {
         ->toContain('use BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent;')
         ->toContain('public function instructions(): string')
         ->toContain('protected function reply(string $prompt): string')
-        ->toContain('php artisan make:agent OutlineWriter')
+        ->toContain('php artisan make:agent OutlineWriterNative')
         ->toContain('// TODO: replace this deterministic response with application behavior.')
         ->toContain('declare(strict_types=1);');
 });
@@ -97,5 +98,13 @@ test('make:swarm:agent preserves the deterministic offline compatibility shape',
         ->toMatch('/public function instructions\(\): string/')
         ->toMatch('/protected function reply\(string \$prompt\): string/')
         ->toContain('deterministic offline')
-        ->toContain('php artisan make:agent ShapeCheckAgent');
+        ->toContain('php artisan make:agent ShapeCheckAgentNative');
+});
+
+test('make:swarm:agent help keeps the native model-agent guidance explicit', function () {
+    $command = app(Kernel::class)->all()['make:swarm:agent'];
+
+    expect($command->getDescription())
+        ->toContain('deterministic offline swarm agent')
+        ->toContain('use make:agent for model agents');
 });

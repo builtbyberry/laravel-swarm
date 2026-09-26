@@ -92,3 +92,18 @@ test('a generated-style native agent runs tools and streams through a swarm with
             'status' => 'succeeded',
         ]);
 });
+
+test('published native onboarding snippets keep their executable contracts', function (): void {
+    $packageRoot = dirname(__DIR__, 2);
+    $tutorial = File::get($packageRoot.'/docs/native-agent-onboarding.md');
+    $testing = File::get($packageRoot.'/docs/testing.md');
+
+    expect($tutorial)
+        ->toContain('php artisan make:tool ReleaseNoteLookup')
+        ->toContain('public function name(): string')
+        ->toContain("return 'lookup_release_notes';")
+        ->toContain('$events->map(fn ($event) => $event->type())')
+        ->not->toContain('$events->pluck(\'type\')')
+        ->and($testing)
+        ->toContain('use App\\Ai\\Swarms\\ReleaseNotesSwarm;');
+});

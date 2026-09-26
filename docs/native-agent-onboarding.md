@@ -8,11 +8,40 @@ wrap or regenerate them.
 
 ```bash
 php artisan make:agent ReleaseNoteWriter
+php artisan make:tool ReleaseNoteLookup
 php artisan make:swarm:swarm ReleaseNotesSwarm
 ```
 
-Add your application-owned instructions and tool declarations to the generated
-agent. For example:
+Make the generated tool deterministic for this tutorial:
+
+```php
+use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Laravel\Ai\Tools\Request;
+use Stringable;
+
+public function name(): string
+{
+    return 'lookup_release_notes';
+}
+
+public function description(): Stringable|string
+{
+    return 'Look up local release-note facts.';
+}
+
+public function handle(Request $request): Stringable|string
+{
+    return $request['release'].' makes native Laravel AI agents the normal authoring path.';
+}
+
+public function schema(JsonSchema $schema): array
+{
+    return ['release' => $schema->string()->required()];
+}
+```
+
+This handler performs no network request. Add your application-owned
+instructions and tool declaration to the generated agent:
 
 ```php
 use App\Ai\Tools\ReleaseNoteLookup;
@@ -66,15 +95,19 @@ ReleaseNoteWriter::fake([
 $stream = ReleaseNotesSwarm::make()->stream('Draft the v0.28.0 release note.');
 $events = collect(iterator_to_array($stream));
 
-expect($events->pluck('type'))
+expect($events->map(fn ($event) => $event->type()))
     ->toContain('swarm_tool_call', 'swarm_tool_result', 'swarm_text_delta', 'swarm_stream_end');
 expect($stream->streamedResponse->output)->toBe('Release notes are ready.');
 ```
 
-The package's executable counterpart is
+The package's executable counterparts are the generated-style
+[`NativeOnboardingWriter`](../tests/Fixtures/Agents/NativeOnboardingWriter.php),
+[`NativeOnboardingSwarm`](../tests/Fixtures/Swarms/NativeOnboardingSwarm.php),
+[`NativeOnboardingLookup`](../tests/Fixtures/Tools/NativeOnboardingLookup.php),
+and their
 [`NativeAgentOnboardingTest`](../tests/Feature/NativeAgentOnboardingTest.php).
-It additionally asserts tool arguments, one execution, event order, the tool
-result, and the native step-result status recorded by the Swarm stream.
+The test additionally asserts tool arguments, one execution, event order, the
+tool result, and the native step-result status recorded by the Swarm stream.
 
 ## Structured output is a separate path
 
