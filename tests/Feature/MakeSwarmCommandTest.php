@@ -15,7 +15,7 @@ test('make swarm still works as a deprecated alias that prints a migration hint'
     File::ensureDirectoryExists(dirname($path));
 
     $this->artisan('make:swarm', ['name' => 'DeprecatedAliasSwarm', '--topology' => 'sequential'])
-        ->expectsOutputToContain('make:swarm is deprecated')
+        ->expectsOutputToContain('make:swarm is deprecated. Use `make:swarm:swarm` for swarm classes, Laravel AI `make:agent` for model agents, or `make:swarm:agent` for deterministic offline compatibility helpers.')
         ->assertExitCode(0);
 
     // Old command still produced the file under the original path.
@@ -239,12 +239,9 @@ test('make swarm scaffolds a single agent under app ai agents when --single is p
     expect($contents)
         ->toContain('namespace App\Ai\Agents;')
         ->toContain('class Summarizer extends ScriptedAgent')
-        // Demonstrates the new Swarm::agent() front door...
         ->toContain('Swarm::agent(new Summarizer)->prompt($task)')
-        // ...and references the inline topology builders.
-        ->toContain('Swarm::sequential([new Summarizer, new NextAgent])')
-        ->toContain('Swarm::parallel(')
-        ->toContain('Swarm::hierarchical(')
+        ->toContain('php artisan make:agent SummarizerNative')
+        ->toContain('deterministic offline behavior')
         // It is NOT a swarm class.
         ->not->toContain('implements Swarm');
 
@@ -262,7 +259,7 @@ test('make swarm prompts for single-agent vs swarm when interactive and scaffold
 
     $this->artisan('make:swarm', ['name' => 'InteractiveAgent'])
         ->expectsChoice('What would you like to scaffold?', 'single', [
-            'single' => 'A single agent — run it instantly with Swarm::agent(), no swarm class',
+            'single' => 'A deterministic offline agent — run it with Swarm::agent(), no swarm class',
             'swarm' => 'A multi-agent swarm — choose a topology',
         ])
         ->assertExitCode(0);
@@ -286,7 +283,7 @@ test('make swarm interactive swarm choice falls through to the topology prompt',
 
     $this->artisan('make:swarm', ['name' => 'InteractiveSwarm'])
         ->expectsChoice('What would you like to scaffold?', 'swarm', [
-            'single' => 'A single agent — run it instantly with Swarm::agent(), no swarm class',
+            'single' => 'A deterministic offline agent — run it with Swarm::agent(), no swarm class',
             'swarm' => 'A multi-agent swarm — choose a topology',
         ])
         ->expectsChoice('Which topology?', 'parallel', [

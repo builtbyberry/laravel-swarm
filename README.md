@@ -131,9 +131,12 @@ Prefer to wire things by hand? Every step `swarm:install` performs has a stable 
 
 ## Your First Swarm
 
-Generate a swarm class:
+Generate native Laravel AI agents, then generate the swarm that composes them:
 
 ```bash
+php artisan make:agent ArticlePlanner
+php artisan make:agent ArticleWriter
+php artisan make:agent ArticleEditor
 php artisan make:swarm:swarm ContentPipeline
 ```
 
@@ -143,7 +146,7 @@ Or scaffold a **complete, runnable** swarm from a curated blueprint — the swar
 php artisan make:swarm:blueprint SupportTriage --template=triage
 ```
 
-See [Generators](docs/generators.md) for the full generator surface, including `make:swarm:blueprint` and its catalog, `make:swarm:agent`, and the `--topology` flag.
+See [Native Agent Onboarding](docs/native-agent-onboarding.md) for a no-paid-provider tools-and-streaming tutorial and [Generators](docs/generators.md) for the full generator surface. `make:swarm:agent` remains available as the deterministic offline compatibility scaffold.
 
 Swarms live in `App\Ai\Swarms`, implement `BuiltByBerry\LaravelSwarm\Contracts\Swarm`, use the `Runnable` trait, and return their participating Laravel AI agents from `agents()`:
 

@@ -28,10 +28,9 @@ use Laravel\Ai\Tools\Request;
  *
  * Extends ScriptedAgent so the example runs end-to-end with no provider
  * configured: a real model would decide to call `remember`; the scripted
- * {@see reply()} invokes the same tool deterministically. To plug in a live
- * model, replace `extends ScriptedAgent` with `implements Agent` + `use
- * Promptable;`, add `#[Provider]` / `#[Model]`, and add {@see Remember} to a
- * `tools()` method so the model can call it — the swarm wiring stays identical.
+ * {@see reply()} invokes the same tool deterministically. For model behavior,
+ * generate RequestListener with `make:agent`, then expose {@see Remember} from
+ * its generated `tools()` method and port these instructions.
  */
 class RequestListener extends ScriptedAgent
 {
@@ -49,8 +48,8 @@ class RequestListener extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent and expose
-        // Remember via a tools() method so a live model calls `remember`
+        // For model behavior, generate RequestListener with make:agent and expose
+        // Remember through its tools() method so a live model calls `remember`
         // itself. This scripted reply invokes the exact same tool so the demo
         // genuinely writes to memory rather than faking it.
         (new Remember)->handle(new Request([

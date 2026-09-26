@@ -19,7 +19,7 @@ class GeneralResponder extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent to use a live model.
+        // For model behavior, generate GeneralResponder with make:agent and port these instructions.
         return "[GeneralResponder] {$prompt}\n"
             .'- Answered from the help center and pointed to the getting-started guide.'."\n"
             .'- Offered to escalate if the request needs a specialist.';

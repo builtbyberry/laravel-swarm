@@ -22,7 +22,7 @@ class BillingResponder extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent to use a live model.
+        // For model behavior, generate BillingResponder with make:agent and port these instructions.
         return "[BillingResponder] {$prompt}\n"
             .'- Pulled the account ledger and the last three invoices.'."\n"
             .'- Proposed a prorated adjustment and a link to the billing portal.';
