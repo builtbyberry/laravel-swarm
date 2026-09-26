@@ -8,6 +8,8 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Concerns\MergesAgentUsage;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\HaltsSwarmExecution;
+use BuiltByBerry\LaravelSwarm\Contracts\RecordsContextualRunFailure;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
@@ -34,6 +36,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
+use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamLimits;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -86,6 +89,7 @@ final class ParallelStreamRunner
         private AgentVisibleMemoryView $view,
         private ConcurrencyManager $concurrency,
         private ParallelProcessStreamTransport $transport,
+        private ParallelStreamLimits $parallelStreamLimits,
         private NativeStepResultProjector $nativeResults,
     ) {}
 
@@ -107,9 +111,10 @@ final class ParallelStreamRunner
         $this->parallel->ensureAgentsAreContainerResolvable($swarm);
         $maxAgentExecutions = $this->resolver->resolveMaxAgentExecutions($swarm);
         $agents = array_slice($swarm->agents(), 0, $maxAgentExecutions);
-        $maxBranches = $this->boundedInteger('swarm.streaming.parallel.max_branches', 32, 1, 256);
+        $parallelStreamLimits = $this->parallelStreamLimits->resolve();
+        $maxBranches = $parallelStreamLimits['max_branches'];
         if (count($agents) > $maxBranches) {
-            throw new SwarmException('Live parallel streaming was asked to open ['.count($agents)."] branches, above the configured [{$maxBranches}] branch/file-descriptor limit.");
+            throw new SwarmException('Live parallel streaming was asked to open ['.count($agents)."] branches, above the configured [{$maxBranches}] per-stream branch-process limit.");
         }
         foreach ($agents as $index => $agent) {
             StructuredOutputStreamingException::guard($agent, "parallel:{$index}");
@@ -119,6 +124,7 @@ final class ParallelStreamRunner
         $contextTtl = (int) $this->config->get('swarm.context.ttl', 3600);
         $context = RunContext::fromTask($task);
         $this->checkInputPayload($task, $context);
+        $this->parallel->ensureAdHocNativeSettingsAreDeclared($swarm, $context, $agents);
         $context->mergeMetadata(['swarm_class' => $swarm::class, 'topology' => $topology->value]);
 
         $state = new SwarmExecutionState(
@@ -166,16 +172,23 @@ final class ParallelStreamRunner
                 $sequence = 0;
                 $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, MonotonicTime::now(), $sequence);
             },
+            onAbandonmentFailure: function (Throwable $exception) use ($context): void {
+                $this->logger->error('Parallel swarm stream abandonment could not be terminalized.', [
+                    'run_id' => $context->runId,
+                    'exception_class' => $exception::class,
+                ]);
+            },
         );
     }
 
     /**
-     * @param-out float $startedAt
+     * @param-out float|null $startedAt
      *
      * @return \Generator<int, SwarmStreamEvent, mixed, SwarmResponse>
      */
     private function execute(SwarmExecutionState $state, RunContext $context, int $contextTtl, Swarm $swarm, ?float &$startedAt): \Generator
     {
+        $parallelStreamLimits = $this->parallelStreamLimits->resolve();
         $historyStarted = false;
         $streamSequence = 0;
         $telemetryStarted = MonotonicTime::now();
@@ -186,27 +199,28 @@ final class ParallelStreamRunner
 
         $this->historyStore->start($context->runId, $swarm::class, $state->topology->value, $this->capture->context($context), $context->metadata, $contextTtl);
         $historyStarted = true;
-        $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
-        $this->events->dispatch(new SwarmStarted($context->runId, $swarm::class, $state->topology->value,
-            $this->capture->applyInput($context->input, $context), $context->metadata, ExecutionMode::Stream->value));
-        $this->audit->emit('run.started', [
-            'run_id' => $context->runId,
-            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-            'swarm_class' => $swarm::class,
-            'topology' => $state->topology->value,
-            'execution_mode' => ExecutionMode::Stream->value,
-            'status' => 'started',
-            ...$this->audit->metadata($context->metadata),
-        ]);
-
-        $start = new SwarmStreamStart(SwarmStreamEvent::newId(), $context->runId, $swarm::class,
-            $state->topology->value, $this->capture->applyInput($context->input, $context), $context->metadata,
-            SwarmStreamEvent::timestamp());
-        $this->recordTelemetry($state, $swarm, $start, $streamSequence, $telemetryStarted);
-        yield $start;
-        $startedAt = MonotonicTime::now();
 
         try {
+            $this->contextStore->put($this->capture->activeContext($context), $contextTtl);
+            $this->events->dispatch(new SwarmStarted($context->runId, $swarm::class, $state->topology->value,
+                $this->capture->applyInput($context->input, $context), $context->metadata, ExecutionMode::Stream->value));
+            $this->audit->emit('run.started', [
+                'run_id' => $context->runId,
+                'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+                'swarm_class' => $swarm::class,
+                'topology' => $state->topology->value,
+                'execution_mode' => ExecutionMode::Stream->value,
+                'status' => 'started',
+                ...$this->audit->metadata($context->metadata),
+            ]);
+
+            $start = new SwarmStreamStart(SwarmStreamEvent::newId(), $context->runId, $swarm::class,
+                $state->topology->value, $this->capture->applyInput($context->input, $context), $context->metadata,
+                SwarmStreamEvent::timestamp());
+            $this->recordTelemetry($state, $swarm, $start, $streamSequence, $telemetryStarted);
+            yield $start;
+            $startedAt = MonotonicTime::now();
+
             $agents = array_slice($swarm->agents(), 0, $state->maxAgentExecutions);
             $input = $context->prompt();
             $workers = [];
@@ -274,18 +288,106 @@ final class ParallelStreamRunner
             $session = $this->transport->start(
                 $workers,
                 $state->deadlineMonotonic,
-                $this->boundedInteger('swarm.streaming.parallel.max_frame_bytes', 2_097_152, 1_024, 4_194_304),
-                $this->boundedInteger('swarm.streaming.parallel.cancel_grace_milliseconds', 250, 0, 10_000),
+                $parallelStreamLimits['max_frame_bytes'],
+                $parallelStreamLimits['cancel_grace_milliseconds'],
             );
             $multiplexed = $session->events();
+            $steps = [];
+            $usage = [];
+            $outputs = [];
             foreach ($multiplexed as $envelope) {
                 $branchId = $envelope['branch_id'];
                 $failureBranch = $branchId;
+                $branchIndex = (int) substr($branchId, strlen('parallel:'));
+
+                if (($envelope['terminal'] ?? false) === true) {
+                    $row = $envelope['payload'];
+                    if (! isset($agents[$branchIndex])) {
+                        throw new SwarmException("Parallel stream branch [{$branchId}] did not return a successful terminal outcome.");
+                    }
+                    if (($row['ok'] ?? null) !== true) {
+                        $failedUsage = is_array($row['usage'] ?? null) ? $row['usage'] : [];
+                        $usage = $this->mergeUsageReport($usage, $failedUsage);
+                        $context->mergeMetadata(['usage' => $usage]);
+                        ConcurrentAgentResult::throwFailureDescriptor(
+                            is_array($row['failure'] ?? null) ? $row['failure'] : [],
+                        );
+                    }
+                    $agent = $agents[$branchIndex];
+                    $this->guardrails->validateStep(
+                        $swarm,
+                        GuardrailStepContext::fromState($state, $branchIndex, $agent::class, $input, (string) ($row['output'] ?? ''), []),
+                        $context,
+                    );
+
+                    $consumed = is_array($row['native_settings_consumed'] ?? null)
+                        ? array_values(array_filter($row['native_settings_consumed'], 'is_string'))
+                        : [];
+                    $state->nativeSettingsAttempt->merge($consumed);
+                    foreach (is_array($row['tool_calls'] ?? null) ? $row['tool_calls'] : [] as $toolCall) {
+                        if (is_array($toolCall)) {
+                            $snapshots[$branchIndex] = $this->snapshots->appendToolCall(
+                                $snapshots[$branchIndex],
+                                $this->normalizeToolCall($toolCall),
+                            );
+                        }
+                    }
+                    $unknown = is_array($row['unknown_event_classes'] ?? null)
+                        ? array_fill_keys(array_filter($row['unknown_event_classes'], 'is_string'), true)
+                        : [];
+                    $this->breadcrumbUnknownStreamEvents($unknown, $runId, $branchIndex);
+
+                    $stepUsage = is_array($row['usage'] ?? null) ? $row['usage'] : [];
+                    $citationEvidence = CitationEvidence::fromArray(is_array($row['citation_evidence'] ?? null) ? $row['citation_evidence'] : []);
+                    $nativeResult = is_array($row['native_result'] ?? null)
+                        ? NativeStepResult::fromArray($row['native_result'])
+                        : NativeStepResult::unavailable(['missing']);
+                    $step = $this->steps->completed(
+                        state: $state,
+                        index: $branchIndex,
+                        agentClass: $agent::class,
+                        input: $input,
+                        output: (string) ($row['output'] ?? ''),
+                        usage: $stepUsage,
+                        durationMs: (int) ($row['duration_ms'] ?? 1),
+                        updateContext: false,
+                        storeContext: false,
+                        storeArtifacts: false,
+                        citationEvidence: $citationEvidence,
+                        nativeResult: $nativeResult,
+                    );
+                    $steps[$branchIndex] = $step;
+                    $outputs[$branchIndex] = $step->output;
+                    $usage = $this->mergeUsageReport($usage, $stepUsage);
+
+                    $stepEnd = (new SwarmStepEnd(
+                        citationEvidence: $this->capture->citationEvidence($citationEvidence, $context),
+                        id: SwarmStreamEvent::newId(),
+                        runId: $runId,
+                        stepIndex: $branchIndex,
+                        agentClass: $agent::class,
+                        agent: class_basename($agent),
+                        output: $this->capture->applyOutput($step->output, $context),
+                        durationMs: (int) ($row['duration_ms'] ?? 1),
+                        metadata: ['usage' => $stepUsage],
+                        timestamp: SwarmStreamEvent::timestamp(),
+                        nativeResult: $this->capture->nativeResultForStreamEvent($nativeResult, $context),
+                    ))->withNodeId($branchId)->withBranchIdentity(
+                        $branchId,
+                        $attemptIds[$branchId],
+                        $branchSequences[$branchId]++,
+                    );
+                    $this->recordTelemetry($state, $swarm, $stepEnd, $streamSequence, $telemetryStarted);
+                    yield $stepEnd;
+                    $failureBranch = null;
+
+                    continue;
+                }
+
                 $event = SwarmStreamEvent::fromArray($envelope['payload']);
                 if (($event->toArray()['run_id'] ?? null) !== $runId) {
                     throw new SwarmException("Parallel stream branch [{$branchId}] returned an event for a different run.");
                 }
-                $branchIndex = (int) substr($branchId, strlen('parallel:'));
                 if (($event->toArray()['step_index'] ?? $branchIndex) !== $branchIndex) {
                     throw new SwarmException("Parallel stream branch [{$branchId}] returned an event for a different branch index.");
                 }
@@ -298,92 +400,14 @@ final class ParallelStreamRunner
                 yield $event;
                 $failureBranch = null;
             }
-            $outcomes = $multiplexed->getReturn();
-
-            foreach ($agents as $index => $agent) {
-                $branchId = "parallel:{$index}";
-                if (! isset($outcomes[$branchId]) || ($outcomes[$branchId]['ok'] ?? null) !== true) {
-                    throw new SwarmException("Parallel stream branch [{$branchId}] did not return a successful terminal outcome.");
-                }
-                $row = $outcomes[$branchId];
-                $this->guardrails->validateStep(
-                    $swarm,
-                    GuardrailStepContext::fromState($state, $index, $agent::class, $input, (string) ($row['output'] ?? ''), []),
-                    $context,
-                );
+            if (count($steps) !== count($agents)) {
+                throw new SwarmException('Parallel stream did not return one successful terminal outcome per branch.');
             }
 
-            foreach ($outcomes as $row) {
-                $consumed = is_array($row['native_settings_consumed'] ?? null)
-                    ? array_values(array_filter($row['native_settings_consumed'], 'is_string'))
-                    : [];
-                $state->nativeSettingsAttempt->merge($consumed);
-            }
-            foreach ($agents as $index => $agent) {
-                $row = $outcomes["parallel:{$index}"];
-                foreach (is_array($row['tool_calls'] ?? null) ? $row['tool_calls'] : [] as $toolCall) {
-                    if (is_array($toolCall)) {
-                        $snapshots[$index] = $this->snapshots->appendToolCall(
-                            $snapshots[$index],
-                            $this->normalizeToolCall($toolCall),
-                        );
-                    }
-                }
-                $unknown = is_array($row['unknown_event_classes'] ?? null)
-                    ? array_fill_keys(array_filter($row['unknown_event_classes'], 'is_string'), true)
-                    : [];
-                $this->breadcrumbUnknownStreamEvents($unknown, $runId, $index);
-            }
-
-            $steps = [];
-            $usage = [];
-            $outputs = [];
-            foreach ($agents as $index => $agent) {
-                $branchId = "parallel:{$index}";
-                $row = $outcomes[$branchId];
-                $stepUsage = is_array($row['usage'] ?? null) ? $row['usage'] : [];
-                $citationEvidence = CitationEvidence::fromArray(is_array($row['citation_evidence'] ?? null) ? $row['citation_evidence'] : []);
-                $nativeResult = is_array($row['native_result'] ?? null)
-                    ? NativeStepResult::fromArray($row['native_result'])
-                    : NativeStepResult::unavailable(['missing']);
-                $step = $this->steps->completed(
-                    state: $state,
-                    index: $index,
-                    agentClass: $agent::class,
-                    input: $input,
-                    output: (string) ($row['output'] ?? ''),
-                    usage: $stepUsage,
-                    durationMs: (int) ($row['duration_ms'] ?? 1),
-                    updateContext: false,
-                    storeContext: false,
-                    storeArtifacts: false,
-                    citationEvidence: $citationEvidence,
-                    nativeResult: $nativeResult,
-                );
-                $steps[] = $step;
-                $outputs[] = $step->output;
-                $usage = $this->mergeUsageReport($usage, $stepUsage);
-
-                $stepEnd = (new SwarmStepEnd(
-                    citationEvidence: $this->capture->citationEvidence($citationEvidence, $context),
-                    id: SwarmStreamEvent::newId(),
-                    runId: $runId,
-                    stepIndex: $index,
-                    agentClass: $agent::class,
-                    agent: class_basename($agent),
-                    output: $this->capture->applyOutput($step->output, $context),
-                    durationMs: (int) ($row['duration_ms'] ?? 1),
-                    metadata: ['usage' => $stepUsage],
-                    timestamp: SwarmStreamEvent::timestamp(),
-                    nativeResult: $this->capture->nativeResultForStreamEvent($nativeResult, $context),
-                ))->withNodeId($branchId)->withBranchIdentity(
-                    $branchId,
-                    $attemptIds[$branchId],
-                    $branchSequences[$branchId]++,
-                );
-                $this->recordTelemetry($state, $swarm, $stepEnd, $streamSequence, $telemetryStarted);
-                yield $stepEnd;
-            }
+            ksort($steps);
+            ksort($outputs);
+            $steps = array_values($steps);
+            $outputs = array_values($outputs);
 
             $combined = implode("\n\n", $outputs);
             $context->mergeData(['last_output' => $combined, 'steps' => count($steps)])
@@ -434,15 +458,16 @@ final class ParallelStreamRunner
             return $response;
         } catch (Throwable $exception) {
             $failureBranch ??= $session?->failureBranchId;
+            $branchIdentity = is_string($failureBranch) && isset($attemptIds[$failureBranch], $branchSequences[$failureBranch])
+                ? [
+                    'branch_id' => $failureBranch,
+                    'attempt_id' => $attemptIds[$failureBranch],
+                    'branch_sequence' => $branchSequences[$failureBranch]++,
+                ]
+                : null;
             $error = $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt,
-                $telemetryStarted, $streamSequence, $historyStarted);
-            if (is_string($failureBranch) && isset($attemptIds[$failureBranch], $branchSequences[$failureBranch])) {
-                $error->withNodeId($failureBranch)->withBranchIdentity(
-                    $failureBranch,
-                    $attemptIds[$failureBranch],
-                    $branchSequences[$failureBranch]++,
-                );
-            }
+                $telemetryStarted, $streamSequence, $historyStarted, false, $branchIdentity);
+            $this->recordTelemetry($state, $swarm, $error, $streamSequence, $telemetryStarted);
             yield $error;
             NativeOutcomeValidator::rethrowIfUnsupported($exception);
             throw $exception;
@@ -458,40 +483,44 @@ final class ParallelStreamRunner
             $context, $context->metadata, $exception, $state->ttlSeconds);
         $this->events->dispatch(new SwarmFailed($context->runId, $swarm::class, $state->topology->value,
             $this->capture->failureException($exception), 0, $context->metadata, ExecutionMode::Stream->value, $exception::class));
+        if (! $exception instanceof HaltsSwarmExecution) {
+            $this->emitRunFailedAudit($state, $context, $swarm, $exception::class, 0, $context->metadata);
+        }
     }
 
+    /** @param array{branch_id: string, attempt_id: string, branch_sequence: int}|null $branchIdentity */
     private function failStream(SwarmExecutionState $state, RunContext $context, int $ttl, Swarm $swarm,
-        Throwable $exception, ?float $startedAt, float $telemetryStarted, int &$sequence, bool $historyStarted = true): SwarmStreamError
+        Throwable $exception, ?float $startedAt, float $telemetryStarted, int &$sequence,
+        bool $historyStarted = true, bool $recordTelemetry = true, ?array $branchIdentity = null): SwarmStreamError
     {
         if ($exception instanceof GuardrailViolation) {
             $context->mergeMetadata($exception->safeContextMetadata());
         }
+        if (is_array($branchIdentity)) {
+            $context->mergeMetadata($branchIdentity);
+        }
         $duration = $startedAt !== null ? MonotonicTime::elapsedMilliseconds($startedAt) : 1;
+        $failureMetadata = $exception instanceof SwarmStreamProviderException
+            ? array_merge($context->metadata, ['provider_error' => $exception->metadata], $branchIdentity ?? [])
+            : array_merge($context->metadata, $branchIdentity ?? []);
         if ($historyStarted) {
-            $this->historyStore->fail($context->runId, $exception, $ttl);
+            if ($this->historyStore instanceof RecordsContextualRunFailure) {
+                $this->historyStore->failWithMetadata($context->runId, $exception, $failureMetadata, $ttl);
+            } else {
+                $this->historyStore->fail($context->runId, $exception, $ttl);
+            }
         } else {
             $this->historyStore->recordPreflightFailure($context->runId, $swarm::class, $state->topology->value,
-                $context, $context->metadata, $exception, $ttl);
+                $context, $failureMetadata, $exception, $ttl);
         }
         $this->contextStore->put($this->capture->terminalContext($context), $ttl);
-        $failureMetadata = $exception instanceof SwarmStreamProviderException
-            ? array_merge($context->metadata, ['provider_error' => $exception->metadata])
-            : $context->metadata;
         $failureClass = $exception instanceof SwarmStreamProviderException ? ProviderStreamError::class : $exception::class;
         $this->events->dispatch(new SwarmFailed($context->runId, $swarm::class, $state->topology->value,
             $this->capture->failureException($exception), $duration, $failureMetadata,
             ExecutionMode::Stream->value, $failureClass));
-        $this->audit->emit('run.failed', [
-            'run_id' => $context->runId,
-            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
-            'swarm_class' => $swarm::class,
-            'topology' => $state->topology->value,
-            'execution_mode' => ExecutionMode::Stream->value,
-            'status' => 'failed',
-            'exception_class' => $failureClass,
-            'duration_ms' => $duration,
-            ...$this->audit->metadata($failureMetadata),
-        ]);
+        if (! $exception instanceof HaltsSwarmExecution) {
+            $this->emitRunFailedAudit($state, $context, $swarm, $failureClass, $duration, $failureMetadata);
+        }
         $event = new SwarmStreamError(
             $exception instanceof SwarmStreamProviderException ? $exception->eventId : SwarmStreamEvent::newId(),
             $context->runId,
@@ -504,9 +533,53 @@ final class ParallelStreamRunner
         if ($exception instanceof SwarmStreamProviderException && is_string($exception->invocationId)) {
             $event->withInvocationId($exception->invocationId);
         }
-        $this->recordTelemetry($state, $swarm, $event, $sequence, $telemetryStarted);
+        if (is_array($branchIdentity)) {
+            $event->withNodeId($branchIdentity['branch_id'])->withBranchIdentity(
+                $branchIdentity['branch_id'],
+                $branchIdentity['attempt_id'],
+                $branchIdentity['branch_sequence'],
+            );
+        }
+        if ($recordTelemetry) {
+            $this->recordTelemetry($state, $swarm, $event, $sequence, $telemetryStarted);
+        }
 
         return $event;
+    }
+
+    /** @param array<string, mixed> $metadata */
+    private function emitRunFailedAudit(SwarmExecutionState $state, RunContext $context, Swarm $swarm,
+        string $exceptionClass, int $duration, array $metadata): void
+    {
+        $this->audit->emit('run.failed', [
+            'run_id' => $context->runId,
+            'parent_run_id' => $context->metadata['parent_run_id'] ?? null,
+            'swarm_class' => $swarm::class,
+            'topology' => $state->topology->value,
+            'execution_mode' => ExecutionMode::Stream->value,
+            'status' => 'failed',
+            'exception_class' => $exceptionClass,
+            'duration_ms' => $duration,
+            ...$this->branchFailureIdentity($metadata),
+            ...$this->audit->metadata($metadata),
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $metadata
+     * @return array{branch_id: string, attempt_id: string, branch_sequence: int}|array{}
+     */
+    private function branchFailureIdentity(array $metadata): array
+    {
+        return is_string($metadata['branch_id'] ?? null)
+            && is_string($metadata['attempt_id'] ?? null)
+            && is_int($metadata['branch_sequence'] ?? null)
+            ? [
+                'branch_id' => $metadata['branch_id'],
+                'attempt_id' => $metadata['attempt_id'],
+                'branch_sequence' => $metadata['branch_sequence'],
+            ]
+            : [];
     }
 
     private function recordTelemetry(SwarmExecutionState $state, Swarm $swarm, SwarmStreamEvent $event, int &$sequence, float $started): void
@@ -522,6 +595,9 @@ final class ParallelStreamRunner
             'duration_ms' => MonotonicTime::elapsedMilliseconds($started),
             'is_replay' => false,
             'status' => 'streaming',
+            'branch_id' => $event->branchId,
+            'attempt_id' => $event->attemptId,
+            'branch_sequence' => $event->branchSequence,
         ]);
     }
 
@@ -529,16 +605,6 @@ final class ParallelStreamRunner
     private function checkInputPayload(string|array|RunContext|AgentInput|UserMessage $task, RunContext $context): void
     {
         $task instanceof RunContext ? $this->limits->checkContextInput($context) : $this->limits->checkInput($context->input);
-    }
-
-    private function boundedInteger(string $key, int $default, int $minimum, int $maximum): int
-    {
-        $value = (int) $this->config->get($key, $default);
-        if ($value < $minimum || $value > $maximum) {
-            throw new SwarmException("Invalid [{$key}] value [{$value}]; expected {$minimum}..{$maximum}.");
-        }
-
-        return $value;
     }
 
     /**

@@ -22,7 +22,15 @@ final class ParallelLiveStreamBranchTwo extends SerializationBoundaryAgent
 
         return new StreamableAgentResponse('shared-native-invocation', function () use ($path): \Generator {
             file_put_contents($path.'.branch-two-pid', (string) getmypid());
-            usleep(250_000);
+            if (file_exists($path.'.hold-branch-two')) {
+                $deadline = hrtime(true) + 5_000_000_000;
+                while (! file_exists($path.'.release-branch-two')) {
+                    if (hrtime(true) >= $deadline) {
+                        throw new \RuntimeException('Timed out waiting for the branch-two test release barrier.');
+                    }
+                    usleep(10_000);
+                }
+            }
             yield (new TextDelta('shared-native-event', 'shared-message', 'branch-two', 1710000001))
                 ->withInvocationId('shared-native-invocation');
             yield (new StreamEnd('shared-native-end', 'stop', new TextUsage(5, 7), 1710000002))

@@ -22,6 +22,12 @@ final class ParallelLiveStreamBranchOne extends SerializationBoundaryAgent
 
         return new StreamableAgentResponse('shared-native-invocation', function () use ($path): \Generator {
             file_put_contents($path.'.branch-one-pid', (string) getmypid());
+            if (file_exists($path.'.require-both-pids')) {
+                $deadline = hrtime(true) + 2_000_000_000;
+                while (! file_exists($path.'.branch-two-pid') && hrtime(true) < $deadline) {
+                    usleep(10_000);
+                }
+            }
             yield (new TextDelta('shared-native-event', 'shared-message', 'branch-one', 1710000001))
                 ->withInvocationId('shared-native-invocation');
             file_put_contents($path.'.branch-one-advanced', 'yes');

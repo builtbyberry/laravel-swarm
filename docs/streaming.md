@@ -24,15 +24,15 @@ mode is separate from `stream()`.
 
 - You want step lifecycle events plus final-agent text, reasoning, and tool
   stream events for SSE or custom progress UIs.
-- A single HTTP request should own the full sequential workflow while emitting
-  progress.
+- A single HTTP request should own the supported workflow while emitting live
+  progress, including explicitly enabled process-backed parallel branches.
 - You may later need **persisted replay** of the exact emitted timeline (opt-in).
 
 Use `prompt()` when the caller only needs the final aggregate result. Use
 `queue()` or `dispatchDurable()` when the work should outlive the request or
 needs background or checkpointed execution.
 
-## Topology: Sequential, Static-Hierarchical, and Hierarchical
+## Topology: Sequential, Parallel, Static-Hierarchical, and Hierarchical
 
 Streaming is supported for **sequential**, **static-hierarchical**, and
 **hierarchical** (dynamic, coordinator-generated plan) swarms. Top-level
@@ -81,18 +81,20 @@ different branches. Arrival order across branches is scheduler-dependent and is
 authored `agents()` order, regardless of which branch finished first.
 
 The transport uses authenticated, versioned, length-prefixed loopback frames.
-Frames are byte-bounded and atomic; one event is never split. The parent
+Branch-event and terminal-outcome frames are byte-bounded and atomic; a frame is
+never split. The parent
 acknowledges each event only after the consumer asks for the next event, applying
 backpressure all the way to that branch. The absolute swarm deadline continues
-while a consumer is paused. Branch count, event-frame bytes, and cancellation
+while a consumer is paused. Branch count, event-or-terminal frame bytes, and cancellation
 grace are bounded by `swarm.streaming.parallel.*`.
 
 If one branch fails, disconnects, violates the protocol, exceeds a bound, or
 misses the deadline, the run emits its normal terminal stream error, records the
 failure, cancels and reaps sibling processes, and rethrows the original branch
 failure when it can be reconstructed. Events already yielded remain partial
-observations; no branch is recorded successful until every native outcome and
-step guardrail passes. If the consumer abandons the stream, all active branches
+observations. A branch is recorded successful only after its own authenticated
+native outcome and step guardrail pass; run success waits for every branch. If
+the consumer abandons the stream, all active branches
 are stopped and reaped. There is no buffered-completion fallback presented as
 live streaming.
 
@@ -101,10 +103,20 @@ and custom concurrency drivers expose only buffered completion and therefore
 fail before agent invocation. Use `prompt()` for a truthful buffered aggregate,
 or run the streaming endpoint where the process transport is available.
 
+Request-local tenant state does not cross a process boundary by implication.
+Put the tenant identifier in `RunContext` and, when the application's tenancy
+bootstrap depends on Laravel Context, in Laravel's `Context` before starting the
+stream. Swarm hydrates both before resolving the child agent; the application
+remains responsible for using that identity in its container/service-provider
+tenancy initialization and for preventing cross-tenant data access.
+
 Capture/redaction, citations, native step results, inclusive usage aggregation,
 replay, and broadcast use their existing owners. Child processes return bounded
 outcomes; the parent alone applies guardrails and writes canonical history,
-snapshots, replay, and terminal state, so retries are not counted twice. Persisted
+snapshots, replay, and terminal state, so usage is aggregated once for one live
+attempt. A Laravel queue or application retry restarts the whole stream and can
+repeat provider cost or effects unless the application supplies idempotency; this path
+adds no branch-level retry or deduplication contract. Persisted
 replay and broadcast envelopes retain the branch identity fields. Durable
 streaming continues to use its existing node/attempt-epoch causal log; live
 `attempt_id` does not replace or reinterpret durable epochs.
@@ -112,8 +124,9 @@ streaming continues to use its existing node/attempt-epoch causal log; live
 There is intentionally no transaction spanning a child process socket, replay
 store, history store, and broadcast transport. Each yielded event is an observed
 fact and may be persisted or delivered before a later branch fails. Terminal
-history and step evidence are written only by the parent after every branch and
-guardrail succeeds. The frame byte limit protects branch-to-parent transport; it
+run success is written only after every branch succeeds; completed branch step
+evidence is written by the parent as each branch passes its guardrail. The frame
+byte limit protects branch-to-parent transport; it
 is not a promise that an application's WebSocket/SSE infrastructure accepts that
 envelope size, so configure downstream limits separately.
 
@@ -123,8 +136,26 @@ branch finishes, event-level backpressure, absolute deadlines while a consumer
 is paused, partial branch failure with sibling reaping, consumer abandonment,
 capture/redaction, citations, usage, native results, and persisted replay. The
 protocol unit lane separately rejects oversized, truncated, malformed,
-unauthenticated, and duplicate frames. These are provider-free deterministic
+unauthenticated frames and duplicate branch handshakes/connections. These are provider-free deterministic
 tests; they do not assert a paid provider's network timing.
+
+Before enabling the writer in a serving environment, run:
+
+```bash
+php artisan swarm:health --parallel-streaming
+```
+
+The `Parallel live streaming` row must report `ok`. This probe launches the
+actual provider-free child bootstrap and authenticated loopback handshake. Once
+the feature flag is enabled, bare `swarm:health` includes the same check and
+exits nonzero when the process transport is unavailable.
+
+`max_branches` is a per-stream branch-process admission limit, not a raw
+file-descriptor or application-wide ceiling. Each branch owns process pipes and
+a loopback socket. Budget aggregate capacity as concurrent live streams times
+`max_branches`, allow several descriptors per branch, and enforce the resulting
+application-wide limit through the serving HTTP/queue concurrency controls or an
+application rate limiter.
 
 Swarm tool-call serialization omits opaque provider continuation fields, including
 `reasoning_encrypted_content` and `thought_signature`. Native conversation replay
@@ -149,6 +180,32 @@ foreach (ArticlePipeline::make()->stream([
 }
 ```
 
+For a top-level parallel swarm, group by branch and attempt rather than
+concatenating scheduler-dependent arrival order:
+
+```php
+$branches = [];
+
+foreach (ResearchSwarm::make()->stream('Compare the options') as $event) {
+    if ($event->type() !== 'swarm_text_delta' || $event->branchId === null) {
+        continue;
+    }
+
+    $attempt = $event->attemptId;
+    $branches[$event->branchId][$attempt][$event->branchSequence] = $event->delta;
+}
+
+foreach ($branches as &$attempts) {
+    foreach ($attempts as &$events) {
+        ksort($events); // Order only inside this branch attempt.
+    }
+}
+```
+
+`branchId` is the authored slot, `attemptId` scopes one live attempt, and
+`branchSequence` is meaningful only within that pair. Use the terminal combined
+response when authored branch order, rather than live arrival, is required.
+
 Return from a route for Laravel AI-style SSE (`data:` lines by default):
 
 ```php
@@ -156,6 +213,11 @@ return ArticlePipeline::make()->stream([
     'topic' => 'Laravel queues',
 ]);
 ```
+
+The response sends `Cache-Control: no-cache, no-transform` and
+`X-Accel-Buffering: no` to discourage intermediary buffering. Those headers are
+advisory: verify end-to-end flushing through the application server, FastCGI or
+reverse proxy, and any CDN before claiming client-visible live delivery.
 
 For Laravel 13 named SSE events, each swarm stream event exposes
 `toStreamedEvent()` for use with `response()->eventStream()`. See the
@@ -171,25 +233,28 @@ stream events:
 
 ```php
 use App\Ai\Swarms\ArticlePipeline;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Support\Str;
 
-ArticlePipeline::make()->broadcast(
-    ['topic' => 'Laravel queues'],
-    new PrivateChannel('swarm.article-pipeline'),
-);
+$runId = (string) Str::uuid();
+$channel = new PrivateChannel("tenants.{$tenantId}.swarm.{$runId}");
+$context = RunContext::from([
+    'input' => 'Draft an article about Laravel queues.',
+    'data' => ['topic' => 'Laravel queues'],
+], runId: $runId);
 
-ArticlePipeline::make()->broadcastNow(
-    ['topic' => 'Laravel queues'],
-    new PrivateChannel('swarm.article-pipeline'),
-);
-
-ArticlePipeline::make()
-    ->broadcastOnQueue(
-        ['topic' => 'Laravel queues'],
-        new PrivateChannel('swarm.article-pipeline'),
-    )
-    ->onQueue('ai-streams');
+// Choose exactly one delivery verb for this run.
+ArticlePipeline::make()->broadcast($context, $channel);
+// ArticlePipeline::make()->broadcastNow($context, $channel);
+// ArticlePipeline::make()->broadcastOnQueue($context, $channel)
+//     ->onQueue('ai-streams');
 ```
+
+The application must authorize that private channel by both tenant membership
+and permission to inspect that exact run ID. Define the corresponding
+application policy in `routes/channels.php`. A constant cross-tenant channel is
+not a safe default for streamed prompts, tool events, citations, or output.
 
 `broadcast()` consumes the stream immediately and broadcasts each
 `SwarmStreamEvent` through Laravel broadcasting. `broadcastNow()` uses immediate
@@ -279,9 +344,11 @@ run-structure node it belongs to (absent/null = a top-level event with no
 enclosing node). The three `swarm_node_*` events make a run's structure
 first-class on the causal log — "structure as payload".
 
-Parallel branch events add nullable `branch_id`, `attempt_id`, and
-`branch_sequence` fields. They are absent on older rows and non-parallel live
-paths. Consumers must not use array arrival order as a cross-branch causal order.
+Parallel branch events add optional wire keys. They are absent on older rows and
+non-parallel live paths; when present, `branch_id` and `attempt_id` are strings
+and `branch_sequence` is an integer. The corresponding PHP object properties are
+nullable for compatibility. Consumers must not use array arrival order as a
+cross-branch causal order.
 
 **Provenance:** For upstream final-agent streamed provider events, Laravel Swarm
 preserves upstream event **IDs** and **timestamps** in typed replay. **Invocation
@@ -541,7 +608,9 @@ fails the run without publishing a successful terminal event. Native provider
 failover before any output remains available; after output or tool effects, do
 not assume the attempt can be replayed safely. Inspect effects before an
 operator-controlled restart. Discarding an unfinished consumer marks that run
-failed and closes its local stream state; it does not hard-cancel a provider call.
+failed. On the process-backed parallel path it also terminates and reaps local
+branch processes, but process termination does not prove cancellation of a
+provider request or remote side effect that was already accepted.
 
 The public Swarm `then()` callback is a different stage: it observes an already
 completed Swarm response. If that observer throws, completed history and replay
@@ -550,8 +619,12 @@ remain successful.
 ## Timeouts
 
 `#[Timeout]` and `swarm.timeout` are **best-effort** orchestration deadlines.
-Laravel Swarm checks them before and between agent steps; they do **not**
-hard-cancel an in-flight provider request or a streamed response mid-call.
+Ordinary execution paths check them before and between agent steps and do not
+hard-cancel an in-flight provider request. Process-backed parallel streaming
+also enforces the absolute deadline continuously while polling frames and waiting
+for acknowledgements; on expiry it terminates and reaps local branch processes.
+That local cleanup does not prove cancellation of a provider request or remote
+side effect already accepted outside the process.
 
 ## Testing
 

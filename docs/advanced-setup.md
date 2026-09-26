@@ -384,6 +384,7 @@ path:
 php artisan swarm:health
 php artisan swarm:health --durable
 php artisan swarm:health --audit
+php artisan swarm:health --parallel-streaming
 ```
 
 `--durable` verifies the database tables required by `dispatchDurable()`
@@ -391,6 +392,13 @@ and coordinated multi-worker hierarchical queueing. `--audit` runs the
 two audit outbox checks (pending staleness + dead-letter count). Both
 flags degrade cleanly on the cache persistence driver, where the
 underlying tables are unavailable by design.
+
+`--parallel-streaming` is a pre-enable production probe for the default-off
+top-level parallel live path. It validates the effective limits and exercises
+the actual provider-free child bootstrap plus authenticated loopback handshake.
+Require its `Parallel live streaming` row to report `ok` before enabling the
+writer. It cannot be combined with the audit-only option. Once the writer is
+enabled, bare `swarm:health` includes the same runtime check.
 
 ## Where to next
 

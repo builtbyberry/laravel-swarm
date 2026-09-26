@@ -16,37 +16,71 @@ for the complete deployment and drain-before-rollback procedure.
 
 No migration is required. The capability is default-off. Deploy v0.28 code to
 every HTTP and queue worker, configure Laravel's concurrency driver as `process`,
-verify loopback process transport in the serving environment, and only then set
+run `php artisan swarm:health --parallel-streaming` in the serving environment,
+require the `Parallel live streaming` row to report `ok`, and only then set
 `SWARM_PARALLEL_STREAMING_ENABLED=true` for endpoints that use a top-level
 parallel swarm's `stream()` or broadcast helpers.
 
-Parallel branch events add nullable `branch_id`, `attempt_id`, and
-`branch_sequence` fields. Update exhaustive event consumers before enabling the
-writer. Order only within one `(branch_id, attempt_id)` by `branch_sequence`;
-arrival order across branches is not a causal order. Native IDs remain unchanged
-and can repeat across branches. Existing replay rows and non-parallel events omit
-the new fields and remain readable.
+If your application has published `config/swarm.php`, Laravel's package config
+merge will not add nested keys beneath an existing `streaming` array. Merge this
+complete block into the published file before enabling the environment flag
+(or carefully republish with `--force` after preserving local customizations):
+
+```php
+'parallel' => [
+    'enabled' => filter_var(env('SWARM_PARALLEL_STREAMING_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+    'max_branches' => (int) env('SWARM_PARALLEL_STREAMING_MAX_BRANCHES', 32),
+    'max_frame_bytes' => (int) env('SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES', 2097152),
+    'cancel_grace_milliseconds' => (int) env('SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS', 250),
+],
+```
+
+Place it inside the published `streaming` array. Confirm
+`config('swarm.streaming.parallel.enabled')` reflects the environment after
+clearing and rebuilding the application's configuration cache.
+
+Parallel branch events add optional wire keys. Existing replay rows and
+non-parallel events omit them; branch-scoped events contain string `branch_id`,
+string `attempt_id`, and integer `branch_sequence`. The PHP object properties
+remain nullable for compatibility. Update exhaustive event consumers before
+enabling the writer. Order only within one `(branch_id, attempt_id)` by
+`branch_sequence`; arrival order across branches is not a causal order. Native
+IDs remain unchanged and can repeat across branches.
 
 The live path requires the `process` driver. `sync`, `fork`, and custom drivers
 fail before agent invocation because their public result is buffered. Use
 `prompt()` where process streaming is unavailable. There is no automatic
 buffered fallback. Tune `max_branches`, `max_frame_bytes`, and cancellation grace
-for the worker's file-descriptor and memory budgets; a frame is one atomic event
-and is never split.
+for the worker's process and memory budgets; a frame is one atomic event and is
+never split. `max_branches` is a per-stream branch-process admission limit, not a
+raw file-descriptor or application-wide ceiling. Each branch owns several
+descriptors, so budget aggregate capacity as concurrent live streams times
+`max_branches` and enforce that capacity through application HTTP/queue
+concurrency controls or a rate limiter.
 
 On a branch failure, protocol failure, deadline, or client disconnect, partial
 events may already have reached the consumer. The run fails and active siblings
 are canceled/reaped. Retry only under the application's normal effect/idempotency
 policy. Broadcast transport retry remains Laravel/application-owned. Existing
 stream replay retention and `swarm:prune` ownership apply; this feature adds no
-new persistent table, retention hook, or operational command.
+new persistent table, retention hook, or standalone command. It extends the
+existing `swarm:health` command with `--parallel-streaming`; after the feature is
+enabled, bare `swarm:health` runs the same provider-free transport check.
+
+Stream responses add advisory `Cache-Control: no-cache, no-transform` and
+`X-Accel-Buffering: no` headers. Verify application-server, FastCGI/proxy, and
+CDN flushing end to end before treating browser delivery as live.
 
 Rollback is safe only after active live streams drain. Disable
 `SWARM_PARALLEL_STREAMING_ENABLED`, restart long-lived workers so no new parallel
-streams begin, wait for active HTTP/queued broadcast streams to terminate, then
-deploy the old readers. Retaining replay rows with the nullable identity keys is
-schema-safe, but older consumers may discard those keys and cannot reconstruct
-cross-branch provenance.
+streams begin, stop or drain the queue that owns queued broadcasts, and wait for
+the serving layer to report zero active streaming requests and the broadcast
+queue to report zero active/reserved jobs before deploying old readers.
+`swarm:history --status=running` can identify known persisted runs, but it is
+advisory rather than an authoritative active-connection count; use the HTTP
+server/load balancer and queue worker as the rollback stop condition. Retaining
+replay rows with the optional identity keys is schema-safe, but older consumers
+may discard the optional keys and cannot reconstruct cross-branch provenance.
 
 The `Runnable` and inline pending-run execution verbs now accept `AgentInput|UserMessage` in
 addition to string, array, and `RunContext`. Applications that override

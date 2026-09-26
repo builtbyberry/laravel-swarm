@@ -16,7 +16,11 @@ use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
+use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
+use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamLimits;
 use Carbon\CarbonInterface;
+use Illuminate\Concurrency\ConcurrencyManager;
+use Illuminate\Concurrency\ProcessDriver;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Filesystem\Factory;
@@ -30,10 +34,11 @@ class SwarmHealthCommand extends Command
 {
     protected $signature = 'swarm:health
                             {--durable : Also verify durable database runtime tables}
+                            {--parallel-streaming : Exercise the provider-free live parallel process transport}
                             {--audit : Run only the audit outbox checks (skips persistence and durable)}
                             {--json : Output machine-readable health results}';
 
-    protected $description = 'Verify Laravel Swarm persistence readiness';
+    protected $description = 'Verify Laravel Swarm persistence and runtime readiness';
 
     public function handle(
         Application $app,
@@ -41,9 +46,22 @@ class SwarmHealthCommand extends Command
         Connection $connection,
         CommandOverlapGuard $overlapGuard,
     ): int {
+        $concurrency = $app->make(ConcurrencyManager::class);
+        $parallelStreamTransport = $app->make(ParallelProcessStreamTransport::class);
+        $parallelStreamLimits = $app->make(ParallelStreamLimits::class);
         $auditOnly = $this->option('audit') === true;
 
         $results = [];
+
+        if ($auditOnly && $this->option('parallel-streaming') === true) {
+            $results[] = [
+                'component' => 'Command options',
+                'driver' => 'n/a',
+                'store' => 'n/a',
+                'status' => 'failed',
+                'details' => '--audit cannot be combined with --parallel-streaming; run the readiness checks separately.',
+            ];
+        }
 
         if (! $auditOnly) {
             $checks = [
@@ -85,6 +103,11 @@ class SwarmHealthCommand extends Command
             $results[] = $this->runGuardrailResolutionCheck($app, $config);
             $results[] = $this->runAuditSinkCheck($app);
             $results[] = $this->runCapturePolicyCheck($app);
+
+            if ($this->option('parallel-streaming') === true
+                || (bool) $config->get('swarm.streaming.parallel.enabled', false)) {
+                $results[] = $this->runParallelStreamingCheck($config, $concurrency, $parallelStreamTransport, $parallelStreamLimits);
+            }
         }
 
         // Audit outbox checks run by default (the audit lane is on by default in v0.5)
@@ -116,6 +139,50 @@ class SwarmHealthCommand extends Command
         return $hasFailure
             ? self::FAILURE
             : self::SUCCESS;
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runParallelStreamingCheck(
+        ConfigRepository $config,
+        ConcurrencyManager $concurrency,
+        ParallelProcessStreamTransport $transport,
+        ParallelStreamLimits $limits,
+    ): array {
+        $enabled = (bool) $config->get('swarm.streaming.parallel.enabled', false);
+        if (! $concurrency->driver() instanceof ProcessDriver) {
+            return [
+                'component' => 'Parallel live streaming',
+                'driver' => get_debug_type($concurrency->driver()),
+                'store' => 'loopback',
+                'status' => 'failed',
+                'details' => 'Laravel concurrency.default must resolve to the process driver before parallel live streaming is enabled.',
+            ];
+        }
+
+        try {
+            $resolved = $limits->resolve();
+            $transport->assertReady($resolved['max_frame_bytes'], $resolved['cancel_grace_milliseconds']);
+
+            return [
+                'component' => 'Parallel live streaming',
+                'driver' => 'process',
+                'store' => 'loopback',
+                'status' => 'ok',
+                'details' => ($enabled ? 'writer enabled; ' : 'writer disabled; ')
+                    .'provider-free child bootstrap and authenticated loopback handshake passed; '
+                    ."max_branches={$resolved['max_branches']}, max_frame_bytes={$resolved['max_frame_bytes']}, cancel_grace_milliseconds={$resolved['cancel_grace_milliseconds']}",
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Parallel live streaming',
+                'driver' => 'process',
+                'store' => 'loopback',
+                'status' => 'failed',
+                'details' => $exception->getMessage(),
+            ];
+        }
     }
 
     /**

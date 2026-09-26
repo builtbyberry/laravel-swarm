@@ -29,19 +29,20 @@ is a separate component and is not introduced by this input surface.
 ## Execution matrix
 
 Native input does not make a previously unsupported execution combination
-available. It follows the existing v0.27.0 execution envelope (tag commit
-`06ee4c8c095f3999f32aebd849c3534f5283d1a4`):
+available by itself. The v0.28 matrix below includes the separately gated
+[top-level parallel stream multiplexer](streaming.md#parallel-live-multiplexing):
 
 | Topology | `prompt()` | `queue()` | `stream()` / in-process broadcast | queued broadcast | durable |
 |---|---:|---:|---:|---:|---:|
 | Sequential | yes | yes | yes | yes | yes |
-| Parallel | yes | yes | no live ordered stream | no | yes |
+| Parallel | yes | yes | opt-in process multiplexing | opt-in process worker | yes |
 | Generated hierarchy | yes | yes | yes | yes | yes |
 | Static hierarchy | yes | yes | yes | yes | yes |
 
 Inline `Swarm::agent()`, `sequential()`, `parallel()` and `hierarchical()` builders
-retain their in-process-only boundary. Background and durable work still requires
-a named, container-resolvable swarm class.
+remain unavailable to queue and durable modes. Opt-in parallel streaming may
+launch local branch processes from the calling process; background and durable
+work still requires a named, container-resolvable swarm class.
 
 ## Explicit recipients
 

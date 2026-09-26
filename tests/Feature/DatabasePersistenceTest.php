@@ -1937,3 +1937,25 @@ test('database run history seals completed context input when encrypt at rest is
 
     expect($store->find($runId)['context']['input'])->toBe('classified-history-prompt');
 });
+
+test('database run history atomically merges failure metadata without losing prior context', function () {
+    $store = app(DatabaseRunHistoryStore::class);
+    $runId = (string) str()->uuid();
+    $context = RunContext::from('failure-metadata', $runId);
+    $store->start($runId, FakeSequentialSwarm::class, 'parallel', $context, [
+        'existing' => 'kept',
+        'usage' => ['input_tokens' => 2],
+    ], 3600);
+
+    $store->failWithMetadata($runId, new RuntimeException('branch failed'), [
+        'branch_id' => 'parallel:1',
+        'usage' => ['input_tokens' => 7, 'output_tokens' => 9],
+    ], 3600);
+
+    $record = $store->find($runId);
+    expect($record['status'])->toBe('failed')
+        ->and($record['error']['message'])->toBe('branch failed')
+        ->and($record['metadata']['existing'])->toBe('kept')
+        ->and($record['metadata']['branch_id'])->toBe('parallel:1')
+        ->and($record['metadata']['usage'])->toBe(['input_tokens' => 7, 'output_tokens' => 9]);
+});

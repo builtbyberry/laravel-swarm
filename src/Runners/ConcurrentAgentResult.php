@@ -80,22 +80,7 @@ class ConcurrentAgentResult
         }
 
         if ($this->transportedFailure !== null) {
-            /** @var class-string<Throwable> $class */
-            $class = $this->transportedFailure['class'];
-            if ($this->transportedFailure['transport_failed'] ?? false) {
-                if ($class === UnsupportedNativeApprovalException::class) {
-                    throw new UnsupportedNativeApprovalException;
-                }
-                if ($class === ApprovalNotResumableException::class) {
-                    throw ApprovalNotResumableException::make();
-                }
-                throw new SwarmException('Concurrent agent failure could not be transported ['.$class.'].');
-            }
-            $parameters = $this->transportedFailure['parameters'];
-
-            throw new $class(...(! empty(array_filter($parameters, fn ($value) => $value !== null))
-                ? $parameters
-                : [$this->transportedFailure['message']]));
+            self::throwFailureDescriptor($this->transportedFailure);
         }
 
         return $this->transportedResult === null ? $this->result : unserialize(base64_decode($this->transportedResult));

@@ -52,8 +52,9 @@ return [
 
     'topology' => env('SWARM_TOPOLOGY', Topology::Sequential->value),
 
-    // Best-effort orchestration deadline checked before and between swarm steps.
-    // This does not hard-cancel an in-flight provider call.
+    // Ordinary modes check this deadline at step boundaries. Process-backed parallel
+    // streams also enforce it while multiplexing and terminate local branch processes;
+    // neither path guarantees cancellation of remote provider work already accepted.
     'timeout' => (int) env('SWARM_TIMEOUT', 300),
 
     'max_agent_steps' => (int) env('SWARM_MAX_AGENT_STEPS', 10),
@@ -648,9 +649,9 @@ return [
          */
         'parallel' => [
             'enabled' => filter_var(env('SWARM_PARALLEL_STREAMING_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
-            // Maximum worker branches/file descriptors admitted to one live stream.
+            // Maximum branch processes admitted to one live stream; each branch uses multiple descriptors.
             'max_branches' => (int) env('SWARM_PARALLEL_STREAMING_MAX_BRANCHES', 32),
-            // Byte ceiling for one atomic native event frame; events are never split.
+            // Byte ceiling for one atomic branch event or terminal outcome frame; frames are never split.
             'max_frame_bytes' => (int) env('SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES', 2097152),
             // Grace before forcibly terminating sibling workers on failure/disconnect.
             'cancel_grace_milliseconds' => (int) env('SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS', 250),

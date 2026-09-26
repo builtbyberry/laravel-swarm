@@ -13,22 +13,22 @@ use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\StreamableAgentResponse;
 use Laravel\Ai\Streaming\Events\StreamEnd;
 use Laravel\Ai\Streaming\Events\TextDelta;
-use RuntimeException;
 
-final class ParallelLiveStreamFailingBranch extends SerializationBoundaryAgent
+final class RuntimeConfiguredParallelStreamAgent extends SerializationBoundaryAgent
 {
+    public function __construct(private string $runtimeConfiguration = 'container-default')
+    {
+        parent::__construct();
+    }
+
     public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
         $path = is_string($prompt) ? $prompt : '';
 
-        return new StreamableAgentResponse('failing-native-invocation', function () use ($path): \Generator {
-            $deadline = hrtime(true) + 2_000_000_000;
-            while (! file_exists($path.'.waiting-pid') && hrtime(true) < $deadline) {
-                usleep(10_000);
-            }
-            yield new TextDelta('failure-before-error', 'failure-message', 'partial', 1710000001);
-            yield new StreamEnd('failure-usage-before-error', 'stop', new TextUsage(11, 13), 1710000002);
-            throw new RuntimeException('parallel branch failed after a partial event');
+        return new StreamableAgentResponse('runtime-configured-invocation', function () use ($path): \Generator {
+            file_put_contents($path.'.provider-invoked', $this->runtimeConfiguration);
+            yield new TextDelta('runtime-configured-event', 'runtime-configured-message', $this->runtimeConfiguration, 1710000001);
+            yield new StreamEnd('runtime-configured-end', 'stop', new TextUsage, 1710000002);
         }, new Meta('fixture', 'parallel-live'));
     }
 }

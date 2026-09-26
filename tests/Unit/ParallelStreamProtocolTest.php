@@ -12,7 +12,7 @@ test('parallel stream frames enforce atomic byte bounds', function (): void {
 
     try {
         expect(fn () => ParallelStreamProtocol::writeFrame($writer, ['payload' => str_repeat('x', 128)], 32, $deadline))
-            ->toThrow(SwarmException::class, 'native event was not split');
+            ->toThrow(SwarmException::class, 'branch event and terminal outcome frames are atomic and are not split');
     } finally {
         fclose($writer);
         fclose($reader);

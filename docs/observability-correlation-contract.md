@@ -81,7 +81,7 @@ Emitted by `SwarmTelemetryEventListener` when `listen_to_events` is `true`:
 
 | Category | Source |
 | --- | --- |
-| `stream.event` | `SequentialStreamRunner` and `StaticHierarchicalStreamRunner` — one record per typed `SwarmStreamEvent` (`event_type`, `sequence_index`, `duration_ms` since stream start, `is_replay`). |
+| `stream.event` | `SequentialStreamRunner`, `StaticHierarchicalStreamRunner`, and `ParallelStreamRunner` — one record per typed `SwarmStreamEvent` (`event_type`, `sequence_index`, `duration_ms` since stream start, `is_replay`). Parallel branch records also include `branch_id`, `attempt_id`, and `branch_sequence`; those correlation fields are null for non-branch events. |
 | `broadcast.event` | `BroadcastSwarm` job — same shape plus `channel_names`. |
 
 ### Package queue jobs (listener filter)

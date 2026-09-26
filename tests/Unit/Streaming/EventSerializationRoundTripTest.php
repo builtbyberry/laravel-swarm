@@ -44,7 +44,9 @@ use BuiltByBerry\LaravelSwarm\Streaming\StreamEventIdentity;
  *
  * Every event carries `node_id` (#284). The cases below pair a "full" payload
  * with a non-null `node_id` against a "null/empty" payload with `node_id` null,
- * so each class round-trips the structural tag at both extremes.
+ * so each class round-trips the structural tag at both extremes. The matrix also
+ * derives one complete parallel branch-identity payload per class, while the
+ * original cases prove the absent branch-identity shape remains unchanged.
  */
 
 /**
@@ -604,7 +606,33 @@ function event_payload_cases(): array
     }
     unset($case);
 
-    return $cases;
+    $branchCases = [];
+    $covered = [];
+    $branchIndex = 0;
+    foreach ($cases as $name => [$class, $payload]) {
+        if (isset($covered[$class])) {
+            continue;
+        }
+
+        $covered[$class] = true;
+        $branchId = 'parallel:'.$branchIndex;
+        $branchPayload = array_replace($payload, [
+            'branch_id' => $branchId,
+            'attempt_id' => 'attempt-'.$branchIndex,
+            'branch_sequence' => $branchIndex + 1,
+        ]);
+
+        // Normalize key order through the real replay dispatcher. Known events
+        // emit branch identity in their canonical transport position; unknown
+        // future events deliberately preserve the raw payload order unchanged.
+        $branchCases[$name.' with branch identity'] = [
+            $class,
+            SwarmStreamEvent::fromArray($branchPayload)->toArray(),
+        ];
+        $branchIndex++;
+    }
+
+    return [...$cases, ...$branchCases];
 }
 
 dataset('event_payloads', fn (): array => event_payload_cases());
@@ -620,7 +648,8 @@ test('event payload round-trips identically and preserves every field', function
     expect($roundTripped)->toBe($payload);
 
     // And re-hydrating once more is stable (idempotent past the first pass).
-    expect(SwarmStreamEvent::fromArray($roundTripped)->toArray())->toBe($payload);
+    $restored = SwarmStreamEvent::fromArray($roundTripped);
+    expect($restored->toArray())->toBe($payload);
 
     // Every individual field on the original payload survives by key and value,
     // so a silently dropped field would fail here even if toArray() happened to
@@ -637,6 +666,48 @@ test('event payload round-trips identically and preserves every field', function
     // The structural node tag (#284) rehydrates onto the base class too, at both
     // extremes: a set node_id is restored, a null one stays null.
     expect($event->nodeId)->toBe($payload['node_id']);
+
+    $hasCompleteBranchIdentity = is_string($payload['branch_id'] ?? null)
+        && is_string($payload['attempt_id'] ?? null)
+        && is_int($payload['branch_sequence'] ?? null);
+
+    if ($hasCompleteBranchIdentity) {
+        expect($event->branchId)->toBe($payload['branch_id'])
+            ->and($event->attemptId)->toBe($payload['attempt_id'])
+            ->and($event->branchSequence)->toBe($payload['branch_sequence'])
+            ->and($restored->branchId)->toBe($payload['branch_id'])
+            ->and($restored->attemptId)->toBe($payload['attempt_id'])
+            ->and($restored->branchSequence)->toBe($payload['branch_sequence']);
+
+        $identity = StreamEventIdentity::forEvent($event);
+        $scopeVariants = [
+            SwarmStreamEvent::fromArray(array_replace($payload, [
+                'branch_id' => $payload['branch_id'].'-sibling',
+            ])),
+            SwarmStreamEvent::fromArray(array_replace($payload, [
+                'attempt_id' => $payload['attempt_id'].'-retry',
+            ])),
+            SwarmStreamEvent::fromArray(array_replace($payload, [
+                'branch_sequence' => $payload['branch_sequence'] + 1,
+            ])),
+        ];
+
+        expect($identity)->toBeString()
+            ->toStartWith('parallel:')
+            ->and(StreamEventIdentity::forEvent($restored))->toBe($identity);
+        foreach ($scopeVariants as $variant) {
+            expect(StreamEventIdentity::forEvent($variant))->not->toBe($identity);
+        }
+    } else {
+        expect($payload)->not->toHaveKeys(['branch_id', 'attempt_id', 'branch_sequence'])
+            ->and($event->branchId)->toBeNull()
+            ->and($event->attemptId)->toBeNull()
+            ->and($event->branchSequence)->toBeNull()
+            ->and($restored->branchId)->toBeNull()
+            ->and($restored->attemptId)->toBeNull()
+            ->and($restored->branchSequence)->toBeNull()
+            ->and(StreamEventIdentity::forEvent($restored))->toBe(StreamEventIdentity::forEvent($event));
+    }
 })->with('event_payloads');
 
 test('every concrete event class has at least one round-trip payload case', function (): void {
@@ -651,38 +722,25 @@ test('every concrete event class has at least one round-trip payload case', func
     }
 });
 
-test('parallel branch identity round-trips without changing native event identity', function (): void {
-    $event = (new SwarmTextDelta(
-        id: 'reused-native-id',
-        runId: 'run-parallel-identity',
-        stepIndex: 1,
-        agentClass: 'Agent',
-        delta: 'chunk',
-        timestamp: 1710000000,
-    ))->withInvocationId('reused-invocation')
-        ->withNodeId('parallel:1')
-        ->withBranchIdentity('parallel:1', 'attempt-uuid', 7);
+test('every concrete event class round-trips complete and absent branch identity', function (): void {
+    $complete = [];
+    $absent = [];
 
-    $restored = SwarmStreamEvent::fromArray($event->toArray());
-    $sibling = (new SwarmTextDelta(
-        id: 'reused-native-id',
-        runId: 'run-parallel-identity',
-        stepIndex: 0,
-        agentClass: 'Agent',
-        delta: 'other chunk',
-        timestamp: 1710000000,
-    ))->withInvocationId('reused-invocation')
-        ->withNodeId('parallel:0')
-        ->withBranchIdentity('parallel:0', 'other-attempt-uuid', 7);
+    foreach (event_payload_cases() as [$class, $payload]) {
+        $branchKeys = array_intersect(['branch_id', 'attempt_id', 'branch_sequence'], array_keys($payload));
+        expect($branchKeys)->toHaveCount(in_array('branch_id', $branchKeys, true) ? 3 : 0);
 
-    expect($restored->toArray())->toBe($event->toArray())
-        ->and($restored->id)->toBe('reused-native-id')
-        ->and($restored->invocationId)->toBe('reused-invocation')
-        ->and($restored->branchId)->toBe('parallel:1')
-        ->and($restored->attemptId)->toBe('attempt-uuid')
-        ->and($restored->branchSequence)->toBe(7)
-        ->and(StreamEventIdentity::forEvent($restored))->toBe(StreamEventIdentity::forEvent($event))
-        ->and(StreamEventIdentity::forEvent($restored))->not->toBe(StreamEventIdentity::forEvent($sibling));
+        if ($branchKeys === []) {
+            $absent[$class] = true;
+        } else {
+            $complete[$class] = true;
+        }
+    }
+
+    foreach (ROUND_TRIP_EVENT_CLASSES as $class) {
+        expect($complete)->toHaveKey($class, "Event class [{$class}] has no payload case with complete parallel branch identity.");
+        expect($absent)->toHaveKey($class, "Event class [{$class}] has no payload case with absent parallel branch identity.");
+    }
 });
 
 test('every concrete event class round-trips both a set and a null node_id', function (): void {

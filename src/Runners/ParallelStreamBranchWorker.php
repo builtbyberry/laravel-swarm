@@ -6,9 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Runners;
 
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Audit\ResolvedCapturePolicy;
-use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
-use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
@@ -17,6 +14,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
 use BuiltByBerry\LaravelSwarm\Memory\NullSnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
+use BuiltByBerry\LaravelSwarm\Streaming\Parallel\DetachedParallelStreamStores;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamProtocol;
 use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolDataLimits;
 use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolEventMapper;
@@ -89,17 +87,21 @@ final class ParallelStreamBranchWorker
 
         try {
             $container = Container::getInstance();
+            $workerContext = RunContext::fromPayload($contextPayload, $runId);
+            $attempt = new NativeAgentSettingsAttempt($nativeSettingsAttemptIds);
+            $activeContextEntered = false;
+            ActiveRunContext::enter($runId, $swarmClass, $workerContext);
+            $activeContextEntered = true;
+
             $agent = $container->make(ParallelAgentResolver::class)
                 ->resolve($swarmClass, $agentClass, $index, $adHoc);
             StructuredOutputStreamingException::guard($agent, $branchId);
-
-            $workerContext = RunContext::fromPayload($contextPayload, $runId);
-            $attempt = new NativeAgentSettingsAttempt($nativeSettingsAttemptIds);
             $swarm = $adHoc ? new AdHocParallelSwarm([$agent]) : $container->make($swarmClass);
             if (! $swarm instanceof Swarm) {
                 throw new SwarmException("Parallel swarm [{$swarmClass}] must reconstruct to a swarm in its branch process.");
             }
 
+            $detachedStores = new DetachedParallelStreamStores;
             $state = new SwarmExecutionState(
                 swarm: $swarm,
                 topology: Topology::Parallel,
@@ -111,9 +113,9 @@ final class ParallelStreamBranchWorker
                 executionToken: null,
                 verifyOwnership: null,
                 context: $workerContext,
-                contextStore: $container->make(ContextStore::class),
-                artifactRepository: $container->make(ArtifactRepository::class),
-                historyStore: $container->make(RunHistoryStore::class),
+                contextStore: $detachedStores,
+                artifactRepository: $detachedStores,
+                historyStore: $detachedStores,
                 events: $container->make(Dispatcher::class),
                 queueHierarchicalParallelCoordination: null,
                 nativeSettingsAttempt: $attempt,
@@ -144,8 +146,6 @@ final class ParallelStreamBranchWorker
             );
             $accumulator = new StreamStepAccumulator(new MemorySnapshot($runId, $index, $snapshotEntries));
             $startedAt = MonotonicTime::now();
-            ActiveRunContext::enter($runId, $swarmClass, $workerContext);
-
             try {
                 $invocation = $workerContext->nativeInvocation($branchId, $input, $attempt);
                 $stream = NativeAgentInvoker::stream($agent, $invocation);
@@ -163,7 +163,6 @@ final class ParallelStreamBranchWorker
                         SnapshotToolCallNormalizer::entry($unpairedCall),
                     );
                 }
-                ActiveRunContext::exit();
             }
 
             $frame('terminal', [
@@ -184,6 +183,7 @@ final class ParallelStreamBranchWorker
             try {
                 $frame('terminal', [
                     'ok' => false,
+                    'usage' => isset($accumulator) ? $accumulator->stepUsage : [],
                     'failure' => ConcurrentAgentResult::failureDescriptor($exception),
                 ]);
             } catch (Throwable) {
@@ -194,6 +194,9 @@ final class ParallelStreamBranchWorker
 
             return ['branch_id' => $branchId, 'terminal_sent' => true];
         } finally {
+            if (($activeContextEntered ?? false) === true) {
+                ActiveRunContext::exit();
+            }
             if (is_resource($socket)) {
                 fclose($socket);
             }

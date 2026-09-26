@@ -151,6 +151,17 @@ swarm execution:
 php artisan swarm:health
 ```
 
+Before enabling top-level parallel live streaming, exercise its actual
+provider-free child bootstrap and authenticated loopback transport:
+
+```bash
+php artisan swarm:health --parallel-streaming
+```
+
+Require the `Parallel live streaming` row to report `ok`. The check validates
+the effective branch/frame/cancellation limits and cannot be combined with the
+audit-only option. After the writer is enabled, bare `swarm:health` runs it too.
+
 For deployments using `dispatchDurable()` or coordinated multi-worker
 hierarchical queueing, include the durable runtime tables:
 

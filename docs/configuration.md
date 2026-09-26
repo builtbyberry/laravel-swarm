@@ -23,7 +23,7 @@ Top-level settings that apply to every swarm run regardless of topology or execu
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.topology` | string | `sequential` | `SWARM_TOPOLOGY` | Default topology used when a swarm class does not declare `#[Topology]`. Values: `sequential`, `parallel`, `hierarchical`. |
-| `swarm.timeout` | int | `300` | `SWARM_TIMEOUT` | Best-effort orchestration deadline in seconds. Checked before and between swarm steps. Does not hard-cancel an in-flight provider call. |
+| `swarm.timeout` | int | `300` | `SWARM_TIMEOUT` | Best-effort orchestration deadline in seconds. Ordinary modes check before/between steps. Process-backed top-level parallel streaming enforces the absolute deadline while multiplexing and terminates local branch processes, but cannot guarantee cancellation of remote provider effects already accepted. |
 | `swarm.max_agent_steps` | int | `10` | `SWARM_MAX_AGENT_STEPS` | Maximum number of agent steps per run. The swarm fails before exceeding this limit. |
 | `swarm.retention.prevent_prune` | bool | `false` | `SWARM_PREVENT_PRUNE` | When `true`, `swarm:prune` skips all destructive deletes (scheduled pruning becomes a no-op). Use in regulated deployments that manage retention outside the package. `--dry-run` still reports counts when this is enabled. |
 
@@ -248,7 +248,7 @@ Controls the optional persisted stream replay feature. Replay is disabled by def
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.streaming.parallel.enabled` | bool | `false` | `SWARM_PARALLEL_STREAMING_ENABLED` | Enables real top-level parallel live multiplexing. Requires Laravel's `process` concurrency driver and loopback process transport; unsupported drivers fail before agent invocation and never masquerade buffered completion as streaming. |
-| `swarm.streaming.parallel.max_branches` | int | `32` | `SWARM_PARALLEL_STREAMING_MAX_BRANCHES` | Maximum branches/file descriptors admitted to one parallel live stream. Runtime range: 1–256. |
+| `swarm.streaming.parallel.max_branches` | int | `32` | `SWARM_PARALLEL_STREAMING_MAX_BRANCHES` | Maximum branch processes admitted to one parallel live stream. This is not a raw file-descriptor or application-wide ceiling: every branch uses multiple pipes/sockets, and overlapping requests multiply the total. Runtime range: 1–256. |
 | `swarm.streaming.parallel.max_frame_bytes` | int | `2097152` | `SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES` | Maximum encoded bytes for one atomic branch event or terminal frame. Events are never split. Runtime range: 1 KiB–4 MiB. |
 | `swarm.streaming.parallel.cancel_grace_milliseconds` | int | `250` | `SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS` | Grace period before active sibling processes are forcibly stopped after branch failure, deadline, protocol failure, or consumer abandonment. Runtime range: 0–10000 ms. |
 | `swarm.streaming.replay.enabled` | bool | `false` | `SWARM_STREAM_REPLAY_ENABLED` | When `true`, all streamed swarm runs are automatically stored for replay via `SwarmHistory::replay($runId)`. Can also be enabled per-run with `storeForReplay()`. |

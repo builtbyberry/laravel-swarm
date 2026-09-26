@@ -57,15 +57,7 @@ class ParallelRunner
         $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
         $input = $state->context->prompt();
         $this->ensureAgentsAreContainerResolvable($state->swarm);
-
-        if ($state->swarm instanceof AdHocSwarm
-            && (bool) $this->config->get('swarm.native_agent_settings.enabled', false)) {
-            foreach (array_keys($agents) as $index) {
-                if (! $state->context->hasNativeSettingsFor("parallel:{$index}")) {
-                    throw new SwarmException('Ad-hoc parallel agents are reconstructed in worker processes, so live instance state cannot be preserved. Declare per-run native settings for every slot with RunContext::withAgentConfiguration(), or move the agents into a container-resolvable swarm class.');
-                }
-            }
-        }
+        $this->ensureAdHocNativeSettingsAreDeclared($state->swarm, $state->context, $agents);
 
         $callbacks = [];
         $citationLimits = ['max_count' => (int) $this->config->get('swarm.citations.max_count', 256),
@@ -90,14 +82,13 @@ class ParallelRunner
             );
 
             $callbacks[$index] = function () use ($agentClass, $input, $runId, $swarmClass, $contextPayload, $index, $citationLimits, $nativeResultLimits, $attemptIds, $adHoc): array {
-                $agent = Container::getInstance()->make(ParallelAgentResolver::class)
-                    ->resolve($swarmClass, $agentClass, $index, $adHoc);
-
                 $workerContext = RunContext::fromPayload($contextPayload, $runId);
                 $attempt = new NativeAgentSettingsAttempt($attemptIds);
                 ActiveRunContext::enter($runId, $swarmClass, $workerContext);
 
                 try {
+                    $agent = Container::getInstance()->make(ParallelAgentResolver::class)
+                        ->resolve($swarmClass, $agentClass, $index, $adHoc);
                     $startedAt = MonotonicTime::now();
                     $invocation = $workerContext->nativeInvocation("parallel:{$index}", $input, $attempt);
                     $response = NativeAgentInvoker::prompt($agent, $invocation);
@@ -234,5 +225,20 @@ class ParallelRunner
     public function ensureAgentsAreContainerResolvable(Swarm $swarm): void
     {
         $this->agentResolver->ensureResolvable($swarm);
+    }
+
+    /** @param array<int, object> $agents */
+    public function ensureAdHocNativeSettingsAreDeclared(Swarm $swarm, RunContext $context, array $agents): void
+    {
+        if (! $swarm instanceof AdHocSwarm
+            || ! (bool) $this->config->get('swarm.native_agent_settings.enabled', false)) {
+            return;
+        }
+
+        foreach (array_keys($agents) as $index) {
+            if (! $context->hasNativeSettingsFor("parallel:{$index}")) {
+                throw new SwarmException('Ad-hoc parallel agents are reconstructed in worker processes, so live instance state cannot be preserved. Declare per-run native settings for every slot with RunContext::withAgentConfiguration(), or move the agents into a container-resolvable swarm class.');
+            }
+        }
     }
 }

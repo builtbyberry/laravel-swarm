@@ -22,7 +22,7 @@ final class ParallelStreamProtocol
         $length = strlen($payload);
 
         if ($length > $maxBytes) {
-            throw new SwarmException("Parallel stream frame exceeded the configured [{$maxBytes}] byte limit; the native event was not split because its identity is atomic.");
+            throw new SwarmException("Parallel stream frame exceeded the configured [{$maxBytes}] byte limit; branch event and terminal outcome frames are atomic and are not split.");
         }
 
         self::writeExact($socket, pack('N', $length).$payload, $deadline);

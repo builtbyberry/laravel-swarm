@@ -195,7 +195,12 @@ class ResearchSwarm implements Swarm
 }
 ```
 
-The timeout is checked before the parallel group starts and again after it completes. If the deadline has passed at either check, a `SwarmTimeoutException` is thrown and the run fails. The timeout does not hard-cancel an in-flight provider call — it is an orchestration deadline, not a process kill signal.
+For `prompt()` and `queue()`, the timeout is checked before the parallel group
+starts and again after it completes. It does not hard-cancel an in-flight
+provider call. The opt-in process-backed `stream()` path additionally enforces
+the absolute deadline while multiplexing and terminates/reaps its local branch
+processes. That local process termination cannot guarantee cancellation of a
+remote provider effect the provider already accepted.
 
 ## Execution Modes
 
@@ -262,11 +267,24 @@ The fake verifies that your application code invokes the swarm correctly. It doe
 composer test:process-concurrency
 ```
 
+Before enabling top-level parallel live streaming in a serving environment, run
+`php artisan swarm:health --parallel-streaming` and require the `Parallel live
+streaming` row to report `ok`. Its `max_branches` setting limits branch processes
+per stream, not application-wide processes or raw file descriptors. Budget
+aggregate capacity as concurrent live streams times `max_branches`, allow several
+descriptors per branch, and enforce that bound in the application's serving or
+queue concurrency controls.
+
+Process workers do not inherit request-local tenant globals. Carry tenant
+identity in `RunContext` (and Laravel `Context` when your child bootstrap reads
+it); the child enters the reconstructed active run context before resolving its
+agent. Application tenancy bindings must initialize from that explicit identity.
+
 See [Testing](testing.md) for the full testing guide, including lifecycle event assertions and persisted run assertions.
 
 ## Related
 
 - [examples/parallel-research-swarm](../examples/parallel-research-swarm/README.md) — working example with market, competitor, and customer researcher agents
 - [Durable Execution](durable-execution.md) — checkpointed background execution including durable parallel branches
-- [Streaming](streaming.md) — supports sequential and both hierarchical topologies; not top-level Parallel swarms
+- [Streaming](streaming.md) — includes the default-off, process-backed top-level parallel live contract
 - [Testing](testing.md) — fakes, assertions, and process-concurrency test lane

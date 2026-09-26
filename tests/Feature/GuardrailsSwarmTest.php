@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
+use BuiltByBerry\LaravelSwarm\Testing\SwarmFake;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
@@ -17,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksInputWhenMatches;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksOutputWhenContains;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksStepWhenIndex;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\GuardrailContainer;
 use Illuminate\Support\Facades\Event;
@@ -153,6 +155,32 @@ test('stream input guardrail throws eagerly before stream response is returned',
 
     Event::assertNotDispatched(SwarmStarted::class);
     Event::assertDispatched(SwarmFailed::class, fn (SwarmFailed $e): bool => $e->exceptionClass === GuardrailViolation::class);
+});
+
+test('parallel stream input guardrail records the complete preflight failure lifecycle', function () {
+    Event::fake();
+    $audit = SwarmFake::interceptSwarmAuditSink();
+
+    config()->set('concurrency.default', 'process');
+    config()->set('swarm.streaming.parallel.enabled', true);
+    config()->set('swarm.guardrails.input', [BlocksInputWhenMatches::class]);
+    $this->app->bind(BlocksInputWhenMatches::class, fn () => new BlocksInputWhenMatches('reject-parallel-stream'));
+    GuardrailContainer::refresh($this->app);
+    $runId = 'guardrail-parallel-stream-preflight-'.uniqid('', true);
+
+    expect(fn () => FakeParallelSwarm::make()->stream(RunContext::from('reject-parallel-stream', $runId)))
+        ->toThrow(GuardrailViolation::class);
+
+    $record = app(RunHistoryStore::class)->find($runId);
+    expect($record)->not->toBeNull()
+        ->and($record['status'])->toBe('failed')
+        ->and($record['error']['class'] ?? null)->toBe(GuardrailViolation::class);
+    Event::assertNotDispatched(SwarmStarted::class);
+    Event::assertDispatched(SwarmFailed::class, fn (SwarmFailed $event): bool => $event->runId === $runId
+        && $event->exceptionClass === GuardrailViolation::class);
+    $audit->assertEmittedAudit('run.failed', fn (array $payload): bool => ($payload['run_id'] ?? null) === $runId
+        && ($payload['exception_class'] ?? null) === GuardrailViolation::class
+        && ($payload['duration_ms'] ?? null) === 0);
 });
 
 test('telemetry run failed records guardrail violation exception class', function () {

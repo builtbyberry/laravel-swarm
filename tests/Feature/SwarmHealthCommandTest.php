@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
@@ -19,11 +21,16 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
+use Illuminate\Console\OutputStyle;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Symfony\Component\Console\Input\ArrayInput;
+use Symfony\Component\Console\Output\BufferedOutput;
 
 class SwarmHealthRecordingCacheStore extends ArrayStore
 {
@@ -132,6 +139,66 @@ test('swarm health durable option verifies durable database readiness', function
 
     expect(Artisan::call('swarm:health', ['--durable' => true]))->toBe(1);
     expect(Artisan::output())->toContain('missing_swarm_durable_runs');
+});
+
+test('swarm health parallel streaming option exercises the real provider-free process transport', function (): void {
+    config()->set('concurrency.default', 'process');
+
+    expect(Artisan::call('swarm:health', ['--parallel-streaming' => true]))->toBe(0);
+    expect(Artisan::output())
+        ->toContain('Parallel live streaming')
+        ->toContain('provider-free child bootstrap and authenticated loopback handshake passed');
+});
+
+test('swarm health keeps its four argument direct invocation contract', function (): void {
+    $command = app(SwarmHealthCommand::class);
+    $input = new ArrayInput(['--json' => true], $command->getDefinition());
+    $command->setInput($input);
+    $command->setOutput(new OutputStyle($input, new BufferedOutput));
+
+    expect($command->handle(
+        app(),
+        app(ConfigRepository::class),
+        app(Connection::class),
+        app(CommandOverlapGuard::class),
+    ))->toBe(0);
+});
+
+test('enabled parallel live streaming fails health when the process driver is unavailable', function (): void {
+    config()->set('swarm.streaming.parallel.enabled', true);
+    config()->set('concurrency.default', 'sync');
+
+    expect(Artisan::call('swarm:health'))->toBe(1);
+    expect(Artisan::output())
+        ->toContain('Parallel live streaming')
+        ->toContain('must resolve to the process driver');
+});
+
+test('parallel streaming health validates the effective runtime limits', function (string $key, int $value): void {
+    config()->set('concurrency.default', 'process');
+    config()->set($key, $value);
+
+    expect(Artisan::call('swarm:health', ['--parallel-streaming' => true]))->toBe(1);
+    expect(Artisan::output())
+        ->toContain('Parallel live streaming')
+        ->toContain("Invalid [{$key}] value [{$value}]");
+})->with([
+    ['swarm.streaming.parallel.max_branches', 0],
+    ['swarm.streaming.parallel.max_frame_bytes', 1],
+    ['swarm.streaming.parallel.cancel_grace_milliseconds', 20_000],
+]);
+
+test('parallel streaming readiness cannot be silently combined with audit-only mode', function (): void {
+    expect(Artisan::call('swarm:health', [
+        '--parallel-streaming' => true,
+        '--audit' => true,
+        '--json' => true,
+    ]))->toBe(1);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+    expect($payload['ok'])->toBeFalse()
+        ->and(collect($payload['checks'])->firstWhere('component', 'Command options')['details'])
+        ->toContain('cannot be combined');
 });
 
 test('custom checkpoint citation notes do not bypass native-result readiness failures', function (): void {

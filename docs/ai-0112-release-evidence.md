@@ -118,7 +118,7 @@ have their own documented impact.
 
 - Streaming and broadcasts support sequential, generated hierarchical and static
   hierarchical paths. Generated coordinators prompt synchronously. Top-level
-  parallel live streaming is separately default-off and process-backed. Owners:
+  parallel live streaming remains rejected. Owners:
   [SwarmRunner](../src/Runners/SwarmRunner.php),
   [DispatchValidator](../src/Runners/DispatchValidator.php).
 - Generated hierarchy queueing defaults to in-process branch declaration order;

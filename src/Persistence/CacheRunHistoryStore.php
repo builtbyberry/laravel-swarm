@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Persistence;
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RecordsCitationSteps;
+use BuiltByBerry\LaravelSwarm\Contracts\RecordsContextualRunFailure;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\Concerns\ResolvesSwarmCacheStore;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
@@ -25,7 +26,7 @@ use Throwable;
 /**
  * @internal
  */
-class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSteps, RunHistoryStore
+class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSteps, RecordsContextualRunFailure, RunHistoryStore
 {
     use ResolvesSwarmCacheStore;
 
@@ -103,6 +104,18 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSt
         $history = $this->findRaw($runId) ?? [];
         $history['status'] = 'failed';
         $history['error'] = $this->failurePayload($exception);
+        $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
+        $history['updated_at'] = $history['finished_at'];
+
+        $this->store()->put($this->key($runId), $history, $ttlSeconds);
+    }
+
+    public function failWithMetadata(string $runId, Throwable $exception, array $metadata, int $ttlSeconds): void
+    {
+        $history = $this->findRaw($runId) ?? [];
+        $history['status'] = 'failed';
+        $history['error'] = $this->failurePayload($exception);
+        $history['metadata'] = array_replace(is_array($history['metadata'] ?? null) ? $history['metadata'] : [], $metadata);
         $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
         $history['updated_at'] = $history['finished_at'];
 

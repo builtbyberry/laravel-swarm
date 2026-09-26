@@ -116,11 +116,7 @@ the supported mode or privacy boundary.
 ## Supported combinations and operational limits
 
 - `prompt()` / `run()` and declared-class `queue()` / `dispatchDurable()` retain sequential, parallel, generated hierarchical and static hierarchical paths. Inline builders remain in-process. Generated hierarchical queue defaults to one job; opt-in `multi_worker` has real branch/join tests. Static hierarchy does not acquire that multi-worker promise.
-- Live `stream()` / broadcast helpers support sequential, generated hierarchical,
-  and static hierarchical topology. The generated coordinator uses prompt.
-  Top-level parallel live streaming is default-off and process-backed, with
-  explicit per-branch identity and no global ordering claim. Durable per-node
-  streaming retains its separate node/attempt-epoch causal log.
+- Live `stream()` / broadcast helpers support sequential, generated hierarchical and static hierarchical topology. The generated coordinator uses prompt; top-level parallel live streaming remains rejected. Durable per-node streaming has its own node/branch causal log and does not imply one ordered live parallel stream.
 - Queued/durable execution requires `swarm.capture.active_context=true`. C4 does not provide an all-capture-off durable path. Signal payload capture affects operational metadata; capture off redacts values. Captured signal JSON is not one of the designated sealed columns, even when context input sealing is enabled. The new raw-row tests pin both cases.
 - Signal insertion happens before the wait-acceptance transaction. A crash there leaves a recorded signal; replaying its run-scoped idempotency key is a duplicate and does not release the wait. Keys bind run plus key, not name/payload. The new crash test proves this boundary. It is not a native approval continuation or a stronger atomic receipt.
 - Child first dispatch may use live input; recovery depends on persisted captured input. A child intent claimed before creation can remain stranded: age alone does not release its dispatch marker. The new recovery test preserves that limitation; child recovery work remains separate.

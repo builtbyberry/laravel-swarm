@@ -10,6 +10,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RecordsCitationSteps;
+use BuiltByBerry\LaravelSwarm\Contracts\RecordsContextualRunFailure;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
@@ -35,7 +36,7 @@ use Throwable;
 /**
  * @internal
  */
-class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStepResultStorage, ClaimsQueuedRunExecution, ReadableRunHistoryStore, RecordsCitationSteps, RunHistoryStore
+class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStepResultStorage, ClaimsQueuedRunExecution, ReadableRunHistoryStore, RecordsCitationSteps, RecordsContextualRunFailure, RunHistoryStore
 {
     use InteractsWithJsonColumns;
 
@@ -271,6 +272,24 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
         if ($executionToken !== null && $updated === 0) {
             throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
         }
+    }
+
+    public function failWithMetadata(string $runId, Throwable $exception, array $metadata, int $ttlSeconds): void
+    {
+        $this->connection->transaction(function () use ($exception, $metadata, $runId, $ttlSeconds): void {
+            $record = $this->table()->where('run_id', $runId)->lockForUpdate()->first(['metadata']);
+            $existing = $record !== null ? $this->decodeJson($record->metadata, []) : [];
+
+            $this->update($runId, [
+                'status' => 'failed',
+                'error' => $this->encodeJson($this->failurePayload($exception)),
+                'metadata' => $this->encodeJson(array_replace($existing, $metadata)),
+                'finished_at' => Carbon::now('UTC'),
+                'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+                'execution_token' => null,
+                'leased_until' => null,
+            ]);
+        });
     }
 
     /**

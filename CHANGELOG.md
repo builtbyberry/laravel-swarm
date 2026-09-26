@@ -37,11 +37,17 @@ Native feature access through Laravel Swarm workflows.
   guardrails, history, replay, capture/redaction, citation/native-result evidence,
   and once-only usage accounting. Unsupported concurrency drivers fail before
   provider invocation; `prompt()` remains the explicit buffered alternative.
+  `swarm:health --parallel-streaming` exercises the real provider-free child and
+  authenticated loopback handshake before enablement. SSE responses send
+  advisory no-transform/no-buffering headers, while operators remain responsible
+  for verifying end-to-end proxy/CDN flushing and application-wide process
+  capacity (`concurrent live streams × max_branches`, with several descriptors
+  per branch).
 
 ### Changed
 
 - Native input preserves the v0.27.0 background envelope for inline swarms and
-  does not itself add an execution mode. P7 separately adds default-off,
+  does not itself add an execution mode. Top-level parallel streaming separately adds default-off,
   process-backed top-level parallel live multiplexing. Approval `Decisions`
   remain outside fresh-run input and fail with continuation guidance.
 - Authored parallel and hierarchical workers now reconstruct the declared swarm and stable slot/node inside concurrency workers, preserving configuration expressed by `agents()`. When native per-run settings admission is enabled, ad-hoc concurrent builders require explicit configuration for every reconstructed slot/node and fail before dispatch instead of silently discarding live instance state.
