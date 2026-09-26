@@ -103,6 +103,7 @@ test('native attachments cross fresh process workers in every concurrent topolog
     config()->set('swarm.persistence.driver', 'database');
     config()->set('swarm.history.driver', 'database');
     config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.streaming.parallel.enabled', true);
 
     $message = new UserMessage('process-task', [new Base64Document(base64_encode('process-document'), 'text/plain')]);
     $context = RunContext::fromTask($message)->withAgentInput($message, [
@@ -160,12 +161,44 @@ test('native attachments cross fresh process workers in every concurrent topolog
         ]);
         $settings = NativeSettingsSerializationParallelSwarm::make()->run($settingsContext);
 
+        $liveContext = RunContext::fromTask($message)
+            ->withAgentInput($message, [
+                NativeInputRecipient::parallel(0, textSource: 'original', attachments: [0]),
+                NativeInputRecipient::parallel(1, textSource: 'original', attachments: [0]),
+            ])
+            ->withAgentConfiguration([
+                NativeInputRecipient::parallel(0)
+                    ->withInvocation('openai', 'gpt-stream', 29)
+                    ->withTools([new NativeAgentToolReference(NativeSettingsTool::class, ['tenant' => 'tenant-stream-a'])])
+                    ->withMessages([new UserMessage('stream-history-a')]),
+                NativeInputRecipient::parallel(1)
+                    ->withInvocation('anthropic', 'claude-stream', 31)
+                    ->withTools([new NativeAgentToolReference(NativeSettingsTool::class, ['tenant' => 'tenant-stream-b'])])
+                    ->withMessages([new UserMessage('stream-history-b')]),
+            ]);
+        $liveEvents = iterator_to_array(NativeSettingsSerializationParallelSwarm::make()->stream($liveContext), false);
+        $liveDeltas = array_values(array_filter($liveEvents, fn ($event) => $event instanceof SwarmTextDelta));
+        $liveDeltasByBranch = collect($liveDeltas)->keyBy(fn (SwarmTextDelta $event): string => $event->branchId ?? '');
+        $continued = RunContext::fromPayload($liveContext->toQueuePayload());
+
         expect($parallel->steps)->toHaveCount(2)
             ->and((string) $parallel)->toContain('serialization-boundary:process-task:process-document')
             ->and((string) $static)->toContain('serialization-boundary:process-task:process-document')
             ->and((string) $generated)->toContain('serialization-boundary:process-task:process-document')
             ->and((string) $settings)->toContain('native-settings:settings-task:history-a:tenant-a:openai:gpt-process:19')
-            ->and((string) $settings)->toContain('native-settings:settings-task:history-b:tenant-b:anthropic:claude-process:23');
+            ->and((string) $settings)->toContain('native-settings:settings-task:history-b:tenant-b:anthropic:claude-process:23')
+            ->and($liveDeltas)->toHaveCount(2)
+            ->and($liveDeltasByBranch->keys()->sort()->values()->all())->toBe(['parallel:0', 'parallel:1'])
+            ->and($liveDeltasByBranch['parallel:0']->delta)->toBe('native-settings:process-task:process-document:stream-history-a:tenant-stream-a:openai:gpt-stream:29')
+            ->and($liveDeltasByBranch['parallel:1']->delta)->toBe('native-settings:process-task:process-document:stream-history-b:tenant-stream-b:anthropic:claude-stream:31')
+            ->and($liveDeltasByBranch->every(fn (SwarmTextDelta $event): bool => is_string($event->attemptId)
+                && $event->attemptId !== ''
+                && $event->branchSequence === 1))->toBeTrue()
+            ->and($liveDeltasByBranch['parallel:0']->attemptId)->not->toBe($liveDeltasByBranch['parallel:1']->attemptId)
+            ->and($continued->nativeInvocation('parallel:0', 'continued')->messages)->toBeEmpty()
+            ->and($continued->nativeInvocation('parallel:1', 'continued')->messages)->toBeEmpty()
+            ->and($continued->nativeInvocation('parallel:0', 'continued')->tools)->toHaveCount(1)
+            ->and($continued->nativeInvocation('parallel:1', 'continued')->tools)->toHaveCount(1);
     } finally {
         SerializableClosure::setSecretKey(null);
         Storage::disk('local')->deleteDirectory('swarm/native-inputs/'.$context->runId);
@@ -174,6 +207,9 @@ test('native attachments cross fresh process workers in every concurrent topolog
         }
         if (isset($generatedContext)) {
             Storage::disk('local')->deleteDirectory('swarm/native-inputs/'.$generatedContext->runId);
+        }
+        if (isset($liveContext)) {
+            Storage::disk('local')->deleteDirectory('swarm/native-inputs/'.$liveContext->runId);
         }
         @unlink($database);
         putenv('APP_KEY');

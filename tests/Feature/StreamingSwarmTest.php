@@ -940,12 +940,24 @@ test('prune removes expired stream events while preserving active run stream eve
     expect(DB::table('swarm_stream_events')->where('run_id', 'active-run')->exists())->toBeTrue();
 });
 
-test('non sequential swarms cannot be streamed', function () {
+test('parallel live streaming remains default off', function () {
     $stream = fn () => iterator_to_array(FakeParallelSwarm::make()->stream('stream-task'));
 
     expect($stream)->toThrow(
         SwarmException::class,
-        'The live stream() API only supports sequential, static_hierarchical, and hierarchical swarms; a parallel swarm cannot yield a single ordered live token stream.',
+        'Parallel live multiplexing is default-off',
+    );
+});
+
+test('parallel live streaming rejects buffered concurrency drivers before agents run', function () {
+    config()->set('swarm.streaming.parallel.enabled', true);
+    config()->set('concurrency.default', 'sync');
+
+    $stream = fn () => iterator_to_array(FakeParallelSwarm::make()->stream('stream-task'));
+
+    expect($stream)->toThrow(
+        SwarmException::class,
+        'requires Laravel\'s process concurrency driver',
     );
 });
 

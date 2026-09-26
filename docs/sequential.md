@@ -223,7 +223,11 @@ foreach (ContentPipelineSwarm::make()->stream(['topic' => 'Laravel queues']) as 
 }
 ```
 
-Streaming is supported for **sequential swarms only**. See [Streaming](streaming.md) for the full event type reference, SSE integration, and persisted replay.
+Sequential swarms are one supported live-streaming topology. Generated and
+static hierarchical swarms are also supported, and top-level parallel live
+multiplexing is available behind its default-off process-transport flag. See
+[Streaming](streaming.md) for the complete topology contract, event reference,
+SSE integration, and persisted replay.
 
 ### `dispatchDurable()` — durable background execution
 

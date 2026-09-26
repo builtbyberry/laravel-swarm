@@ -243,7 +243,14 @@ It preserves structured data and native identities without serializing raw
 provider responses, and persistence still follows capture controls. See
 [Native Step Results](docs/native-step-results.md).
 
-`stream()` and the broadcast helpers support sequential, generated hierarchical and static hierarchical swarms. The generated coordinator runs synchronously; workers stream. Top-level parallel live streaming is unsupported. See [streaming topology](docs/streaming.md#topology-sequential-static-hierarchical-and-hierarchical). For workflow operations feeds across all modes, use lifecycle events and application-owned broadcasts.
+`stream()` and the broadcast helpers support sequential, generated hierarchical,
+and static hierarchical swarms. Top-level parallel live multiplexing is also
+available behind the default-off `SWARM_PARALLEL_STREAMING_ENABLED` flag when
+Laravel's `process` concurrency driver is active. Parallel events carry explicit
+branch/attempt/sequence identity; their arrival order is deliberately not a
+global workflow order. See [streaming topology](docs/streaming.md#topology-sequential-parallel-static-hierarchical-and-hierarchical).
+For workflow operations feeds across all modes, use lifecycle events and
+application-owned broadcasts.
 
 ## Queueing a Swarm
 
@@ -308,25 +315,28 @@ return ContentPipeline::make()->stream([
 Broadcast the same typed stream events through Laravel broadcasting:
 
 ```php
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Support\Str;
 
-ContentPipeline::make()->broadcast(
-    ['topic' => 'Laravel queues'],
-    new PrivateChannel('swarm.content-pipeline'),
-);
+$runId = (string) Str::uuid();
+$channel = new PrivateChannel("tenants.{$tenantId}.swarm.{$runId}");
+$context = RunContext::from([
+    'input' => 'Draft an article about Laravel queues.',
+    'data' => ['topic' => 'Laravel queues'],
+], runId: $runId);
 
-ContentPipeline::make()->broadcastNow(
-    ['topic' => 'Laravel queues'],
-    new PrivateChannel('swarm.content-pipeline'),
-);
-
-ContentPipeline::make()
-    ->broadcastOnQueue(
-        ['topic' => 'Laravel queues'],
-        new PrivateChannel('swarm.content-pipeline'),
-    )
-    ->onQueue('ai-streams');
+// Choose exactly one delivery verb for this run.
+ContentPipeline::make()->broadcast($context, $channel);
+// ContentPipeline::make()->broadcastNow($context, $channel);
+// ContentPipeline::make()->broadcastOnQueue($context, $channel)
+//     ->onQueue('ai-streams');
 ```
+
+Authorize the private channel only when the subscriber belongs to the named
+tenant and may inspect that exact run ID. Define the corresponding application
+policy in `routes/channels.php`; never reuse one shared channel across tenants
+or unrelated runs.
 
 Persisted stream replay is opt in:
 

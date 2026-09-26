@@ -28,8 +28,6 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
-use Illuminate\Contracts\Container\BindingResolutionException;
-use Laravel\Ai\Contracts\Agent;
 
 /**
  * @internal
@@ -47,6 +45,7 @@ class ParallelRunner
         protected SnapshotsMemory $snapshots,
         protected AgentVisibleMemoryView $view,
         protected NativeOutcomeValidator $outcomes,
+        protected ParallelAgentResolver $agentResolver,
     ) {}
 
     public function run(SwarmExecutionState $state): SwarmResponse
@@ -58,15 +57,7 @@ class ParallelRunner
         $agents = array_slice($state->swarm->agents(), 0, $state->maxAgentExecutions);
         $input = $state->context->prompt();
         $this->ensureAgentsAreContainerResolvable($state->swarm);
-
-        if ($state->swarm instanceof AdHocSwarm
-            && (bool) $this->config->get('swarm.native_agent_settings.enabled', false)) {
-            foreach (array_keys($agents) as $index) {
-                if (! $state->context->hasNativeSettingsFor("parallel:{$index}")) {
-                    throw new SwarmException('Ad-hoc parallel agents are reconstructed in worker processes, so live instance state cannot be preserved. Declare per-run native settings for every slot with RunContext::withAgentConfiguration(), or move the agents into a container-resolvable swarm class.');
-                }
-            }
-        }
+        $this->ensureAdHocNativeSettingsAreDeclared($state->swarm, $state->context, $agents);
 
         $callbacks = [];
         $citationLimits = ['max_count' => (int) $this->config->get('swarm.citations.max_count', 256),
@@ -91,38 +82,13 @@ class ParallelRunner
             );
 
             $callbacks[$index] = function () use ($agentClass, $input, $runId, $swarmClass, $contextPayload, $index, $citationLimits, $nativeResultLimits, $attemptIds, $adHoc): array {
-                if ($adHoc) {
-                    $agent = Container::getInstance()->make($agentClass);
-                } else {
-                    $workerSwarm = Container::getInstance()->make($swarmClass);
-                    if (! $workerSwarm instanceof Swarm) {
-                        throw new SwarmException("Parallel swarm [{$swarmClass}] must be container-resolvable in worker processes.");
-                    }
-                    $agent = $workerSwarm->agents()[$index] ?? null;
-                    if ($agent instanceof Agent && $agent::class !== $agentClass) {
-                        // In-memory config does not cross Laravel's process boundary. Preserve
-                        // the class selected by the parent while the authored slot remains the
-                        // source for stable per-instance configuration when its class matches.
-                        try {
-                            $agent = Container::getInstance()->make($agentClass);
-                        } catch (BindingResolutionException $exception) {
-                            throw new SwarmException(
-                                "{$swarmClass}: parent-selected parallel agent [{$agentClass}] must be container-resolvable when worker configuration selects a different class for slot [{$index}].",
-                                previous: $exception,
-                            );
-                        }
-                    }
-                }
-
-                if (! $agent instanceof Agent) {
-                    throw new SwarmException("Parallel swarm agent [{$agentClass}] must resolve to a Laravel AI agent.");
-                }
-
                 $workerContext = RunContext::fromPayload($contextPayload, $runId);
                 $attempt = new NativeAgentSettingsAttempt($attemptIds);
                 ActiveRunContext::enter($runId, $swarmClass, $workerContext);
 
                 try {
+                    $agent = Container::getInstance()->make(ParallelAgentResolver::class)
+                        ->resolve($swarmClass, $agentClass, $index, $adHoc);
                     $startedAt = MonotonicTime::now();
                     $invocation = $workerContext->nativeInvocation("parallel:{$index}", $input, $attempt);
                     $response = NativeAgentInvoker::prompt($agent, $invocation);
@@ -258,47 +224,20 @@ class ParallelRunner
 
     public function ensureAgentsAreContainerResolvable(Swarm $swarm): void
     {
-        $agents = $swarm->agents();
-        $swarmClass = $swarm::class;
+        $this->agentResolver->ensureResolvable($swarm);
+    }
 
-        if ($swarm instanceof AdHocSwarm) {
-            foreach ($agents as $agent) {
-                $agentClass = $agent::class;
-
-                try {
-                    $resolved = Container::getInstance()->make($agentClass);
-                } catch (BindingResolutionException $exception) {
-                    throw new SwarmException(
-                        "{$swarmClass}: parallel agent [{$agentClass}] must be container-resolvable because Laravel Concurrency serializes worker callbacks.",
-                        previous: $exception,
-                    );
-                }
-
-                if (! $resolved instanceof Agent) {
-                    throw new SwarmException("{$swarmClass}: parallel agent [{$agentClass}] must resolve to a Laravel AI agent.");
-                }
-            }
-
+    /** @param array<int, object> $agents */
+    public function ensureAdHocNativeSettingsAreDeclared(Swarm $swarm, RunContext $context, array $agents): void
+    {
+        if (! $swarm instanceof AdHocSwarm
+            || ! (bool) $this->config->get('swarm.native_agent_settings.enabled', false)) {
             return;
         }
 
-        try {
-            $resolvedSwarm = Container::getInstance()->make($swarmClass);
-        } catch (BindingResolutionException $exception) {
-            throw new SwarmException(
-                "{$swarmClass}: authored parallel swarms must be container-resolvable so worker slots can be reconstructed.",
-                previous: $exception,
-            );
-        }
-
-        if (! $resolvedSwarm instanceof Swarm) {
-            throw new SwarmException("{$swarmClass}: authored parallel swarm must resolve to a swarm in worker processes.");
-        }
-
-        $resolvedAgents = $resolvedSwarm->agents();
         foreach (array_keys($agents) as $index) {
-            if (! ($resolvedAgents[$index] ?? null) instanceof Agent) {
-                throw new SwarmException("{$swarmClass}: authored parallel agent slot [{$index}] must reconstruct to a Laravel AI agent.");
+            if (! $context->hasNativeSettingsFor("parallel:{$index}")) {
+                throw new SwarmException('Ad-hoc parallel agents are reconstructed in worker processes, so live instance state cannot be preserved. Declare per-run native settings for every slot with RunContext::withAgentConfiguration(), or move the agents into a container-resolvable swarm class.');
             }
         }
     }

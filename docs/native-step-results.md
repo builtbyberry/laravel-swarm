@@ -109,11 +109,12 @@ The same projection is carried through:
 - real process-concurrency worker return values;
 - queued whole-workflow and coordinated hierarchical execution;
 - durable steps, branches, node outputs, retries, and durable streaming; and
-- supported sequential, generated hierarchical, and static hierarchical live
-  streams, including persisted replay.
+- supported sequential, generated hierarchical, static hierarchical, and
+  opt-in process-backed parallel live streams, including persisted replay.
 
-Top-level parallel live streaming remains unsupported. Native result access
-does not add a new execution mode.
+Parallel branches transfer one bounded capture-shaped result to the parent,
+which owns canonical history and usage aggregation. Native result access does
+not itself add an execution mode.
 
 Queue and process boundaries serialize only the bounded array projection.
 Laravel AI response objects are never serialized. A missing native ID is never

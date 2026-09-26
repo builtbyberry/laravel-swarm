@@ -34,7 +34,7 @@ final class SwarmProviderToolEvent extends SwarmStreamEvent
         return [
             'id' => $this->id, 'type' => 'swarm_provider_tool_event', 'run_id' => $this->runId,
             'step_index' => $this->stepIndex, 'agent_class' => $this->agentClass,
-            'invocation_id' => $this->invocationId, 'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'attempt_epoch' => $this->attemptEpoch, 'causal_id' => $this->causalId(),
             'item_id' => $this->itemId, 'provider_type' => $this->providerType,
             'provider_status' => $this->providerStatus, 'provider' => $this->provider,

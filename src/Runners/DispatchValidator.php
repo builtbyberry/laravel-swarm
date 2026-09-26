@@ -87,21 +87,23 @@ class DispatchValidator
     }
 
     /**
-     * Gate the LIVE `stream()` API — a single ordered generator of token events for
-     * one in-process run. This is a different surface from durable causal-log
-     * streaming ({@see ensureDurableStreamingInfrastructure()}): a parallel swarm
-     * cannot yield one ordered live token stream (its branches run concurrently), but
-     * it DOES stream durably under `#[DurableStreaming]`, where each branch writes its
-     * own per-node rows to the causal log. Keep that live-vs-durable distinction in the
-     * error string below so the two gates are never read as contradicting each other.
+     * Gate the live `stream()` API. Parallel support is an explicit default-off
+     * process transport because Laravel Concurrency's public run contract returns
+     * only completed results; the stream itself carries branch-local ordering and
+     * never invents a global causal order.
      */
     public function ensureStreamableTopology(Swarm $swarm): void
     {
         $topology = $this->resolver->resolveTopology($swarm);
         $streamable = [Topology::Sequential, Topology::StaticHierarchical, Topology::Hierarchical];
 
+        if ($topology === Topology::Parallel
+            && (bool) $this->config->get('swarm.streaming.parallel.enabled', false)) {
+            return;
+        }
+
         if (! in_array($topology, $streamable, true)) {
-            throw new SwarmException("The live stream() API only supports sequential, static_hierarchical, and hierarchical swarms; a {$topology->value} swarm cannot yield a single ordered live token stream. (Durable per-node streaming via #[DurableStreaming] does support {$topology->value} — its branches stream as separate causal-log rows; see ensureDurableStreamingInfrastructure().)");
+            throw new SwarmException('The live stream() API supports sequential, static_hierarchical, and hierarchical swarms by default. Parallel live multiplexing is default-off; enable [swarm.streaming.parallel.enabled] with the process driver, use prompt(), or use durable per-node streaming.');
         }
     }
 
