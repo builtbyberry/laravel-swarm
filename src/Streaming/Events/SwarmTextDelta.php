@@ -13,6 +13,7 @@ final class SwarmTextDelta extends SwarmStreamEvent
         public string $agentClass,
         public ?string $delta,
         public int $timestamp,
+        public ?string $messageId = null,
     ) {}
 
     /**
@@ -28,6 +29,7 @@ final class SwarmTextDelta extends SwarmStreamEvent
             'step_index' => $this->stepIndex,
             'agent_class' => $this->agentClass,
             'delta' => $this->delta,
+            ...($this->messageId === null ? [] : ['message_id' => $this->messageId]),
             'timestamp' => $this->timestamp,
         ];
     }
@@ -44,6 +46,7 @@ final class SwarmTextDelta extends SwarmStreamEvent
             agentClass: self::stringValue($payload, 'agent_class'),
             delta: self::nullableStringValue($payload, 'delta'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
+            messageId: self::nullableStringValue($payload, 'message_id'),
         );
     }
 

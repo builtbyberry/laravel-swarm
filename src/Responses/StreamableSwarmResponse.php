@@ -5,15 +5,21 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Enums\NativeProtocolProjection;
+use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\NativeChatProtocolAdapter;
+use BuiltByBerry\LaravelSwarm\Streaming\Protocols\AgentUserInteractionSwarmProtocol;
+use BuiltByBerry\LaravelSwarm\Streaming\Protocols\VercelSwarmProtocol;
 use Closure;
 use Generator;
 use Illuminate\Contracts\Support\Responsable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use IteratorAggregate;
+use Laravel\Ai\Streaming\Protocols\StreamProtocol;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 use Traversable;
@@ -55,6 +61,10 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
 
     protected bool $thenCallbacksRan = false;
 
+    protected ?StreamProtocol $nativeProtocol = null;
+
+    protected NativeProtocolProjection $nativeProtocolProjection = NativeProtocolProjection::Workflow;
+
     /**
      * @param  Closure():iterable<int, SwarmStreamEvent>  $generator
      * @param  Closure(Throwable):SwarmStreamEvent|null  $onReplayFailure
@@ -71,6 +81,8 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         protected ?Closure $onReplayFailure = null,
         protected ?Closure $onAbandoned = null,
         protected ?Closure $onAbandonmentFailure = null,
+        public readonly ?string $topology = null,
+        protected bool $nativeChatProtocolsEnabled = false,
     ) {
         if (! in_array($this->replayFailurePolicy, ['fail', 'continue'], true)) {
             throw new SwarmException("Invalid swarm stream replay failure policy [{$this->replayFailurePolicy}]. Supported policies: fail, continue.");
@@ -114,11 +126,52 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         return $this;
     }
 
+    public function usingVercelDataProtocol(
+        string $messageId,
+        NativeProtocolProjection $projection = NativeProtocolProjection::Workflow,
+    ): self {
+        $this->configureNativeProtocol($projection);
+
+        if ($messageId === '') {
+            throw new SwarmException('Vercel protocol projection requires a non-empty caller-owned UI message ID.');
+        }
+
+        $this->nativeProtocol = new VercelSwarmProtocol($messageId);
+
+        return $this;
+    }
+
+    public function usingAgentUserInteractionProtocol(
+        string $threadId,
+        ?string $runId = null,
+        NativeProtocolProjection $projection = NativeProtocolProjection::Workflow,
+    ): self {
+        $this->configureNativeProtocol($projection);
+
+        if ($threadId === '') {
+            throw new SwarmException('AG-UI protocol projection requires a non-empty caller-owned thread ID.');
+        }
+
+        if ($runId !== null && $runId !== $this->runId) {
+            throw new SwarmException('AG-UI protocol run ID must be the Swarm run ID when it is provided.');
+        }
+
+        $this->nativeProtocol = new AgentUserInteractionSwarmProtocol($threadId, $this->runId);
+
+        return $this;
+    }
+
     /**
      * @param  Request  $request
      */
     public function toResponse($request): Response
     {
+        if ($this->nativeProtocol instanceof StreamProtocol) {
+            return $this->nativeProtocol->response(
+                (new NativeChatProtocolAdapter)->adapt($this, $this->nativeProtocolProjection),
+            );
+        }
+
         return response()->stream(function (): Generator {
             foreach ($this as $event) {
                 yield 'data: '.((string) $event)."\n\n";
@@ -130,6 +183,23 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
             'Cache-Control' => 'no-cache, no-transform',
             'X-Accel-Buffering' => 'no',
         ]);
+    }
+
+    protected function configureNativeProtocol(NativeProtocolProjection $projection): void
+    {
+        if (! $this->nativeChatProtocolsEnabled) {
+            throw new SwarmException('Native chat protocol projection is disabled. Enable swarm.streaming.native_protocols.enabled first.');
+        }
+
+        if ($this->state === self::STATE_STREAMING) {
+            throw new SwarmException('A native chat protocol cannot be selected while the stream is being iterated.');
+        }
+
+        if ($projection === NativeProtocolProjection::FinalAgent && $this->topology !== Topology::Sequential->value) {
+            throw new SwarmException('The final-agent native protocol projection is supported only for sequential swarms.');
+        }
+
+        $this->nativeProtocolProjection = $projection;
     }
 
     public function getIterator(): Traversable

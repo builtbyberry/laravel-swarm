@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamedSwarmResponse;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Collection;
 
 class SwarmHistory
@@ -16,6 +17,7 @@ class SwarmHistory
     public function __construct(
         protected RunHistoryStore $historyStore,
         protected StreamEventStore $streamEvents,
+        protected ConfigRepository $config,
     ) {}
 
     /**
@@ -45,6 +47,8 @@ class SwarmHistory
 
     public function replay(string $runId): StreamableSwarmResponse
     {
+        $history = $this->historyStore->find($runId);
+
         return new StreamableSwarmResponse(
             runId: $runId,
             generator: function () use ($runId): \Generator {
@@ -62,6 +66,8 @@ class SwarmHistory
 
                 return StreamedSwarmResponse::fromEvents($runId, new Collection($events));
             },
+            topology: is_string($history['topology'] ?? null) ? $history['topology'] : null,
+            nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
         );
     }
 

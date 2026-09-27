@@ -46,6 +46,17 @@ Native feature access through Laravel Swarm workflows.
 - Native Laravel AI agent onboarding through the upstream `make:agent` command,
   including structured-output generation and an executable provider-free test
   that drives a native tool call and Swarm stream with `Agent::fake()`.
+- Default-off Vercel AI SDK and AG-UI projection through Laravel AI's native
+  protocol encoders. Complete workflow projection uses capture-safe custom
+  progress with run/node/branch/attempt/sequence identity across every live
+  topology, including process-parallel multiplexing without invented global
+  order. A sequential-only final-agent projection buffers until workflow
+  success, preserves real content-block and optional native conversation-row
+  identities, and emits standard text/tool/citation frames only when their
+  payloads are actually available. Unsupported approvals, incomplete replay,
+  invalid aggregate usage, and stream failures terminate with protocol errors
+  and no success/finish frame. The adapter adds no migration or persistent data;
+  rollback is revert-safe after projected streams drain.
 
 ### Changed
 

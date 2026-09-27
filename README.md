@@ -351,6 +351,14 @@ $stream = ContentPipeline::make()
 
 Replay later with `SwarmHistory::replay($runId)`. See [Streaming](docs/streaming.md) for event schemas, replay behavior, capture, limits, and failure handling.
 
+Vercel AI SDK and AG-UI clients can reuse Laravel AI's native encoders through
+the default-off Swarm adapter. The workflow projection supports every live
+topology, including enabled process-parallel multiplexing, without inventing a
+global branch order. The final-agent projection is sequential-only and buffers
+until workflow success. See [Vercel and AG-UI protocol projection](docs/native-chat-protocols.md)
+for examples, identity rules, capture behavior, replay authorization, and exact
+approval/error limits.
+
 ### Crash-replay resume (v0.12.0)
 
 A streamed run that is abandoned mid-stream — a worker crash, a dropped connection, an early `break` — can be resumed by re-running the same swarm with the **same run id**:
