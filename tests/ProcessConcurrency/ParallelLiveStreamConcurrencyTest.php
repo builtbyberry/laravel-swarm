@@ -33,6 +33,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\ParallelStreamBootstrapFailureWorker;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Protocols\VercelDataStreamClient;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelCitationStreamSwarm;
@@ -211,6 +212,36 @@ test('process workers enter run context before agent resolution and never resolv
     $response = ParallelContextBootstrapSwarm::make()->stream('live');
     iterator_to_array($response, false);
     expect($response->streamedResponse?->output)->toBe('context-bootstrap');
+});
+
+test('parallel live stream projects branch-local workflow events through the Vercel client fixture', function (): void {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
+    $context = RunContext::from('protocol-parallel', 'p8-parallel-protocol-'.getmypid());
+    $stream = ParallelLiveStreamSwarm::make()
+        ->stream($context)
+        ->usingVercelDataProtocol('ui-message');
+    $_SERVER['LARAVEL_OCTANE'] = true;
+
+    try {
+        $http = $stream->toResponse(request());
+        $parts = VercelDataStreamClient::consume(implode('', iterator_to_array(($http->getCallback())())));
+    } finally {
+        unset($_SERVER['LARAVEL_OCTANE']);
+    }
+
+    $deltas = collect($parts)
+        ->where('type', 'data-swarm')
+        ->pluck('data')
+        ->where('event_type', 'text_delta')
+        ->values();
+
+    expect(array_column($parts, 'type'))->not->toContain('text-delta')
+        ->and($deltas)->toHaveCount(2)
+        ->and($deltas->pluck('branch_id')->sort()->values()->all())->toBe(['parallel:0', 'parallel:1']);
+
+    foreach ($deltas->groupBy('branch_id') as $branch) {
+        expect($branch->pluck('branch_sequence')->all())->toBe($branch->pluck('branch_sequence')->sort()->values()->all());
+    }
 });
 
 test('post-history startup failure terminalizes the run before branch processes start', function (): void {

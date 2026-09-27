@@ -178,6 +178,8 @@ final class ParallelStreamRunner
                     'exception_class' => $exception::class,
                 ]);
             },
+            topology: $topology->value,
+            nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
         );
     }
 

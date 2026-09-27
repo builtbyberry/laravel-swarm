@@ -106,6 +106,7 @@ class StreamEventMapper
                 agentClass: $agent::class,
                 delta: $this->capture->applyOutput($event->delta, $state->context),
                 timestamp: $event->timestamp,
+                messageId: $event->messageId,
             );
             $this->syncInvocationId($swarmEvent, $event->invocationId);
 
@@ -171,6 +172,7 @@ class StreamEventMapper
                 agentClass: $agent::class,
                 toolCall: $this->captureToolCall($event->toolCall, $state->context),
                 timestamp: $event->timestamp,
+                payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($state->context)),
             );
             $this->syncInvocationId($swarmEvent, $event->invocationId);
 
@@ -200,6 +202,7 @@ class StreamEventMapper
                 timestamp: $event->timestamp,
                 preliminary: $event->preliminary,
                 denied: $event->denied,
+                payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($state->context)),
             );
             $this->syncInvocationId($swarmEvent, $event->invocationId);
 

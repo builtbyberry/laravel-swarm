@@ -15,6 +15,10 @@ while a swarm runs. The method returns a lazy
 iterate in PHP, return the response from a controller, or replay persisted
 events later.
 
+For Vercel AI SDK and AG-UI HTTP clients, enable the default-off native adapter
+and choose a workflow or sequential final-agent projection. See
+[Vercel and AG-UI protocol projection](native-chat-protocols.md).
+
 For how context, history, and replay rows are stored, see
 [Persistence And History](persistence-and-history.md). For checkpointed
 execution across jobs, see [Durable Execution](durable-execution.md) — that
@@ -638,3 +642,4 @@ the broadcast helper. `broadcastOnQueue()` records in the queued bucket. See
 - [Persistence And History](persistence-and-history.md) — storage, replay rows, limits, prune
 - [Testing](testing.md) — `assertStreamed()`, fakes
 - [Streaming Progress example](../examples/streaming-progress/README.md) — routes and SSE patterns
+- [Vercel and AG-UI protocol projection](native-chat-protocols.md) — HTTP integration examples and exact projection limits

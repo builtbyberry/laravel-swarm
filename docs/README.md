@@ -43,6 +43,7 @@ The recommended reading path for new users.
 
 - [Choosing an Execution Mode](execution-modes.md) — comparison table and decision tree
 - [Streaming](streaming.md) — real-time token streaming
+- [Vercel and AG-UI protocol projection](native-chat-protocols.md) — native encoder reuse, workflow and final-agent projections, identity, privacy, replay, and error limits
 - [Streaming Substrate Author Guide](streaming-substrate-author-guide.md) — streaming dynamic swarms, the causal-log fold (`CausalLogView`), rollup nodes, and the context-growth policy (v0.15.0+)
 - [Durable Execution](durable-execution.md) — checkpointed, recoverable, long-running workflows
 

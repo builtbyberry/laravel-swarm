@@ -179,6 +179,8 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                 $abandonStreamStart = MonotonicTime::now();
                 $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $abandonStreamStart, $abandonStreamSeq);
             },
+            topology: $topology->value,
+            nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
         );
     }
 

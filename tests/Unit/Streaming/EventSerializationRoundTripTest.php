@@ -304,6 +304,7 @@ function event_payload_cases(): array
         'step_index' => 1,
         'agent_class' => 'App\\Agents\\Writer',
         'delta' => 'Hello, ',
+        'message_id' => 'msg-1',
         'timestamp' => 1_700_000_014,
     ]];
     $cases['text_delta null delta'] = [SwarmTextDelta::class, [
@@ -359,6 +360,7 @@ function event_payload_cases(): array
             'reasoning_id' => 'reason-1',
             'reasoning_summary' => ['step' => 'plan'],
         ],
+        'payload_status' => 'available',
         'timestamp' => 1_700_000_018,
     ]];
     $cases['tool_call minimal nested nulls'] = [SwarmToolCall::class, [
@@ -399,6 +401,7 @@ function event_payload_cases(): array
         'successful' => true,
         'preliminary' => false,
         'denied' => false,
+        'payload_status' => 'redacted',
         'error' => null,
         'timestamp' => 1_700_000_020,
     ]];

@@ -369,6 +369,7 @@ class SwarmFake implements Swarm
                     agentClass: $step->agentClass,
                     delta: $step->output,
                     timestamp: SwarmStreamEvent::timestamp(),
+                    messageId: 'fake-message-'.$index,
                 );
                 yield new SwarmStepEnd(
                     citationEvidence: $step->citationEvidence,
@@ -389,7 +390,7 @@ class SwarmFake implements Swarm
                 id: SwarmStreamEvent::newId(),
                 runId: 'fake-run-id',
                 output: $output,
-                usage: [],
+                usage: ['input_tokens' => 0, 'output_tokens' => 0],
                 metadata: ['run_id' => 'fake-run-id'],
                 timestamp: SwarmStreamEvent::timestamp(),
             );
@@ -400,7 +401,10 @@ class SwarmFake implements Swarm
                 output: $output,
                 metadata: ['run_id' => 'fake-run-id'],
             );
-        });
+        }, topology: $this->fakeTopology, nativeChatProtocolsEnabled: (bool) Container::getInstance()->make('config')->get(
+            'swarm.streaming.native_protocols.enabled',
+            false,
+        ));
     }
 
     /**
