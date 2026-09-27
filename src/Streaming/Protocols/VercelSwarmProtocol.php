@@ -8,8 +8,10 @@ use Laravel\Ai\Streaming\Events\StreamEvent;
 use Laravel\Ai\Streaming\Protocols\VercelDataProtocol;
 
 /**
- * Adds Swarm workflow data parts while Laravel AI remains the owner of every
- * standard Vercel frame, response header, error path, and stream terminator.
+ * Maps SwarmProtocolEvent to a Vercel data-swarm part and delegates every
+ * other event to the inherited protocol implementation.
+ *
+ * @see VercelDataProtocol
  */
 final class VercelSwarmProtocol extends VercelDataProtocol
 {

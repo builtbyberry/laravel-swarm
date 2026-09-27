@@ -34,6 +34,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
+use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInput;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Testing\Audit\RecordingCapturePolicy;
@@ -370,6 +371,7 @@ class SwarmFake implements Swarm
                     delta: $step->output,
                     timestamp: SwarmStreamEvent::timestamp(),
                     messageId: 'fake-message-'.$index,
+                    payloadAvailability: PayloadAvailability::Available,
                 );
                 yield new SwarmStepEnd(
                     citationEvidence: $step->citationEvidence,

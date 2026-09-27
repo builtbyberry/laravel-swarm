@@ -13,7 +13,7 @@ final class ProtocolStreamFrames
     public static function decode(string $stream, ?string $terminator = null): array
     {
         $frames = [];
-        $sawTerminator = false;
+        $terminatorCount = 0;
 
         foreach (preg_split('/\R\R/', trim($stream)) ?: [] as $frame) {
             if (! str_starts_with($frame, 'data: ')) {
@@ -22,9 +22,17 @@ final class ProtocolStreamFrames
 
             $data = substr($frame, 6);
             if ($terminator !== null && $data === $terminator) {
-                $sawTerminator = true;
+                $terminatorCount++;
+
+                if ($terminatorCount > 1) {
+                    throw new RuntimeException('Protocol stream emitted its required terminator more than once.');
+                }
 
                 continue;
+            }
+
+            if ($terminatorCount > 0) {
+                throw new RuntimeException('Protocol stream emitted a frame after its required terminator.');
             }
 
             try {
@@ -40,7 +48,7 @@ final class ProtocolStreamFrames
             $frames[] = $decoded;
         }
 
-        if ($terminator !== null && ! $sawTerminator) {
+        if ($terminator !== null && $terminatorCount === 0) {
             throw new RuntimeException('Protocol stream omitted its required terminator.');
         }
 

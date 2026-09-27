@@ -32,6 +32,8 @@ use BuiltByBerry\LaravelSwarm\Runners\SequentialStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
+use Illuminate\Config\Repository;
+use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Artisan;
 
 test('the swarm runner resolves from the container', function () {
@@ -50,6 +52,69 @@ test('the swarm configuration is merged', function () {
     expect(config('swarm.timeout'))->toBeInt();
     expect(config('swarm.max_agent_steps'))->toBeInt();
     expect(config('swarm.persistence.driver'))->toBeString();
+});
+
+test('pre-v0.28 published streaming configuration receives recursive native protocol defaults', function () {
+    config()->set('swarm', [
+        'timeout' => 123,
+        'streaming' => [
+            'replay' => [
+                'enabled' => true,
+                'prefix' => 'published:',
+            ],
+        ],
+    ]);
+
+    (new SwarmServiceProvider(app()))->register();
+
+    expect(config('swarm.timeout'))->toBe(123)
+        ->and(config('swarm.streaming.replay.enabled'))->toBeTrue()
+        ->and(config('swarm.streaming.replay.prefix'))->toBe('published:')
+        ->and(config('swarm.streaming.native_protocols.enabled'))->toBeFalse()
+        ->and(config('swarm.streaming.parallel.max_branches'))->toBeInt();
+});
+
+test('recursive configuration merge applies the native protocol environment opt in', function () {
+    $previous = getenv('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED');
+    putenv('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED=true');
+    config()->set('swarm', [
+        'streaming' => [
+            'replay' => ['enabled' => false],
+        ],
+    ]);
+
+    try {
+        (new SwarmServiceProvider(app()))->register();
+
+        expect(config('swarm.streaming.native_protocols.enabled'))->toBeTrue()
+            ->and(config('swarm.streaming.replay.enabled'))->toBeFalse();
+    } finally {
+        $previous === false
+            ? putenv('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED')
+            : putenv("SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED={$previous}");
+    }
+});
+
+test('an already loaded configuration cache remains authoritative until it is rebuilt', function () {
+    $application = new class(base_path()) extends Application
+    {
+        public function configurationIsCached(): bool
+        {
+            return true;
+        }
+    };
+    $application->instance('config', new Repository([
+        'swarm' => [
+            'streaming' => [
+                'replay' => ['enabled' => true],
+            ],
+        ],
+    ]));
+
+    (new SwarmServiceProvider($application))->register();
+
+    expect($application->make('config')->has('swarm.streaming.native_protocols.enabled'))->toBeFalse()
+        ->and($application->make('config')->get('swarm.streaming.replay.enabled'))->toBeTrue();
 });
 
 test('the make swarm command is registered', function () {

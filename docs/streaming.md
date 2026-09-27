@@ -330,9 +330,9 @@ Swarm streams emit typed events, including:
 | --- | --- |
 | `swarm_stream_start` | Run metadata and captured input. |
 | `swarm_step_start` | Step lifecycle start with captured step input. |
-| `swarm_text_delta` / `swarm_text_end` | Final-agent text chunks and close marker. |
+| `swarm_text_delta` / `swarm_text_end` | Final-agent text chunks and close marker with native content-block `message_id` and explicit `payload_status` when known. |
 | `swarm_reasoning_delta` / `swarm_reasoning_end` | Final-agent reasoning stream events. |
-| `swarm_tool_call` / `swarm_tool_result` | Final-agent tool invocation and results. |
+| `swarm_tool_call` / `swarm_tool_result` | Final-agent tool invocation and results with explicit `payload_status` when known. |
 | `swarm_provider_tool_event` | Captured native [provider-tool activity](provider-tool-events.md) with identity and explicit data availability. |
 | `swarm_provider_tool_attempt_invalidated` | Durable control marker invalidating older provider activity for one node. |
 | `swarm_citation` | Native source occurrence with captured [citation evidence and availability](citations.md). |
@@ -365,6 +365,30 @@ IDs or join native tool-invocation IDs to streamed provider call IDs by comparin
 arguments. Native event subscribers remain application-owned; Swarm does not
 install a second global native-event collector or add native event usage a second
 time to step usage.
+
+### Raw event identity and payload availability
+
+`swarm_text_delta` and `swarm_text_end` preserve the upstream content-block
+`message_id` when Laravel AI supplies one. This is not the Swarm `run_id`, a
+Vercel client message ID, or a persisted conversation-row ID. Older replay rows
+may not contain it; readers leave it absent rather than fabricating identity.
+Native protocol projection fails the response with a terminal protocol error if
+a text event that needs projection has no content-block ID.
+
+New text and function-tool events also carry `payload_status` when capture has
+made availability knowable:
+
+| `payload_status` | Raw event value | Native protocol eligibility |
+| --- | --- | --- |
+| `available` | Full captured text or tool payload | May become a standard native content/tool frame in `FinalAgent` projection. |
+| `redacted` | Text is `[redacted]`; function-tool values retain only their capture-shaped redaction | Custom progress only; never presented as genuine standard native content or tool data. |
+| `omitted` | Text is `null`; function-tool arguments/results are omitted by capture | Custom status only; never coerced to an empty genuine value. |
+| `unknown` | The persisted row predates `payload_status`, or availability otherwise cannot be proved | Safe legacy/default state in PHP; never upgraded to `available` by inspecting the value. |
+
+`PayloadAvailability::Unknown` is omitted when that legacy event is serialized
+back to the raw event shape, preserving backward compatibility. Protocol clients
+still receive an explicit unavailable status through custom progress and never a
+standard content/tool frame. See [Vercel and AG-UI protocol projection](native-chat-protocols.md#tools-text-reasoning-citations-and-capture).
 
 ### Tool calls (including MCP tools)
 

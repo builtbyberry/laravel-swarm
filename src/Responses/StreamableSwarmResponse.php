@@ -65,11 +65,17 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
 
     protected NativeProtocolProjection $nativeProtocolProjection = NativeProtocolProjection::Workflow;
 
+    protected bool $topologyResolverRan = false;
+
+    protected ?string $resolvedTopology = null;
+
     /**
      * @param  Closure():iterable<int, SwarmStreamEvent>  $generator
      * @param  Closure(Throwable):SwarmStreamEvent|null  $onReplayFailure
      * @param  Closure(SwarmException):void|null  $onAbandoned
      * @param  Closure(Throwable):void|null  $onAbandonmentFailure
+     * @param  Closure():?string|null  $topologyResolver
+     * @param  Closure(string, string, NativeProtocolProjection, string):void|null  $onNativeProtocolFailure
      */
     public function __construct(
         public readonly string $runId,
@@ -83,6 +89,8 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         protected ?Closure $onAbandonmentFailure = null,
         public readonly ?string $topology = null,
         protected bool $nativeChatProtocolsEnabled = false,
+        protected ?Closure $topologyResolver = null,
+        protected ?Closure $onNativeProtocolFailure = null,
     ) {
         if (! in_array($this->replayFailurePolicy, ['fail', 'continue'], true)) {
             throw new SwarmException("Invalid swarm stream replay failure policy [{$this->replayFailurePolicy}]. Supported policies: fail, continue.");
@@ -130,11 +138,8 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         string $messageId,
         NativeProtocolProjection $projection = NativeProtocolProjection::Workflow,
     ): self {
+        $this->validateProtocolIdentity($messageId, 'Vercel UI message ID');
         $this->configureNativeProtocol($projection);
-
-        if ($messageId === '') {
-            throw new SwarmException('Vercel protocol projection requires a non-empty caller-owned UI message ID.');
-        }
 
         $this->nativeProtocol = new VercelSwarmProtocol($messageId);
 
@@ -146,15 +151,13 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         ?string $runId = null,
         NativeProtocolProjection $projection = NativeProtocolProjection::Workflow,
     ): self {
-        $this->configureNativeProtocol($projection);
-
-        if ($threadId === '') {
-            throw new SwarmException('AG-UI protocol projection requires a non-empty caller-owned thread ID.');
-        }
+        $this->validateProtocolIdentity($threadId, 'AG-UI thread ID');
 
         if ($runId !== null && $runId !== $this->runId) {
             throw new SwarmException('AG-UI protocol run ID must be the Swarm run ID when it is provided.');
         }
+
+        $this->configureNativeProtocol($projection);
 
         $this->nativeProtocol = new AgentUserInteractionSwarmProtocol($threadId, $this->runId);
 
@@ -167,8 +170,15 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
     public function toResponse($request): Response
     {
         if ($this->nativeProtocol instanceof StreamProtocol) {
+            $protocol = $this->nativeProtocol instanceof VercelSwarmProtocol ? 'vercel' : 'ag-ui';
+
             return $this->nativeProtocol->response(
-                (new NativeChatProtocolAdapter)->adapt($this, $this->nativeProtocolProjection),
+                (new NativeChatProtocolAdapter)->adapt(
+                    $this,
+                    $this->nativeProtocolProjection,
+                    $protocol,
+                    $this->onNativeProtocolFailure,
+                ),
             );
         }
 
@@ -185,7 +195,7 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         ]);
     }
 
-    protected function configureNativeProtocol(NativeProtocolProjection $projection): void
+    private function configureNativeProtocol(NativeProtocolProjection $projection): void
     {
         if (! $this->nativeChatProtocolsEnabled) {
             throw new SwarmException('Native chat protocol projection is disabled. Enable swarm.streaming.native_protocols.enabled first.');
@@ -195,11 +205,41 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
             throw new SwarmException('A native chat protocol cannot be selected while the stream is being iterated.');
         }
 
-        if ($projection === NativeProtocolProjection::FinalAgent && $this->topology !== Topology::Sequential->value) {
+        if ($projection === NativeProtocolProjection::FinalAgent && $this->resolveTopology() !== Topology::Sequential->value) {
             throw new SwarmException('The final-agent native protocol projection is supported only for sequential swarms.');
         }
 
         $this->nativeProtocolProjection = $projection;
+    }
+
+    private function resolveTopology(): ?string
+    {
+        if ($this->topology !== null) {
+            return $this->topology;
+        }
+
+        if (! $this->topologyResolverRan) {
+            $this->topologyResolverRan = true;
+            $resolved = ($this->topologyResolver ?? static fn (): null => null)();
+            $this->resolvedTopology = is_string($resolved) ? $resolved : null;
+        }
+
+        return $this->resolvedTopology;
+    }
+
+    private function validateProtocolIdentity(string $value, string $label): void
+    {
+        if ($value === '' || trim($value) === '') {
+            throw new SwarmException("{$label} must be a non-blank caller-owned string.");
+        }
+
+        if (strlen($value) > 512) {
+            throw new SwarmException("{$label} must not exceed 512 bytes.");
+        }
+
+        if (preg_match('//u', $value) !== 1 || preg_match('/[\x00-\x1F\x7F]/u', $value) === 1) {
+            throw new SwarmException("{$label} must be valid UTF-8 without control characters.");
+        }
     }
 
     public function getIterator(): Traversable

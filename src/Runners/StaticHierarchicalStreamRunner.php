@@ -17,7 +17,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
+use BuiltByBerry\LaravelSwarm\Enums\NativeProtocolProjection;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
+use BuiltByBerry\LaravelSwarm\Events\NativeProtocolProjectionFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
@@ -311,6 +313,11 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             },
             topology: $topology->value,
             nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
+            onNativeProtocolFailure: function (string $runId, string $protocol, NativeProtocolProjection $projection, string $reason): void {
+                $this->events->dispatch(
+                    new NativeProtocolProjectionFailed($runId, $protocol, $projection, $reason, SwarmStreamEvent::timestamp()),
+                );
+            },
         );
     }
 
@@ -1171,6 +1178,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         delta: $this->capture->applyOutput($event->delta, $context),
                         timestamp: $event->timestamp,
                         messageId: $event->messageId,
+                        payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($context)),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
                     $this->tagNode($swarmEvent, $nodeId);
@@ -1184,6 +1192,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         agentClass: $agent::class,
                         messageId: $event->messageId,
                         timestamp: $event->timestamp,
+                        payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($context)),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
                     $this->tagNode($swarmEvent, $nodeId);
