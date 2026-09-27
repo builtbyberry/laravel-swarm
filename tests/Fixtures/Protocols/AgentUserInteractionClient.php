@@ -18,12 +18,33 @@ final class AgentUserInteractionClient
             throw new RuntimeException('AG-UI stream did not start a run and step.');
         }
 
-        $terminal = $events[array_key_last($events)]['type'] ?? null;
-        if (! in_array($terminal, ['RUN_FINISHED', 'RUN_ERROR'], true)) {
+        $terminal = null;
+        $terminalIndex = null;
+
+        foreach ($events as $index => $event) {
+            $type = $event['type'] ?? null;
+
+            if (in_array($type, ['RUN_FINISHED', 'RUN_ERROR'], true)) {
+                if ($terminal !== null) {
+                    throw new RuntimeException('AG-UI stream emitted more than one protocol terminal.');
+                }
+
+                $terminal = $type;
+                $terminalIndex = $index;
+
+                continue;
+            }
+
+            if ($terminal !== null) {
+                throw new RuntimeException('AG-UI stream emitted an event after its protocol terminal.');
+            }
+        }
+
+        if ($terminal === null || $terminalIndex === null) {
             throw new RuntimeException('AG-UI stream had no protocol terminal.');
         }
 
-        if ($terminal === 'RUN_FINISHED' && ($events[array_key_last($events) - 1]['type'] ?? null) !== 'STEP_FINISHED') {
+        if ($terminal === 'RUN_FINISHED' && ($events[$terminalIndex - 1]['type'] ?? null) !== 'STEP_FINISHED') {
             throw new RuntimeException('AG-UI successful run did not finish its step.');
         }
 

@@ -33,6 +33,7 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\ParallelStreamBootstrapFailureWorker;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Protocols\AgentUserInteractionClient;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Protocols\VercelDataStreamClient;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmTelemetrySink;
@@ -214,35 +215,42 @@ test('process workers enter run context before agent resolution and never resolv
     expect($response->streamedResponse?->output)->toBe('context-bootstrap');
 });
 
-test('parallel live stream projects branch-local workflow events through the Vercel client fixture', function (): void {
+test('parallel live stream projects branch-local workflow events through native client fixtures', function (string $protocol): void {
     config()->set('swarm.streaming.native_protocols.enabled', true);
-    $context = RunContext::from('protocol-parallel', 'p8-parallel-protocol-'.getmypid());
-    $stream = ParallelLiveStreamSwarm::make()
-        ->stream($context)
-        ->usingVercelDataProtocol('ui-message');
+    $context = RunContext::from('protocol-parallel', 'p8-parallel-'.$protocol.'-'.getmypid());
+    $stream = ParallelLiveStreamSwarm::make()->stream($context);
+    $stream = $protocol === 'vercel'
+        ? $stream->usingVercelDataProtocol('ui-message')
+        : $stream->usingAgentUserInteractionProtocol('thread');
     $_SERVER['LARAVEL_OCTANE'] = true;
 
     try {
         $http = $stream->toResponse(request());
-        $parts = VercelDataStreamClient::consume(implode('', iterator_to_array(($http->getCallback())())));
+        $content = implode('', iterator_to_array(($http->getCallback())()));
+        $parts = $protocol === 'vercel'
+            ? VercelDataStreamClient::consume($content)
+            : AgentUserInteractionClient::consume($content);
     } finally {
         unset($_SERVER['LARAVEL_OCTANE']);
     }
 
-    $deltas = collect($parts)
-        ->where('type', 'data-swarm')
-        ->pluck('data')
+    $custom = collect($parts)->filter(fn (array $part): bool => $protocol === 'vercel'
+        ? ($part['type'] ?? null) === 'data-swarm'
+        : ($part['type'] ?? null) === 'CUSTOM' && ($part['name'] ?? null) === 'laravel-swarm');
+    $deltas = $custom
+        ->map(fn (array $part): mixed => $protocol === 'vercel' ? ($part['data'] ?? null) : ($part['value'] ?? null))
+        ->filter(fn (mixed $part): bool => is_array($part))
         ->where('event_type', 'text_delta')
         ->values();
 
-    expect(array_column($parts, 'type'))->not->toContain('text-delta')
+    expect(array_column($parts, 'type'))->not->toContain('text-delta', 'TEXT_MESSAGE_CONTENT')
         ->and($deltas)->toHaveCount(2)
         ->and($deltas->pluck('branch_id')->sort()->values()->all())->toBe(['parallel:0', 'parallel:1']);
 
     foreach ($deltas->groupBy('branch_id') as $branch) {
         expect($branch->pluck('branch_sequence')->all())->toBe($branch->pluck('branch_sequence')->sort()->values()->all());
     }
-});
+})->with(['vercel', 'ag-ui']);
 
 test('post-history startup failure terminalizes the run before branch processes start', function (): void {
     $path = parallelStreamPath('startup-failure');

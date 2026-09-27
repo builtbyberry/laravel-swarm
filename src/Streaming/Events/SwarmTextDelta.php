@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
+use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
+
 final class SwarmTextDelta extends SwarmStreamEvent
 {
     public function __construct(
@@ -14,6 +16,7 @@ final class SwarmTextDelta extends SwarmStreamEvent
         public ?string $delta,
         public int $timestamp,
         public ?string $messageId = null,
+        public PayloadAvailability $payloadAvailability = PayloadAvailability::Unknown,
     ) {}
 
     /**
@@ -30,6 +33,7 @@ final class SwarmTextDelta extends SwarmStreamEvent
             'agent_class' => $this->agentClass,
             'delta' => $this->delta,
             ...($this->messageId === null ? [] : ['message_id' => $this->messageId]),
+            ...($this->payloadAvailability === PayloadAvailability::Unknown ? [] : ['payload_status' => $this->payloadAvailability->value]),
             'timestamp' => $this->timestamp,
         ];
     }
@@ -47,6 +51,7 @@ final class SwarmTextDelta extends SwarmStreamEvent
             delta: self::nullableStringValue($payload, 'delta'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
             messageId: self::nullableStringValue($payload, 'message_id'),
+            payloadAvailability: PayloadAvailability::tryFrom(self::stringValue($payload, 'payload_status')) ?? PayloadAvailability::Unknown,
         );
     }
 

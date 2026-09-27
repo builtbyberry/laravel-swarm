@@ -53,10 +53,17 @@ Native feature access through Laravel Swarm workflows.
   order. A sequential-only final-agent projection buffers until workflow
   success, preserves real content-block and optional native conversation-row
   identities, and emits standard text/tool/citation frames only when their
-  payloads are actually available. Unsupported approvals, incomplete replay,
-  invalid aggregate usage, and stream failures terminate with protocol errors
-  and no success/finish frame. The adapter adds no migration or persistent data;
-  rollback is revert-safe after projected streams drain.
+  payloads are actually available. Raw text and function-tool events carry
+  capture availability; legacy rows without that field remain `unknown` and are
+  never promoted to standard protocol content. Unsupported approvals, unmatched
+  final steps, incomplete replay, invalid aggregate usage, and stream failures
+  terminate with protocol errors and no success/finish frame. Adapter-created
+  failures dispatch an inspection-safe `NativeProtocolProjectionFailed` event
+  for application monitoring without claiming client delivery. Older published
+  config receives the default-off nested key through recursive config merging.
+  The adapter adds no migration or persistent data; rollback is revert-safe
+  after projected streams drain, cached config is rebuilt, and long-lived
+  application workers are recycled.
 
 ### Changed
 

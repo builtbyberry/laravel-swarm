@@ -8,8 +8,10 @@ use Laravel\Ai\Streaming\Events\StreamEvent;
 use Laravel\Ai\Streaming\Protocols\AgentUserInteractionProtocol;
 
 /**
- * Adds Swarm workflow CUSTOM events while Laravel AI remains the owner of
- * every standard AG-UI event, response header, error path, and run terminal.
+ * Maps SwarmProtocolEvent to a laravel-swarm CUSTOM event and delegates every
+ * other event to the inherited protocol implementation.
+ *
+ * @see AgentUserInteractionProtocol
  */
 final class AgentUserInteractionSwarmProtocol extends AgentUserInteractionProtocol
 {

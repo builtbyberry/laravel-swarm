@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Streaming;
 
 use BuiltByBerry\LaravelSwarm\Enums\NativeProtocolProjection;
-use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
@@ -29,6 +28,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\Protocols\SwarmProtocolEvent;
+use Closure;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\Data\UrlCitation;
@@ -48,19 +48,26 @@ use Throwable;
 /** @internal Converts Swarm events to Laravel AI events without encoding either protocol. */
 final class NativeChatProtocolAdapter
 {
-    public function adapt(StreamableSwarmResponse $source, NativeProtocolProjection $projection): StreamableAgentResponse
-    {
+    /**
+     * @param  Closure(string, string, NativeProtocolProjection, string):void|null  $onFailure
+     */
+    public function adapt(
+        StreamableSwarmResponse $source,
+        NativeProtocolProjection $projection,
+        string $protocol = 'unknown',
+        ?Closure $onFailure = null,
+    ): StreamableAgentResponse {
         $response = null;
         $response = new StreamableAgentResponse(
             invocationId: $source->runId,
-            generator: function () use ($source, $projection, &$response): \Generator {
+            generator: function () use ($source, $projection, $protocol, $onFailure, &$response): \Generator {
                 if ($projection === NativeProtocolProjection::Workflow) {
-                    yield from $this->workflow($source);
+                    yield from $this->workflow($source, $protocol, $onFailure);
 
                     return;
                 }
 
-                yield from $this->finalAgent($source, $response);
+                yield from $this->finalAgent($source, $response, $protocol, $onFailure);
             },
             meta: new Meta,
         );
@@ -69,7 +76,7 @@ final class NativeChatProtocolAdapter
     }
 
     /** @return \Generator<int, StreamEvent> */
-    private function workflow(StreamableSwarmResponse $source): \Generator
+    private function workflow(StreamableSwarmResponse $source, string $protocol, ?Closure $onFailure): \Generator
     {
         $ended = false;
         $errored = false;
@@ -113,9 +120,12 @@ final class NativeChatProtocolAdapter
             }
         } catch (Throwable $exception) {
             if (! $errored) {
+                $reason = $this->failureReason($exception);
+                $this->reportFailure($onFailure, $source, NativeProtocolProjection::Workflow, $protocol, $reason);
+                yield $this->failureProgress($source, NativeProtocolProjection::Workflow, $reason);
                 yield new Error(
                     id: SwarmStreamEvent::newId(),
-                    type: 'swarm_stream_failed',
+                    type: $reason,
                     message: 'The swarm stream failed.',
                     recoverable: false,
                     timestamp: SwarmStreamEvent::timestamp(),
@@ -126,6 +136,8 @@ final class NativeChatProtocolAdapter
         }
 
         if (! $ended && ! $errored) {
+            $this->reportFailure($onFailure, $source, NativeProtocolProjection::Workflow, $protocol, 'swarm_stream_incomplete');
+            yield $this->failureProgress($source, NativeProtocolProjection::Workflow, 'swarm_stream_incomplete');
             yield new Error(
                 id: SwarmStreamEvent::newId(),
                 type: 'swarm_stream_incomplete',
@@ -137,14 +149,19 @@ final class NativeChatProtocolAdapter
     }
 
     /** @return \Generator<int, StreamEvent> */
-    private function finalAgent(StreamableSwarmResponse $source, StreamableAgentResponse $response): \Generator
-    {
+    private function finalAgent(
+        StreamableSwarmResponse $source,
+        StreamableAgentResponse $response,
+        string $protocol,
+        ?Closure $onFailure,
+    ): \Generator {
         $current = [];
         $last = [];
         $lastNativeResult = null;
         $steps = 0;
         $ended = false;
         $errored = false;
+        $stepOpen = false;
 
         try {
             foreach ($source as $event) {
@@ -152,9 +169,18 @@ final class NativeChatProtocolAdapter
                     continue;
                 }
 
+                if ($event instanceof SwarmStreamStart) {
+                    yield $this->custom($event, $this->finalAgentProgressPayload($event, 'buffering'));
+
+                    continue;
+                }
+
                 if ($event instanceof SwarmStepStart) {
                     $steps++;
                     $current = [];
+                    $stepOpen = true;
+
+                    yield $this->custom($event, $this->finalAgentProgressPayload($event, 'step_started'));
 
                     continue;
                 }
@@ -162,6 +188,9 @@ final class NativeChatProtocolAdapter
                 if ($event instanceof SwarmStepEnd) {
                     $last = $current;
                     $lastNativeResult = $event->nativeResult;
+                    $stepOpen = false;
+
+                    yield $this->custom($event, $this->finalAgentProgressPayload($event, 'step_completed'));
 
                     continue;
                 }
@@ -175,6 +204,22 @@ final class NativeChatProtocolAdapter
                 }
 
                 if ($event instanceof SwarmStreamEnd) {
+                    if ($stepOpen) {
+                        $reason = 'swarm_stream_incomplete_step';
+                        $this->reportFailure($onFailure, $source, NativeProtocolProjection::FinalAgent, $protocol, $reason);
+                        yield $this->failureProgress($source, NativeProtocolProjection::FinalAgent, $reason, $event);
+                        yield new Error(
+                            id: $event->id,
+                            type: $reason,
+                            message: 'The swarm stream ended before its final step completed.',
+                            recoverable: false,
+                            timestamp: $event->timestamp,
+                        );
+                        $errored = true;
+
+                        continue;
+                    }
+
                     $usage = $this->usage($event, $steps);
                     $this->adoptNativeMessageRows($response, $lastNativeResult);
 
@@ -201,9 +246,12 @@ final class NativeChatProtocolAdapter
             }
         } catch (Throwable $exception) {
             if (! $errored) {
+                $reason = $this->failureReason($exception);
+                $this->reportFailure($onFailure, $source, NativeProtocolProjection::FinalAgent, $protocol, $reason);
+                yield $this->failureProgress($source, NativeProtocolProjection::FinalAgent, $reason);
                 yield new Error(
                     id: SwarmStreamEvent::newId(),
-                    type: 'swarm_stream_failed',
+                    type: $reason,
                     message: 'The swarm stream failed.',
                     recoverable: false,
                     timestamp: SwarmStreamEvent::timestamp(),
@@ -214,6 +262,8 @@ final class NativeChatProtocolAdapter
         }
 
         if (! $ended && ! $errored) {
+            $this->reportFailure($onFailure, $source, NativeProtocolProjection::FinalAgent, $protocol, 'swarm_stream_incomplete');
+            yield $this->failureProgress($source, NativeProtocolProjection::FinalAgent, 'swarm_stream_incomplete');
             yield new Error(
                 id: SwarmStreamEvent::newId(),
                 type: 'swarm_stream_incomplete',
@@ -231,9 +281,21 @@ final class NativeChatProtocolAdapter
     private function finalAgentEvents(array $events): \Generator
     {
         $openMessages = [];
+        $suppressedMessages = [];
 
         foreach ($events as $event) {
             if ($event instanceof SwarmTextDelta) {
+                if ($event->payloadAvailability !== PayloadAvailability::Available) {
+                    $key = $event->messageId ?? $event->id;
+
+                    if (! isset($suppressedMessages[$key])) {
+                        $suppressedMessages[$key] = true;
+                        yield $this->custom($event, $this->workflowPayload($event));
+                    }
+
+                    continue;
+                }
+
                 $messageId = $this->requiredMessageId($event);
 
                 if (! isset($openMessages[$messageId])) {
@@ -249,6 +311,15 @@ final class NativeChatProtocolAdapter
             }
 
             if ($event instanceof SwarmTextEnd) {
+                if ($event->payloadAvailability !== PayloadAvailability::Available || isset($suppressedMessages[$event->messageId])) {
+                    if (! isset($suppressedMessages[$event->messageId])) {
+                        $suppressedMessages[$event->messageId] = true;
+                        yield $this->custom($event, $this->workflowPayload($event));
+                    }
+
+                    continue;
+                }
+
                 if (! isset($openMessages[$event->messageId])) {
                     $openMessages[$event->messageId] = true;
                     yield $this->withInvocation(new TextStart($event->id.'-start', $event->messageId, $event->timestamp), $event->invocationId);
@@ -356,14 +427,15 @@ final class NativeChatProtocolAdapter
             $event instanceof SwarmTextDelta => [
                 'event_type' => 'text_delta',
                 'step_index' => $event->stepIndex,
-                'message_id' => $this->requiredMessageId($event),
-                'content_status' => $event->delta === null ? 'omitted' : 'available',
-                ...($event->delta === null ? [] : ['delta' => $event->delta]),
+                'message_id' => $event->messageId,
+                'content_status' => $event->payloadAvailability->value,
+                ...($event->payloadAvailability === PayloadAvailability::Available && $event->delta !== null ? ['delta' => $event->delta] : []),
             ],
             $event instanceof SwarmTextEnd => [
                 'event_type' => 'text_ended',
                 'step_index' => $event->stepIndex,
                 'message_id' => $event->messageId,
+                'content_status' => $event->payloadAvailability->value,
             ],
             $event instanceof SwarmReasoningDelta, $event instanceof SwarmReasoningEnd => [
                 'event_type' => 'reasoning_withheld',
@@ -484,7 +556,10 @@ final class NativeChatProtocolAdapter
         $output = $event->usage['output_tokens'] ?? null;
 
         if (! is_int($input) || $input < 0 || ! is_int($output) || $output < 0) {
-            throw new SwarmException('Native protocol projection requires exact aggregate input_tokens and output_tokens for a non-empty run.');
+            throw new NativeProtocolProjectionException(
+                'swarm_usage_unavailable',
+                'Native protocol projection requires exact aggregate input_tokens and output_tokens for a non-empty run.',
+            );
         }
 
         return new TextUsage(
@@ -501,7 +576,10 @@ final class NativeChatProtocolAdapter
         $value = $event->usage[$key] ?? null;
 
         if ($value !== null && (! is_int($value) || $value < 0)) {
-            throw new SwarmException("Native protocol projection received invalid aggregate usage [{$key}].");
+            throw new NativeProtocolProjectionException(
+                'swarm_usage_invalid',
+                "Native protocol projection received invalid aggregate usage [{$key}].",
+            );
         }
 
         return $value;
@@ -510,7 +588,10 @@ final class NativeChatProtocolAdapter
     private function requiredMessageId(SwarmTextDelta $event): string
     {
         if ($event->messageId === null || $event->messageId === '') {
-            throw new SwarmException('Native protocol projection cannot fabricate a missing streamed content-block message ID.');
+            throw new NativeProtocolProjectionException(
+                'swarm_message_identity_unavailable',
+                'Native protocol projection cannot fabricate a missing streamed content-block message ID.',
+            );
         }
 
         return $event->messageId;
@@ -518,7 +599,63 @@ final class NativeChatProtocolAdapter
 
     private function mayExposePayload(PayloadAvailability $availability): bool
     {
-        return in_array($availability, [PayloadAvailability::Available, PayloadAvailability::Redacted], true);
+        return $availability === PayloadAvailability::Available;
+    }
+
+    /** @return array<string, mixed> */
+    private function finalAgentProgressPayload(SwarmStreamEvent $event, string $state): array
+    {
+        return array_filter([
+            ...$this->identity($event),
+            'event_type' => 'projection_progress',
+            'projection' => NativeProtocolProjection::FinalAgent->value,
+            'state' => $state,
+            'step_index' => property_exists($event, 'stepIndex') && is_int($event->stepIndex) ? $event->stepIndex : null,
+        ], static fn (mixed $value): bool => $value !== null);
+    }
+
+    private function failureReason(Throwable $exception): string
+    {
+        return $exception instanceof NativeProtocolProjectionException
+            ? $exception->reason
+            : 'swarm_stream_failed';
+    }
+
+    /**
+     * @param  Closure(string, string, NativeProtocolProjection, string):void|null  $onFailure
+     */
+    private function reportFailure(
+        ?Closure $onFailure,
+        StreamableSwarmResponse $source,
+        NativeProtocolProjection $projection,
+        string $protocol,
+        string $reason,
+    ): void {
+        $onFailure?->__invoke($source->runId, $protocol, $projection, $reason);
+    }
+
+    private function failureProgress(
+        StreamableSwarmResponse $source,
+        NativeProtocolProjection $projection,
+        string $reason,
+        ?SwarmStreamEvent $event = null,
+    ): SwarmProtocolEvent {
+        $failure = new SwarmProtocolEvent(
+            id: $event !== null && property_exists($event, 'id') && is_string($event->id)
+                ? $event->id.'-projection-error'
+                : SwarmStreamEvent::newId(),
+            payload: array_filter([
+                'event_type' => 'projection_error',
+                'run_id' => $source->runId,
+                'projection' => $projection->value,
+                'reason' => $reason,
+            ]),
+            timestamp: $event !== null && property_exists($event, 'timestamp') && is_int($event->timestamp)
+                ? $event->timestamp
+                : SwarmStreamEvent::timestamp(),
+        );
+
+        return $event === null ? $failure : $this->withInvocation($failure, $event->invocationId);
     }
 
     private function adoptNativeMessageRows(StreamableAgentResponse $response, ?NativeStepResult $native): void
