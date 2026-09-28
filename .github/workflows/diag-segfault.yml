@@ -1,10 +1,10 @@
 name: diag-segfault
 
-# TEMPORARY diagnostic workflow for the P8 coverage-lane exit-139 segfault.
-# Run 3: (F) does an EXPLICIT 1GB C stack clear the real crash? (kernel honors
-# an explicit value, unlike "unlimited"); (G) does the isolated crashing test
-# file crash on its own under pcov, or is the crash cumulative? Runs only on
-# diag/** branches; delete when done.
+# TEMPORARY diagnostic. Run 4: why did a step-level `ulimit -s 1048576` fail to
+# stop the segfault when run through `composer`, while direct `php` passed?
+# P1: does composer propagate the raised stack limit to its child process?
+# P2: direct php with 1GB stack (expected pass). P3: via composer (expected crash).
+# Runs only on diag/** branches; delete when done.
 on:
   push:
     branches:
@@ -15,55 +15,48 @@ permissions:
 
 jobs:
   probe:
-    name: stack-size + isolation probes (PHP ${{ matrix.php }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         php: ['8.4']
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           tools: composer:v2
           coverage: pcov
           ini-values: memory_limit=1G
-
       - name: Install dependencies (stable-latest)
         run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
-
       - name: Prepare testbench vendor symlink
         run: |
           if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
             ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
           fi
 
-      - name: PROBE F — full suite under pcov with EXPLICIT 1GB stack
+      - name: P1 — does composer propagate the raised stack to children?
         run: |
           set +e
-          bash -c 'ulimit -s 1048576; echo "stack_kb=$(ulimit -s)"; \
-            php -d pcov.enabled=1 -d memory_limit=1G \
-              vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0 \
-              2>&1 | tail -25'
-          echo "PROBE_F_EXIT=${PIPESTATUS[0]:-$?}"
+          ulimit -s 1048576
+          echo "outer_stack=$(ulimit -s)"
+          echo "direct_child=$(bash -c 'ulimit -s')"
+          echo "composer_child=$(composer exec -- bash -c 'ulimit -s' 2>/dev/null | tail -1)"
+          # what stack does a php spawned BY composer see?
+          echo "composer_php_child=$(composer exec -- php -r 'echo trim(shell_exec("bash -c \"ulimit -s\""));' 2>/dev/null | tail -1)"
 
-      - name: PROBE G — isolated crashing file under pcov (default stack)
+      - name: P2 — direct php, 1GB stack (expect pass)
         run: |
           set +e
+          ulimit -s 1048576
           php -d pcov.enabled=1 -d memory_limit=1G \
-            vendor/bin/pest tests/Feature/ProviderTools/ProviderToolPreservationTest --coverage --min=0 \
-            2>&1 | tail -25
-          echo "PROBE_G_EXIT=${PIPESTATUS[0]:-$?}"
+            vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0 2>&1 | tail -4
+          echo "P2_EXIT=${PIPESTATUS[0]}"
 
-      - name: PROBE H — isolated crashing file under pcov (EXPLICIT 1GB stack)
+      - name: P3 — via composer, 1GB stack (real lane; expect crash if composer resets)
         run: |
           set +e
-          bash -c 'ulimit -s 1048576; \
-            php -d pcov.enabled=1 -d memory_limit=1G \
-              vendor/bin/pest tests/Feature/ProviderTools/ProviderToolPreservationTest --coverage --min=0 \
-              2>&1 | tail -15'
-          echo "PROBE_H_EXIT=$?"
+          ulimit -s 1048576
+          composer test:coverage:ci 2>&1 | tail -4
+          echo "P3_EXIT=${PIPESTATUS[0]}"
