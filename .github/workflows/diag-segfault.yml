@@ -1,9 +1,8 @@
 name: diag-segfault
 
-# TEMPORARY diagnostic. Run 4: why did a step-level `ulimit -s 1048576` fail to
-# stop the segfault when run through `composer`, while direct `php` passed?
-# P1: does composer propagate the raised stack limit to its child process?
-# P2: direct php with 1GB stack (expected pass). P3: via composer (expected crash).
+# TEMPORARY diagnostic. Run 5: does the full suite complete under the XDEBUG
+# coverage driver (instead of pcov)? pcov segfaults flakily on x86_64 across the
+# streaming pipeline; if xdebug does not, swapping the driver is a robust fix.
 # Runs only on diag/** branches; delete when done.
 on:
   push:
@@ -14,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  xdebug-coverage:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -26,7 +25,7 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           tools: composer:v2
-          coverage: pcov
+          coverage: xdebug
           ini-values: memory_limit=1G
       - name: Install dependencies (stable-latest)
         run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
@@ -35,28 +34,10 @@ jobs:
           if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
             ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
           fi
-
-      - name: P1 — does composer propagate the raised stack to children?
+      - name: Coverage driver in use
+        run: php -v
+      - name: Full coverage suite under xdebug (expect pass, no 139)
         run: |
           set +e
-          ulimit -s 1048576
-          echo "outer_stack=$(ulimit -s)"
-          echo "direct_child=$(bash -c 'ulimit -s')"
-          echo "composer_child=$(composer exec -- bash -c 'ulimit -s' 2>/dev/null | tail -1)"
-          # what stack does a php spawned BY composer see?
-          echo "composer_php_child=$(composer exec -- php -r 'echo trim(shell_exec("bash -c \"ulimit -s\""));' 2>/dev/null | tail -1)"
-
-      - name: P2 — direct php, 1GB stack (expect pass)
-        run: |
-          set +e
-          ulimit -s 1048576
-          php -d pcov.enabled=1 -d memory_limit=1G \
-            vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0 2>&1 | tail -4
-          echo "P2_EXIT=${PIPESTATUS[0]}"
-
-      - name: P3 — via composer, 1GB stack (real lane; expect crash if composer resets)
-        run: |
-          set +e
-          ulimit -s 1048576
-          composer test:coverage:ci 2>&1 | tail -4
-          echo "P3_EXIT=${PIPESTATUS[0]}"
+          composer test:coverage:ci 2>&1 | tail -25
+          echo "XDEBUG_COV_EXIT=${PIPESTATUS[0]}"
