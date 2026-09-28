@@ -1,10 +1,10 @@
 name: diag-segfault
 
-# TEMPORARY diagnostic workflow. Reproduces the P8 coverage-lane exit-139
-# segfault on the Linux runner to (1) confirm whether an unlimited C stack
-# clears it (legit-deep-recursion + pcov overhead vs unbounded-recursion bug)
-# and (2) capture the USERLAND php backtrace (function + file:line) via debug
-# symbols + php's zbacktrace. Runs only on diag/** branches; delete when done.
+# TEMPORARY diagnostic workflow for the P8 coverage-lane exit-139 segfault.
+# Run 3: (F) does an EXPLICIT 1GB C stack clear the real crash? (kernel honors
+# an explicit value, unlike "unlimited"); (G) does the isolated crashing test
+# file crash on its own under pcov, or is the crash cumulative? Runs only on
+# diag/** branches; delete when done.
 on:
   push:
     branches:
@@ -14,8 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  backtrace:
-    name: capture segfault backtrace (PHP ${{ matrix.php }})
+  probe:
+    name: stack-size + isolation probes (PHP ${{ matrix.php }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -42,33 +42,28 @@ jobs:
             ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
           fi
 
-      - name: Install gdb + php debug symbols
-        run: sudo apt-get update && sudo apt-get install -y gdb php8.4-dbg || sudo apt-get install -y gdb
-
-      - name: Show default stack limit
-        run: ulimit -a | grep -i stack || true
-
-      - name: PROBE A — unlimited stack under pcov (does the crash vanish?)
+      - name: PROBE F — full suite under pcov with EXPLICIT 1GB stack
         run: |
           set +e
-          bash -c 'ulimit -s unlimited 2>/dev/null || ulimit -s 131072; ulimit -s; \
+          bash -c 'ulimit -s 1048576; echo "stack_kb=$(ulimit -s)"; \
             php -d pcov.enabled=1 -d memory_limit=1G \
-              vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0'
-          echo "PROBE_A_EXIT=$?"
+              vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0 \
+              2>&1 | tail -25'
+          echo "PROBE_F_EXIT=${PIPESTATUS[0]:-$?}"
 
-      - name: PROBE B — userland backtrace under gdb (default 8MB stack)
+      - name: PROBE G — isolated crashing file under pcov (default stack)
         run: |
           set +e
-          curl -fsSL https://raw.githubusercontent.com/php/php-src/PHP-8.4/.gdbinit -o /tmp/php.gdbinit || echo "gdbinit fetch failed"
-          gdb -batch \
-            -x /tmp/php.gdbinit \
-            -ex 'set pagination off' \
-            -ex 'set backtrace limit 2000' \
-            -ex 'run' \
-            -ex 'echo \n===== ZBACKTRACE (userland) =====\n' \
-            -ex 'zbacktrace' \
-            -ex 'echo \n===== C BACKTRACE (top 60) =====\n' \
-            -ex 'bt 60' \
-            --args php -d pcov.enabled=1 -d memory_limit=1G \
-              vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0
-          echo "gdb wrapper exit: $?"
+          php -d pcov.enabled=1 -d memory_limit=1G \
+            vendor/bin/pest tests/Feature/ProviderTools/ProviderToolPreservationTest --coverage --min=0 \
+            2>&1 | tail -25
+          echo "PROBE_G_EXIT=${PIPESTATUS[0]:-$?}"
+
+      - name: PROBE H — isolated crashing file under pcov (EXPLICIT 1GB stack)
+        run: |
+          set +e
+          bash -c 'ulimit -s 1048576; \
+            php -d pcov.enabled=1 -d memory_limit=1G \
+              vendor/bin/pest tests/Feature/ProviderTools/ProviderToolPreservationTest --coverage --min=0 \
+              2>&1 | tail -15'
+          echo "PROBE_H_EXIT=$?"
