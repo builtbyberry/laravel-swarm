@@ -1,0 +1,29 @@
+name: diag-c1
+on:
+  push:
+    branches:
+      - 'diag/**'
+permissions:
+  contents: read
+jobs:
+  c1:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          tools: composer:v2
+          coverage: pcov
+          ini-values: memory_limit=1G
+      - run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+      - run: |
+          if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
+            ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
+          fi
+      - name: Pest5 + pcov coverage at first P8 commit (crash => adapter commit; pass => review-fixes commit)
+        run: |
+          set +e
+          php -d pcov.enabled=1 -d memory_limit=1G \
+            vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0 2>&1 | tail -3
+          echo "C1_EXIT=${PIPESTATUS[0]}"
