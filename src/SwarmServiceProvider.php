@@ -170,7 +170,7 @@ class SwarmServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->replaceConfigRecursivelyFrom(
+        $this->mergeConfigFrom(
             __DIR__.'/../config/swarm.php',
             'swarm',
         );
