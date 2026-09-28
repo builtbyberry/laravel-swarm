@@ -1,0 +1,69 @@
+name: diag-segfault
+
+# TEMPORARY diagnostic workflow. Reproduces the P8 coverage-lane exit-139
+# segfault on the Linux runner and captures a native backtrace so the crash
+# frame (pcov / zend) and the PHP file being instrumented are known. Runs only
+# on diag/** branches; delete this file and branch once diagnosed.
+on:
+  push:
+    branches:
+      - 'diag/**'
+
+permissions:
+  contents: read
+
+jobs:
+  backtrace:
+    name: capture segfault backtrace (PHP ${{ matrix.php }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer:v2
+          coverage: pcov
+          ini-values: memory_limit=1G
+
+      - name: Install dependencies (stable-latest)
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
+
+      - name: Prepare testbench vendor symlink
+        run: |
+          if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
+            ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
+          fi
+
+      - name: Install gdb
+        run: sudo apt-get update && sudo apt-get install -y gdb
+
+      - name: pcov + php diagnostics
+        run: |
+          php -v
+          php -i | grep -i pcov || true
+
+      - name: Run suite under gdb and capture backtrace on crash
+        run: |
+          set +e
+          gdb -batch \
+            -ex 'set pagination off' \
+            -ex 'handle SIGSEGV stop' \
+            -ex 'run' \
+            -ex 'echo \n===== C BACKTRACE =====\n' \
+            -ex 'bt' \
+            -ex 'echo \n===== FULL BACKTRACE =====\n' \
+            -ex 'bt full' \
+            -ex 'echo \n===== PHP CURRENT FILE =====\n' \
+            -ex 'call (char*) (executor_globals.current_execute_data ? executor_globals.current_execute_data->func->op_array.filename->val : "n/a")' \
+            -ex 'echo \n===== SHARED LIBS =====\n' \
+            -ex 'info sharedlibrary pcov' \
+            --args php -d pcov.enabled=1 -d memory_limit=1G \
+              vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0
+          echo "gdb wrapper exit: $?"
