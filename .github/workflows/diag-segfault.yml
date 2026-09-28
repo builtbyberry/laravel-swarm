@@ -1,9 +1,10 @@
 name: diag-segfault
 
 # TEMPORARY diagnostic workflow. Reproduces the P8 coverage-lane exit-139
-# segfault on the Linux runner and captures a native backtrace so the crash
-# frame (pcov / zend) and the PHP file being instrumented are known. Runs only
-# on diag/** branches; delete this file and branch once diagnosed.
+# segfault on the Linux runner to (1) confirm whether an unlimited C stack
+# clears it (legit-deep-recursion + pcov overhead vs unbounded-recursion bug)
+# and (2) capture the USERLAND php backtrace (function + file:line) via debug
+# symbols + php's zbacktrace. Runs only on diag/** branches; delete when done.
 on:
   push:
     branches:
@@ -41,29 +42,33 @@ jobs:
             ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
           fi
 
-      - name: Install gdb
-        run: sudo apt-get update && sudo apt-get install -y gdb
+      - name: Install gdb + php debug symbols
+        run: sudo apt-get update && sudo apt-get install -y gdb php8.4-dbg || sudo apt-get install -y gdb
 
-      - name: pcov + php diagnostics
-        run: |
-          php -v
-          php -i | grep -i pcov || true
+      - name: Show default stack limit
+        run: ulimit -a | grep -i stack || true
 
-      - name: Run suite under gdb and capture backtrace on crash
+      - name: PROBE A — unlimited stack under pcov (does the crash vanish?)
         run: |
           set +e
+          bash -c 'ulimit -s unlimited 2>/dev/null || ulimit -s 131072; ulimit -s; \
+            php -d pcov.enabled=1 -d memory_limit=1G \
+              vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0'
+          echo "PROBE_A_EXIT=$?"
+
+      - name: PROBE B — userland backtrace under gdb (default 8MB stack)
+        run: |
+          set +e
+          curl -fsSL https://raw.githubusercontent.com/php/php-src/PHP-8.4/.gdbinit -o /tmp/php.gdbinit || echo "gdbinit fetch failed"
           gdb -batch \
+            -x /tmp/php.gdbinit \
             -ex 'set pagination off' \
-            -ex 'handle SIGSEGV stop' \
+            -ex 'set backtrace limit 2000' \
             -ex 'run' \
-            -ex 'echo \n===== C BACKTRACE =====\n' \
-            -ex 'bt' \
-            -ex 'echo \n===== FULL BACKTRACE =====\n' \
-            -ex 'bt full' \
-            -ex 'echo \n===== PHP CURRENT FILE =====\n' \
-            -ex 'call (char*) (executor_globals.current_execute_data ? executor_globals.current_execute_data->func->op_array.filename->val : "n/a")' \
-            -ex 'echo \n===== SHARED LIBS =====\n' \
-            -ex 'info sharedlibrary pcov' \
+            -ex 'echo \n===== ZBACKTRACE (userland) =====\n' \
+            -ex 'zbacktrace' \
+            -ex 'echo \n===== C BACKTRACE (top 60) =====\n' \
+            -ex 'bt 60' \
             --args php -d pcov.enabled=1 -d memory_limit=1G \
               vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0
           echo "gdb wrapper exit: $?"
