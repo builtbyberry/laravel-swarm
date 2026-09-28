@@ -1,9 +1,8 @@
 name: diag-segfault
 
-# TEMPORARY diagnostic. Run 6: isolate the Pest axis. The failing lanes are
-# Pest 5 + coverage; the passing compat lane is Pest 4 + NO coverage. This runs
-# the missing cell: Pest 4 + pcov coverage. Pass => Pest 5 runner depth is the
-# extra push over the 8MB stack. Crash => purely coverage-frame overhead.
+# TEMPORARY diagnostic. Run 7: localize P8's stack/instrumentation contribution
+# by pcov.exclude'ing subsets of P8 files and seeing which exclusion clears the
+# reliably-reproducing 8MB crash. Control (no exclude) should crash 139.
 # Runs only on diag/** branches; delete when done.
 on:
   push:
@@ -14,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  pest4-coverage:
+  localize:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -28,28 +27,33 @@ jobs:
           tools: composer:v2
           coverage: pcov
           ini-values: memory_limit=1G
-
-      - name: Preserve production manifest
-        run: cp composer.json /tmp/swarm-production-composer.json
-      - name: Select Pest 4 compatibility toolchain
-        run: composer require --no-update --dev "pestphp/pest:^4.7" "pestphp/pest-plugin-laravel:^4.1" "laravel/framework:13.16.0"
-      - name: Install compatibility dependencies
-        run: composer update --with laravel/ai:1.0.0 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress
-      - name: Restore production manifest
-        run: cp /tmp/swarm-production-composer.json composer.json
+      - name: Install dependencies (stable-latest)
+        run: composer update --prefer-stable --prefer-dist --no-interaction --no-progress
       - name: Prepare testbench vendor symlink
         run: |
           if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
             ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
           fi
-      - name: Versions in use
-        run: |
-          php -v
-          composer show pestphp/pest phpunit/php-code-coverage 2>/dev/null | grep -iE 'name|versions' | head
 
-      - name: Pest 4 + pcov coverage, full suite (pass => Pest 5 implicated)
+      - name: CONTROL — no exclude (expect 139)
         run: |
           set +e
           php -d pcov.enabled=1 -d memory_limit=1G \
-            vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0 2>&1 | tail -20
-          echo "PEST4_COV_EXIT=${PIPESTATUS[0]}"
+            vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0 2>&1 | tail -3
+          echo "CONTROL_EXIT=${PIPESTATUS[0]}"
+
+      - name: PROBE A — exclude NEW adapter/protocol files
+        run: |
+          set +e
+          php -d pcov.enabled=1 -d memory_limit=1G \
+            -d "pcov.exclude=~(Streaming/NativeChatProtocolAdapter|Streaming/Protocols/|Streaming/PayloadAvailability|Enums/NativeProtocolProjection|Events/NativeProtocolProjectionFailed|Streaming/Exceptions/NativeProtocolProjectionException)~" \
+            vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0 2>&1 | tail -3
+          echo "PROBE_A_EXIT=${PIPESTATUS[0]}"
+
+      - name: PROBE B — exclude MODIFIED streaming hot-path files
+        run: |
+          set +e
+          php -d pcov.enabled=1 -d memory_limit=1G \
+            -d "pcov.exclude=~(Responses/StreamableSwarmResponse|Streaming/StreamEventMapper|Runners/[A-Za-z]*StreamRunner|Support/SwarmHistory)~" \
+            vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=0 2>&1 | tail -3
+          echo "PROBE_B_EXIT=${PIPESTATUS[0]}"
