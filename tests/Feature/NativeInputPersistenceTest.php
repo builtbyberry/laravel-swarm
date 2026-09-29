@@ -97,9 +97,9 @@ test('native background work uses capability-specific jobs while legacy queue pa
         ->toBeInstanceOf(InvokeSwarm::class)
         ->not->toBeInstanceOf(InvokeNativeInputSwarm::class);
 
-    PendingDispatchTestHelper::release($queued);
-    PendingDispatchTestHelper::release($durable);
-    PendingDispatchTestHelper::release($legacy);
+    PendingDispatchTestHelper::dispatchAndDetach($queued);
+    PendingDispatchTestHelper::dispatchAndDetach($durable);
+    PendingDispatchTestHelper::dispatchAndDetach($legacy);
 });
 
 test('recoverable execution reconstructs every supported attachment family', function (object $attachment, string $storedClass) {

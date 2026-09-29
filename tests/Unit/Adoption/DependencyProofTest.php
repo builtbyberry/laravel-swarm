@@ -154,6 +154,10 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
     expect($manifest['scripts']['test:ci'])->toBe('vendor/bin/pest --parallel --processes=4')
         ->and($manifest['scripts']['test:coverage:ci'])->toBe('vendor/bin/pest --parallel --processes=4 --coverage --min=80');
+    $phpunit = file_get_contents(dirname(__DIR__, 3).'/phpunit.xml');
+    preg_match_all('#<directory>tests/(Unit|Feature|Installer)</directory>#', $phpunit, $suiteMatches);
+    expect(substr_count($phpunit, '<directory>'))->toBe(3)
+        ->and($suiteMatches[1])->toBe(['Unit', 'Feature', 'Installer']);
 
     $job = $workflow['jobs']['laravel-13-16'];
     expect($job['strategy']['matrix'])->toBe(['php' => ['8.4', '8.5']]);

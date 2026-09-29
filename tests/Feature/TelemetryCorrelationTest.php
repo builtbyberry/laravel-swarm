@@ -178,7 +178,7 @@ test('durable advance step correlates audit and telemetry run lifecycle', functi
         ->and($telemetrySteps[0]['run_id'])->toBe($runId)
         ->and($telemetrySteps[0]['execution_mode'])->toBe('durable');
 
-    PendingDispatchTestHelper::release($response);
+    PendingDispatchTestHelper::dispatchAndDetach($response);
 });
 
 test('sync step telemetry includes execution mode', function (): void {
@@ -215,7 +215,7 @@ test('durable progress telemetry includes swarm and topology correlation fields'
         ->and($progress['topology'])->toBe('sequential')
         ->and($progress['execution_mode'])->toBe('durable');
 
-    PendingDispatchTestHelper::release($response);
+    PendingDispatchTestHelper::dispatchAndDetach($response);
 });
 
 test('package job failure telemetry includes worker attempt duration and rethrows', function (): void {
@@ -291,7 +291,7 @@ test('durable package job telemetry includes routing and timing fields', functio
         ->and($completed['duration_ms'])->toBeInt()
         ->and($completed['total_elapsed_ms'])->toBeInt();
 
-    PendingDispatchTestHelper::release($response);
+    PendingDispatchTestHelper::dispatchAndDetach($response);
 });
 
 test('telemetry payloads omit sensitive strings when capture is disabled', function (): void {
