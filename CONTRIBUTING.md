@@ -51,7 +51,7 @@ Normal development uses **Pest 5**. Continuous integration runs the same checks 
 scope-isolation/propagation + replay-determinism `compliance` Pest group, a
 discrete re-runnable evidence lane) on **stable-latest** only. The real MySQL
 and PostgreSQL process-concurrency jobs run on PHP **8.4**, the minimum supported
-runtime. Install PCOV for PHP locally when you want to match CI or debug coverage
+runtime. Install Xdebug for PHP locally when you want to match CI or debug coverage
 failures; otherwise `composer test` remains the default fast path without
 coverage. If workflow runtime becomes prohibitive, maintainers may split
 **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
@@ -66,10 +66,12 @@ installed packages. These jobs run `composer test`,
 Pest 5's Laravel plugin excludes Laravel 13.16, so its lowest resolution alone
 cannot prove that compatibility. Swarm's production requirements remain unchanged.
 
-The four normal Pest 5 jobs retain PCOV, `memory_limit=1G`, the complete source
-filter, and the **80%** coverage floor. The separate compatibility jobs run the
-full suite without coverage reporting to avoid Pest 4's report reload overhead.
-PHPStan retains its separate existing `--memory-limit=2G` setting.
+The four normal Pest 5 jobs use Xdebug, `memory_limit=1G`, the complete source
+filter, and the **80%** coverage floor. The scheduled mutation baseline uses the
+same driver because mutation requires coverage data. The separate compatibility
+jobs and moving-development nightly load no coverage driver: they run the full
+suite without collecting coverage. PHPStan retains its separate existing
+`--memory-limit=2G` setting.
 
 **Moving development proof** — PR/nightly and real-database canaries resolve
 official Laravel AI `1.x-dev` and Laravel `13.x-dev`. Capture official branch

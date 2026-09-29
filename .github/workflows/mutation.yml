@@ -30,7 +30,9 @@ jobs:
         with:
           php-version: '8.5'
           tools: composer:v2
-          coverage: pcov
+          # Mutation testing needs coverage, so use the same hosted-stable
+          # driver as the ordinary coverage gate.
+          coverage: xdebug
           ini-values: memory_limit=1G
 
       - name: Install dependencies

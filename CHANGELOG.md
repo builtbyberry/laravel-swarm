@@ -49,6 +49,11 @@ Native feature access through Laravel Swarm workflows.
 
 ### Changed
 
+- Hosted Pest 5 coverage and mutation workflows now use Xdebug after repeated
+  PCOV exit-139 crashes on the expanded v0.28 suite. The four PHP/dependency
+  matrix jobs retain the complete coverage command and 80% floor; the
+  moving-development nightly loads no coverage driver because it does not
+  collect coverage.
 - Installation, generator, starter, example, testing, README, and upgrade
   guidance now present native Laravel AI agents as the normal model-agent path.
   `make:swarm:agent` and deprecated `make:swarm --single` remain deterministic
