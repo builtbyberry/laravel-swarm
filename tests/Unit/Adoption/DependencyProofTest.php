@@ -152,8 +152,8 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     expect($normalSetup['with']['coverage'])->toBe('xdebug');
     expect($normalSetup['with']['ini-values'])->toBe('memory_limit=1G');
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
-    expect($manifest['scripts']['test:ci'])->toBe('vendor/bin/pest --parallel --processes=4 --max-batch-size=32')
-        ->and($manifest['scripts']['test:coverage:ci'])->toBe('vendor/bin/pest --parallel --processes=4 --max-batch-size=32 --coverage --min=80');
+    expect($manifest['scripts']['test:ci'])->toBe('vendor/bin/pest --parallel --processes=4 --max-batch-size=1')
+        ->and($manifest['scripts']['test:coverage:ci'])->toBe('vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --coverage --min=80');
     $phpunit = file_get_contents(dirname(__DIR__, 3).'/phpunit.xml');
     preg_match_all('#<directory>tests/(Unit|Feature|Installer)</directory>#', $phpunit, $suiteMatches);
     expect(substr_count($phpunit, '<directory>'))->toBe(3)

@@ -529,8 +529,8 @@ release-readiness and again before tagging any release.
   upstream changes before a tagged release reaches the package's supported
   version matrix.
 - **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
-  across four concurrent ParaTest workers, each recycled after at most 32
-  test-file assignments),
+  across four concurrent ParaTest workers, with a fresh worker for every
+  test-file assignment),
   `composer test:process-concurrency:ci`,
   `composer analyse`, `composer test:compliance`, and `composer lint` on PHP
   8.5 against the moving dependency set.
@@ -548,6 +548,12 @@ release-readiness and again before tagging any release.
   Laravel or Laravel AI commit, the failing gate, and the affected package
   code, then keep the release gate closed until the incompatibility or workflow
   defect is resolved.
+
+  Per-file worker startup is intentionally slower than persistent workers. It
+  prevents suite growth or file-order changes from carrying accumulated process
+  state into a later test file, so maintainers should treat a proposal to raise
+  `--max-batch-size` as a reliability change that requires fresh no-coverage and
+  Xdebug proof on the complete current suite.
 
 ### Daily Pest mutation
 

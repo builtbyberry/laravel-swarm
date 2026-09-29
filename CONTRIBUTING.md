@@ -54,11 +54,13 @@ and PostgreSQL process-concurrency jobs run on PHP **8.4**, the minimum supporte
 runtime. Install Xdebug for PHP locally when you want to match CI or debug coverage
 failures; otherwise `composer test` remains the default sequential fast path
 without coverage. Hosted Pest 5 uses four concurrent ParaTest workers through
-`composer test:ci` and `composer test:coverage:ci`, recycling each worker after
-at most 32 test-file assignments. This preserves the Unit, Feature, and Installer
-suites while bounding each PHP process's lifetime; Pest merges worker coverage
-before enforcing the existing 80% aggregate floor. If workflow runtime becomes
-prohibitive, maintainers may split
+`composer test:ci` and `composer test:coverage:ci`, starting a fresh worker for
+every test-file assignment. This preserves the Unit, Feature, and Installer
+suites while preventing state accumulated by one test file from crossing into
+the next; Pest merges worker coverage before enforcing the existing 80% aggregate
+floor. Per-file startup deliberately trades additional hosted runtime for a
+deterministic isolation boundary. If workflow runtime becomes prohibitive,
+maintainers may split
 **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
 until then, pull requests validate both matrices equally.
 
@@ -72,7 +74,7 @@ Pest 5's Laravel plugin excludes Laravel 13.16, so its lowest resolution alone
 cannot prove that compatibility. Swarm's production requirements remain unchanged.
 
 The four normal Pest 5 jobs use Xdebug, `memory_limit=1G`, four concurrent test
-workers recycled after at most 32 test-file assignments, the complete source
+workers with a fresh worker for every test-file assignment, the complete source
 filter, and the **80% aggregate** coverage floor.
 The scheduled mutation baseline uses the
 same driver because mutation requires coverage data. The separate compatibility
