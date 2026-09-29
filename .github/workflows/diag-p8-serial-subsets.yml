@@ -1,0 +1,79 @@
+name: diag-p8-serial-subsets
+
+on:
+  push:
+    branches:
+      - 'diag/p8-serial-subsets'
+
+permissions:
+  contents: read
+
+jobs:
+  subsets:
+    name: PHP 8.5 moving-dev serial subsets
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          coverage: none
+          ini-values: memory_limit=1G
+
+      - name: Preserve production manifest
+        run: cp composer.json /tmp/swarm-production-composer.json
+
+      - name: Capture official moving branch references
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_ref() {
+            local url="$1" branch="$2" variable="$3" ref name
+            local evidence="$RUNNER_TEMP/$variable.refs"
+            git ls-remote --exit-code "$url" "$branch" > "$evidence"
+            test "$(wc -l < "$evidence")" -eq 1
+            read -r ref name < "$evidence"
+            test "$name" = "$branch"
+            printf '%s=%s\n' "$variable" "$ref" >> "$GITHUB_ENV"
+          }
+          capture_ref https://github.com/laravel/ai.git refs/heads/1.x SWARM_AI_DEV_REF
+          capture_ref https://github.com/laravel/framework.git refs/heads/13.x SWARM_FRAMEWORK_DEV_REF
+
+      - name: Install moving dependencies
+        run: |
+          composer require --no-update "laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"
+          composer require --no-update --dev "laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"
+          composer update --prefer-dist --no-interaction --no-progress
+          cp /tmp/swarm-production-composer.json composer.json
+
+      - name: Prepare testbench vendor symlink
+        run: |
+          if [ ! -e "vendor/orchestra/testbench-core/laravel/vendor" ]; then
+            ln -sf '../../../' vendor/orchestra/testbench-core/laravel/vendor
+          fi
+
+      - name: Run full file and semantic subsets in fresh processes
+        shell: bash
+        run: |
+          set +e
+          file=tests/Feature/ProviderTools/ProviderToolPreservationTest.php
+          probe() {
+            local label="$1"
+            shift
+            php -d memory_limit=512M vendor/bin/pest "$file" --compact "$@"
+            printf '%s_EXIT=%s\n' "$label" "$?"
+          }
+          probe FULL --group=ci-serial
+          probe PRESERVE --filter='preserves live completed memory'
+          probe HIERARCHY --filter='maps static and generated hierarchical workers'
+          probe BROADCAST --filter='broadcasts provider wire events'
+          probe NONSTREAM --filter='does not fabricate provider activity'
+          probe INTERRUPTION --filter='does not invent completed playback'
+          probe KEYLOSS --filter='reports unavailable protected evidence'
+          probe REPLAY --filter='cleans partial provider replay'
+          probe TELEMETRY --filter='honors default output capture off'
+          probe RETENTION --filter='retains cold audit history'
+
