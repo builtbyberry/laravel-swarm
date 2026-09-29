@@ -37,7 +37,6 @@ final readonly class SwarmTerminalContext implements Arrayable
         public CallbackSlot $slot,
         public string $swarmClass,
         public ?string $topology = null,
-        public ?string $executionMode = null,
         public ?string $exceptionClass = null,
         public ?string $exceptionMessage = null,
     ) {}
@@ -68,7 +67,6 @@ final readonly class SwarmTerminalContext implements Arrayable
             'slot' => $this->slot->value,
             'swarm_class' => $this->swarmClass,
             'topology' => $this->topology,
-            'execution_mode' => $this->executionMode,
             'exception_class' => $this->exceptionClass,
             'exception_message' => $this->exceptionMessage,
         ];

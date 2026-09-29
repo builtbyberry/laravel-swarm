@@ -243,7 +243,7 @@ class SwarmPruneCommand extends Command
             //   2. Dead-letter rows past the opt-in retention window
             //      (swarm.callbacks.retention_days); null keeps them indefinitely for
             //      inspection, matching the audit outbox default.
-            $retentionDays = $config->get('swarm.callbacks.retention_days');
+            $retentionDays = $config->get('swarm.callbacks.dead_letter_retention_days');
 
             $query->where(function ($query) use ($historyTable, $retentionDays): void {
                 $query->whereIn('run_id', function ($subquery) use ($historyTable): void {

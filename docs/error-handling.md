@@ -335,15 +335,36 @@ callbacks when you want to attach behavior to *this* run at the call site.
 
 Callback deliveries are persisted in `swarm_callback_deliveries`.
 
+- **Schedule the relay.** Delivery only happens through `swarm:relay` — a plain `queue()`
+  app that had no reason to schedule the relay before **must schedule it now** once callbacks
+  are enabled, or callbacks never fire (and their rows are eventually pruned as orphans once
+  the run's history expires). `swarm:health` warns with "is swarm:relay scheduled?" as a nudge.
 - **Deliver:** `swarm:relay --type=callback` (or a bare `swarm:relay`, which drains every lane).
-  Schedule it like the durable relay.
-- **Inspect:** `swarm:health` reports pending and dead-lettered callback counts when the feature
-  is enabled.
+- **Kill switch.** Setting `swarm.callbacks.enabled=false` stops both registration and delivery:
+  the relay lane goes inert and in-flight `DeliverSwarmCallback` jobs no-op, so it is a safe way
+  to halt callback execution during an incident. Re-enabling resumes the pending rows.
+- **Reservation window.** A claimed-but-undelivered row is re-claimed after
+  `swarm.callbacks.reservation_timeout_seconds` (falling back to the durable relay timeout). If a
+  delivery job sits in a backed-up queue longer than that window it is re-dispatched, so a callback
+  can run more than once — delivery is at-least-once, **make callbacks idempotent**. Size this
+  timeout above your worst-case callback latency to reduce duplicate deliveries.
+- **Inspect:** `swarm:health` reports registered, pending, and dead-lettered callback counts when
+  the feature is enabled, and warns while any row is dead-lettered.
+- **Dead-letters are not auto-recovered.** A callback that exhausts `swarm.callbacks.max_attempts`
+  moves to `dead_letter` and stops being delivered; there is no requeue command (unlike the audit
+  lane). If guaranteed delivery matters, listen to `SwarmCompleted` / `SwarmFailed` instead — those
+  are the reliable path. A dead-letter caused by an **`APP_KEY` rotation** (which invalidates every
+  in-flight callback's signature) is expected: rotate with no pending callbacks, or accept their loss.
+- **Callbacks run without ambient request/tenant state.** A delivered callback runs later, in the
+  relay/worker process, with no HTTP request and no ambient tenant context. Capture everything the
+  closure needs (ids, not `tenant()` globals) at registration.
 - **Prune:** `swarm:prune` removes delivery records for terminal, expired runs, and dead-lettered
-  rows older than `swarm.callbacks.retention_days` (null keeps them indefinitely). It honors
-  `swarm.retention.prevent_prune`.
-- **Rollback / drain:** because undelivered rows are lost on the down-migration, drain the callback
-  lane (`swarm:relay --type=callback --drain-until-empty`) before reverting the migration.
+  rows older than `swarm.callbacks.dead_letter_retention_days` (null keeps them indefinitely). It
+  honors `swarm.retention.prevent_prune`.
+- **Rollback / drain:** undelivered rows are lost on the down-migration, and draining only moves
+  rows into delivery jobs. To revert safely: stop dispatching new runs, run
+  `swarm:relay --type=callback --drain-until-empty`, **wait for the callback queue workers to
+  finish** the dispatched `DeliverSwarmCallback` jobs, then revert the migration.
 
 ## Queue Retry vs Durable Retry
 

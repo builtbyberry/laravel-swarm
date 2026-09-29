@@ -111,6 +111,7 @@ class SwarmRelayCommand extends Command
         $totalAuditReplayed = 0;
         $totalAuditDeadLettered = 0;
         $totalCallbackDispatched = 0;
+        $totalCallbackDeadLettered = 0;
         $attempts = 0;
         $durableResult = new DrainResult(0, 0, 0, 0, 0);
         $auditResult = new AuditDrainResult(0, 0, 0, 0, 0);
@@ -139,6 +140,7 @@ class SwarmRelayCommand extends Command
                     &$totalAuditReplayed,
                     &$totalAuditDeadLettered,
                     &$totalCallbackDispatched,
+                    &$totalCallbackDeadLettered,
                     &$attempts,
                     &$durableResult,
                     &$auditResult,
@@ -178,7 +180,7 @@ class SwarmRelayCommand extends Command
                         if ($shouldDrainCallback) {
                             $callbackResult = $callbackOutbox->drain($limit);
                             $totalCallbackDispatched += $callbackResult->dispatched;
-                            $totalSkipped += $callbackResult->skipped;
+                            $totalCallbackDeadLettered += $callbackResult->deadLettered;
                             $totalFailed += $callbackResult->failed;
                             $totalClaimed += $callbackResult->claimed;
                             $totalReclaimed += $callbackResult->reclaimed;
@@ -216,6 +218,7 @@ class SwarmRelayCommand extends Command
                 'audit_replayed_count' => $totalAuditReplayed,
                 'audit_dead_lettered_count' => $totalAuditDeadLettered,
                 'callback_dispatched_count' => $totalCallbackDispatched,
+                'callback_dead_lettered_count' => $totalCallbackDeadLettered,
                 'status' => 'error',
                 'exception_class' => $exception::class,
                 ...$audit->metadata($actorMetadata),
@@ -239,6 +242,7 @@ class SwarmRelayCommand extends Command
                 'audit_replayed_count' => 0,
                 'audit_dead_lettered_count' => 0,
                 'callback_dispatched_count' => 0,
+                'callback_dead_lettered_count' => 0,
                 'status' => 'skipped_overlap',
                 ...$audit->metadata($actorMetadata),
             ]);
@@ -267,11 +271,12 @@ class SwarmRelayCommand extends Command
             'audit_replayed_count' => $totalAuditReplayed,
             'audit_dead_lettered_count' => $totalAuditDeadLettered,
             'callback_dispatched_count' => $totalCallbackDispatched,
-            'status' => $this->auditStatus($totalDispatched + $totalAuditReplayed + $totalCallbackDispatched, $totalSkipped + $totalAuditDeadLettered, $hasUnresolvedTransient),
+            'callback_dead_lettered_count' => $totalCallbackDeadLettered,
+            'status' => $this->auditStatus($totalDispatched + $totalAuditReplayed + $totalCallbackDispatched, $totalSkipped + $totalAuditDeadLettered + $totalCallbackDeadLettered, $hasUnresolvedTransient),
             ...$audit->metadata($actorMetadata),
         ]);
 
-        $totalRemoved = $totalDispatched + $totalSkipped + $totalAuditReplayed + $totalAuditDeadLettered + $totalCallbackDispatched;
+        $totalRemoved = $totalDispatched + $totalSkipped + $totalAuditReplayed + $totalAuditDeadLettered + $totalCallbackDispatched + $totalCallbackDeadLettered;
 
         if ($totalRemoved === 0 && $totalFailed === 0) {
             $this->components->info('No pending outbox entries were found.');
@@ -289,6 +294,10 @@ class SwarmRelayCommand extends Command
 
         if ($totalCallbackDispatched > 0) {
             $this->components->info('Dispatched '.$totalCallbackDispatched.' terminal callback deliver'.($totalCallbackDispatched === 1 ? 'y' : 'ies').'.');
+        }
+
+        if ($totalCallbackDeadLettered > 0) {
+            $this->components->warn('Dead-lettered '.$totalCallbackDeadLettered.' terminal callback'.($totalCallbackDeadLettered === 1 ? '' : 's').' that exceeded swarm.callbacks.max_attempts.');
         }
 
         if ($totalAuditDeadLettered > 0) {

@@ -18,6 +18,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
+use Laravel\SerializableClosure\Exceptions\InvalidSignatureException;
 use Laravel\SerializableClosure\SerializableClosure;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -137,13 +138,25 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         $this->table()->where('run_id', $runId)->delete();
     }
 
+    public function hasFor(string $runId): bool
+    {
+        if (! $this->isAvailable()) {
+            return false;
+        }
+
+        return $this->table()->where('run_id', $runId)->exists();
+    }
+
     public function drain(int $limit = 100): CallbackDrainResult
     {
-        if ($limit < 1) {
+        // The enabled flag is the operator kill switch: with it off, stop draining and
+        // dispatching so already-registered closures cease executing, even mid-incident.
+        if ($limit < 1 || ! $this->featureEnabled()) {
             return new CallbackDrainResult(0, 0, 0, 0, 0);
         }
 
-        $reservationTimeoutSeconds = (int) $this->config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
+        $reservationTimeoutSeconds = $this->reservationTimeoutSeconds();
+        $maxAttempts = max(1, (int) $this->config->get('swarm.callbacks.max_attempts', 5));
         $now = Carbon::now('UTC');
         $staleThreshold = $now->copy()->subSeconds($reservationTimeoutSeconds);
 
@@ -167,7 +180,14 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
                 return $entries;
             }
 
-            $this->table()->whereIn('id', $entries->pluck('id')->all())->update(['reserved_at' => $now]);
+            // Increment the attempt count AT CLAIM TIME, not in deliver(). A delivery
+            // job that dies mid-closure (SIGKILL, OOM, worker timeout) never reaches
+            // deliver()'s success-delete or failure-write, so an attempt counted only
+            // there would let a killed row be reclaimed and re-invoked forever. Counting
+            // at claim advances every row — including ones whose delivery died — toward
+            // the cap, so it eventually dead-letters instead of looping.
+            $this->table()->whereIn('id', $entries->pluck('id')->all())
+                ->increment('attempts', 1, ['reserved_at' => $now, 'updated_at' => $now]);
 
             return $entries;
         });
@@ -180,9 +200,21 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         $reclaimed = $entries->filter(fn (object $e): bool => $e->reserved_at !== null)->count();
 
         $dispatched = 0;
+        $deadLettered = 0;
         $failed = 0;
 
         foreach ($entries as $entry) {
+            $attempts = (int) $entry->attempts + 1;
+
+            if ($attempts > $maxAttempts) {
+                // Delivery budget exhausted across claims (including deaths that never
+                // recorded an outcome). Stop reclaiming this row.
+                $this->markDeadLetter((int) $entry->id, $attempts, 'exceeded max delivery attempts');
+                $deadLettered++;
+
+                continue;
+            }
+
             try {
                 // Only the row id travels to the delivery job; the sealed closure
                 // stays at rest in this table (never in a queue payload).
@@ -196,12 +228,14 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             }
         }
 
-        return new CallbackDrainResult($dispatched, 0, $failed, $claimed, $reclaimed);
+        return new CallbackDrainResult($dispatched, $deadLettered, $failed, $claimed, $reclaimed);
     }
 
     public function deliver(int $id): void
     {
-        if (! $this->isAvailable()) {
+        // Honor the kill switch here too: an already-dispatched delivery job must not
+        // execute a stored closure once the operator has turned the feature off.
+        if (! $this->isAvailable() || ! $this->featureEnabled()) {
             return;
         }
 
@@ -214,16 +248,13 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             return;
         }
 
-        $maxAttempts = max(1, (int) $this->config->get('swarm.callbacks.max_attempts', 5));
-        $attempts = (int) $row->attempts + 1;
-
         $closure = $this->resolveClosure($row);
 
         if ($closure === null) {
-            // A closure that cannot be unsealed or whose signature does not verify
-            // can never be invoked. Dead-letter it permanently rather than burning
-            // the attempt budget on a deterministic failure.
-            $this->deadLetter($id, $attempts, 'callback signature invalid or unreadable');
+            // A closure that cannot be unsealed or whose signature does not verify can
+            // never be invoked (tamper, or an APP_KEY rotation that invalidated the
+            // signature). Dead-letter it permanently rather than reclaiming forever.
+            $this->markDeadLetter($id, (int) $row->attempts, $this->unreadableReason($row));
 
             return;
         }
@@ -234,17 +265,13 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             $closure($context);
         } catch (Throwable $exception) {
             // The callback ran in this delivery process, entirely separate from the
-            // settled workflow: its failure can neither replay the workflow's model
-            // or tool effects nor change the already-recorded terminal result. It
-            // only affects this delivery row.
+            // settled workflow: its failure can neither replay the workflow's model or
+            // tool effects nor change the already-recorded terminal result. It only
+            // affects this delivery row. Release the reservation so the next drain
+            // re-claims it — that claim increments the attempt count and eventually
+            // dead-letters, so the retry budget is enforced at claim time.
             $this->safeReport($exception);
-            $error = mb_substr($exception->getMessage(), 0, 1000);
-
-            if ($attempts >= $maxAttempts) {
-                $this->deadLetter($id, $attempts, $error);
-            } else {
-                $this->releaseForRetry($id, $attempts, $error);
-            }
+            $this->releaseForRetry($id, mb_substr($exception->getMessage(), 0, 1000));
 
             return;
         }
@@ -269,12 +296,49 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
             return $restored->getClosure();
         } catch (Throwable $exception) {
-            // Includes InvalidSignatureException (tampered payload) and decrypt
-            // failures — both permanent, both routed to dead-letter by the caller.
+            // Includes InvalidSignatureException (tampered payload or an APP_KEY
+            // rotation) and decrypt failures — all permanent, all routed to
+            // dead-letter by the caller. unreadableReason() categorizes them.
             $this->safeReport($exception);
 
             return null;
         }
+    }
+
+    /**
+     * Categorize why a stored closure could not be resolved, so the dead-letter
+     * record distinguishes a routine APP_KEY rotation from an actual tampering
+     * attempt (both fail closed, but an operator needs to tell them apart).
+     */
+    protected function unreadableReason(object $row): string
+    {
+        if (! is_string($row->callback)) {
+            return 'callback payload missing';
+        }
+
+        try {
+            $raw = $this->cipher->openStrict($row->callback);
+        } catch (Throwable) {
+            return 'callback payload could not be decrypted (possible APP_KEY rotation)';
+        }
+
+        if (! is_string($raw)) {
+            return 'callback payload could not be decrypted (possible APP_KEY rotation)';
+        }
+
+        try {
+            $restored = unserialize($raw);
+        } catch (Throwable $exception) {
+            // SerializableClosure verifies its HMAC on unserialize and throws
+            // InvalidSignatureException on a bad signature (tamper or an APP_KEY rotation).
+            return $exception instanceof InvalidSignatureException
+                ? 'callback signature verification failed (payload tampering or APP_KEY rotation)'
+                : 'callback payload is not a readable serialized closure';
+        }
+
+        return $restored instanceof SerializableClosure
+            ? 'callback resolved but could not be invoked'
+            : 'callback payload is not a serialized closure';
     }
 
     protected function resolveContext(object $row): SwarmTerminalContext
@@ -302,7 +366,6 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             slot: CallbackSlot::tryFrom((string) ($decoded['slot'] ?? $slot->value)) ?? $slot,
             swarmClass: is_string($decoded['swarm_class'] ?? null) ? $decoded['swarm_class'] : 'unknown',
             topology: is_string($decoded['topology'] ?? null) ? $decoded['topology'] : null,
-            executionMode: is_string($decoded['execution_mode'] ?? null) ? $decoded['execution_mode'] : null,
             exceptionClass: is_string($decoded['exception_class'] ?? null) ? $decoded['exception_class'] : null,
             exceptionMessage: is_string($decoded['exception_message'] ?? null) ? $decoded['exception_message'] : null,
         );
@@ -313,24 +376,50 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         return json_encode($context->toArray(), JSON_THROW_ON_ERROR);
     }
 
-    protected function releaseForRetry(int $id, int $attempts, string $error): void
+    protected function featureEnabled(): bool
     {
+        return (bool) $this->config->get('swarm.callbacks.enabled', false);
+    }
+
+    /**
+     * Reservation timeout for the callback lane. Prefers a callback-specific value so
+     * operators can size it for slow callbacks, falling back to the shared durable
+     * relay timeout for backward compatibility.
+     */
+    protected function reservationTimeoutSeconds(): int
+    {
+        $callback = $this->config->get('swarm.callbacks.reservation_timeout_seconds');
+
+        if (is_int($callback) && $callback > 0) {
+            return $callback;
+        }
+
+        return max(1, (int) $this->config->get('swarm.durable.relay.reservation_timeout_seconds', 60));
+    }
+
+    /**
+     * Release a reservation without touching the attempt count — the claim in drain()
+     * owns the increment, so a transiently-failing closure advances toward the cap on
+     * its next claim rather than here.
+     */
+    protected function releaseForRetry(int $id, string $error): void
+    {
+        $now = Carbon::now('UTC');
+
         $this->table()->where('id', $id)->update([
-            'attempts' => $attempts,
             'last_error' => $this->cipher->seal($error),
-            'last_attempted_at' => Carbon::now('UTC'),
+            'last_attempted_at' => $now,
             'reserved_at' => null,
-            'updated_at' => Carbon::now('UTC'),
+            'updated_at' => $now,
         ]);
     }
 
-    protected function deadLetter(int $id, int $attempts, string $error): void
+    protected function markDeadLetter(int $id, int $attempts, string $error): void
     {
         $now = Carbon::now('UTC');
 
         $this->table()->where('id', $id)->update([
             'status' => 'dead_letter',
-            'attempts' => $attempts,
             'last_error' => $this->cipher->seal($error),
             'last_attempted_at' => $now,
             'reserved_at' => null,

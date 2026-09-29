@@ -48,6 +48,14 @@ interface CallbackDeliveryOutbox
     public function register(string $runId, CallbackSlot $slot, Closure $callback): void;
 
     /**
+     * Whether the run has any callback rows at all. A cheap run_id-indexed existence
+     * check the terminal seam uses to skip settle()/discard() entirely for the common
+     * case of a run that registered no callbacks — avoiding a no-match DELETE/UPDATE
+     * (and its gap locks) inside the hot terminal transaction.
+     */
+    public function hasFor(string $runId): bool;
+
+    /**
      * Settle a run's callbacks for its terminal outcome. Flips the matching-outcome
      * rows from 'registered' to 'pending' (recording the terminal context for
      * delivery) and DELETES the other outcome's rows. MUST be called inside the same

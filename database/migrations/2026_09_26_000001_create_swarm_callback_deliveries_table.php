@@ -2,38 +2,26 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\CallbackDeliveryOutbox;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Transactional store for terminal workflow callback deliveries.
+ * Schema for the terminal workflow callback delivery store, backing the queue/durable
+ * then()/catch() conveniences. The delivery lifecycle (register → settle → claim →
+ * deliver) is owned by {@see CallbackDeliveryOutbox}
+ * and its database implementation, not restated here.
  *
- * Backs the queue/durable `then()` / `catch()` conveniences. A callback
- * registered on a QueuedSwarmResponse or DurableSwarmResponse is persisted here
- * as a signed, sealed SerializableClosure with status 'registered'. When the run
- * settles, the terminal seam flips the matching-outcome rows to 'pending' inside
- * the SAME transaction as the terminal state write, so a crash between the
- * terminal commit and the callback dispatch cannot silently drop the callback.
- *
- * Delivery (swarm:relay --type=callback):
- *   1. Claim pending rows atomically via FOR UPDATE SKIP LOCKED, setting reserved_at.
- *   2. Dispatch a DeliverSwarmCallback job carrying only the row id (never the
- *      sealed closure, which stays at rest in this table).
- *   3. The job unseals + verifies the closure signature, invokes it, and deletes
- *      the row on success. On failure it increments attempts and releases the
- *      reservation; after swarm.callbacks.max_attempts the row moves to
- *      'dead_letter' and stops being re-claimed.
- *
- * Delivery is at-least-once, never exactly-once: a crash after the closure runs
- * but before the row delete re-delivers on the next drain. Callbacks must be
- * idempotent.
- *
- * Unlike the durable outbox, callback rows have NO parent-run cascade — a plain
- * single-job queue() run has only a swarm_run_histories row (no durable row),
- * so this table is deliberately run_id-indexed without a foreign key so it can
- * hold callbacks for every terminal mode. Retention is prune-based
- * (swarm.callbacks.retention_days).
+ * Columns of note:
+ * - run_id is INDEXED WITHOUT A FOREIGN KEY, deliberately. A callback is registered at
+ *   ->then()/->catch() call time, before the run's swarm_run_histories row is guaranteed
+ *   written (a queued run writes history when its job runs), so an FK to swarm_run_histories
+ *   would break registration; and a plain single-job queue() run has no swarm_durable_runs
+ *   row, so an FK there could not cover every mode. Orphan rows are collected by swarm:prune
+ *   against the run's terminal history instead of via a cascade.
+ * - callback, context, and last_error are sealed at rest by SwarmPersistenceCipher.
+ * - the (status, reserved_at) index serves the drain claim query.
  */
 return new class extends Migration
 {
@@ -45,8 +33,8 @@ return new class extends Migration
             $table->string('slot');
             $table->longText('callback');
             // Sealed terminal-context JSON, populated at the terminal flip (null while
-            // 'registered'): swarm class, topology, execution mode, and, for a catch,
-            // the settled exception class/message. Built from the terminal lifecycle
+            // 'registered'): swarm class, topology, and, for a catch, the settled
+            // (redacted) exception class/message. Built from the terminal lifecycle
             // record so the delivered callback receives an always-available summary
             // without reconstructing the full (possibly uncaptured) SwarmResponse.
             $table->longText('context')->nullable();

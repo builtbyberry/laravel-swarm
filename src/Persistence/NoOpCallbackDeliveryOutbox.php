@@ -35,6 +35,11 @@ class NoOpCallbackDeliveryOutbox implements CallbackDeliveryOutbox, ReadableCall
         );
     }
 
+    public function hasFor(string $runId): bool
+    {
+        return false;
+    }
+
     public function settle(string $runId, SwarmTerminalContext $context): void {}
 
     public function discard(string $runId): void {}

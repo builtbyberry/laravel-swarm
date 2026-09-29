@@ -16,17 +16,12 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
  * (queued or durable).
  *
  * A `then` callback fires once when the whole workflow settles as completed; a
- * `catch` callback fires once when it settles as a failure (including the permanent
- * UnsupportedNativeApprovalException boundary). Neither fires on cancellation, and
- * neither fires after an intermediate agent's success or a recoverable error — only
- * on the terminal outcome of the run.
- *
- * The callbacks are persisted as signed, sealed SerializableClosures and delivered
- * at-least-once by `swarm:relay --type=callback` after the run settles, in a
- * separate process — so a callback must be a serializable closure and must be
- * idempotent. Unlike the in-process stream `catch()`, these do NOT receive the live
- * exception or response object; they receive a {@see SwarmTerminalContext}
- * summary. For the full response, read `SwarmHistory` by run id.
+ * `catch` callback fires once when it settles as a failure. The callback must be a
+ * serializable, idempotent closure and receives a {@see SwarmTerminalContext} summary.
+ * The delivery semantics (at-least-once, the relay lane, the events-vs-callbacks
+ * contract, the terminal outcomes that do and do not fire) live in
+ * docs/error-handling.md § Terminal Workflow Callbacks — this trait only registers
+ * the callback.
  *
  * Feature-gated by `swarm.callbacks.enabled` (default off). With the flag off, both
  * methods throw the exact BadMethodCallException they threw before the feature

@@ -269,7 +269,7 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
                 throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
             }
 
-            $this->settleCallbacks($runId, CallbackSlot::Then, null, null);
+            $this->settleCallbacks($runId, CallbackSlot::Then);
         });
     }
 
@@ -289,12 +289,7 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
                 throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
             }
 
-            $this->settleCallbacks(
-                $runId,
-                CallbackSlot::Catch,
-                $exception::class,
-                mb_substr($exception->getMessage(), 0, 1000),
-            );
+            $this->settleCallbacks($runId, CallbackSlot::Catch, $exception);
         });
     }
 
@@ -327,34 +322,43 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
     /**
      * Arm the run's registered callbacks for its terminal outcome, inside the
      * terminal transaction. A no-op when the feature is inactive or the run
-     * registered no callbacks.
+     * registered no callbacks — the hasFor() existence check keeps a callback-free
+     * run from paying a no-match DELETE/UPDATE (and its gap locks) on the hot path.
+     *
+     * The exception message is routed through the same redaction the history `error`
+     * column uses (swarm.audit.redact_exception_messages), so a callback never
+     * receives a raw message an operator asked to have redacted.
      */
-    protected function settleCallbacks(string $runId, CallbackSlot $slot, ?string $exceptionClass, ?string $exceptionMessage): void
+    protected function settleCallbacks(string $runId, CallbackSlot $slot, ?Throwable $exception = null): void
     {
-        if (! $this->callbacksActive()) {
+        $callbacks = $this->callbacks;
+
+        if ($callbacks === null || ! $this->callbacksActive() || ! $callbacks->hasFor($runId)) {
             return;
         }
 
         $row = $this->table()->where('run_id', $runId)->first(['swarm_class', 'topology']);
+        $message = $exception !== null ? $this->capture->applyFailureMessage($exception) : null;
 
-        $this->callbacks->settle($runId, new SwarmTerminalContext(
+        $callbacks->settle($runId, new SwarmTerminalContext(
             runId: $runId,
             slot: $slot,
             swarmClass: is_object($row) && isset($row->swarm_class) ? (string) $row->swarm_class : 'unknown',
             topology: is_object($row) && isset($row->topology) ? (string) $row->topology : null,
-            executionMode: null,
-            exceptionClass: $exceptionClass,
-            exceptionMessage: $exceptionMessage,
+            exceptionClass: $exception !== null ? $exception::class : null,
+            exceptionMessage: is_string($message) ? mb_substr($message, 0, 1000) : null,
         ));
     }
 
     protected function discardCallbacks(string $runId): void
     {
-        if (! $this->callbacksActive()) {
+        $callbacks = $this->callbacks;
+
+        if ($callbacks === null || ! $this->callbacksActive() || ! $callbacks->hasFor($runId)) {
             return;
         }
 
-        $this->callbacks->discard($runId);
+        $callbacks->discard($runId);
     }
 
     public function failWithMetadata(string $runId, Throwable $exception, array $metadata, int $ttlSeconds): void
@@ -372,6 +376,12 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
                 'execution_token' => null,
                 'leased_until' => null,
             ]);
+
+            // failWithMetadata is a terminal `failed` write too (e.g. ParallelStreamRunner),
+            // so it must arm catch callbacks like fail() does — otherwise a run terminating
+            // here would leave registered catch callbacks that never fire. Already inside
+            // this method's transaction, so the flip stays atomic with the status write.
+            $this->settleCallbacks($runId, CallbackSlot::Catch, $exception);
         });
     }
 

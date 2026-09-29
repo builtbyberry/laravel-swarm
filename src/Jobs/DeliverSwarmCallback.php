@@ -13,14 +13,11 @@ use Illuminate\Queue\SerializesModels;
 /**
  * Delivers a single terminal workflow callback claimed by `swarm:relay --type=callback`.
  *
- * The job carries ONLY the outbox row id — never the sealed closure, which stays at
- * rest in swarm_callback_deliveries. It hands the id straight to the outbox, which
- * owns unsealing, signature verification, invocation, and the row's terminal fate
- * (delete on success; increment/dead-letter on failure).
+ * The job carries ONLY the outbox row id — never the sealed closure — and hands it to
+ * {@see CallbackDeliveryOutbox::deliver()}, which owns what delivery does.
  *
- * `tries = 1`: the outbox reservation + attempt counter own retry, so the queue does
- * not add a second, competing retry mechanism. Delivery is at-least-once — a callback
- * must be idempotent.
+ * `tries = 1`: the outbox reservation and claim-time attempt counter own retry, so the
+ * queue does not add a second, competing retry mechanism.
  *
  * @internal
  */
