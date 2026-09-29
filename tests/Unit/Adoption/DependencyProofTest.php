@@ -174,11 +174,12 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     $serialTests = [];
     $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($testsRoot, FilesystemIterator::SKIP_DOTS));
     foreach ($files as $file) {
-        if (! $file->isFile() || ! str_ends_with($file->getFilename(), 'Test.php') || $file->getPathname() === __FILE__) {
+        if (! $file->isFile() || $file->getExtension() !== 'php' || $file->getPathname() === __FILE__) {
             continue;
         }
-        if (str_contains(file_get_contents($file->getPathname()), "pest()->group('ci-serial');")) {
-            $serialTests[] = str_replace($testsRoot.DIRECTORY_SEPARATOR, '', $file->getPathname());
+        if (str_contains(file_get_contents($file->getPathname()), 'ci-serial')) {
+            $relativePath = str_replace($testsRoot.DIRECTORY_SEPARATOR, '', $file->getPathname());
+            $serialTests[] = str_replace(DIRECTORY_SEPARATOR, '/', $relativePath);
         }
     }
     expect($serialTests)->toBe(['Feature/ProviderTools/ProviderToolPreservationTest.php'])
