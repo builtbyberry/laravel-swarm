@@ -191,6 +191,7 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
 it('keeps mutation coverage on the hosted stable driver without weakening its baseline', function () {
     $workflow = Yaml::parseFile(dirname(__DIR__, 3).'/.github/workflows/mutation.yml');
     expect($workflow['on'])->toHaveKeys(['schedule', 'workflow_dispatch']);
+    expect($workflow['permissions'])->toBe(['contents' => 'read']);
     $job = $workflow['jobs']['mutate'];
     expect($job['continue-on-error'])->toBeTrue()
         ->and($job['timeout-minutes'])->toBe(120);
