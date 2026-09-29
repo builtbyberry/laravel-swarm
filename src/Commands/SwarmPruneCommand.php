@@ -68,6 +68,7 @@ class SwarmPruneCommand extends Command
             'durable_webhook_idempotency' => (string) $config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'),
             'durable_outbox' => (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox'),
             'audit_outbox' => (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox'),
+            'callback_deliveries' => (string) $config->get('swarm.tables.callback_deliveries', 'swarm_callback_deliveries'),
             'native_inputs' => (string) $config->get('swarm.tables.native_inputs', 'swarm_native_inputs'),
         ];
 
@@ -163,6 +164,11 @@ class SwarmPruneCommand extends Command
             $counts['audit_outbox'],
         ));
         $this->components->info(sprintf(
+            '%s %d callback delivery record(s).',
+            $verb,
+            $counts['callback_deliveries'],
+        ));
+        $this->components->info(sprintf(
             '%s %d expired native input operational envelope(s).',
             $verb,
             $counts['native_inputs'],
@@ -228,6 +234,32 @@ class SwarmPruneCommand extends Command
                 $query->where('status', 'dead_letter')
                     ->where('last_attempted_at', '<', now()->subDays($retentionDays));
             }
+        } elseif ($role === 'callback_deliveries') {
+            // Two prune targets, neither of which can drop an undelivered callback for a
+            // still-live run:
+            //   1. Orphans — any row (registered/pending/dead_letter) whose run has
+            //      reached a terminal, EXPIRED history row. Delivery had the full run TTL
+            //      window; a lingering row after that is abandoned (mirrors durable_outbox).
+            //   2. Dead-letter rows past the opt-in retention window
+            //      (swarm.callbacks.retention_days); null keeps them indefinitely for
+            //      inspection, matching the audit outbox default.
+            $retentionDays = $config->get('swarm.callbacks.retention_days');
+
+            $query->where(function ($query) use ($historyTable, $retentionDays): void {
+                $query->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                    $subquery->from($historyTable)
+                        ->select('run_id')
+                        ->where('expires_at', '<', now())
+                        ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                });
+
+                if (is_int($retentionDays) && $retentionDays >= 1) {
+                    $query->orWhere(function ($query) use ($retentionDays): void {
+                        $query->where('status', 'dead_letter')
+                            ->where('last_attempted_at', '<', now()->subDays($retentionDays));
+                    });
+                }
+            });
         } elseif ($role === 'durable_webhook_idempotency') {
             $staleCutoff = now()->subSeconds((int) $config->get('swarm.durable.webhooks.idempotency_ttl', 3600));
 

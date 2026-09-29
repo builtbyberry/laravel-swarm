@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
@@ -115,6 +116,9 @@ class SwarmHealthCommand extends Command
         foreach ($this->runAuditOutboxChecks($config, $connection) as $result) {
             $results[] = $result;
         }
+
+        // Terminal workflow callback delivery health (off by default; a note when disabled).
+        $results[] = $this->runCallbackOutboxCheck($config);
 
         $hasFailure = collect($results)->contains(fn (array $result): bool => $result['status'] === 'failed');
 
@@ -463,6 +467,38 @@ class SwarmHealthCommand extends Command
             'status' => 'ok',
             'details' => 'CapturePolicy resolves ('.get_debug_type($policy).')',
         ];
+    }
+
+    /**
+     * @return array{component: string, driver: string, store: string, status: string, details: string}
+     */
+    protected function runCallbackOutboxCheck(ConfigRepository $config): array
+    {
+        $base = ['component' => 'Callback delivery', 'driver' => 'database', 'store' => 'n/a'];
+
+        if ((bool) $config->get('swarm.callbacks.enabled', false) !== true) {
+            return $base + ['driver' => 'n/a', 'status' => 'note', 'details' => 'terminal workflow callbacks disabled (swarm.callbacks.enabled=false)'];
+        }
+
+        try {
+            $summary = $this->laravel->make(ReadableCallbackDeliveryOutbox::class)->healthSummary();
+        } catch (Throwable $exception) {
+            return $base + ['status' => 'failed', 'details' => 'callback outbox health read failed: '.$exception->getMessage()];
+        }
+
+        if (($summary['available'] ?? false) !== true) {
+            return $base + ['status' => 'failed', 'details' => 'callback outbox unavailable — swarm.callbacks.enabled requires the database driver and the swarm_callback_deliveries migration'];
+        }
+
+        $deadLetter = (int) ($summary['dead_letter'] ?? 0);
+        $pending = (int) ($summary['pending'] ?? 0);
+        $registered = (int) ($summary['registered'] ?? 0);
+
+        if ($deadLetter > 0) {
+            return $base + ['status' => 'warning', 'details' => "{$deadLetter} dead-lettered callback(s) — inspect and prune; {$pending} pending, {$registered} registered"];
+        }
+
+        return $base + ['status' => 'ok', 'details' => "{$pending} pending, {$registered} registered — is swarm:relay scheduled?"];
     }
 
     /**

@@ -707,6 +707,39 @@ return [
         ],
     ],
 
+    /*
+     * Terminal workflow callbacks: the queue/durable then() / catch() and stream
+     * catch() conveniences. Stream catch() runs in-process and needs nothing here.
+     * The queue/durable callbacks are persisted (as signed, sealed SerializableClosures)
+     * and delivered at-least-once by `swarm:relay --type=callback`; schedule the relay
+     * for them to fire. See [error handling](../docs/error-handling.md#terminal-callbacks).
+     */
+    'callbacks' => [
+        /*
+         * Off by default. When false, then()/catch() on a QueuedSwarmResponse or
+         * DurableSwarmResponse throw BadMethodCallException exactly as before this
+         * feature existed — no persisted rows, no behavior change. Enabling requires
+         * database-backed persistence (swarm.persistence.driver=database); under any
+         * other driver, registering a callback fails closed rather than silently dropping it.
+         */
+        'enabled' => (bool) env('SWARM_CALLBACKS_ENABLED', false),
+        /*
+         * Maximum delivery attempts before a callback row moves to 'dead_letter' and
+         * stops being re-claimed. Delivery is at-least-once; a callback must be idempotent.
+         */
+        'max_attempts' => (int) env('SWARM_CALLBACKS_MAX_ATTEMPTS', 5),
+        /*
+         * Retention window for dead-lettered callback rows, in days. Default null keeps
+         * them indefinitely (operators inspect failures via swarm:health --callbacks).
+         * Set a positive integer to opt into automatic pruning via `swarm:prune`.
+         * Registered/pending rows are never pruned by this policy — orphaned rows for a
+         * terminal run are pruned with their run instead.
+         */
+        'retention_days' => env('SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS') !== null
+            ? (int) env('SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS')
+            : null,
+    ],
+
     'durable' => [
         'step_timeout' => (int) env('SWARM_DURABLE_STEP_TIMEOUT', 300),
 
@@ -912,6 +945,7 @@ return [
         'durable_webhook_idempotency' => env('SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE', 'swarm_durable_webhook_idempotency'),
         'durable_outbox' => env('SWARM_DURABLE_OUTBOX_TABLE', 'swarm_durable_outbox'),
         'audit_outbox' => env('SWARM_AUDIT_OUTBOX_TABLE', 'swarm_audit_outbox'),
+        'callback_deliveries' => env('SWARM_CALLBACK_DELIVERIES_TABLE', 'swarm_callback_deliveries'),
         'memories' => env('SWARM_MEMORIES_TABLE', 'swarm_memories'),
         'memory_snapshots' => env('SWARM_MEMORY_SNAPSHOTS_TABLE', 'swarm_memory_snapshots'),
         'stream_step_checkpoints' => env('SWARM_STREAM_STEP_CHECKPOINTS_TABLE', 'swarm_stream_step_checkpoints'),

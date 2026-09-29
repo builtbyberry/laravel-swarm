@@ -6,6 +6,21 @@ Native feature access through Laravel Swarm workflows.
 
 ### Added
 
+- Default-off terminal workflow callbacks: `then()` / `catch()` on queued
+  ([QueuedSwarmResponse](src/Responses/QueuedSwarmResponse.php)) and durable
+  ([DurableSwarmResponse](src/Responses/DurableSwarmResponse.php)) responses, and `catch()` on the
+  streaming response ([StreamableSwarmResponse](src/Responses/StreamableSwarmResponse.php)). `then`
+  fires once only when the whole workflow settles as completed and `catch` once only when it settles
+  as a failure — including the permanent unsupported-native-approval boundary — never on an
+  intermediate agent success, a recoverable error, or cancellation; a callback's own failure never
+  replays completed model or tool effects and never changes the already-settled result. Queue and
+  durable callbacks are persisted as HMAC-signed, cipher-sealed serializable closures in a new
+  `swarm_callback_deliveries` table and delivered **at-least-once (never exactly-once)** by
+  `swarm:relay --type=callback` after the run settles, so they must be idempotent; the stream
+  `catch()` runs in-process. Feature-gated by `swarm.callbacks.enabled` (default off, requires the
+  database persistence driver — registering a callback under any other driver fails closed); with
+  the flag off, queued/durable `then()`/`catch()` throw the same error as before. Delivery records
+  are inspected via `swarm:health` and pruned by `swarm:prune` (`swarm.callbacks.retention_days`).
 - Default-off native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input, with decisions-first approval rejection, explicit topology-stable attachment recipients, original-versus-predecessor text selection, and optional per-recipient provider/model/timeout overrides.
 - Versioned, cipher-sealed native-input operational envelopes for queue, concurrency and durable recovery. Queue payloads carry opaque references; staged envelopes record planned paths before private local/base64 attachments are promoted to an application-selected disk, recoverable headers/provider options are preserved as plain resolved values, content identity and authorization are rechecked, and `swarm:prune` owns only Swarm-created temporary files.
 - Default-off native per-run agent settings through `RunContext::withAgentConfiguration()`. Topology-stable recipients preserve Laravel AI `withTools()`, one-shot `withMessages()`, conversations, provider, model and timeout across sequential, real process-parallel, queued, durable, routed-worker, retry and recovered execution. Explicit empty tools/messages remain meaningful overrides; input routing and settings compose in either order. Tools use reconstructible class references or registered factories; recoverable conversations require an existing native conversation and a saved Eloquent participant.

@@ -150,7 +150,7 @@ ContentPipelineSwarm::make()
 
 **Gotchas:**
 - By default one Laravel queue job owns the workflow; there is no per-agent recovery cursor. Opt-in generated hierarchical `multi_worker` coordination persists branch/join state and has [separate recovery](hierarchical-routing.md#queue). Static hierarchy keeps its in-process queued path. An ordinary queue retry may re-enter the workflow from the beginning; it is not an external-effect deduplicator.
-- Whole-workflow `then()` / `catch()` callbacks are unavailable: [QueuedSwarmResponse](../src/Responses/QueuedSwarmResponse.php) proxies only methods present on its pending dispatch. Listen to `SwarmCompleted` and `SwarmFailed` lifecycle events. This does not remove stream `each()` / `then()` callbacks.
+- Whole-workflow `then()` / `catch()` callbacks are opt-in via `swarm.callbacks.enabled` (default off, database driver required). When enabled, [QueuedSwarmResponse](../src/Responses/QueuedSwarmResponse.php) exposes them: `then` fires once on a settled completion, `catch` once on a settled failure — persisted and delivered at-least-once by `swarm:relay --type=callback` after the run settles. With the flag off, they throw `BadMethodCallException` and you listen to `SwarmCompleted` / `SwarmFailed` instead. Either way, stream `each()` / `then()` callbacks are unaffected. See [Terminal Workflow Callbacks](error-handling.md#terminal-workflow-callbacks).
 - Queued swarms are re-resolved from the container; do not rely on runtime instance state. Pass per-run data in the task payload or a `RunContext`.
 
 #### Queue retry & timeout
@@ -313,7 +313,7 @@ $detail = $response->inspect(); // DurableRunDetail
 - Schedule `swarm:prune` to retire expired run records.
 
 **Gotchas:**
-- `DurableSwarmResponse` does not support `then()` / `catch()` callbacks. Listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead.
+- `DurableSwarmResponse` supports `then()` / `catch()` only when `swarm.callbacks.enabled` is on (default off); they are persisted at registration and delivered at-least-once by `swarm:relay --type=callback` once the durable run settles. With the flag off they throw `BadMethodCallException` — listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead. See [Terminal Workflow Callbacks](error-handling.md#terminal-workflow-callbacks).
 - `dispatchDurable()` adds operational overhead: the relay schedule, recovery monitoring, and prune jobs must be wired up or stalled runs accumulate silently.
 - `swarm:recover` can be inspected with `swarm:status` — the **Phase** column shows `parallel_join` when a hierarchical coordinated run is waiting on parallel branches.
 

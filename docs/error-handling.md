@@ -264,15 +264,86 @@ try {
 
 Ordinary `InvokeSwarm` / `BroadcastSwarm` jobs use `swarm.queue.tries` (default 1), overriding the worker's tries default. A retry may restart uncheckpointed workflow work and repeat effects. `SwarmFailed` is emitted by the [runner failure path](../src/Runners/SwarmRunner.php), not only after Laravel exhausts retries. Generated hierarchical `multi_worker` execution has separate branch/join recovery; its [resume job](../src/Jobs/ResumeQueuedHierarchicalSwarm.php) uses the durable advance retry profile. [Unsupported native approval outcomes](native-outcome-boundary.md) are nonretryable regardless of these settings.
 
-Queued whole-workflow `then()` / `catch()` callbacks are unavailable; listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead. Stream callbacks remain supported.
+Queued whole-workflow `then()` / `catch()` callbacks are opt-in — see [Terminal Workflow Callbacks](#terminal-workflow-callbacks). With `swarm.callbacks.enabled` off (the default) they throw `BadMethodCallException`; listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead. Stream callbacks remain supported.
 
 ### `stream()`
 
-The stream terminates. A `swarm_stream_error` event is yielded, run history is marked failed, and `SwarmFailed` fires. Partial events already delivered to the client (SSE bytes already flushed) cannot be recalled. The exception is re-thrown to the caller after the stream terminates, so a try/catch around the `foreach` loop will see it. Recovery is not available — a failed stream must be re-submitted as a new run.
+The stream terminates. A `swarm_stream_error` event is yielded, run history is marked failed, and `SwarmFailed` fires. Partial events already delivered to the client (SSE bytes already flushed) cannot be recalled. The exception is re-thrown to the caller after the stream terminates, so a try/catch around the `foreach` loop will see it. You may also register an in-process `catch()` handler on the [StreamableSwarmResponse](../src/Responses/StreamableSwarmResponse.php) (see [Terminal Workflow Callbacks](#terminal-workflow-callbacks)); it runs on the failure and the original exception still propagates — `catch()` is a handler, not a suppressor. Recovery is not available — a failed stream must be re-submitted as a new run.
 
 ### `dispatchDurable()`
 
 The failed step is checkpointed. The `DurableRetry` policy applies (if configured) and `swarm:recover` redispatches due retries without replaying completed steps. `SwarmFailed` fires when the run reaches a terminal failed state. See [Durable Recovery](#durable-recovery) below.
+
+## Terminal Workflow Callbacks
+
+Terminal callbacks are a convenience over the `SwarmCompleted` / `SwarmFailed` lifecycle
+events for the **whole workflow** — not a per-agent hook. They are off by default; enable
+with `swarm.callbacks.enabled=true`, which requires the database persistence driver.
+
+```php
+// Queued or durable: then() on completion, catch() on failure.
+ReportSwarm::make()
+    ->queue(['user_id' => $user->id])
+    ->then(fn (SwarmTerminalContext $ctx) => Log::info("run {$ctx->runId} completed"))
+    ->catch(fn (SwarmTerminalContext $ctx) => Log::warning("run {$ctx->runId} failed: {$ctx->exceptionClass}"));
+
+// Streaming: catch() handles a failed stream in-process.
+ArticlePipeline::make()->stream($input)
+    ->catch(fn (Throwable $e) => report($e))
+    ->each(fn ($event) => broadcast(...));
+```
+
+### Callbacks versus events
+
+| | Terminal callbacks | Lifecycle events |
+|---|---|---|
+| Enable | `swarm.callbacks.enabled` (DB driver) | always on |
+| Registered | fluently, per run | globally, per listener |
+| Queue/durable delivery | at-least-once via `swarm:relay` | synchronous, in the settling process |
+| Payload | `SwarmTerminalContext` summary | full event object |
+
+Reach for events when you need a global, always-on hook or the full event payload; reach for
+callbacks when you want to attach behavior to *this* run at the call site.
+
+### Semantics
+
+- **`then` fires once, only on a settled completion. `catch` fires once, only on a settled
+  failure.** Neither fires on cancellation, an intermediate agent success, or a recoverable
+  error. The permanent `UnsupportedNativeApprovalException` boundary is a terminal failure:
+  `catch` runs once, `then` never.
+- **Queue and durable callbacks are delivered asynchronously, at-least-once**, by
+  `swarm:relay --type=callback` after the run settles — in a separate process from the run.
+  Never exactly-once: a crash after the callback runs but before its delivery row is removed
+  re-delivers it. **Make your callbacks idempotent.** Schedule `swarm:relay` for them to fire
+  at all. The stream `catch()` runs in-process, synchronously, on the failing iteration.
+- **A queue/durable callback receives a `SwarmTerminalContext`**, not the full `SwarmResponse`:
+  a lightweight, always-available summary (run id, swarm class, topology, and, for `catch`, the
+  settled exception class/message) built from the terminal record. Capture is off by default and
+  payloads are sensitive, so the full response is not reconstructed at delivery time — read it
+  from `SwarmHistory` by run id when you need it. The stream `catch()` receives the live `Throwable`.
+- **A callback must be a serializable closure** (it is signed and sealed for later delivery in
+  another process); capturing a non-serializable binding (a database handle, an open resource)
+  throws at registration. Payload authorization is the closure signature — a tampered delivery
+  row is never invoked, it is dead-lettered.
+- **A callback's own failure is isolated.** It runs after the workflow has already settled, in a
+  separate process, so it can neither replay completed model or tool effects nor change the
+  recorded result. A failing queue/durable callback is retried up to `swarm.callbacks.max_attempts`
+  and then dead-lettered; a throwing stream `catch()` is reported and swallowed so it cannot mask
+  the workflow's own error.
+
+### Operating the delivery outbox
+
+Callback deliveries are persisted in `swarm_callback_deliveries`.
+
+- **Deliver:** `swarm:relay --type=callback` (or a bare `swarm:relay`, which drains every lane).
+  Schedule it like the durable relay.
+- **Inspect:** `swarm:health` reports pending and dead-lettered callback counts when the feature
+  is enabled.
+- **Prune:** `swarm:prune` removes delivery records for terminal, expired runs, and dead-lettered
+  rows older than `swarm.callbacks.retention_days` (null keeps them indefinitely). It honors
+  `swarm.retention.prevent_prune`.
+- **Rollback / drain:** because undelivered rows are lost on the down-migration, drain the callback
+  lane (`swarm:relay --type=callback --drain-until-empty`) before reverting the migration.
 
 ## Queue Retry vs Durable Retry
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\CallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksCitationStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ClaimsQueuedRunExecution;
@@ -12,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RecordsCitationSteps;
 use BuiltByBerry\LaravelSwarm\Contracts\RecordsContextualRunFailure;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Enums\CallbackSlot;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
@@ -22,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
 use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmTerminalContext;
 use BuiltByBerry\LaravelSwarm\Support\DatabaseTtl;
 use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
 use BuiltByBerry\LaravelSwarm\Support\QueuedRunAcquisition;
@@ -44,6 +47,8 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
 
     protected NativeStepResultCodec $nativeResults;
 
+    protected ?CallbackDeliveryOutbox $callbacks;
+
     public function __construct(
         protected Connection $connection,
         protected ConfigRepository $config,
@@ -51,7 +56,11 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
         protected SwarmPersistenceCipher $cipher,
         ?CitationEvidenceCodec $citations = null,
         ?NativeStepResultCodec $nativeResults = null,
+        // Auto-wired by the container; nullable so the store can still be constructed
+        // by hand (e.g. in a focused unit test) without the callback feature.
+        ?CallbackDeliveryOutbox $callbacks = null,
     ) {
+        $this->callbacks = $callbacks;
         $this->citations = $citations ?? new CitationEvidenceCodec($cipher, new CitationEvidenceLimits($config));
         $this->nativeResults = $nativeResults ?? new NativeStepResultCodec($cipher, $config);
     }
@@ -239,39 +248,113 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
 
     public function complete(string $runId, SwarmResponse $response, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
-        $updated = $this->update($runId, [
-            'status' => 'completed',
-            'citation_evidence' => $this->citations->encode($this->capture->citationEvidence($response->citationEvidence, $response->context)),
-            'output' => $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $this->cipher->seal($response->output),
-            'usage' => $this->encodeJson($response->usage),
-            'context' => $this->encodeJson($response->context !== null ? $this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($response->context->toArray(), $response->context)) : null),
-            'artifacts' => $this->encodeJson(collect($response->artifacts)->map(static fn ($artifact): array => $artifact->toArray())->all()),
-            'metadata' => $this->encodeJson($response->metadata),
-            'finished_at' => Carbon::now('UTC'),
-            'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
-            'execution_token' => null,
-            'leased_until' => null,
-        ], $executionToken, $leaseSeconds);
+        // The terminal status write and the callback settle share one transaction so
+        // a crash between them cannot leave a settled run with un-armed then callbacks.
+        $this->withTerminalTransaction(function () use ($runId, $response, $ttlSeconds, $executionToken, $leaseSeconds): void {
+            $updated = $this->update($runId, [
+                'status' => 'completed',
+                'citation_evidence' => $this->citations->encode($this->capture->citationEvidence($response->citationEvidence, $response->context)),
+                'output' => $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $this->cipher->seal($response->output),
+                'usage' => $this->encodeJson($response->usage),
+                'context' => $this->encodeJson($response->context !== null ? $this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($response->context->toArray(), $response->context)) : null),
+                'artifacts' => $this->encodeJson(collect($response->artifacts)->map(static fn ($artifact): array => $artifact->toArray())->all()),
+                'metadata' => $this->encodeJson($response->metadata),
+                'finished_at' => Carbon::now('UTC'),
+                'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+                'execution_token' => null,
+                'leased_until' => null,
+            ], $executionToken, $leaseSeconds);
 
-        if ($executionToken !== null && $updated === 0) {
-            throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
-        }
+            if ($executionToken !== null && $updated === 0) {
+                throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
+            }
+
+            $this->settleCallbacks($runId, CallbackSlot::Then, null, null);
+        });
     }
 
     public function fail(string $runId, Throwable $exception, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
-        $updated = $this->update($runId, [
-            'status' => 'failed',
-            'error' => $this->encodeJson($this->failurePayload($exception)),
-            'finished_at' => Carbon::now('UTC'),
-            'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
-            'execution_token' => null,
-            'leased_until' => null,
-        ], $executionToken, $leaseSeconds);
+        $this->withTerminalTransaction(function () use ($runId, $exception, $ttlSeconds, $executionToken, $leaseSeconds): void {
+            $updated = $this->update($runId, [
+                'status' => 'failed',
+                'error' => $this->encodeJson($this->failurePayload($exception)),
+                'finished_at' => Carbon::now('UTC'),
+                'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+                'execution_token' => null,
+                'leased_until' => null,
+            ], $executionToken, $leaseSeconds);
 
-        if ($executionToken !== null && $updated === 0) {
-            throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
+            if ($executionToken !== null && $updated === 0) {
+                throw new LostSwarmLeaseException("Queued swarm run [{$runId}] no longer owns the execution lease.");
+            }
+
+            $this->settleCallbacks(
+                $runId,
+                CallbackSlot::Catch,
+                $exception::class,
+                mb_substr($exception->getMessage(), 0, 1000),
+            );
+        });
+    }
+
+    /**
+     * Run a terminal state write, and its callback settle, atomically — but only
+     * when terminal callbacks are active. With the feature off, the write runs
+     * exactly as it did before this feature existed (no wrapping transaction), so
+     * disabled installs see no behavior change.
+     *
+     * @param  \Closure(): void  $work
+     */
+    protected function withTerminalTransaction(\Closure $work): void
+    {
+        if ($this->callbacksActive()) {
+            $this->connection->transaction($work);
+
+            return;
         }
+
+        $work();
+    }
+
+    protected function callbacksActive(): bool
+    {
+        return $this->callbacks !== null
+            && (bool) $this->config->get('swarm.callbacks.enabled', false)
+            && $this->callbacks->isAvailable();
+    }
+
+    /**
+     * Arm the run's registered callbacks for its terminal outcome, inside the
+     * terminal transaction. A no-op when the feature is inactive or the run
+     * registered no callbacks.
+     */
+    protected function settleCallbacks(string $runId, CallbackSlot $slot, ?string $exceptionClass, ?string $exceptionMessage): void
+    {
+        if (! $this->callbacksActive()) {
+            return;
+        }
+
+        $row = $this->table()->where('run_id', $runId)->first(['swarm_class', 'topology']);
+
+        $this->callbacks->settle($runId, new SwarmTerminalContext(
+            runId: $runId,
+            slot: $slot,
+            swarmClass: is_object($row) && isset($row->swarm_class) ? (string) $row->swarm_class : 'unknown',
+            topology: is_object($row) && isset($row->topology) ? (string) $row->topology : null,
+            executionMode: null,
+            exceptionClass: $exceptionClass,
+            exceptionMessage: $exceptionMessage,
+        ));
+    }
+
+    protected function discardCallbacks(string $runId): void
+    {
+        if (! $this->callbacksActive()) {
+            return;
+        }
+
+        $this->callbacks->discard($runId);
     }
 
     public function failWithMetadata(string $runId, Throwable $exception, array $metadata, int $ttlSeconds): void
@@ -339,6 +422,19 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
         if ($executionToken === null) {
             $values['execution_token'] = null;
             $values['leased_until'] = null;
+
+            if ($status === 'cancelled') {
+                // A cancelled run settles as neither completion nor failure: drop its
+                // registered then/catch callbacks so none is ever delivered, atomically
+                // with the terminal state write.
+                $this->withTerminalTransaction(function () use ($runId, $values): void {
+                    $this->update($runId, $values);
+                    $this->discardCallbacks($runId);
+                });
+
+                return;
+            }
+
             $this->update($runId, $values);
 
             return;

@@ -47,6 +47,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\AuthorizesNativeAgentConversation;
 use BuiltByBerry\LaravelSwarm\Contracts\AuthorizesNativeInputAttachment;
+use BuiltByBerry\LaravelSwarm\Contracts\CallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ColdArchiveDriver;
@@ -60,6 +61,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\NativeInputStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
@@ -91,6 +93,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
@@ -98,6 +101,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseNativeInputStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Persistence\NoOpCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Persistence\TieredStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
@@ -222,6 +226,21 @@ class SwarmServiceProvider extends ServiceProvider
         $this->app->singleton(ReadableAuditOutbox::class, function (Application $app): ReadableAuditOutbox {
             $outbox = $app->make(AuditOutbox::class);
             assert($outbox instanceof ReadableAuditOutbox);
+
+            return $outbox;
+        });
+        $this->app->singleton(CallbackDeliveryOutbox::class, function (Application $app): CallbackDeliveryOutbox {
+            $driver = $app->make(ConfigRepository::class)->get('swarm.persistence.driver');
+
+            return $driver === 'database'
+                ? $app->make(DatabaseCallbackDeliveryOutbox::class)
+                : $app->make(NoOpCallbackDeliveryOutbox::class);
+        });
+        // Read-only health seam over the callback-delivery outbox; the bound
+        // CallbackDeliveryOutbox instance (database or no-op) already implements it.
+        $this->app->singleton(ReadableCallbackDeliveryOutbox::class, function (Application $app): ReadableCallbackDeliveryOutbox {
+            $outbox = $app->make(CallbackDeliveryOutbox::class);
+            assert($outbox instanceof ReadableCallbackDeliveryOutbox);
 
             return $outbox;
         });
