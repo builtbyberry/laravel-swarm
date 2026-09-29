@@ -152,8 +152,38 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     expect($normalSetup['with']['coverage'])->toBe('xdebug');
     expect($normalSetup['with']['ini-values'])->toBe('memory_limit=1G');
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
-    expect($manifest['scripts']['test:ci'])->toBe('vendor/bin/pest --parallel --processes=4 --max-batch-size=1')
-        ->and($manifest['scripts']['test:coverage:ci'])->toBe('vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --coverage --min=80');
+    expect($manifest['scripts']['test'])->toBe('vendor/bin/pest tests/Feature tests/Unit tests/Installer')
+        ->and($manifest['scripts']['test:ci'])->toBe([
+            'vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --exclude-group=ci-serial',
+            '@php -d memory_limit=512M vendor/bin/pest --group=ci-serial',
+        ])
+        ->and($manifest['scripts']['test:coverage:ci'])->toBe([
+            'vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --exclude-group=ci-serial --coverage --min=80',
+            '@php -d memory_limit=512M vendor/bin/pest --group=ci-serial',
+        ]);
+    foreach (['test:ci', 'test:coverage:ci'] as $script) {
+        [$parallel, $serial] = $manifest['scripts'][$script];
+        expect($parallel)->toContain('--parallel', '--processes=4', '--max-batch-size=1', '--exclude-group=ci-serial')
+            ->and($serial)->toBe('@php -d memory_limit=512M vendor/bin/pest --group=ci-serial')
+            ->and($serial)->not->toContain('--parallel', '--coverage');
+    }
+    expect($manifest['scripts']['test:coverage:ci'][0])->toContain('--coverage --min=80')
+        ->and($manifest['scripts']['test:ci'][0])->not->toContain('--coverage');
+
+    $testsRoot = dirname(__DIR__, 2);
+    $serialTests = [];
+    $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($testsRoot, FilesystemIterator::SKIP_DOTS));
+    foreach ($files as $file) {
+        if (! $file->isFile() || ! str_ends_with($file->getFilename(), 'Test.php') || $file->getPathname() === __FILE__) {
+            continue;
+        }
+        if (str_contains(file_get_contents($file->getPathname()), "pest()->group('ci-serial');")) {
+            $serialTests[] = str_replace($testsRoot.DIRECTORY_SEPARATOR, '', $file->getPathname());
+        }
+    }
+    expect($serialTests)->toBe(['Feature/ProviderTools/ProviderToolPreservationTest.php'])
+        ->and(file_get_contents($testsRoot.'/Feature/ProviderTools/ProviderToolPreservationTest.php'))
+        ->toContain("pest()->group('ci-serial');");
     $phpunit = file_get_contents(dirname(__DIR__, 3).'/phpunit.xml');
     preg_match_all('#<directory>tests/(Unit|Feature|Installer)</directory>#', $phpunit, $suiteMatches);
     expect(substr_count($phpunit, '<directory>'))->toBe(3)

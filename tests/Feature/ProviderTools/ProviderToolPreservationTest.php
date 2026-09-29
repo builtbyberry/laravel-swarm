@@ -28,6 +28,8 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 
+pest()->group('ci-serial');
+
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');
     config()->set('swarm.streaming.replay.enabled', true);
