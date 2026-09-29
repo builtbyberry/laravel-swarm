@@ -528,10 +528,10 @@ release-readiness and again before tagging any release.
   `laravel/framework:13.x-dev` and `laravel/ai:1.x-dev`. Surfaces breaking
   upstream changes before a tagged release reaches the package's supported
   version matrix.
-- **What it runs.** `composer test:ci` (the database-heavy `ci-serial`
-  provider-tool group first in a fresh non-parallel Pest process, followed by
-  the Unit, Feature, and Installer suites across four concurrent ParaTest
-  workers, with a fresh worker for every parallel test-file assignment),
+- **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
+  across four concurrent ParaTest workers, with a fresh worker for every
+  parallel test-file assignment, followed by the database-heavy `ci-serial`
+  provider-tool group in a fresh non-parallel Pest process),
   `composer test:process-concurrency:ci`,
   `composer analyse`, `composer test:compliance`, and `composer lint` on PHP
   8.5 against the moving dependency set.
@@ -560,10 +560,8 @@ release-readiness and again before tagging any release.
   Xdebug rows and the coverage-disabled moving-development row, without proving
   a PHP, framework, database, or coverage-driver root cause. `composer test:ci`
   and `composer test:coverage:ci` therefore exclude only that named group from
-  ParaTest and require it to pass first in a fresh serial process with a bounded
-  512 MB PHP memory limit. This ordering also keeps the large parallel suite
-  from preceding the isolated boundary after the expanded P8 suite reproduced
-  the post-suite exit 139. The coverage percentage uses
+  ParaTest and require it to pass immediately afterward in a fresh serial
+  process with a bounded 512 MB PHP memory limit. The coverage percentage uses
   the complete source filter and the
   parallel non-`ci-serial` execution data; serial verification is not merged
   into that report. Do not remove either half or lower the 80% floor.

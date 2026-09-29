@@ -57,17 +57,15 @@ without coverage. Hosted Pest 5 uses four concurrent ParaTest workers through
 `composer test:ci` and `composer test:coverage:ci`, starting a fresh worker for
 every parallel test-file assignment. The database-heavy
 `ProviderToolPreservationTest` belongs to the named `ci-serial` group: both
-hosted commands first run that group in a fresh, non-parallel Pest process with
-a bounded 512 MB PHP memory limit, then exclude it from ParaTest. No test or
+hosted commands exclude it from ParaTest and then run that group in a fresh,
+non-parallel Pest process with a bounded 512 MB PHP memory limit. No test or
 assertion is skipped. This preserves the
 Unit, Feature, and Installer suites while preventing state accumulated by one
 test file from crossing into the next. In the coverage command, Pest merges
 coverage from the parallel non-`ci-serial` tests against the complete source
-filter before enforcing the existing 80% aggregate floor; the preceding serial
+filter before enforcing the existing 80% aggregate floor; the following serial
 run verifies provider-tool behavior but does not contribute execution data to
-that percentage. Both processes must pass. Running the isolated group first
-also keeps the large parallel suite from preceding that safety boundary.
-Per-file startup and the serial
+that percentage. Both processes must pass. Per-file startup and the serial
 boundary deliberately trade additional hosted runtime for deterministic
 isolation. If workflow runtime becomes prohibitive, maintainers may split
 **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
@@ -84,8 +82,8 @@ cannot prove that compatibility. Swarm's production requirements remain unchange
 
 The four normal Pest 5 jobs use Xdebug, `memory_limit=1G`, four concurrent test
 workers with a fresh worker for every parallel test-file assignment, the
-complete source filter, and the **80% aggregate** coverage floor, after the
-fresh serial `ci-serial` behavior-verification process described above.
+complete source filter, and the **80% aggregate** coverage floor, followed by
+the fresh serial `ci-serial` behavior-verification process described above.
 The scheduled mutation baseline uses the
 same driver because mutation requires coverage data. The separate compatibility
 jobs and moving-development nightly load no coverage driver: they run the full
