@@ -53,11 +53,12 @@ discrete re-runnable evidence lane) on **stable-latest** only. The real MySQL
 and PostgreSQL process-concurrency jobs run on PHP **8.4**, the minimum supported
 runtime. Install Xdebug for PHP locally when you want to match CI or debug coverage
 failures; otherwise `composer test` remains the default sequential fast path
-without coverage. Hosted Pest 5 uses four bounded ParaTest workers through
-`composer test:ci` and `composer test:coverage:ci`. This preserves the Unit,
-Feature, and Installer suites while avoiding one monolithic PHP process; Pest
-merges worker coverage before enforcing the existing 80% aggregate floor. If
-workflow runtime becomes prohibitive, maintainers may split
+without coverage. Hosted Pest 5 uses four concurrent ParaTest workers through
+`composer test:ci` and `composer test:coverage:ci`, recycling each worker after
+at most 32 test-file assignments. This preserves the Unit, Feature, and Installer
+suites while bounding each PHP process's lifetime; Pest merges worker coverage
+before enforcing the existing 80% aggregate floor. If workflow runtime becomes
+prohibitive, maintainers may split
 **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
 until then, pull requests validate both matrices equally.
 
@@ -70,8 +71,9 @@ installed packages. These jobs run `composer test`,
 Pest 5's Laravel plugin excludes Laravel 13.16, so its lowest resolution alone
 cannot prove that compatibility. Swarm's production requirements remain unchanged.
 
-The four normal Pest 5 jobs use Xdebug, `memory_limit=1G`, four bounded test
-workers, the complete source filter, and the **80% aggregate** coverage floor.
+The four normal Pest 5 jobs use Xdebug, `memory_limit=1G`, four concurrent test
+workers recycled after at most 32 test-file assignments, the complete source
+filter, and the **80% aggregate** coverage floor.
 The scheduled mutation baseline uses the
 same driver because mutation requires coverage data. The separate compatibility
 jobs and moving-development nightly load no coverage driver: they run the full
