@@ -157,6 +157,8 @@ class SequentialStreamRunner
 
         $startedAt = null;
 
+        $eventDispatcher = $this->events;
+
         return new StreamableSwarmResponse(
             runId: $context->runId,
             generator: function () use ($state, $context, $contextTtl, $swarm, &$startedAt): \Generator {
@@ -179,8 +181,8 @@ class SequentialStreamRunner
             },
             topology: $topology->value,
             nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
-            onNativeProtocolFailure: function (string $runId, string $protocol, NativeProtocolProjection $projection, string $reason): void {
-                $this->events->dispatch(
+            onNativeProtocolFailure: static function (string $runId, string $protocol, NativeProtocolProjection $projection, string $reason) use ($eventDispatcher): void {
+                $eventDispatcher->dispatch(
                     new NativeProtocolProjectionFailed($runId, $protocol, $projection, $reason, SwarmStreamEvent::timestamp()),
                 );
             },
