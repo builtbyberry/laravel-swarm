@@ -202,6 +202,8 @@ it('keeps mutation coverage on the hosted stable driver without weakening its ba
         'ini-values' => 'memory_limit=1G',
     ]);
     expect($steps['Run Pest mutation testing']['run'])->toBe('composer test:mutation');
+    expect(file_get_contents(dirname(__DIR__, 3).'/docs/maintenance.md'))
+        ->toContain('with Xdebug, the same hosted coverage driver as the ordinary coverage gate.');
 });
 
 it('rejects the same wrong well formed branch SHA in lock and installed metadata', function (int $package) {
