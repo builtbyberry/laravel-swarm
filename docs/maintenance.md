@@ -561,13 +561,7 @@ release-readiness and again before tagging any release.
   a PHP, framework, database, or coverage-driver root cause. `composer test:ci`
   and `composer test:coverage:ci` therefore exclude only that named group from
   ParaTest and require it to pass immediately afterward in a fresh serial
-  process with a bounded 512 MB PHP memory limit. The serial command names
-  `ProviderToolPreservationTest.php` explicitly as well as retaining the group
-  filter, bounding Pest discovery to the intended file. The expanded P8 suite
-  reproduced exit 139 when the group-only command discovered the complete test
-  corpus before filtering, including in a clean serial-first hosted run. This
-  observation does not establish a PHP, Pest, or framework root cause. The
-  coverage percentage uses
+  process with a bounded 512 MB PHP memory limit. The coverage percentage uses
   the complete source filter and the
   parallel non-`ci-serial` execution data; serial verification is not merged
   into that report. Do not remove either half or lower the 80% floor.

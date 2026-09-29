@@ -59,8 +59,11 @@ Native feature access through Laravel Swarm workflows.
   final steps, incomplete replay, invalid aggregate usage, and stream failures
   terminate with protocol errors and no success/finish frame. Adapter-created
   failures dispatch an inspection-safe `NativeProtocolProjectionFailed` event
-  for application monitoring without claiming client delivery. Older published
-  config receives the default-off nested key through recursive config merging.
+  for application monitoring without claiming client delivery. Those lazy
+  failure callbacks retain only Laravel's event dispatcher, not the owning
+  stream runner and its orchestration graph, so replay-failure teardown does
+  not inherit the runner lifetime. Older published config receives the
+  default-off nested key through recursive config merging.
   The adapter adds no migration or persistent data; rollback is revert-safe
   after projected streams drain, cached config is rebuilt, and long-lived
   application workers are recycled.
@@ -89,13 +92,7 @@ Native feature access through Laravel Swarm workflows.
   the coverage-disabled moving-development row, without establishing a PHP,
   framework, database, or coverage-driver root cause. That one named
   `ci-serial` group now runs in a fresh non-parallel Pest process after the
-  parallel pass with a bounded 512 MB PHP memory limit. That process names the
-  provider-preservation file explicitly as well as retaining its group filter,
-  so Pest does not discover the complete test corpus before selecting those 24
-  cases. The expanded P8 suite reproduced exit 139 with group-only discovery,
-  including in a clean serial-first hosted run; this bounds the discovery
-  surface without claiming an unproven PHP, Pest, or framework root cause.
-  Coverage from the
+  parallel pass with a bounded 512 MB PHP memory limit. Coverage from the
   remaining parallel tests is measured against
   the complete source filter before the unchanged 80% aggregate floor is
   enforced; the serial behavior-verification process contributes no coverage

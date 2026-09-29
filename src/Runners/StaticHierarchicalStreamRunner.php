@@ -17,9 +17,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
 use BuiltByBerry\LaravelSwarm\Enums\GuardrailParallelFailurePolicy;
-use BuiltByBerry\LaravelSwarm\Enums\NativeProtocolProjection;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
-use BuiltByBerry\LaravelSwarm\Events\NativeProtocolProjectionFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
@@ -60,6 +58,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Streaming\NativeProtocolFailureReporter;
 use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
@@ -313,11 +312,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
             },
             topology: $topology->value,
             nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
-            onNativeProtocolFailure: function (string $runId, string $protocol, NativeProtocolProjection $projection, string $reason): void {
-                $this->events->dispatch(
-                    new NativeProtocolProjectionFailed($runId, $protocol, $projection, $reason, SwarmStreamEvent::timestamp()),
-                );
-            },
+            onNativeProtocolFailure: NativeProtocolFailureReporter::callback($this->events),
         );
     }
 

@@ -58,9 +58,7 @@ without coverage. Hosted Pest 5 uses four concurrent ParaTest workers through
 every parallel test-file assignment. The database-heavy
 `ProviderToolPreservationTest` belongs to the named `ci-serial` group: both
 hosted commands exclude it from ParaTest and then run that group in a fresh,
-non-parallel Pest process with a bounded 512 MB PHP memory limit. The serial
-command names the one file explicitly as well as its group so Pest does not
-discover unrelated test files before applying the group filter. No test or
+non-parallel Pest process with a bounded 512 MB PHP memory limit. No test or
 assertion is skipped. This preserves the
 Unit, Feature, and Installer suites while preventing state accumulated by one
 test file from crossing into the next. In the coverage command, Pest merges
