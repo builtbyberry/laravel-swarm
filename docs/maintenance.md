@@ -554,10 +554,12 @@ release.
   alone hides. Replaced Infection in v0.3.5.
 - **What it runs.** `composer test:mutation`, which invokes
   `vendor/bin/pest --mutate --coverage --parallel --covered-only` on PHP 8.5
-  with pcov. Wall time is hours, not minutes, which is why it runs daily on a
-  schedule rather than per PR.
-- **Trigger.** Daily at 07:17 UTC and on `workflow_dispatch`. Timeout is 120
-  minutes.
+  with Xdebug, the same hosted coverage driver as the ordinary coverage gate.
+  Wall time is hours, not minutes, which is why it runs daily on a schedule
+  rather than per PR.
+- **Trigger.** Daily at 07:17 UTC and on `workflow_dispatch`. Timeout is 240
+  minutes so the slower Xdebug-backed baseline can finish and report a usable
+  score instead of being cancelled at the former two-hour ceiling.
 - **Owner and cadence of review.** The maintainer reviews the mutation score
   trend weekly during release-readiness. There is no per-PR signal to react
   to.

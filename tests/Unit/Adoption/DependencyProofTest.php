@@ -120,6 +120,8 @@ it('parses the actual nightly workflow and requires hard gates after verified mo
     expect($workflow['on'])->toHaveKeys(['schedule', 'workflow_dispatch', 'pull_request']);
     $job = $workflow['jobs']['tests'];
     expect($job)->not->toHaveKey('continue-on-error');
+    $setup = array_values(array_filter($job['steps'], fn (array $step): bool => str_starts_with($step['uses'] ?? '', 'shivammathur/setup-php@')))[0];
+    expect($setup['with'])->toMatchArray(['php-version' => '8.5', 'coverage' => 'none', 'ini-values' => 'memory_limit=1G']);
     $runs = [];
     foreach ($job['steps'] as $step) {
         expect($step)->not->toHaveKeys(['continue-on-error', 'if']);
@@ -147,7 +149,7 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     expect($coverage)->toHaveCount(1);
     expect($coverage[0])->not->toHaveKeys(['if', 'continue-on-error']);
     $normalSetup = array_values(array_filter($normal['steps'], fn (array $step): bool => str_starts_with($step['uses'] ?? '', 'shivammathur/setup-php@')))[0];
-    expect($normalSetup['with']['coverage'])->toBe('pcov');
+    expect($normalSetup['with']['coverage'])->toBe('xdebug');
     expect($normalSetup['with']['ini-values'])->toBe('memory_limit=1G');
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
     expect($manifest['scripts']['test:coverage:ci'])->toBe('vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=80');
@@ -184,6 +186,25 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
         expect($position)->toBeGreaterThan($previous);
         $previous = $position;
     }
+});
+
+it('keeps mutation coverage on the hosted stable driver without weakening its baseline', function () {
+    $workflow = Yaml::parseFile(dirname(__DIR__, 3).'/.github/workflows/mutation.yml');
+    expect($workflow['on'])->toHaveKeys(['schedule', 'workflow_dispatch']);
+    expect($workflow['permissions'])->toBe(['contents' => 'read']);
+    $job = $workflow['jobs']['mutate'];
+    expect($job['continue-on-error'])->toBeTrue()
+        ->and($job['timeout-minutes'])->toBe(240);
+    $steps = array_column($job['steps'], null, 'name');
+    expect($steps['Setup PHP']['with'])->toMatchArray([
+        'php-version' => '8.5',
+        'coverage' => 'xdebug',
+        'ini-values' => 'memory_limit=1G',
+    ]);
+    expect($steps['Run Pest mutation testing']['run'])->toBe('composer test:mutation');
+    expect(file_get_contents(dirname(__DIR__, 3).'/docs/maintenance.md'))
+        ->toContain('with Xdebug, the same hosted coverage driver as the ordinary coverage gate.')
+        ->toContain('Timeout is 240');
 });
 
 it('rejects the same wrong well formed branch SHA in lock and installed metadata', function (int $package) {

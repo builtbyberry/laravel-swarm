@@ -34,7 +34,10 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           tools: composer:v2
-          coverage: pcov
+          # The expanded v0.28 suite reproducibly crashes hosted PCOV with
+          # exit 139. Keep the complete coverage gate on the supported Xdebug
+          # driver rather than weakening the matrix, test scope, or floor.
+          coverage: xdebug
           ini-values: memory_limit=1G
 
       - name: Install dependencies
