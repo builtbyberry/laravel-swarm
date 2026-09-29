@@ -531,7 +531,9 @@ release.
   `illuminate/*` packages aliased to `13.x-dev`. Surfaces breakage from
   upstream Laravel changes before a tagged release reaches the package's
   supported version matrix.
-- **What it runs.** `composer test`, `composer test:process-concurrency:ci`,
+- **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
+  across four bounded ParaTest workers),
+  `composer test:process-concurrency:ci`,
   and `composer analyse` on PHP 8.5 against the dev-main dependency set.
 - **Trigger.** Daily at 06:17 UTC and on `workflow_dispatch`.
 - **Owner and cadence of review.** The maintainer reviews failures weekly

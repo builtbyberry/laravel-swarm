@@ -80,7 +80,7 @@ jobs:
           fi
 
       - name: Execute tests
-        run: composer test
+        run: composer test:ci
 
       - name: Execute process concurrency validation
         run: composer test:process-concurrency:ci

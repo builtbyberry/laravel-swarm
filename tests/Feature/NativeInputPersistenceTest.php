@@ -28,6 +28,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksInputWhenMatches;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\GuardrailContainer;
+use BuiltByBerry\LaravelSwarm\Tests\Support\PendingDispatchTestHelper;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Contracts\Filesystem\Factory as FilesystemFactory;
 use Illuminate\Contracts\Filesystem\Filesystem;
@@ -95,6 +96,10 @@ test('native background work uses capability-specific jobs while legacy queue pa
     expect($legacy->getJob())
         ->toBeInstanceOf(InvokeSwarm::class)
         ->not->toBeInstanceOf(InvokeNativeInputSwarm::class);
+
+    PendingDispatchTestHelper::release($queued);
+    PendingDispatchTestHelper::release($durable);
+    PendingDispatchTestHelper::release($legacy);
 });
 
 test('recoverable execution reconstructs every supported attachment family', function (object $attachment, string $storedClass) {
