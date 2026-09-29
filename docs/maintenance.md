@@ -530,7 +530,8 @@ release-readiness and again before tagging any release.
   version matrix.
 - **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
   across four concurrent ParaTest workers, with a fresh worker for every
-  test-file assignment),
+  parallel test-file assignment, followed by the database-heavy `ci-serial`
+  provider-tool group in a fresh non-parallel Pest process),
   `composer test:process-concurrency:ci`,
   `composer analyse`, `composer test:compliance`, and `composer lint` on PHP
   8.5 against the moving dependency set.
@@ -553,7 +554,17 @@ release-readiness and again before tagging any release.
   prevents suite growth or file-order changes from carrying accumulated process
   state into a later test file, so maintainers should treat a proposal to raise
   `--max-batch-size` as a reliability change that requires fresh no-coverage and
-  Xdebug proof on the complete current suite.
+  Xdebug proof on the complete current suite. The hosted `ci-serial` exclusion
+  is equally deliberate: exact P8 runs isolated exit 139 to
+  `ProviderToolPreservationTest` inside fresh ParaTest workers across four
+  Xdebug rows and the coverage-disabled moving-development row, without proving
+  a PHP, framework, database, or coverage-driver root cause. `composer test:ci`
+  and `composer test:coverage:ci` therefore exclude only that named group from
+  ParaTest and require it to pass immediately afterward in a fresh serial
+  process with a bounded 512 MB PHP memory limit. The coverage percentage uses
+  the complete source filter and the
+  parallel non-`ci-serial` execution data; serial verification is not merged
+  into that report. Do not remove either half or lower the 80% floor.
 
 ### Daily Pest mutation
 

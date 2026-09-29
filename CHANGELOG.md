@@ -65,11 +65,19 @@ Native feature access through Laravel Swarm workflows.
   bound passed on its corrective branch, but the larger P8 suite changed worker
   history and reproduced the same coverage-disabled crash with identical PHP,
   Laravel AI, Pest, and ParaTest versions. Hosted Pest 5 now starts a fresh
-  worker for every test file while retaining four-way concurrency. Coverage is
-  merged before the unchanged 80% aggregate floor is enforced. The ordinary
-  local `composer test` path remains sequential. Generator tests now remove only
-  the files they own, so parallel workers cannot delete a sibling worker's
-  generated artifact.
+  worker for every parallel test file while retaining four-way concurrency.
+  Fresh P8 runs then isolated exit 139 to the database-heavy
+  `ProviderToolPreservationTest` inside ParaTest across all four Xdebug rows and
+  the coverage-disabled moving-development row, without establishing a PHP,
+  framework, database, or coverage-driver root cause. That one named
+  `ci-serial` group now runs in a fresh non-parallel Pest process after the
+  parallel pass with a bounded 512 MB PHP memory limit. Coverage from the
+  remaining parallel tests is measured against
+  the complete source filter before the unchanged 80% aggregate floor is
+  enforced; the serial behavior-verification process contributes no coverage
+  data, and both processes must pass. The ordinary local `composer test` path
+  remains sequential. Generator tests now remove only the files they own, so
+  parallel workers cannot delete a sibling worker's generated artifact.
 - Installation, generator, starter, example, testing, README, and upgrade
   guidance now present native Laravel AI agents as the normal model-agent path.
   `make:swarm:agent` and deprecated `make:swarm --single` remain deterministic
