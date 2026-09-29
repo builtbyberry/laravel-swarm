@@ -12,7 +12,14 @@ use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\ProviderToolData;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmCitation as CitationItem;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\CausalVoidEdgeType;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalVoidEdge;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCitation;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeChildrenDecided;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeClosed;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmNodeOpened;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolAttemptInvalidated;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmProviderToolEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
@@ -193,6 +200,73 @@ test('production stream runners project successful workflows through both native
         }
     }
 });
+
+test('workflow projection maps every hierarchy and causal control event through both protocol clients', function (
+    SwarmStreamEvent $controlEvent,
+    string $eventType,
+    array $expected,
+) {
+    $events = [
+        new SwarmStreamStart('start', 'swarm-run-1', 'StaticSwarm', 'static_hierarchical', null, [], 1),
+        new SwarmStepStart('step', 'swarm-run-1', 0, 'Agent', 'Agent', null, 2),
+        $controlEvent,
+        new SwarmStepEnd('step-end', 'swarm-run-1', 0, 'Agent', 'Agent', 'done', 1, [], 8, nativeResult: new NativeStepResult),
+        new SwarmStreamEnd('end', 'swarm-run-1', 'done', ['input_tokens' => 1, 'output_tokens' => 1], [], 9),
+    ];
+
+    foreach (['vercel', 'ag-ui'] as $protocol) {
+        $stream = nativeProtocolStream($events, 'static_hierarchical');
+        $frames = $protocol === 'vercel'
+            ? VercelDataStreamClient::consume(renderedProtocolContent($stream->usingVercelDataProtocol('message')))
+            : AgentUserInteractionClient::consume(renderedProtocolContent($stream->usingAgentUserInteractionProtocol('thread')));
+        $payloads = array_values(array_filter(array_map(
+            static fn (array $frame): ?array => match ($frame['type'] ?? null) {
+                'data-swarm' => $frame['data'] ?? null,
+                'CUSTOM' => $frame['value'] ?? null,
+                default => null,
+            },
+            $frames,
+        )));
+        $payload = collect($payloads)->firstWhere('event_type', $eventType);
+
+        expect($payload)->toMatchArray([
+            'run_id' => 'swarm-run-1',
+            'event_type' => $eventType,
+            ...$expected,
+        ]);
+    }
+})->with([
+    'node opened' => [
+        (new SwarmNodeOpened('node-open', 'swarm-run-1', 'parent', 'worker', 'because', 3))->withNodeId('node'),
+        'node_opened',
+        ['node_id' => 'node', 'parent_node_id' => 'parent', 'role' => 'worker'],
+    ],
+    'node children decided' => [
+        (new SwarmNodeChildrenDecided('children', 'swarm-run-1', ['child-a', 'child-b'], 'because', 4))->withNodeId('node'),
+        'node_children_decided',
+        ['node_id' => 'node', 'child_node_ids' => ['child-a', 'child-b']],
+    ],
+    'node closed' => [
+        (new SwarmNodeClosed('node-close', 'swarm-run-1', 'private result', 5))->withNodeId('node'),
+        'node_closed',
+        ['node_id' => 'node'],
+    ],
+    'causal void edge' => [
+        (new SwarmCausalVoidEdge('void', 'swarm-run-1', CausalVoidEdgeType::Supersedes, 'target', 'private reason', 6, 'digest'))->withNodeId('node'),
+        'causal_event_voided',
+        ['node_id' => 'node', 'void_type' => 'supersedes', 'target_event_id' => 'target', 'digest_node_id' => 'digest'],
+    ],
+    'provider tool attempt invalidated' => [
+        new SwarmProviderToolAttemptInvalidated('invalidated', 'swarm-run-1', 'node', 2, 6),
+        'provider_tool_attempt_invalidated',
+        ['node_id' => 'node', 'before_epoch' => 2, 'attempt_epoch' => 2],
+    ],
+    'causal seal barrier' => [
+        (new SwarmCausalSealBarrier('seal', 'swarm-run-1', 7))->withNodeId('node'),
+        'causal_log_sealed',
+        ['node_id' => 'node'],
+    ],
+]);
 
 test('workflow projection preserves branch-local identity without inventing standard message order', function () {
     $first = (new SwarmTextDelta('branch-a-0', 'swarm-run-1', 0, 'AgentA', 'A', 3, 'message-a', payloadAvailability: PayloadAvailability::Available))
