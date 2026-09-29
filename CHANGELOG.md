@@ -61,11 +61,15 @@ Native feature access through Laravel Swarm workflows.
   Hosted Pest 5 now runs the same configured Unit, Feature, and Installer suites
   across four concurrent ParaTest workers. A later coverage-disabled nightly
   still exited 139 in `ProviderToolPreservationTest`, showing that concurrency
-  was bounded but each persistent worker's lifetime was not. CI now recycles a
-  worker after at most 32 test-file assignments. Coverage is merged before the
-  unchanged 80% aggregate floor is enforced. The ordinary local `composer test`
-  path remains sequential. Generator tests now remove only the files they own,
-  so parallel workers cannot delete a sibling worker's generated artifact.
+  was bounded but each persistent worker's lifetime was not. A 32-file recycle
+  bound passed on its corrective branch, but the larger P8 suite changed worker
+  history and reproduced the same coverage-disabled crash with identical PHP,
+  Laravel AI, Pest, and ParaTest versions. Hosted Pest 5 now starts a fresh
+  worker for every test file while retaining four-way concurrency. Coverage is
+  merged before the unchanged 80% aggregate floor is enforced. The ordinary
+  local `composer test` path remains sequential. Generator tests now remove only
+  the files they own, so parallel workers cannot delete a sibling worker's
+  generated artifact.
 - Installation, generator, starter, example, testing, README, and upgrade
   guidance now present native Laravel AI agents as the normal model-agent path.
   `make:swarm:agent` and deprecated `make:swarm --single` remain deterministic
