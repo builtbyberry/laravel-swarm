@@ -11,6 +11,8 @@ use Laravel\Ai\Streaming\Protocols\VercelDataProtocol;
  * Maps SwarmProtocolEvent to a Vercel data-swarm part and delegates every
  * other event to the inherited protocol implementation.
  *
+ * @internal
+ *
  * @see VercelDataProtocol
  */
 final class VercelSwarmProtocol extends VercelDataProtocol

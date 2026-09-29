@@ -11,6 +11,8 @@ use Laravel\Ai\Streaming\Protocols\AgentUserInteractionProtocol;
  * Maps SwarmProtocolEvent to a laravel-swarm CUSTOM event and delegates every
  * other event to the inherited protocol implementation.
  *
+ * @internal
+ *
  * @see AgentUserInteractionProtocol
  */
 final class AgentUserInteractionSwarmProtocol extends AgentUserInteractionProtocol

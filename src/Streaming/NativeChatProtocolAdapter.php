@@ -631,7 +631,12 @@ final class NativeChatProtocolAdapter
         string $protocol,
         string $reason,
     ): void {
-        $onFailure?->__invoke($source->runId, $protocol, $projection, $reason);
+        try {
+            $onFailure?->__invoke($source->runId, $protocol, $projection, $reason);
+        } catch (Throwable) {
+            // Operational diagnostics must never replace the projection failure
+            // or suppress the terminal protocol error sent to the client.
+        }
     }
 
     private function failureProgress(

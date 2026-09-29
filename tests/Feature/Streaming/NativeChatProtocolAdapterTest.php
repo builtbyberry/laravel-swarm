@@ -251,9 +251,13 @@ test('completed in-memory streams and equivalent replay streams produce the same
 test('the adapter subclasses the installed Laravel AI encoders through their protected map seam', function () {
     $vercel = new ReflectionMethod(VercelDataProtocol::class, 'mapEvent');
     $agui = new ReflectionMethod(AgentUserInteractionProtocol::class, 'mapEvent');
+    $vercelAdapter = new ReflectionClass(VercelSwarmProtocol::class);
+    $aguiAdapter = new ReflectionClass(AgentUserInteractionSwarmProtocol::class);
 
     expect(is_subclass_of(VercelSwarmProtocol::class, VercelDataProtocol::class))->toBeTrue()
         ->and(is_subclass_of(AgentUserInteractionSwarmProtocol::class, AgentUserInteractionProtocol::class))->toBeTrue()
+        ->and($vercelAdapter->getDocComment())->toContain('@internal')
+        ->and($aguiAdapter->getDocComment())->toContain('@internal')
         ->and($vercel->isProtected())->toBeTrue()
         ->and($vercel->getNumberOfParameters())->toBe(1)
         ->and($agui->isProtected())->toBeTrue()
@@ -559,4 +563,36 @@ test('adapter-only terminal failures invoke the operational correlation hook', f
         ->and($failures[0]->protocol)->toBe('vercel')
         ->and($failures[0]->projection)->toBe(NativeProtocolProjection::Workflow)
         ->and($failures[0]->reason)->toBe('swarm_usage_unavailable');
+});
+
+test('a failing operational correlation hook cannot suppress the terminal projection error', function () {
+    $events = successfulNativeProtocolEvents();
+    $events[array_key_last($events)] = new SwarmStreamEnd('end', 'swarm-run-1', 'Hello', [], [], 7);
+    $stream = new StreamableSwarmResponse(
+        runId: 'swarm-run-1',
+        generator: function () use ($events): Generator {
+            foreach ($events as $event) {
+                yield $event;
+            }
+        },
+        topology: 'sequential',
+        nativeChatProtocolsEnabled: true,
+        onNativeProtocolFailure: function (): void {
+            throw new LogicException('listener failed');
+        },
+    );
+
+    $frames = VercelDataStreamClient::consume(renderedProtocolContent($stream->usingVercelDataProtocol('message')));
+    $diagnostics = array_values(array_filter($frames, fn (array $frame): bool => ($frame['type'] ?? null) === 'data-swarm'));
+    $terminal = $frames[array_key_last($frames)];
+
+    expect($diagnostics[array_key_last($diagnostics)]['data'])->toMatchArray([
+        'event_type' => 'projection_error',
+        'run_id' => 'swarm-run-1',
+        'projection' => NativeProtocolProjection::Workflow->value,
+        'reason' => 'swarm_usage_unavailable',
+    ])->and($terminal)->toBe([
+        'type' => 'error',
+        'errorText' => 'The swarm stream failed.',
+    ]);
 });
