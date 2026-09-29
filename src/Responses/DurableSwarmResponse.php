@@ -4,17 +4,30 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Responses;
 
+use BuiltByBerry\LaravelSwarm\Responses\Concerns\RegistersTerminalCallbacks;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Testing\FakePendingDispatch;
 use Illuminate\Foundation\Bus\PendingDispatch;
 
 class DurableSwarmResponse
 {
+    use RegistersTerminalCallbacks;
+
     public function __construct(
         protected PendingDispatch $dispatchable,
         protected DurableSwarmManager $manager,
         public readonly string $runId,
     ) {}
+
+    protected function terminalCallbackRunId(): string
+    {
+        return $this->runId;
+    }
+
+    protected function terminalCallbackResponseNoun(): string
+    {
+        return 'durable';
+    }
 
     public function signal(string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
     {

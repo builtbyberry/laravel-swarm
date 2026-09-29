@@ -51,6 +51,11 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
      */
     protected array $thenCallbacks = [];
 
+    /**
+     * @var array<int, callable>
+     */
+    protected array $catchCallbacks = [];
+
     protected bool $started = false;
 
     protected ?Throwable $failedException = null;
@@ -119,6 +124,34 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         }
 
         $this->thenCallbacks[] = $callback;
+
+        return $this;
+    }
+
+    /**
+     * Register a callback invoked with the terminating Throwable when the stream
+     * settles as a failure — the symmetric counterpart to {@see then()}.
+     *
+     * `catch` fires only on a FAILED terminal (an exception thrown while iterating),
+     * never on completion and never on an abandoned stream (an early `break` out of
+     * the loop, which has its own teardown path). It is a HANDLER, not a suppressor:
+     * the original exception still propagates to the caller after the callbacks run,
+     * preserving the documented stream() re-throw contract. A callback that itself
+     * throws is reported and swallowed so it cannot mask the workflow's own error.
+     *
+     * Registering after the stream has already failed invokes the callback
+     * immediately (mirroring {@see then()}); there is no run-once latch, so a second
+     * late `catch()` also fires.
+     */
+    public function catch(callable $callback): self
+    {
+        if ($this->failedException !== null) {
+            $this->invokeCatchCallback($callback, $this->failedException);
+
+            return $this;
+        }
+
+        $this->catchCallbacks[] = $callback;
 
         return $this;
     }
@@ -334,6 +367,8 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
             $this->failedException = $exception;
             $this->state = self::STATE_FAILED;
 
+            $this->runCatchCallbacks($exception);
+
             throw $exception;
         } finally {
             if (! $completed && $this->state === self::STATE_STREAMING) {
@@ -369,6 +404,30 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
 
         foreach ($this->thenCallbacks as $callback) {
             $callback($this->streamedResponse);
+        }
+    }
+
+    protected function runCatchCallbacks(Throwable $exception): void
+    {
+        foreach ($this->catchCallbacks as $callback) {
+            $this->invokeCatchCallback($callback, $exception);
+        }
+    }
+
+    /**
+     * Invoke one catch callback, isolating its own failure. The callback runs to
+     * handle the workflow error, not to replace it: a throwing callback must never
+     * mask the exception the caller is about to receive, so its throw is reported
+     * and swallowed.
+     */
+    protected function invokeCatchCallback(callable $callback, Throwable $exception): void
+    {
+        try {
+            $callback($exception);
+        } catch (Throwable $callbackException) {
+            if (function_exists('report')) {
+                report($callbackException);
+            }
         }
     }
 
