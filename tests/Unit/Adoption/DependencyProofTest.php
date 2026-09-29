@@ -158,6 +158,10 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     preg_match_all('#<directory>tests/(Unit|Feature|Installer)</directory>#', $phpunit, $suiteMatches);
     expect(substr_count($phpunit, '<directory>'))->toBe(3)
         ->and($suiteMatches[1])->toBe(['Unit', 'Feature', 'Installer']);
+    foreach (['MakeSwarmCommandTest.php', 'MakeSwarmSwarmCommandTest.php', 'MakeSwarmAgentCommandTest.php', 'MakeMemoryToolCommandTest.php'] as $generatorTest) {
+        expect(file_get_contents(dirname(__DIR__, 2).'/Feature/'.$generatorTest))
+            ->not->toContain("glob(app_path('Ai/");
+    }
 
     $job = $workflow['jobs']['laravel-13-16'];
     expect($job['strategy']['matrix'])->toBe(['php' => ['8.4', '8.5']]);

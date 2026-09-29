@@ -61,7 +61,8 @@ Native feature access through Laravel Swarm workflows.
   Hosted Pest 5 now runs the same configured Unit, Feature, and Installer suites
   across four bounded ParaTest workers. Coverage is merged before the unchanged
   80% aggregate floor is enforced. The ordinary local `composer test` path
-  remains sequential.
+  remains sequential. Generator tests now remove only the files they own, so
+  parallel workers cannot delete a sibling worker's generated artifact.
 - Installation, generator, starter, example, testing, README, and upgrade
   guidance now present native Laravel AI agents as the normal model-agent path.
   `make:swarm:agent` and deprecated `make:swarm --single` remain deterministic
