@@ -88,8 +88,12 @@ Native feature access through Laravel Swarm workflows.
   `ProviderToolPreservationTest` inside ParaTest across all four Xdebug rows and
   the coverage-disabled moving-development row, without establishing a PHP,
   framework, database, or coverage-driver root cause. That one named
-  `ci-serial` group now runs in a fresh non-parallel Pest process after the
-  parallel pass with a bounded 512 MB PHP memory limit. Coverage from the
+  `ci-serial` group now runs first in a fresh non-parallel Pest process with a
+  bounded 512 MB PHP memory limit, before the parallel pass. The initial
+  post-parallel split passed on its corrective branch, but the expanded P8 suite
+  reproduced exit 139 in that following process; putting the isolated boundary
+  first avoids preceding it with the large parallel suite without claiming an
+  unproven root cause. Coverage from the
   remaining parallel tests is measured against
   the complete source filter before the unchanged 80% aggregate floor is
   enforced; the serial behavior-verification process contributes no coverage

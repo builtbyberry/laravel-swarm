@@ -154,21 +154,21 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
     expect($manifest['scripts']['test'])->toBe('vendor/bin/pest tests/Feature tests/Unit tests/Installer')
         ->and($manifest['scripts']['test:ci'])->toBe([
-            'vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --exclude-group=ci-serial',
             '@php -d memory_limit=512M vendor/bin/pest --group=ci-serial',
+            'vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --exclude-group=ci-serial',
         ])
         ->and($manifest['scripts']['test:coverage:ci'])->toBe([
-            'vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --exclude-group=ci-serial --coverage --min=80',
             '@php -d memory_limit=512M vendor/bin/pest --group=ci-serial',
+            'vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --exclude-group=ci-serial --coverage --min=80',
         ]);
     foreach (['test:ci', 'test:coverage:ci'] as $script) {
-        [$parallel, $serial] = $manifest['scripts'][$script];
+        [$serial, $parallel] = $manifest['scripts'][$script];
         expect($parallel)->toContain('--parallel', '--processes=4', '--max-batch-size=1', '--exclude-group=ci-serial')
             ->and($serial)->toBe('@php -d memory_limit=512M vendor/bin/pest --group=ci-serial')
             ->and($serial)->not->toContain('--parallel', '--coverage');
     }
-    expect($manifest['scripts']['test:coverage:ci'][0])->toContain('--coverage --min=80')
-        ->and($manifest['scripts']['test:ci'][0])->not->toContain('--coverage');
+    expect($manifest['scripts']['test:coverage:ci'][1])->toContain('--coverage --min=80')
+        ->and($manifest['scripts']['test:ci'][1])->not->toContain('--coverage');
 
     $testsRoot = dirname(__DIR__, 2);
     $serialTests = [];
