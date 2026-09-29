@@ -55,7 +55,14 @@ Native feature access through Laravel Swarm workflows.
   moving-development nightly loads no coverage driver because it does not
   collect coverage. The informational mutation job now has a four-hour timeout
   so its slower Xdebug baseline can complete rather than being cancelled at the
-  former two-hour ceiling.
+  former two-hour ceiling. A subsequent exact P8 run reproduced exit 139 under
+  both Xdebug and the coverage-disabled nightly, showing that the crash was not
+  coverage-driver-specific and implicating the monolithic Pest 5 process.
+  Hosted Pest 5 now runs the same configured Unit, Feature, and Installer suites
+  across four bounded ParaTest workers. Coverage is merged before the unchanged
+  80% aggregate floor is enforced. The ordinary local `composer test` path
+  remains sequential. Generator tests now remove only the files they own, so
+  parallel workers cannot delete a sibling worker's generated artifact.
 - Installation, generator, starter, example, testing, README, and upgrade
   guidance now present native Laravel AI agents as the normal model-agent path.
   `make:swarm:agent` and deprecated `make:swarm --single` remain deterministic

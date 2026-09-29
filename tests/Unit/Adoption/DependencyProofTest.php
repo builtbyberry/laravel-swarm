@@ -133,7 +133,7 @@ it('parses the actual nightly workflow and requires hard gates after verified mo
     expect($commands)->toContain('"laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"', '"laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"', 'verify-adoption-dependencies.php moving-dev')
         ->not->toContain('0.x-dev', '|| true');
     $verify = strpos($commands, 'verify-adoption-dependencies.php moving-dev');
-    foreach (['composer test', 'composer test:process-concurrency:ci', 'composer analyse', 'composer test:compliance', 'composer lint'] as $gate) {
+    foreach (['composer test:ci', 'composer test:process-concurrency:ci', 'composer analyse', 'composer test:compliance', 'composer lint'] as $gate) {
         expect($runs)->toContain($gate);
         expect(strpos($commands, $gate))->toBeGreaterThan($verify);
     }
@@ -152,7 +152,16 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     expect($normalSetup['with']['coverage'])->toBe('xdebug');
     expect($normalSetup['with']['ini-values'])->toBe('memory_limit=1G');
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
-    expect($manifest['scripts']['test:coverage:ci'])->toBe('vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=80');
+    expect($manifest['scripts']['test:ci'])->toBe('vendor/bin/pest --parallel --processes=4')
+        ->and($manifest['scripts']['test:coverage:ci'])->toBe('vendor/bin/pest --parallel --processes=4 --coverage --min=80');
+    $phpunit = file_get_contents(dirname(__DIR__, 3).'/phpunit.xml');
+    preg_match_all('#<directory>tests/(Unit|Feature|Installer)</directory>#', $phpunit, $suiteMatches);
+    expect(substr_count($phpunit, '<directory>'))->toBe(3)
+        ->and($suiteMatches[1])->toBe(['Unit', 'Feature', 'Installer']);
+    foreach (['MakeSwarmCommandTest.php', 'MakeSwarmSwarmCommandTest.php', 'MakeSwarmAgentCommandTest.php', 'MakeMemoryToolCommandTest.php'] as $generatorTest) {
+        expect(file_get_contents(dirname(__DIR__, 2).'/Feature/'.$generatorTest))
+            ->not->toContain("glob(app_path('Ai/");
+    }
 
     $job = $workflow['jobs']['laravel-13-16'];
     expect($job['strategy']['matrix'])->toBe(['php' => ['8.4', '8.5']]);

@@ -6,8 +6,8 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 
 afterEach(function () {
-    foreach (glob(app_path('Ai/Swarms/*.php')) ?: [] as $file) {
-        File::delete($file);
+    foreach (['DefaultSwarm', 'ParallelGenSwarm', 'HierGenSwarm', 'StaticHierGenSwarm', 'CustomStubGenSwarm', 'NonInteractiveGenSwarm'] as $class) {
+        File::delete(app_path("Ai/Swarms/{$class}.php"));
     }
 });
 

@@ -63,6 +63,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelChildDispatchingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RetryableDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RetryableParallelDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\PendingDispatchTestHelper;
 use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingAuditCapturePolicy;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Schema\Blueprint;
@@ -1735,6 +1736,8 @@ test('durable recovery dispatches due retry runs only once per recovery window',
 
     expect($dispatcher->stepDispatches)->toBe([0])
         ->and($manager->find($response->runId)['next_retry_at'])->toBeNull();
+
+    PendingDispatchTestHelper::dispatchAndDetach($response);
 });
 
 test('durable recovery dispatches stale branches only once per recovery window', function () {
@@ -1783,6 +1786,8 @@ test('durable recovery dispatches due retry branches only once per recovery wind
 
     expect($dispatcher->branchDispatches)->toBe(['parallel:1'])
         ->and(app(DurableRunStore::class)->findBranch($runId, 'parallel:1')['next_retry_at'])->toBeNull();
+
+    PendingDispatchTestHelper::dispatchAndDetach($response);
 });
 
 test('durable recovery dispatches timed out waits only once per recovery window', function () {
@@ -1818,8 +1823,7 @@ test('dispatch durable remains lazy until the response is released', function ()
     expect(DB::table('jobs')->count())->toBe(0)
         ->and(app(DurableSwarmManager::class)->find($runId)['status'])->toBe('pending');
 
-    unset($response);
-    gc_collect_cycles();
+    PendingDispatchTestHelper::dispatchAndDetach($response);
 
     expect(DB::table('jobs')->count())->toBe(1)
         ->and(DB::table('jobs')->latest('id')->first())->not->toBeNull();

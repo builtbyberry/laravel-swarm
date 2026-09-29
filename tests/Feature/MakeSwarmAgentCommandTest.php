@@ -7,8 +7,8 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 
 afterEach(function () {
-    foreach (glob(app_path('Ai/Agents/*.php')) ?: [] as $file) {
-        File::delete($file);
+    foreach (['OutlineWriter', 'CustomStubAgent', 'ShapeCheckAgent'] as $class) {
+        File::delete(app_path("Ai/Agents/{$class}.php"));
     }
 });
 

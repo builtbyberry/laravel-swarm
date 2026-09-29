@@ -512,38 +512,41 @@ as runtime state. Do not begin with broad rollout across document-heavy or
 approval-critical workflows until storage growth, recovery behavior, and
 operator procedures have been proven in production-like use.
 
-## Informational CI workflows
+## CI monitoring and release proof
 
-Laravel Swarm ships two scheduled GitHub Actions workflows that are
-intentionally non-blocking. Both run with `continue-on-error: true`, so a red
-run never gates a PR merge or release. They produce a signal the maintainer is
-expected to act on, not a gate the CI system enforces.
+Laravel Swarm ships two scheduled GitHub Actions workflows with different
+failure policies. The moving-development nightly is a hard pull-request and
+pre-tag proof. The daily mutation workflow is informational and uses
+`continue-on-error: true`. The maintainer reviews both weekly as part of
+release-readiness and again before tagging any release.
 
-These workflows rot silently if no one looks at them. The maintainer reviews
-their state weekly as part of release-readiness, and again before tagging any
-release.
-
-### Nightly Laravel dev-main
+### Nightly Laravel 13.x and Laravel AI 1.x moving branches
 
 `.github/workflows/nightly.yml`
 
-- **Purpose.** Canary against `laravel/framework:dev-main` and the matching
-  `illuminate/*` packages aliased to `13.x-dev`. Surfaces breakage from
-  upstream Laravel changes before a tagged release reaches the package's
-  supported version matrix.
-- **What it runs.** `composer test`, `composer test:process-concurrency:ci`,
-  and `composer analyse` on PHP 8.5 against the dev-main dependency set.
-- **Trigger.** Daily at 06:17 UTC and on `workflow_dispatch`.
+- **Purpose.** Canary against the exact official branch heads of
+  `laravel/framework:13.x-dev` and `laravel/ai:1.x-dev`. Surfaces breaking
+  upstream changes before a tagged release reaches the package's supported
+  version matrix.
+- **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
+  across four bounded ParaTest workers),
+  `composer test:process-concurrency:ci`,
+  `composer analyse`, `composer test:compliance`, and `composer lint` on PHP
+  8.5 against the moving dependency set.
+- **Trigger.** Every pull request, daily at 06:17 UTC, and on
+  `workflow_dispatch`. Pull requests prove the candidate before merge. After
+  an authorized release-branch merge, run it once against `main`; that
+  successful post-main run is required before tagging.
 - **Owner and cadence of review.** The maintainer reviews failures weekly
   during release-readiness, and rechecks before cutting a release.
-- **What to do when it fails.** Open the failing run and read the test or
-  analyse output. If the failure reflects a real upstream change, file an
-  issue tagged `laravel-canary` describing the breaking change, the offending
-  Laravel commit (if identifiable), and the package code affected. If the
-  failure is transient (network, package source flake), re-run the workflow
-  manually before filing. Do not block a release on a nightly failure unless
-  the same breakage is reproducible against a tagged Laravel release in the
-  supported matrix.
+- **What to do when it fails.** A pull-request failure blocks merge; a
+  post-main failure blocks tagging. Open the failing run and read the output
+  from the failed test, analysis, compliance, or lint gate. Re-run once when
+  the evidence points to transient network or package-source failure. If the
+  failure reproduces, file an issue tagged `laravel-canary` with the pinned
+  Laravel or Laravel AI commit, the failing gate, and the affected package
+  code, then keep the release gate closed until the incompatibility or workflow
+  defect is resolved.
 
 ### Daily Pest mutation
 
