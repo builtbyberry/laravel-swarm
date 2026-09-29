@@ -317,6 +317,28 @@ it('arms catch when a run fails through failWithMetadata (the parallel-stream te
     expect(callbackTable()->where('run_id', 'run-fwm')->where('slot', 'then')->exists())->toBeFalse();
 });
 
+it('arms catch when a run fails through recordPreflightFailure (in-worker preflight)', function (): void {
+    // A non-deterministic preflight check can pass at dispatch (so the callback was
+    // registered) but fail in the worker, terminating via recordPreflightFailure. That
+    // terminal `failed` write must arm catch too.
+    $outbox = callbackOutbox();
+    $outbox->register('run-preflight', CallbackSlot::Then, fn () => null);
+    $outbox->register('run-preflight', CallbackSlot::Catch, fn () => null);
+
+    app(RunHistoryStore::class)->recordPreflightFailure(
+        'run-preflight',
+        'App\\Swarms\\SeamSwarm',
+        'sequential',
+        RunContext::fromTask('in'),
+        [],
+        new RuntimeException('input guardrail blocked in worker'),
+        3600,
+    );
+
+    expect(callbackTable()->where('run_id', 'run-preflight')->where('slot', 'catch')->value('status'))->toBe('pending');
+    expect(callbackTable()->where('run_id', 'run-preflight')->where('slot', 'then')->exists())->toBeFalse();
+});
+
 it('delivers pending callbacks through the swarm:relay callback lane', function (): void {
     Bus::fake();
 

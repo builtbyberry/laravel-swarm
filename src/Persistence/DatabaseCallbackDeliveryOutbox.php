@@ -500,8 +500,9 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             ];
         }
 
-        $reservationTimeoutSeconds = (int) $this->config->get('swarm.durable.relay.reservation_timeout_seconds', 60);
-        $freshThreshold = Carbon::now('UTC')->subSeconds($reservationTimeoutSeconds);
+        // Use the same reservation timeout drain() reclaims against, so the reported
+        // "reserved" (in-flight) count matches the actual reclaim threshold.
+        $freshThreshold = Carbon::now('UTC')->subSeconds($this->reservationTimeoutSeconds());
 
         $registered = (int) $this->table()->where('status', 'registered')->count();
         $pending = (int) $this->table()->where('status', 'pending')->count();

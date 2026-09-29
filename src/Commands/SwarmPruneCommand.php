@@ -241,8 +241,8 @@ class SwarmPruneCommand extends Command
             //      reached a terminal, EXPIRED history row. Delivery had the full run TTL
             //      window; a lingering row after that is abandoned (mirrors durable_outbox).
             //   2. Dead-letter rows past the opt-in retention window
-            //      (swarm.callbacks.retention_days); null keeps them indefinitely for
-            //      inspection, matching the audit outbox default.
+            //      (swarm.callbacks.dead_letter_retention_days); null keeps them
+            //      indefinitely for inspection, matching the audit outbox default.
             $retentionDays = $config->get('swarm.callbacks.dead_letter_retention_days');
 
             $query->where(function ($query) use ($historyTable, $retentionDays): void {

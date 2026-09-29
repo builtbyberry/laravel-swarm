@@ -392,24 +392,33 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
     {
         $timestamp = Carbon::now('UTC');
 
-        $this->table()->updateOrInsert(['run_id' => $runId], [
-            'swarm_class' => $swarmClass,
-            'topology' => $topology,
-            'status' => 'failed',
-            'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context))),
-            'metadata' => $this->encodeJson($metadata),
-            'steps' => $this->encodeJson([]),
-            'output' => null,
-            'usage' => $this->encodeJson([]),
-            'error' => $this->encodeJson($this->failurePayload($exception)),
-            'artifacts' => $this->encodeJson([]),
-            'created_at' => $timestamp,
-            'updated_at' => $timestamp,
-            'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
-            'finished_at' => $timestamp,
-            'execution_token' => null,
-            'leased_until' => null,
-        ]);
+        // A preflight failure is also a terminal `failed` write. It normally precedes
+        // callback registration (dispatch-time preflight throws before a response is
+        // returned), but a non-deterministic input guardrail / native-recipient check
+        // can pass at dispatch and fail in the worker — after ->then()/->catch() were
+        // registered. Arm catch here too so that run's callback is not stranded.
+        $this->withTerminalTransaction(function () use ($runId, $swarmClass, $topology, $context, $metadata, $exception, $ttlSeconds, $timestamp): void {
+            $this->table()->updateOrInsert(['run_id' => $runId], [
+                'swarm_class' => $swarmClass,
+                'topology' => $topology,
+                'status' => 'failed',
+                'context' => $this->encodeJson($this->cipher->sealContextTopLevelInput($this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context))),
+                'metadata' => $this->encodeJson($metadata),
+                'steps' => $this->encodeJson([]),
+                'output' => null,
+                'usage' => $this->encodeJson([]),
+                'error' => $this->encodeJson($this->failurePayload($exception)),
+                'artifacts' => $this->encodeJson([]),
+                'created_at' => $timestamp,
+                'updated_at' => $timestamp,
+                'expires_at' => DatabaseTtl::expiresAt($ttlSeconds),
+                'finished_at' => $timestamp,
+                'execution_token' => null,
+                'leased_until' => null,
+            ]);
+
+            $this->settleCallbacks($runId, CallbackSlot::Catch, $exception);
+        });
     }
 
     /**
