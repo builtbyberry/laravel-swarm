@@ -529,7 +529,8 @@ release-readiness and again before tagging any release.
   upstream changes before a tagged release reaches the package's supported
   version matrix.
 - **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
-  across four bounded ParaTest workers),
+  across four concurrent ParaTest workers, each recycled after at most 32
+  test-file assignments),
   `composer test:process-concurrency:ci`,
   `composer analyse`, `composer test:compliance`, and `composer lint` on PHP
   8.5 against the moving dependency set.
