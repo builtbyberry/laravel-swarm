@@ -22,7 +22,10 @@ jobs:
     # but does not gate any other workflow. A gating threshold via --min
     # will land in a follow-up once baseline scores stabilise (see issue #12).
     continue-on-error: true
-    timeout-minutes: 120
+    # Xdebug avoids the hosted PCOV crashes, but the full mutation baseline can
+    # exceed two hours. Keep enough headroom for the informational run to
+    # produce a usable score instead of being cancelled before completion.
+    timeout-minutes: 240
 
     steps:
       - name: Checkout code

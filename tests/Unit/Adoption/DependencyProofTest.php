@@ -194,7 +194,7 @@ it('keeps mutation coverage on the hosted stable driver without weakening its ba
     expect($workflow['permissions'])->toBe(['contents' => 'read']);
     $job = $workflow['jobs']['mutate'];
     expect($job['continue-on-error'])->toBeTrue()
-        ->and($job['timeout-minutes'])->toBe(120);
+        ->and($job['timeout-minutes'])->toBe(240);
     $steps = array_column($job['steps'], null, 'name');
     expect($steps['Setup PHP']['with'])->toMatchArray([
         'php-version' => '8.5',
@@ -203,7 +203,8 @@ it('keeps mutation coverage on the hosted stable driver without weakening its ba
     ]);
     expect($steps['Run Pest mutation testing']['run'])->toBe('composer test:mutation');
     expect(file_get_contents(dirname(__DIR__, 3).'/docs/maintenance.md'))
-        ->toContain('with Xdebug, the same hosted coverage driver as the ordinary coverage gate.');
+        ->toContain('with Xdebug, the same hosted coverage driver as the ordinary coverage gate.')
+        ->toContain('Timeout is 240');
 });
 
 it('rejects the same wrong well formed branch SHA in lock and installed metadata', function (int $package) {
