@@ -346,6 +346,29 @@ test('final agent projection never reuses a stale completed step when the final 
     }
 })->with(['vercel', 'ag-ui']);
 
+test('final agent projection does not let a stale step end close a newer step', function (string $protocol) {
+    $events = successfulNativeProtocolEvents();
+    array_pop($events);
+    $events[] = new SwarmStepStart('second-step', 'swarm-run-1', 1, 'SecondAgent', 'Second', null, 7);
+    $events[] = new SwarmTextDelta('second-delta', 'swarm-run-1', 1, 'SecondAgent', 'unfinished', 8, 'second-message', PayloadAvailability::Available);
+    $events[] = new SwarmStepEnd('stale-step-end', 'swarm-run-1', 0, 'App\\Agents\\Writer', 'Writer', 'Hello', 1, [], 9, nativeResult: new NativeStepResult);
+    $events[] = new SwarmStreamEnd('end', 'swarm-run-1', 'unfinished', ['input_tokens' => 2, 'output_tokens' => 1], [], 10);
+
+    if ($protocol === 'vercel') {
+        $frames = VercelDataStreamClient::consume(renderedProtocolContent(
+            nativeProtocolStream($events)->usingVercelDataProtocol('message', NativeProtocolProjection::FinalAgent),
+        ));
+        expect(array_column($frames, 'type'))->toContain('error')->not->toContain('finish', 'finish-step')
+            ->and(json_encode($frames))->not->toContain('Hello', 'unfinished');
+    } else {
+        $frames = AgentUserInteractionClient::consume(renderedProtocolContent(
+            nativeProtocolStream($events)->usingAgentUserInteractionProtocol('thread', projection: NativeProtocolProjection::FinalAgent),
+        ));
+        expect(array_column($frames, 'type'))->toContain('RUN_ERROR')->not->toContain('RUN_FINISHED', 'STEP_FINISHED')
+            ->and(json_encode($frames))->not->toContain('Hello', 'unfinished');
+    }
+})->with(['vercel', 'ag-ui']);
+
 test('final agent projection selects only the last completed step without fabricating message-row identity', function (string $protocol) {
     $events = [
         new SwarmStreamStart('start', 'swarm-run-1', 'Swarm', 'sequential', null, [], 1),

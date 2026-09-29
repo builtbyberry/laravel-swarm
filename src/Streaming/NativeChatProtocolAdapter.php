@@ -161,7 +161,7 @@ final class NativeChatProtocolAdapter
         $steps = 0;
         $ended = false;
         $errored = false;
-        $stepOpen = false;
+        $openStepIndex = null;
 
         try {
             foreach ($source as $event) {
@@ -178,7 +178,7 @@ final class NativeChatProtocolAdapter
                 if ($event instanceof SwarmStepStart) {
                     $steps++;
                     $current = [];
-                    $stepOpen = true;
+                    $openStepIndex = $event->stepIndex;
 
                     yield $this->custom($event, $this->finalAgentProgressPayload($event, 'step_started'));
 
@@ -186,9 +186,13 @@ final class NativeChatProtocolAdapter
                 }
 
                 if ($event instanceof SwarmStepEnd) {
+                    if ($openStepIndex !== $event->stepIndex) {
+                        continue;
+                    }
+
                     $last = $current;
                     $lastNativeResult = $event->nativeResult;
-                    $stepOpen = false;
+                    $openStepIndex = null;
 
                     yield $this->custom($event, $this->finalAgentProgressPayload($event, 'step_completed'));
 
@@ -204,7 +208,7 @@ final class NativeChatProtocolAdapter
                 }
 
                 if ($event instanceof SwarmStreamEnd) {
-                    if ($stepOpen) {
+                    if ($openStepIndex !== null) {
                         $reason = 'swarm_stream_incomplete_step';
                         $this->reportFailure($onFailure, $source, NativeProtocolProjection::FinalAgent, $protocol, $reason);
                         yield $this->failureProgress($source, NativeProtocolProjection::FinalAgent, $reason, $event);
