@@ -6,6 +6,9 @@
 *.md diff=markdown
 *.php diff=php
 
+# Unified diff context uses a literal leading space, including on blank lines.
+/tests/Fixtures/Upstream/LaravelAiSavedResultContinuation/candidate.patch -whitespace
+
 /.claude export-ignore
 /.github export-ignore
 /.idea export-ignore

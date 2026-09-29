@@ -46,6 +46,19 @@ Native feature access through Laravel Swarm workflows.
 - Native Laravel AI agent onboarding through the upstream `make:agent` command,
   including structured-output generation and an executable provider-free test
   that drives a native tool call and Swarm stream with `Agent::fake()`.
+- Reproducible proof of a minimal upstream saved-result continuation contract
+  against an exact Laravel AI `1.x` commit. The isolated candidate survives a
+  real `SIGKILL` after a durable approved result, resumes the same native turn
+  in a fresh process without rerunning the tool or adding a user message, and
+  demonstrates identity, structured output, middleware, streaming, usage,
+  folding, provider replay, ownership, and trait-independent result recording
+  while agent source and named provider configuration remain unchanged. The
+  proof documents that tool, middleware, option, schema, and configured-account
+  drift are not fingerprinted and must be resolved before P6. A
+  deliberate ownership-check mutation proves the targeted tests fail. This is
+  proof-only: no Laravel Swarm runtime bridge or patched dependency ships, and
+  P6 remains blocked pending independent acceptance and an explicitly authorized
+  source strategy.
 
 ### Changed
 

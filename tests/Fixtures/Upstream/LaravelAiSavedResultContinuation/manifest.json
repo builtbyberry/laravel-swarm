@@ -1,0 +1,16 @@
+{
+    "schema": 1,
+    "upstream": "https://github.com/laravel/ai.git",
+    "released_tag": "v1.0.0",
+    "released_sha": "101c7ea33cd8569d82570f753fbf38e48b7d3d95",
+    "target_branch": "1.x",
+    "target_sha": "a117adfe4e07696b7ffdf76c3c0b2effc0f0139f",
+    "patch_sha256": "2945c40ae9bba0fb1e763fd9dd4d26b40a1f749f090d02a33e606e54164a1cde",
+    "composer_lock_sha256": "b71f2cefe8cab63ba3491c9bb7c4787baa1ed247da03efa1dc3050bf2171a02a",
+    "proof_test": "tests/Feature/NativeContinuationTest.php",
+    "regression_tests": [
+        "tests/Feature/ToolApprovalResumeTest.php",
+        "tests/Feature/AgentUserInteractionProtocolStreamTest.php",
+        "tests/Feature/Storage/DatabaseConversationStoreTest.php"
+    ]
+}

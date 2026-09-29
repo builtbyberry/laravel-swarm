@@ -1,18 +1,21 @@
 # Native approval continuation and recovery proof
 
-This document records a proof, not a Laravel Swarm approval bridge. The proof
-targets the released `laravel/ai` v1.0.0 source at
+This document records a proof, not a Laravel Swarm approval bridge. The original
+proof targets the released `laravel/ai` v1.0.0 source at
 `101c7ea33cd8569d82570f753fbf38e48b7d3d95` and the shipped Laravel Swarm
 v0.27.0 baseline at `06ee4c8c095f3999f32aebd849c3534f5283d1a4`.
-Later `laravel/ai ^1.0` releases are checked behaviorally rather than being
-required to retain that source reference.
+The follow-on [saved-result continuation prototype](native-saved-result-continuation-prototype.md)
+pins Laravel AI `1.x` at `a117adfe4e07696b7ffdf76c3c0b2effc0f0139f`
+and applies an isolated candidate patch. Neither source contains a released
+saved-result continuation contract without that patch.
 
 Laravel Swarm still rejects a native approval outcome by default. This proof
 adds no runtime integration, configuration, migration, command, persistence,
 or retention behavior. The future production approval bridge remains blocked
-until this executable proof is independently accepted **and** the missing
-continuation contract described below has an explicitly accepted disposition.
-Neither condition alone authorizes production work.
+until the isolated candidate is independently accepted **and** its source and
+dependency disposition is explicitly authorized. A local patch that proves a
+design is not an installable upstream contract, and neither condition alone
+authorizes production work.
 
 ## What the released public contracts prove
 
@@ -35,7 +38,7 @@ capability explicitly. A wrapper that exposes only `ConversationStore` loses
 pending-approval inspection and ownership verification even when its inner
 store supports them.
 
-The proof also finds a public-contract asymmetry. A custom agent that implements
+The released source also has a public-contract asymmetry. A custom agent that implements
 the `RemembersConversations` contract without using the trait can remember the
 final response, but Laravel AI does not record intermediate approval results
 before the continued model call. The recorder path is selected through the
@@ -45,11 +48,17 @@ documented trait requirement. `ConversationStore::storeApprovalResults()` is
 already the public storage capability; the gap is that recorder selection checks
 the concrete trait rather than the `RemembersConversations` contract.
 
+The isolated candidate closes that asymmetry by selecting the recorder through
+the public `RemembersConversations` contract or Laravel AI's conversation
+middleware. Its executable custom-store case proves that an agent can record
+the result without the framework trait. This remains candidate evidence, not a
+claim about an installed Laravel AI release.
+
 Assertions against Laravel AI's conversation tables and serialized `steps` JSON
 characterize the pinned v1.0.0 first-party database store. They are white-box
 evidence for this proof, not a promise that the upstream schema is a public API.
 
-## Saved-result continuation is not presently supported
+## Released saved-result continuation is not presently supported
 
 The hard boundary is a crash after the approved tool result has been saved but
 before the model returns. Replaying the same `Decisions` object is rejected as
@@ -83,9 +92,13 @@ preserve the original provider, model, account, tools, middleware, options,
 structured-output and streaming behavior; events and failover rules; usage and
 conversation folding; and stale, deleted, ownership, and approval validation.
 It also needs trait-independent activation of the existing public approval-result
-recorder before the model call. Without those capabilities, the future production
-approval bridge cannot honestly promise fresh-process continuation after the
-saved-result boundary.
+recorder before the model call. The isolated candidate provides and tests this
+shape through a public `Continuation` input and optional
+`ContinuesConversations` store capability. See the
+[prototype evidence](native-saved-result-continuation-prototype.md) for the exact
+source, public surface, tests, and restrictions. Until that contract is available
+through an accepted source strategy, the future production approval bridge
+cannot honestly promise fresh-process continuation after the saved-result boundary.
 
 ## Fresh-process crash matrix
 
@@ -107,7 +120,7 @@ authoritative execution lane.
 | Intent persisted, worker not started | Recorded intent and no effect | Recover the recorded intent |
 | Before tool effect | Claimed worker, recorded intent and no observed effect | Indeterminate for a non-idempotent external effect; reconcile, never blind-retry |
 | After effect, before result | Effect exists without a result or receipt | Indeterminate; reconcile externally, never blind-retry |
-| After saved result, before model | Saved result exists; replay is already resolved | Requires the upstream continuation primitive |
+| After saved result, before model | Saved result exists; released replay is already resolved | Unsupported by released v1.0.0 and unpatched `1.x`; the isolated candidate resumes the same turn after `SIGKILL` without rerunning the tool or adding a user message |
 | After native completion, before checkpoint | Completed bound native message exists; application receipt is absent | Validate native identity under the active fence, then create the bound receipt and checkpoint |
 | After checkpoint, before acknowledgement | Fenced checkpoint exists | Return the existing checkpoint; do not rerun |
 
@@ -193,6 +206,10 @@ deliberately skipped in that lane.
   fresh process at every named crash boundary.
 - [NativeApprovalDecisionRaceTest](../tests/ProcessConcurrency/NativeApprovalDecisionRaceTest.php)
   is the real MySQL/PostgreSQL row-lock lane for concurrent decision ingress.
+- [Laravel AI saved-result continuation candidate](../tests/Fixtures/Upstream/LaravelAiSavedResultContinuation/README.md)
+  reproduces the exact isolated patch against pinned `1.x`, runs its focused and
+  full upstream suites, and proves the ownership guard catches a deliberate
+  mutation.
 
 These tests use controlled provider wire fixtures. They do not claim live
 provider, hosted service, production, or release publication evidence.
