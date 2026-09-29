@@ -90,6 +90,18 @@ test('recursive configuration merge preserves published list overrides atomicall
         ->and(config('swarm.streaming.native_protocols.enabled'))->toBeFalse();
 });
 
+test('recursive configuration merge backfills an empty published associative section', function () {
+    config()->set('swarm', [
+        'streaming' => [],
+    ]);
+
+    (new SwarmServiceProvider(app()))->register();
+
+    expect(config('swarm.streaming.native_protocols.enabled'))->toBeFalse()
+        ->and(config('swarm.streaming.replay.enabled'))->toBeFalse()
+        ->and(config('swarm.streaming.parallel.enabled'))->toBeFalse();
+});
+
 test('recursive configuration merge applies the native protocol environment opt in', function () {
     $previous = getenv('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED');
     putenv('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED=true');

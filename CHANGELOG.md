@@ -62,9 +62,10 @@ Native feature access through Laravel Swarm workflows.
   for application monitoring without claiming client delivery. Those lazy
   failure callbacks retain only Laravel's event dispatcher, not the owning
   stream runner and its orchestration graph, so replay-failure teardown does
-  not inherit the runner lifetime. Older published config receives the
-  default-off nested key through recursive config merging while published list
-  values remain atomic instead of receiving appended package defaults.
+  not inherit the runner lifetime. Older published config, including empty
+  associative sections, receives missing nested defaults through recursive
+  merging while published list values remain atomic instead of receiving
+  appended package defaults.
   The adapter adds no migration or persistent data; rollback is revert-safe
   after projected streams drain, cached config is rebuilt, and long-lived
   application workers are recycled.

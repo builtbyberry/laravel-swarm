@@ -504,7 +504,7 @@ class SwarmServiceProvider extends ServiceProvider
             $defaults[$key] = is_array($default)
                 && is_array($override)
                 && ! array_is_list($default)
-                && ! array_is_list($override)
+                && ($override === [] || ! array_is_list($override))
                     ? self::mergeConfigurationMaps($default, $override)
                     : $override;
         }

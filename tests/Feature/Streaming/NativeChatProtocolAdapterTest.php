@@ -205,6 +205,7 @@ test('workflow projection maps every hierarchy and causal control event through 
     SwarmStreamEvent $controlEvent,
     string $eventType,
     array $expected,
+    array $forbidden,
 ) {
     $events = [
         new SwarmStreamStart('start', 'swarm-run-1', 'StaticSwarm', 'static_hierarchical', null, [], 1),
@@ -233,38 +234,48 @@ test('workflow projection maps every hierarchy and causal control event through 
             'run_id' => 'swarm-run-1',
             'event_type' => $eventType,
             ...$expected,
-        ]);
+        ])->not->toHaveKeys(array_keys($forbidden));
+
+        foreach ($forbidden as $sentinel) {
+            expect(json_encode($payload, JSON_THROW_ON_ERROR))->not->toContain($sentinel);
+        }
     }
 })->with([
     'node opened' => [
         (new SwarmNodeOpened('node-open', 'swarm-run-1', 'parent', 'worker', 'because', 3))->withNodeId('node'),
         'node_opened',
         ['node_id' => 'node', 'parent_node_id' => 'parent', 'role' => 'worker'],
+        ['rationale' => 'because'],
     ],
     'node children decided' => [
         (new SwarmNodeChildrenDecided('children', 'swarm-run-1', ['child-a', 'child-b'], 'because', 4))->withNodeId('node'),
         'node_children_decided',
         ['node_id' => 'node', 'child_node_ids' => ['child-a', 'child-b']],
+        ['rationale' => 'because'],
     ],
     'node closed' => [
         (new SwarmNodeClosed('node-close', 'swarm-run-1', 'private result', 5))->withNodeId('node'),
         'node_closed',
         ['node_id' => 'node'],
+        ['result' => 'private result'],
     ],
     'causal void edge' => [
         (new SwarmCausalVoidEdge('void', 'swarm-run-1', CausalVoidEdgeType::Supersedes, 'target', 'private reason', 6, 'digest'))->withNodeId('node'),
         'causal_event_voided',
         ['node_id' => 'node', 'void_type' => 'supersedes', 'target_event_id' => 'target', 'digest_node_id' => 'digest'],
+        ['reason' => 'private reason'],
     ],
     'provider tool attempt invalidated' => [
         new SwarmProviderToolAttemptInvalidated('invalidated', 'swarm-run-1', 'node', 2, 6),
         'provider_tool_attempt_invalidated',
         ['node_id' => 'node', 'before_epoch' => 2, 'attempt_epoch' => 2],
+        [],
     ],
     'causal seal barrier' => [
         (new SwarmCausalSealBarrier('seal', 'swarm-run-1', 7))->withNodeId('node'),
         'causal_log_sealed',
         ['node_id' => 'node'],
+        [],
     ],
 ]);
 
