@@ -2,6 +2,30 @@
 
 ## Upgrading to v0.28.0
 
+### Native chat protocol adapters
+
+Vercel and AG-UI projection is default-off. Applications with a published
+`config/swarm.php` do not need to republish the file: v0.28 recursively supplies
+the missing `streaming.native_protocols.enabled` default while preserving every
+published override. Associative configuration sections receive missing defaults;
+application-defined lists, such as `durable.job.backoff_seconds`, remain atomic
+and are not extended with package defaults. Set
+`SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED=true` only after the endpoint has selected
+its projection and enforces tenant authorization around persisted replay.
+
+If configuration is cached, clear and rebuild it after deploying v0.28 so the
+new package default and environment value are present in the cached array:
+
+```bash
+php artisan config:clear
+php artisan config:cache
+```
+
+Changing the environment variable without rebuilding cached configuration does
+not activate or deactivate the adapter. Restart long-lived HTTP and queue
+workers after rebuilding the cache. Rollback remains revert-safe after active
+protocol streams drain.
+
 ### Native agent authoring
 
 Use Laravel AI's `php artisan make:agent <Name>` command for new model-backed
@@ -48,23 +72,11 @@ require the `Parallel live streaming` row to report `ok`, and only then set
 `SWARM_PARALLEL_STREAMING_ENABLED=true` for endpoints that use a top-level
 parallel swarm's `stream()` or broadcast helpers.
 
-If your application has published `config/swarm.php`, Laravel's package config
-merge will not add nested keys beneath an existing `streaming` array. Merge this
-complete block into the published file before enabling the environment flag
-(or carefully republish with `--force` after preserving local customizations):
-
-```php
-'parallel' => [
-    'enabled' => filter_var(env('SWARM_PARALLEL_STREAMING_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
-    'max_branches' => (int) env('SWARM_PARALLEL_STREAMING_MAX_BRANCHES', 32),
-    'max_frame_bytes' => (int) env('SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES', 2097152),
-    'cancel_grace_milliseconds' => (int) env('SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS', 250),
-],
-```
-
-Place it inside the published `streaming` array. Confirm
-`config('swarm.streaming.parallel.enabled')` reflects the environment after
-clearing and rebuilding the application's configuration cache.
+Laravel Swarm recursively backfills newly shipped nested defaults into an
+existing published `config/swarm.php` while preserving application overrides.
+You do not need to republish or manually copy the `streaming.parallel` block.
+Confirm `config('swarm.streaming.parallel.enabled')` reflects the environment
+after clearing and rebuilding the application's configuration cache.
 
 Parallel branch events add optional wire keys. Existing replay rows and
 non-parallel events omit them; branch-scoped events contain string `branch_id`,

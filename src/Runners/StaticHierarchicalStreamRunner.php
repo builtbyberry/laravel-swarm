@@ -58,6 +58,8 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Streaming\NativeProtocolFailureReporter;
+use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
@@ -308,6 +310,9 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 $abandonStreamStart = MonotonicTime::now();
                 $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $abandonStreamStart, $abandonStreamSeq);
             },
+            topology: $topology->value,
+            nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
+            onNativeProtocolFailure: NativeProtocolFailureReporter::callback($this->events),
         );
     }
 
@@ -1167,6 +1172,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         agentClass: $agent::class,
                         delta: $this->capture->applyOutput($event->delta, $context),
                         timestamp: $event->timestamp,
+                        messageId: $event->messageId,
+                        payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($context)),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
                     $this->tagNode($swarmEvent, $nodeId);
@@ -1180,6 +1187,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         agentClass: $agent::class,
                         messageId: $event->messageId,
                         timestamp: $event->timestamp,
+                        payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($context)),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
                     $this->tagNode($swarmEvent, $nodeId);
@@ -1224,6 +1232,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         agentClass: $agent::class,
                         toolCall: $this->captureStaticToolCall($event->toolCall, $context),
                         timestamp: $event->timestamp,
+                        payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($context)),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
                     $this->tagNode($swarmEvent, $nodeId);
@@ -1252,6 +1261,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         timestamp: $event->timestamp,
                         preliminary: $event->preliminary,
                         denied: $event->denied,
+                        payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($context)),
                     );
                     $this->syncInvocationId($swarmEvent, $event->invocationId);
                     $this->tagNode($swarmEvent, $nodeId);

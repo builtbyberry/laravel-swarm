@@ -86,16 +86,15 @@ test('streaming documentation covers topology replay capture and limits', functi
         ->and($contents)->toContain('swarm.capture');
 });
 
-test('parallel streaming upgrade guidance includes the complete published config block', function () {
+test('parallel streaming upgrade guidance reflects recursive published config defaults', function () {
     $contents = file_get_contents(__DIR__.'/../../UPGRADING.md');
 
     expect($contents)
-        ->toContain("'parallel' => [")
+        ->toContain('recursively backfills newly shipped nested defaults')
+        ->toContain('You do not need to republish or manually copy')
         ->toContain('SWARM_PARALLEL_STREAMING_ENABLED')
-        ->toContain('SWARM_PARALLEL_STREAMING_MAX_BRANCHES')
-        ->toContain('SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES')
-        ->toContain('SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS')
-        ->toContain("config('swarm.streaming.parallel.enabled')");
+        ->toContain("config('swarm.streaming.parallel.enabled')")
+        ->not->toContain('Laravel\'s package config merge will not add nested keys');
 });
 
 test('maintenance documentation includes the enterprise pilot posture', function () {

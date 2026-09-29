@@ -243,10 +243,15 @@ configure it.
 
 ## Streaming / Replay
 
-Controls the optional persisted stream replay feature. Replay is disabled by default. See [streaming.md](streaming.md) for full streaming and replay behavior.
+Controls HTTP protocol projection, process-backed parallel streaming, and the
+optional persisted replay feature. Each is disabled by default. See
+[Streaming](streaming.md) for the typed event/replay contract and
+[Vercel and AG-UI protocol projection](native-chat-protocols.md) for the native
+HTTP adapter, deployment checklist, and exact privacy limits.
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
+| `swarm.streaming.native_protocols.enabled` | bool | `false` | `SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED` | Enables explicit Vercel and AG-UI projection on `StreamableSwarmResponse`. This does not create a route or bypass application authorization. Rebuild cached configuration and recycle long-lived application workers when changing it. |
 | `swarm.streaming.parallel.enabled` | bool | `false` | `SWARM_PARALLEL_STREAMING_ENABLED` | Enables real top-level parallel live multiplexing. Requires Laravel's `process` concurrency driver and loopback process transport; unsupported drivers fail before agent invocation and never masquerade buffered completion as streaming. |
 | `swarm.streaming.parallel.max_branches` | int | `32` | `SWARM_PARALLEL_STREAMING_MAX_BRANCHES` | Maximum branch processes admitted to one parallel live stream. This is not a raw file-descriptor or application-wide ceiling: every branch uses multiple pipes/sockets, and overlapping requests multiply the total. Runtime range: 1–256. |
 | `swarm.streaming.parallel.max_frame_bytes` | int | `2097152` | `SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES` | Maximum encoded bytes for one atomic branch event or terminal frame. Events are never split. Runtime range: 1 KiB–4 MiB. |

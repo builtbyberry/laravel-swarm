@@ -6,9 +6,15 @@ namespace BuiltByBerry\LaravelSwarm\Support;
 
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Enums\NativeProtocolProjection;
+use BuiltByBerry\LaravelSwarm\Events\NativeProtocolProjectionFailed;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\StreamedSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Support\Collection;
 
 class SwarmHistory
@@ -16,6 +22,8 @@ class SwarmHistory
     public function __construct(
         protected RunHistoryStore $historyStore,
         protected StreamEventStore $streamEvents,
+        protected ?ConfigRepository $config = null,
+        protected ?Dispatcher $events = null,
     ) {}
 
     /**
@@ -61,6 +69,19 @@ class SwarmHistory
                 }
 
                 return StreamedSwarmResponse::fromEvents($runId, new Collection($events));
+            },
+            nativeChatProtocolsEnabled: (bool) $this->config?->get('swarm.streaming.native_protocols.enabled', false),
+            topologyResolver: function () use ($runId): ?string {
+                foreach ($this->streamEvents->events($runId) as $event) {
+                    return $event instanceof SwarmStreamStart ? $event->topology : null;
+                }
+
+                return null;
+            },
+            onNativeProtocolFailure: function (string $failedRunId, string $protocol, NativeProtocolProjection $projection, string $reason): void {
+                $this->events?->dispatch(
+                    new NativeProtocolProjectionFailed($failedRunId, $protocol, $projection, $reason, SwarmStreamEvent::timestamp()),
+                );
             },
         );
     }

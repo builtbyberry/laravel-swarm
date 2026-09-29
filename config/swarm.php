@@ -641,6 +641,14 @@ return [
     ],
 
     'streaming' => [
+        'native_protocols' => [
+            /*
+             * Default-off HTTP projection through Laravel AI's Vercel and AG-UI
+             * encoders. Enable only after the application has chosen its
+             * projection and added tenant authorization around persisted replay.
+             */
+            'enabled' => filter_var(env('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+        ],
         /*
          * Default-off live multiplexing for parallel topology. This requires
          * Laravel's process concurrency driver plus local loopback sockets. It

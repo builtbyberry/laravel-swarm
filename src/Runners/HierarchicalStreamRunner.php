@@ -23,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
+use BuiltByBerry\LaravelSwarm\Streaming\NativeProtocolFailureReporter;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
@@ -179,6 +180,9 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                 $abandonStreamStart = MonotonicTime::now();
                 $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $abandonStreamStart, $abandonStreamSeq);
             },
+            topology: $topology->value,
+            nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
+            onNativeProtocolFailure: NativeProtocolFailureReporter::callback($this->events),
         );
     }
 

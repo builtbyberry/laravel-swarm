@@ -35,6 +35,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
+use BuiltByBerry\LaravelSwarm\Streaming\NativeProtocolFailureReporter;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
 use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelStreamLimits;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
@@ -178,6 +179,9 @@ final class ParallelStreamRunner
                     'exception_class' => $exception::class,
                 ]);
             },
+            topology: $topology->value,
+            nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
+            onNativeProtocolFailure: NativeProtocolFailureReporter::callback($this->events),
         );
     }
 

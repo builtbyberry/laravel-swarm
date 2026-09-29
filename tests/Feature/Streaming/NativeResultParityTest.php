@@ -24,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
@@ -182,9 +183,16 @@ it('preserves native result status and identity through capture and database rep
     $stream = nativeParityStream($path, $status);
     $events = collect(iterator_to_array($stream));
     $result = $events->whereInstanceOf(SwarmToolResult::class)->sole();
+    $call = $events->whereInstanceOf(SwarmToolCall::class)->sole();
     $denied = str_contains($status, 'denied');
     $failed = str_contains($status, 'failed');
     expect($result->toolResult->denied)->toBe($denied)
+        ->and($call->payloadAvailability)->toBe(match ($capture) {
+            CaptureDecision::Full => PayloadAvailability::Available,
+            CaptureDecision::Redact => PayloadAvailability::Redacted,
+            CaptureDecision::Skip => PayloadAvailability::Omitted,
+        })
+        ->and($result->payloadAvailability)->toBe($call->payloadAvailability)
         ->and($result->toolResult->failed)->toBe($failed)
         ->and($result->successful)->toBe(! $denied && ! $failed)
         ->and($result->toolResult->successful())->toBe($result->successful)
@@ -196,7 +204,8 @@ it('preserves native result status and identity through capture and database rep
     $native = $events->filter(fn ($event) => str_starts_with($event->id, $status.'-'))->values();
     expect($native->pluck('id')->all())->toBe(array_map(fn ($suffix) => $status.'-'.$suffix, ['delta', 'reasoning', 'reasoning-end', 'call', 'result', 'text-end']))
         ->and($native->pluck('timestamp')->all())->toBe(range(1710000001, 1710000006))
-        ->and($native->pluck('invocationId')->unique()->all())->toBe(['invocation-'.$status]);
+        ->and($native->pluck('invocationId')->unique()->all())->toBe(['invocation-'.$status])
+        ->and($native->first()->messageId)->toBe('message-'.$status);
     foreach ($native as $event) {
         expect($event->runId)->toBe($stream->runId)
             ->and($event->nodeId)->toBe($path === 'static' ? 'worker' : null)
