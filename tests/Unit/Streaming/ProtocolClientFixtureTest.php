@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Protocols\AgentUserInteractionClient;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Protocols\VercelDataStreamClient;
-use RuntimeException;
 
 /** @param list<array<string, mixed>|string> $payloads */
 function malformedProtocolStream(array $payloads): string
