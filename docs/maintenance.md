@@ -531,7 +531,8 @@ release-readiness and again before tagging any release.
 - **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
   across four bounded ParaTest workers),
   `composer test:process-concurrency:ci`,
-  and `composer analyse` on PHP 8.5 against the moving dependency set.
+  `composer analyse`, `composer test:compliance`, and `composer lint` on PHP
+  8.5 against the moving dependency set.
 - **Trigger.** Every pull request, daily at 06:17 UTC, and on
   `workflow_dispatch`. Pull requests prove the candidate before merge. After
   an authorized release-branch merge, run it once against `main`; that
@@ -539,12 +540,13 @@ release-readiness and again before tagging any release.
 - **Owner and cadence of review.** The maintainer reviews failures weekly
   during release-readiness, and rechecks before cutting a release.
 - **What to do when it fails.** A pull-request failure blocks merge; a
-  post-main failure blocks tagging. Open the failing run and read the test or
-  analyse output. Re-run once when the evidence points to transient network or
-  package-source failure. If the failure reproduces, file an issue tagged
-  `laravel-canary` with the pinned Laravel or Laravel AI commit, the failing
-  gate, and the affected package code, then keep the release gate closed until
-  the incompatibility or workflow defect is resolved.
+  post-main failure blocks tagging. Open the failing run and read the output
+  from the failed test, analysis, compliance, or lint gate. Re-run once when
+  the evidence points to transient network or package-source failure. If the
+  failure reproduces, file an issue tagged `laravel-canary` with the pinned
+  Laravel or Laravel AI commit, the failing gate, and the affected package
+  code, then keep the release gate closed until the incompatibility or workflow
+  defect is resolved.
 
 ### Daily Pest mutation
 
