@@ -157,6 +157,7 @@ use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryEventListener;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Foundation\CachesConfiguration;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -170,10 +171,7 @@ class SwarmServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->replaceConfigRecursivelyFrom(
-            __DIR__.'/../config/swarm.php',
-            'swarm',
-        );
+        $this->mergeSwarmConfiguration();
 
         $this->app->singleton(SwarmAuditSink::class, NoOpSwarmAuditSink::class);
         $this->app->singleton(ActorResolver::class, DefaultActorResolver::class);
@@ -472,6 +470,46 @@ class SwarmServiceProvider extends ServiceProvider
             NullStreamStepCheckpointStore::class,
             DatabaseStreamStepCheckpointStore::class,
         ));
+    }
+
+    /**
+     * Backfill nested package defaults without appending defaults to published lists.
+     */
+    private function mergeSwarmConfiguration(): void
+    {
+        if ($this->app instanceof CachesConfiguration && $this->app->configurationIsCached()) {
+            return;
+        }
+
+        $config = $this->app->make(ConfigRepository::class);
+
+        /** @var array<array-key, mixed> $defaults */
+        $defaults = require __DIR__.'/../config/swarm.php';
+        /** @var array<array-key, mixed> $overrides */
+        $overrides = $config->get('swarm', []);
+
+        $config->set('swarm', self::mergeConfigurationMaps($defaults, $overrides));
+    }
+
+    /**
+     * @param  array<array-key, mixed>  $defaults
+     * @param  array<array-key, mixed>  $overrides
+     * @return array<array-key, mixed>
+     */
+    private static function mergeConfigurationMaps(array $defaults, array $overrides): array
+    {
+        foreach ($overrides as $key => $override) {
+            $default = $defaults[$key] ?? null;
+
+            $defaults[$key] = is_array($default)
+                && is_array($override)
+                && ! array_is_list($default)
+                && ! array_is_list($override)
+                    ? self::mergeConfigurationMaps($default, $override)
+                    : $override;
+        }
+
+        return $defaults;
     }
 
     /**

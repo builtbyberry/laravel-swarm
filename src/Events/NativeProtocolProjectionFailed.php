@@ -8,6 +8,9 @@ use BuiltByBerry\LaravelSwarm\Enums\NativeProtocolProjection;
 
 final readonly class NativeProtocolProjectionFailed
 {
+    /**
+     * @param  string  $reason  Stable bounded failure category documented in docs/native-chat-protocols.md.
+     */
     public function __construct(
         public string $runId,
         public string $protocol,

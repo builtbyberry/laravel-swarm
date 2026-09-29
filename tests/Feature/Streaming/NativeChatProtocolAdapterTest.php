@@ -29,8 +29,16 @@ use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Streaming\Protocols\AgentUserInteractionSwarmProtocol;
 use BuiltByBerry\LaravelSwarm\Streaming\Protocols\VercelSwarmProtocol;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Protocols\AgentUserInteractionClient;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Protocols\VercelDataStreamClient;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalStreamSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeStaticHierarchicalStreamSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use Laravel\Ai\Responses\Data\ToolCall as ToolCallData;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
 use Laravel\Ai\Streaming\Protocols\AgentUserInteractionProtocol;
@@ -118,6 +126,72 @@ test('native chat protocols are default off and final agent topology is rejected
     expect(fn () => $parallel->usingVercelDataProtocol('ui-message', NativeProtocolProjection::FinalAgent))
         ->toThrow(SwarmException::class, 'only for sequential');
     expect($iterations)->toBe(0);
+});
+
+test('native protocol selection cannot change while a stream is being iterated', function () {
+    $stream = nativeProtocolStream(successfulNativeProtocolEvents());
+    $iterator = $stream->getIterator();
+    $iterator->rewind();
+
+    expect(fn () => $stream->usingVercelDataProtocol('ui-message'))
+        ->toThrow(SwarmException::class, 'while the stream is being iterated')
+        ->and(fn () => $stream->usingAgentUserInteractionProtocol('thread'))
+        ->toThrow(SwarmException::class, 'while the stream is being iterated');
+
+    while ($iterator->valid()) {
+        $iterator->next();
+    }
+});
+
+test('production stream runners project successful workflows through both native protocols', function () {
+    config()->set('swarm.streaming.native_protocols.enabled', true);
+
+    $makeStream = function (string $topology): StreamableSwarmResponse {
+        FakeResearcher::fake(['research']);
+        FakeWriter::fake(['writer']);
+        FakeEditor::fake(['editor']);
+        FakeHierarchicalCoordinator::fake([
+            HierarchicalTestPlan::make('writer_node', [
+                'writer_node' => [
+                    'type' => 'worker',
+                    'agent' => FakeWriter::class,
+                    'prompt' => 'writer-task',
+                ],
+            ]),
+        ]);
+
+        return match ($topology) {
+            'sequential' => FakeSequentialSwarm::make()->stream('task'),
+            'hierarchical' => FakeHierarchicalStreamSwarm::make()->stream('task'),
+            'static_hierarchical' => FakeStaticHierarchicalStreamSequentialSwarm::make()->stream('task'),
+        };
+    };
+
+    foreach (['sequential', 'hierarchical', 'static_hierarchical'] as $topology) {
+        foreach (['vercel', 'ag-ui'] as $protocol) {
+            $stream = $makeStream($topology);
+            $frames = $protocol === 'vercel'
+                ? VercelDataStreamClient::consume(renderedProtocolContent($stream->usingVercelDataProtocol('message')))
+                : AgentUserInteractionClient::consume(renderedProtocolContent($stream->usingAgentUserInteractionProtocol('thread')));
+            $types = array_column($frames, 'type');
+            $payloads = array_values(array_filter(array_map(
+                static fn (array $frame): ?array => match ($frame['type'] ?? null) {
+                    'data-swarm' => $frame['data'] ?? null,
+                    'CUSTOM' => $frame['value'] ?? null,
+                    default => null,
+                },
+                $frames,
+            )));
+            $eventTypes = array_column($payloads, 'event_type');
+
+            expect($types)->toContain($protocol === 'vercel' ? 'finish' : 'RUN_FINISHED')
+                ->and($eventTypes)->toContain('workflow_completed');
+
+            if ($topology !== 'sequential') {
+                expect($eventTypes)->toContain('node_opened', 'node_children_decided', 'node_closed');
+            }
+        }
+    }
 });
 
 test('workflow projection preserves branch-local identity without inventing standard message order', function () {

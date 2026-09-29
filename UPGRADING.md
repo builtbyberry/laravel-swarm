@@ -7,9 +7,11 @@
 Vercel and AG-UI projection is default-off. Applications with a published
 `config/swarm.php` do not need to republish the file: v0.28 recursively supplies
 the missing `streaming.native_protocols.enabled` default while preserving every
-published override. Set `SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED=true` only after the
-endpoint has selected its projection and enforces tenant authorization around
-persisted replay.
+published override. Associative configuration sections receive missing defaults;
+application-defined lists, such as `durable.job.backoff_seconds`, remain atomic
+and are not extended with package defaults. Set
+`SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED=true` only after the endpoint has selected
+its projection and enforces tenant authorization around persisted replay.
 
 If configuration is cached, clear and rebuild it after deploying v0.28 so the
 new package default and environment value are present in the cached array:

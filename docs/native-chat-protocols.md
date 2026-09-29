@@ -203,6 +203,20 @@ tool payload, tenant identity, or client acknowledgement. Listen to it for
 server-side monitoring or application-owned audit enrichment; it is not an
 access audit record or proof of transport delivery.
 
+The public event uses these reason codes:
+
+| Reason | Projection | Trigger |
+| --- | --- | --- |
+| `swarm_stream_incomplete` | Both | The source ended without `SwarmStreamEnd` or `SwarmStreamError`. |
+| `swarm_stream_incomplete_step` | `FinalAgent` | `SwarmStreamEnd` arrived while the final started step was still open. |
+| `swarm_usage_unavailable` | Both | A non-empty successful run lacks exact non-negative aggregate input or output tokens. |
+| `swarm_usage_invalid` | Both | An optional aggregate usage value is present but is not a non-negative integer. |
+| `swarm_message_identity_unavailable` | `FinalAgent` | A projected text block lacks its real streamed message identity. |
+| `swarm_stream_failed` | Both | Another exception escaped while the adapter was projecting the source stream. |
+
+Treat these values as stable machine-readable categories. New categories may be
+added in a minor release; applications should retain an unknown-code fallback.
+
 Client disconnect is different: a disconnected client cannot receive a
 terminal frame. Swarm records abandonment and process-parallel execution reaps
 local branches on a best-effort basis, but neither action proves cancellation of

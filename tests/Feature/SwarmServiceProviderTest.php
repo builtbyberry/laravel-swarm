@@ -74,6 +74,22 @@ test('pre-v0.28 published streaming configuration receives recursive native prot
         ->and(config('swarm.streaming.parallel.max_branches'))->toBeInt();
 });
 
+test('recursive configuration merge preserves published list overrides atomically', function () {
+    config()->set('swarm', [
+        'durable' => [
+            'job' => [
+                'backoff_seconds' => [90],
+            ],
+        ],
+    ]);
+
+    (new SwarmServiceProvider(app()))->register();
+
+    expect(config('swarm.durable.job.backoff_seconds'))->toBe([90])
+        ->and(config('swarm.durable.job.tries'))->toBeInt()
+        ->and(config('swarm.streaming.native_protocols.enabled'))->toBeFalse();
+});
+
 test('recursive configuration merge applies the native protocol environment opt in', function () {
     $previous = getenv('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED');
     putenv('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED=true');
