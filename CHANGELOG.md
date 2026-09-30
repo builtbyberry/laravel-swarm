@@ -6,6 +6,17 @@ Native feature access through Laravel Swarm workflows.
 
 ### Added
 
+- Native media and retrieval capabilities proven inside workflows: classification,
+  image generation, audio/transcription, provider files and vector stores,
+  embeddings, and reranking, each exercised from an application-owned native agent
+  or tool participating in a Swarm run. Ships a runnable `native-media-retrieval`
+  starter example (`swarm:example:media-retrieval`, offline via `ScriptedAgent`) and
+  a [native capabilities guide](docs/native-capabilities.md) with a tested
+  feature/mode/provider matrix and the preserved unsupported combinations. Generated
+  artifacts (images, provider files, vector-store documents) thread stable
+  references, keeping large binaries out of workflow payload columns; a nested
+  capability's usage is accounted at the tool layer and never folded into the outer
+  agent's text-token total. Proof only — tests, docs, and stubs; no runtime change.
 - Default-off terminal workflow callbacks: `then()` / `catch()` on queued
   ([QueuedSwarmResponse](src/Responses/QueuedSwarmResponse.php)) and durable
   ([DurableSwarmResponse](src/Responses/DurableSwarmResponse.php)) responses, and `catch()` on the
