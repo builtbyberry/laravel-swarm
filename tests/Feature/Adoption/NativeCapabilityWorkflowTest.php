@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\CapabilityAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\ClassifyTool;
@@ -16,7 +17,9 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Laravel\Ai\Audio;
 use Laravel\Ai\Classification;
+use Laravel\Ai\Contracts\Tool;
 use Laravel\Ai\Embeddings;
 use Laravel\Ai\Files;
 use Laravel\Ai\Image;
@@ -61,7 +64,7 @@ beforeEach(function () {
  *
  * @param  array<string, mixed>  $arguments
  */
-function runCapabilityWorkflow(object $tool, string $toolName, array $arguments): BuiltByBerry\LaravelSwarm\Responses\SwarmResponse
+function runCapabilityWorkflow(object $tool, string $toolName, array $arguments): SwarmResponse
 {
     $requests = 0;
     Http::fake(function (Request $request) use (&$requests, $toolName, $arguments) {
@@ -75,7 +78,7 @@ function runCapabilityWorkflow(object $tool, string $toolName, array $arguments)
         return Http::response(NativeCapabilityWire::message());
     });
 
-    /** @var \Laravel\Ai\Contracts\Tool $tool */
+    /** @var Tool $tool */
     return app(SwarmRunner::class)->agent(new CapabilityAgent([$tool]))->prompt('task');
 }
 
@@ -227,12 +230,12 @@ it('carries native capabilities across a genuine multi-step sequential workflow'
 
 it('exposes every proven native capability family as a first-class laravel/ai primitive', function () {
     // Inventory guard (AC1): the six families this component proves exist natively.
-    expect(class_exists(Laravel\Ai\Classification::class))->toBeTrue()
-        ->and(class_exists(Laravel\Ai\Image::class))->toBeTrue()
-        ->and(class_exists(Laravel\Ai\Audio::class))->toBeTrue()
-        ->and(class_exists(Laravel\Ai\Transcription::class))->toBeTrue()
-        ->and(class_exists(Laravel\Ai\Files::class))->toBeTrue()
-        ->and(class_exists(Laravel\Ai\Stores::class))->toBeTrue()
-        ->and(class_exists(Laravel\Ai\Embeddings::class))->toBeTrue()
-        ->and(class_exists(Laravel\Ai\Reranking::class))->toBeTrue();
+    expect(class_exists(Classification::class))->toBeTrue()
+        ->and(class_exists(Image::class))->toBeTrue()
+        ->and(class_exists(Audio::class))->toBeTrue()
+        ->and(class_exists(Transcription::class))->toBeTrue()
+        ->and(class_exists(Files::class))->toBeTrue()
+        ->and(class_exists(Stores::class))->toBeTrue()
+        ->and(class_exists(Embeddings::class))->toBeTrue()
+        ->and(class_exists(Reranking::class))->toBeTrue();
 });

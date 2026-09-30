@@ -12,7 +12,6 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 use Laravel\Ai\Image;
 use Laravel\Ai\Reranking;
-use RuntimeException;
 
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');

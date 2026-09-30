@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities;
 
+use Illuminate\Support\Facades\Http;
+
 /**
  * Controlled OpenAI Responses wire for the native-capability workflow proofs.
  *
  * The OUTER agent's text turn is what runs the application tool loop, so it must
- * go over the real text gateway. This builder is what {@see \Illuminate\Support\Facades\Http::fake()}
+ * go over the real text gateway. This builder is what {@see Http::fake()}
  * returns for that turn: request 1 emits a native `function_call` naming the
  * application tool, and request 2 (after the tool result is fed back as
  * `function_call_output`) emits the final assistant message. The nested native

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\CapabilityAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\GenerateImageTool;
@@ -19,7 +20,6 @@ use Laravel\Ai\Responses\Data\ImageUsage;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\ImageResponse;
 use Laravel\Ai\Stores;
-use RuntimeException;
 
 const ARTIFACT_MARKER = 'IMAGE-BINARY-PAYLOAD-MARKER-0123456789';
 
@@ -54,7 +54,7 @@ function fakeImageOf(string $bytes): void
  * WIRE — the `function_call_output` fed back to the model on request 2. That is
  * the workflow payload a leaked binary would travel in, so tests assert against it.
  *
- * @return array{response: BuiltByBerry\LaravelSwarm\Responses\SwarmResponse, tool_output: string}
+ * @return array{response: SwarmResponse, tool_output: string}
  */
 function runImageArtifactWorkflow(): array
 {
