@@ -109,7 +109,7 @@ it('keeps generated image bytes on the disk and out of the persisted workflow pa
         ->and(DB::table('swarm_run_steps')->count())->toBeGreaterThan(0);
 });
 
-it('does not over-capture media bytes when output capture is disabled', function () {
+it('redacts the native step under capture-off and still keeps media bytes off the payload', function () {
     Storage::fake(GenerateImageTool::DISK);
     foreach (['inputs', 'outputs', 'artifacts', 'active_context'] as $capture) {
         config()->set('swarm.capture.'.$capture, false);
@@ -118,15 +118,23 @@ it('does not over-capture media bytes when output capture is disabled', function
 
     runImageArtifactWorkflow();
 
-    // The artifact reference is still usable off the disk, and capture-off never
-    // reintroduces the bytes into the persisted rows.
+    // The artifact reference is still usable off the disk.
     $path = GenerateImageTool::$effects[0]['path'];
     expect(Storage::disk(GenerateImageTool::DISK)->get($path))->toBe(ARTIFACT_MARKER);
 
-    $persisted = collect(DB::table('swarm_run_steps')->get())
-        ->map(fn ($row): string => json_encode($row, JSON_THROW_ON_ERROR))
-        ->implode("\n");
-    expect($persisted)->not->toContain(base64_encode(ARTIFACT_MARKER));
+    $steps = DB::table('swarm_run_steps')->get();
+    expect($steps)->not->toBeEmpty();
+
+    // Capture genuinely engaged: the shipped-false flag maps to Redact, so the
+    // step output and native result are redacted (this is what makes the guard
+    // non-vacuous — it would fail if capture-off were a silent no-op).
+    expect($steps->first()->native_result_status)->toBe('redacted')
+        ->and($steps->first()->output)->toBe('[redacted]');
+
+    // And regardless, neither the raw bytes nor their base64 form reach any column.
+    $persisted = $steps->map(fn ($row): string => json_encode($row, JSON_THROW_ON_ERROR))->implode("\n");
+    expect($persisted)->not->toContain(ARTIFACT_MARKER)
+        ->and($persisted)->not->toContain(base64_encode(ARTIFACT_MARKER));
 });
 
 it('surfaces an unavailable or expired vector store as an actionable workflow failure', function () {

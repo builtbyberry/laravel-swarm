@@ -10,22 +10,28 @@ use BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent;
  * Step 2 of native-media-retrieval: retrieve and rank passages for the query
  * using Laravel AI's NATIVE retrieval capabilities.
  *
- * Extends ScriptedAgent so the example runs offline. In production this agent
- * uses the native capabilities directly — swap {@see reply()} for a real
- * provider path shaped like this:
+ * Extends ScriptedAgent so the example runs offline. In production, retrieve with
+ * the native capabilities. The idiomatic native path binds a vector store to the
+ * agent with the `FileSearch` provider tool and lets the model retrieve — declare
+ * it on a Promptable agent's tools():
  *
- *     // Embed the query for a similarity search.
+ *     use Laravel\Ai\Providers\Tools\FileSearch;
+ *
+ *     public function tools(): array
+ *     {
+ *         return [new FileSearch([config('services.kb.store_id')])];
+ *     }
+ *
+ * For app-side retrieval instead, embed the query and rerank candidates you fetch
+ * yourself:
+ *
  *     $vector = Embeddings::for([$query])->generate()->first();
- *
- *     // Search a native vector store, then rerank the candidates.
- *     $store = Stores::get(config('services.kb.store_id'));
- *     $candidates = $this->searchStore($store, $vector);   // your similarity search
+ *     $candidates = $this->fetchCandidates($vector);   // your app's ANN/SQL search
  *     $ranked = Reranking::of($candidates)->limit(3)->rerank($query);
  *
- *     return json_encode($ranked->documents());
- *
- * Or bind the store to a native agent with the `FileSearch` provider tool and
- * let the model retrieve. See docs/native-capabilities.md for the full recipe.
+ * See docs/native-capabilities.md for the full recipe. (`Stores` manages a store's
+ * documents — add/remove/get — and is searched through the `FileSearch` tool, not a
+ * query method on the store object.)
  */
 class RetrievalAgent extends ScriptedAgent
 {

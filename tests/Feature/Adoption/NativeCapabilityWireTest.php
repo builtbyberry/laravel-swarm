@@ -7,6 +7,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\EmbedTool;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\NativeCapabilityWire;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\RerankTool;
+use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\UnsupportedCapabilityTool;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
@@ -87,4 +88,22 @@ it('preserves a native provider capability limitation explicitly', function () {
     expect(fn () => Image::of('a diagram')->generate('anthropic'))
         ->toThrow(LogicException::class, 'does not support image generation.');
     Http::assertNothingSent();
+});
+
+it('surfaces a native provider capability limitation from inside a workflow', function () {
+    // Same limitation, but reached through a workflow tool loop: Swarm surfaces the
+    // native LogicException unchanged rather than degrading silently.
+    UnsupportedCapabilityTool::$effects = [];
+    $turns = 0;
+    Http::fake(function (Request $request) use (&$turns) {
+        $turns++;
+
+        return Http::response($turns === 1
+            ? NativeCapabilityWire::toolCall('UnsupportedCapabilityTool', ['prompt' => 'a diagram'])
+            : NativeCapabilityWire::message());
+    });
+
+    expect(fn () => app(SwarmRunner::class)->agent(new CapabilityAgent([new UnsupportedCapabilityTool]))->prompt('task'))
+        ->toThrow(LogicException::class, 'does not support image generation');
+    expect(UnsupportedCapabilityTool::$effects)->toBe([]);
 });

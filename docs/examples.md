@@ -153,6 +153,18 @@ out the setup.
 
 Runner: `php artisan swarm:example:streaming run "Weekly engineering digest"`
 
+### 8. `native-media-retrieval`
+
+A three-node sequential swarm — plan → retrieve → answer — that shows how to
+structure native retrieval (embeddings, vector stores, reranking) inside a Swarm
+workflow, ending in a grounded answer. Runs offline with `ScriptedAgent`
+stand-ins; each agent's docblock and the tree's `README.md` show the real native
+calls (`Embeddings::for()`, the `FileSearch` provider tool, `Reranking::of()`) to
+drop in. The executable proof that native capabilities run in a workflow lives in
+the adoption tests — see [Native Media & Retrieval Capabilities](native-capabilities.md).
+
+Runner: `php artisan swarm:example:media-retrieval "What execution modes do Swarm workflows run in?"`
+
 ## ScriptedAgent — how the starters avoid API keys
 
 Most starter agents extend `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent`

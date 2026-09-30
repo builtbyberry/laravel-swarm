@@ -7,16 +7,19 @@ Native feature access through Laravel Swarm workflows.
 ### Added
 
 - Native media and retrieval capabilities proven inside workflows: classification,
-  image generation, audio/transcription, provider files and vector stores,
-  embeddings, and reranking, each exercised from an application-owned native agent
-  or tool participating in a Swarm run. Ships a runnable `native-media-retrieval`
-  starter example (`swarm:example:media-retrieval`, offline via `ScriptedAgent`) and
-  a [native capabilities guide](docs/native-capabilities.md) with a tested
-  feature/mode/provider matrix and the preserved unsupported combinations. Generated
-  artifacts (images, provider files, vector-store documents) thread stable
-  references, keeping large binaries out of workflow payload columns; a nested
-  capability's usage is accounted at the tool layer and never folded into the outer
-  agent's text-token total. Proof only — tests, docs, and stubs; no runtime change.
+  image generation, audio text-to-speech, transcription, provider files and vector
+  stores, embeddings, and reranking, each exercised from an application-owned native
+  agent or tool participating in a Swarm run (via `prompt()` and the queued path;
+  other execution modes inherit the same in-tool-loop path). Ships a runnable
+  `native-media-retrieval` starter example (`swarm:example:media-retrieval`, offline
+  via `ScriptedAgent`) and a [native capabilities guide](docs/native-capabilities.md)
+  with a feature/mode/provider support matrix and the unsupported combinations
+  (verified against `laravel/ai` v1.0.1 source, with image-on-Anthropic proven to
+  fail loud in-workflow). Generated artifacts (images, speech, provider files,
+  vector-store documents) thread stable references, keeping large binaries off the
+  workflow payload; a nested capability's typed result and usage are consumed at the
+  tool layer, never folded into the outer agent's step or text-token total. Proof
+  only — tests, docs, and stubs; no runtime change.
 - Default-off terminal workflow callbacks: `then()` / `catch()` on queued
   ([QueuedSwarmResponse](src/Responses/QueuedSwarmResponse.php)) and durable
   ([DurableSwarmResponse](src/Responses/DurableSwarmResponse.php)) responses, and `catch()` on the

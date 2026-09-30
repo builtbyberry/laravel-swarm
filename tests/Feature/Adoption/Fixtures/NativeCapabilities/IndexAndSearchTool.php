@@ -41,11 +41,13 @@ class IndexAndSearchTool implements Tool
     public function handle(Request $request): string
     {
         $stored = Files::put((string) $request['document'], 'text/plain', self::FILE_NAME);
+        $file = Files::get($stored->id);
         $store = Stores::create(self::STORE_NAME, fileIds: [$stored->id]);
         $fetched = Stores::get($store->id);
 
         self::$effects[] = [
             'file_id' => $stored->id,
+            'file_mime' => $file->mimeType(),
             'store_id' => $store->id,
             'fetched_id' => $fetched->id,
             'ready' => $fetched->ready,

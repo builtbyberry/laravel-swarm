@@ -4,9 +4,17 @@ Laravel AI ships media and retrieval features as first-class native capabilities
 classification, image generation, audio (text-to-speech) and transcription,
 provider files and vector stores, embeddings, and reranking. This guide shows how
 to use them **from inside a Swarm workflow** — an application-owned native agent or
-tool that calls the capability while the workflow carries its input (P1),
-reconstructs its settings (P2), and exposes its typed result (P3). Prefer the
-native call and a runnable example; no capability here needs a bespoke adapter.
+tool that calls the capability while the workflow carries its native input
+([native message inputs & attachments](native-inputs.md)), reconstructs its native
+agent settings across workers ([per-run settings](native-inputs.md)), and records
+each step's bounded native result ([native step results](native-step-results.md)).
+Prefer the native call and a runnable example; no capability here needs a bespoke
+adapter.
+
+The typed capability result (an `EmbeddingsResponse`, `RerankingResponse`, …) is
+consumed **inside the calling tool**; the workflow step records the agent's own
+bounded native result, not the nested capability object (see
+[Artifacts, capture, and honest accounting](#artifacts-capture-and-honest-accounting)).
 
 > **Scope.** This is a recipe and a proof index, not a new bridge. Every capability
 > below is Laravel AI's own; Swarm composes it. The behaviour is proven against
@@ -69,27 +77,40 @@ topology, because the capability call happens in the agent's tool loop.
 | Embeddings | `Embeddings::for()->generate()` | `EmbeddingsResponse` | openai |
 | Reranking | `Reranking::of()->rerank()` | `RerankingResponse` / `RankedDocument` | cohere |
 
-## Execution-mode matrix
+## Execution modes
 
-The capability call is mode-agnostic — it runs inside the tool loop. The outer
-workflow chooses the mode:
+The capability call happens inside the agent's tool loop, so it is
+**mode-agnostic by construction** — a tool that calls `Embeddings::for()` does the
+same thing whether the workflow ran via `prompt()`, `queue()`, `stream()`, or
+`dispatchDurable()`, across sequential, parallel and hierarchical topologies. The
+outer mode is Swarm's, not the capability's, and is exercised in full by the
+topology/mode components of this release ([P1](native-inputs.md),
+[P7](parallel.md), [P8](native-chat-protocols.md), [P9](error-handling.md)).
 
-| Topology | `prompt()` | `queue()` | `stream()` | `dispatchDurable()` |
-|---|---|---|---|---|
-| Sequential | yes | yes | yes | yes |
-| Parallel | yes | yes | opt-in process multiplexing | yes |
-| Hierarchical (generated / static) | yes | yes | yes | yes |
+This component's own executable coverage of the capability-in-a-tool path is:
+
+| Path | Covered here |
+|---|---|
+| `prompt()`, single agent | yes — every capability family |
+| `prompt()`, sequential multi-agent | yes — embeddings → reranking pipeline |
+| `queue()` | yes — an embedding runs in a queued worker |
+| `stream()` / `dispatchDurable()` / parallel / hierarchical | inherited: same tool-loop path, exercised by the mode/topology components above |
 
 Attachment inputs and reconstructible references cross the queue/durable boundary
-through the native-input transport (see [Native Messages and Attachments](native-inputs.md));
-typed capability results surface on each completed step's native result (see
-[Native Step Results](native-step-results.md)).
+through the native-input transport (see [Native Messages and Attachments](native-inputs.md)).
+Each completed step records the **agent's** bounded native result — provider,
+model, generation steps, and tool-call status — via
+[Native Step Results](native-step-results.md); the nested capability's typed
+object is not placed on the step (it is consumed in the tool).
 
 ## Unsupported combinations (preserved, not worked around)
 
 Provider/model limitations are Laravel AI's. Swarm surfaces them unchanged — an
 unsupported capability fails loud before any provider call rather than silently
-degrading. Choose a provider that offers the capability.
+degrading. Choose a provider that offers the capability. The rows below are
+verified against `laravel/ai` v1.0.1 gateway source; image generation on Anthropic
+is additionally proven to fail loud **from inside a workflow tool loop**
+([NativeCapabilityWireTest](../tests/Feature/Adoption/NativeCapabilityWireTest.php)).
 
 | Capability | Not supported on | Behaviour |
 |---|---|---|
@@ -106,13 +127,21 @@ When a provider list is configured, a recoverable provider error raises
 
 ## Artifacts, capture, and honest accounting
 
-- **Large binaries stay out of the workflow payload.** A generated image is stored
-  to an application disk (`ImageResponse::store()`); the workflow threads the stable
-  path/reference, never the bytes. Provider files and vector-store documents are
-  likewise carried as stable ids (`Files::put()` → id, `Stores::create()` → id).
-- **Capture controls apply.** Native step results honour `swarm.capture.*` (Full /
-  Redact / off) exactly as [Native Step Results](native-step-results.md) defines; the
-  media bytes are never reintroduced into persisted rows by any capture setting.
+- **Keep large binaries out of the workflow payload — return a reference.** When a
+  capability tool returns a stable reference rather than the bytes, the bytes never
+  enter the workflow. A generated image is stored to an application disk
+  (`ImageResponse::store()`) and the tool threads the path; provider files and
+  vector-store documents are carried as stable ids (`Files::put()` → id,
+  `Stores::create()` → id). A tool that instead returned base64 would persist those
+  bytes verbatim under capture — so returning a reference is the rule this component
+  demonstrates, not a guarantee Swarm imposes on arbitrary tool output.
+- **Capture controls apply.** The step's native result honours `swarm.capture.*`
+  exactly as [Native Step Results](native-step-results.md) defines. With capture off,
+  the shipped-false flag maps to **Redact** — the step output and native result are
+  redacted (proven in
+  [NativeCapabilityArtifactTest](../tests/Feature/Adoption/NativeCapabilityArtifactTest.php)) —
+  and, because the reference-returning tool never put bytes on the payload, no media
+  bytes appear in persisted rows under Full or Redact.
 - **Nested usage is accounted honestly.** A capability called inside a tool (for
   example `Embeddings::for()->generate()`) carries its **own** usage on its response
   object. Swarm never folds that usage into the outer agent's text-token total — the
@@ -129,16 +158,22 @@ When a provider list is configured, a recoverable provider error raises
 Executable evidence, run against controlled native wire fixtures and native fakes
 with no live provider:
 
-- [NativeCapabilityWorkflowTest](../tests/Feature/Adoption/NativeCapabilityWorkflowTest.php) — every capability family runs inside a workflow; typed results surface; a genuine multi-step sequential pipeline.
-- [NativeCapabilityWireTest](../tests/Feature/Adoption/NativeCapabilityWireTest.php) — real native embeddings wire request formation; modality failures propagate; an unsupported provider combination is preserved.
-- [NativeCapabilityArtifactTest](../tests/Feature/Adoption/NativeCapabilityArtifactTest.php) — image bytes stay on disk and out of persisted payloads; capture-off does not re-capture bytes; an expired vector store is an actionable failure; `swarm:prune` leaves the application disk untouched.
-- [NativeCapabilityConcurrencyTest](../tests/ProcessConcurrency/NativeCapabilityConcurrencyTest.php) — capability workflows run in real background processes with per-tenant isolation.
+- [NativeCapabilityWorkflowTest](../tests/Feature/Adoption/NativeCapabilityWorkflowTest.php) — classification, image generation, audio (TTS), transcription (STT), provider files (`put` + `get`) with vector stores, embeddings, and reranking each run inside a workflow tool loop and surface a typed result at the tool layer; a genuine multi-step sequential pipeline; and a guard that the nested typed result stays off the step.
+- [NativeCapabilityModeTest](../tests/Feature/Adoption/NativeCapabilityModeTest.php) — a native capability runs on the `queue()` path, not only `prompt()`.
+- [NativeCapabilityWireTest](../tests/Feature/Adoption/NativeCapabilityWireTest.php) — real native embeddings wire request formation; modality failures propagate; an unsupported provider combination is preserved, both directly and from inside a workflow.
+- [NativeCapabilityArtifactTest](../tests/Feature/Adoption/NativeCapabilityArtifactTest.php) — image bytes stay on disk and off the wire/persisted payloads; capture-off redacts the step; an expired vector store is an actionable failure; `swarm:prune` leaves the application disk untouched.
+- [NativeCapabilityConcurrencyTest](../tests/ProcessConcurrency/NativeCapabilityConcurrencyTest.php) — a capability workflow runs in a real background process, each branch producing its own result under process isolation.
 - [NativeCapabilityExampleTest](../tests/Feature/Adoption/NativeCapabilityExampleTest.php) — the starter runs end-to-end, offline.
 
-The workflow substrate these run on is [SwarmRunner](../src/Runners/SwarmRunner.php);
-typed capability results are exposed on [SwarmStep](../src/Responses/SwarmStep.php)
-via [NativeStepResult](../src/Responses/NativeStepResult.php), and attachment inputs
-travel through [NativeInputManager](../src/Support/NativeInputManager.php).
+Vision input (an image `Files\Image` attachment on a `UserMessage`) is the native
+input-attachment mechanism, proven end-to-end by
+[native message inputs](native-inputs.md) rather than re-proven here.
+
+The workflow substrate these run on is [SwarmRunner](../src/Runners/SwarmRunner.php).
+Each completed [SwarmStep](../src/Responses/SwarmStep.php) records the agent's own
+bounded projection via [NativeStepResult](../src/Responses/NativeStepResult.php)
+(never the nested capability object), and attachment inputs travel through
+[NativeInputManager](../src/Support/NativeInputManager.php).
 
 ## Next step
 

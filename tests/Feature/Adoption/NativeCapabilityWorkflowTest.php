@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\ClassifyTool;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\EmbedTool;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\GenerateImageTool;
+use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\GenerateSpeechTool;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\IndexAndSearchTool;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\NativeCapabilityWire;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Adoption\Fixtures\NativeCapabilities\RerankTool;
@@ -24,6 +25,7 @@ use Laravel\Ai\Embeddings;
 use Laravel\Ai\Files;
 use Laravel\Ai\Image;
 use Laravel\Ai\Reranking;
+use Laravel\Ai\Responses\AudioResponse;
 use Laravel\Ai\Responses\ClassificationResponse;
 use Laravel\Ai\Responses\Data\ChoiceAnswer;
 use Laravel\Ai\Responses\Data\GeneratedImage;
@@ -53,6 +55,7 @@ beforeEach(function () {
     RerankTool::$effects = [];
     ClassifyTool::$effects = [];
     GenerateImageTool::$effects = [];
+    GenerateSpeechTool::$effects = [];
     TranscribeTool::$effects = [];
     IndexAndSearchTool::$effects = [];
 });
@@ -98,6 +101,24 @@ it('runs a native embedding inside a workflow and keeps its usage off the outer 
         ->and($response->usage['output_tokens'])->toBe(6)
         ->and($response->output)->toBe('workflow-complete');
     Http::assertSentCount(2);
+});
+
+it('keeps the nested capability typed result at the tool layer, not on the workflow step', function () {
+    Embeddings::fake([
+        new EmbeddingsResponse([[0.111, 0.222, 0.333]], new Usage(11, 0), new Meta('openai', 'text-embedding-3-small')),
+    ]);
+
+    $response = runCapabilityWorkflow(new EmbedTool, 'EmbedTool', ['text' => 'retrieve me']);
+
+    // The typed embedding result is consumed and recorded at the TOOL layer...
+    expect(EmbedTool::$effects[0]['dimensions'])->toBe(3);
+
+    // ...and never appears on the step's native result, which is the agent's own
+    // bounded projection (P3), not the nested EmbeddingsResponse. This is why
+    // nested usage is accounted at the tool layer, not folded into the step.
+    $stepJson = json_encode($response->steps[0]->toArray(), JSON_THROW_ON_ERROR);
+    expect($stepJson)->not->toContain('0.111')
+        ->and($stepJson)->not->toContain('0.222');
 });
 
 it('runs native reranking inside a workflow and surfaces the ranked winner', function () {
@@ -156,6 +177,24 @@ it('generates a native image inside a workflow and threads a stable artifact ref
     Http::assertSentCount(2);
 });
 
+it('synthesizes native speech inside a workflow and threads a stable audio artifact reference', function () {
+    Storage::fake(GenerateSpeechTool::DISK);
+    Audio::fake([
+        new AudioResponse(base64_encode('spoken-audio-bytes'), new Usage(0, 0), new Meta('openai', 'tts-1')),
+    ]);
+
+    $response = runCapabilityWorkflow(new GenerateSpeechTool, 'GenerateSpeechTool', ['text' => 'read this aloud']);
+
+    expect(GenerateSpeechTool::$effects)->toHaveCount(1);
+    $artifact = GenerateSpeechTool::$effects[0];
+    expect($artifact['disk'])->toBe(GenerateSpeechTool::DISK)
+        ->and($artifact['path'])->toBeString()
+        ->and($response->output)->toBe('workflow-complete');
+    Storage::disk(GenerateSpeechTool::DISK)->assertExists($artifact['path']);
+    expect(Storage::disk(GenerateSpeechTool::DISK)->get($artifact['path']))->toBe('spoken-audio-bytes');
+    Http::assertSentCount(2);
+});
+
 it('transcribes native audio inside a workflow and surfaces the typed transcript', function () {
     Transcription::fake([
         new TranscriptionResponse('the quarterly report is ready', new Collection, new TranscriptionUsage(0, 0, audioSeconds: 3.5), new Meta('openai', 'whisper-1')),
@@ -181,8 +220,10 @@ it('indexes into a native vector store inside a workflow and confirms retrieval 
     expect(IndexAndSearchTool::$effects)->toHaveCount(1);
     $indexed = IndexAndSearchTool::$effects[0];
 
-    // Stable references, deterministic and re-derivable — not payloads.
+    // Stable references, deterministic and re-derivable — not payloads. The file
+    // is also fetched back by id (Files::get) to confirm round-trip retrieval.
     expect($indexed['file_id'])->toBe(Files::fakeId(IndexAndSearchTool::FILE_NAME))
+        ->and($indexed['file_mime'])->toBe('text/plain')
         ->and($indexed['store_id'])->toBe(Stores::fakeId(IndexAndSearchTool::STORE_NAME))
         ->and($indexed['fetched_id'])->toBe($indexed['store_id'])
         ->and($indexed['ready'])->toBeTrue()

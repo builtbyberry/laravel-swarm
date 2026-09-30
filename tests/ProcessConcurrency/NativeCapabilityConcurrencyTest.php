@@ -74,7 +74,7 @@ function nativeCapabilityTenantWorker(string $tenant, int $dimensions, int $toke
     };
 }
 
-test('native capability workflows run in real background processes with per-tenant isolation', function () {
+test('native capability workflows run in real background processes with independent per-branch results', function () {
     $appKey = (string) config('app.key');
 
     $results = app(ConcurrencyManager::class)->driver('process')->run([
@@ -82,8 +82,9 @@ test('native capability workflows run in real background processes with per-tena
         nativeCapabilityTenantWorker('bravo', 5, 11, $appKey),
     ]);
 
-    // Each background process produced its OWN tenant's typed modality result;
-    // neither the faked vector nor the tool's static effect state leaked across.
+    // Each forked worker bootstraps the swarm, re-arms its own fakes, and produces
+    // its OWN typed modality result — process isolation means neither the faked
+    // vector nor the tool's static effect state can cross between branches.
     expect($results)->toBe([
         ['tenant' => 'alpha', 'effect' => ['dimensions' => 3, 'input_tokens' => 7]],
         ['tenant' => 'bravo', 'effect' => ['dimensions' => 5, 'input_tokens' => 11]],
