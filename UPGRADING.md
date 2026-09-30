@@ -2,6 +2,26 @@
 
 ## Upgrading to v0.28.0
 
+### Native ownership, limits, and legacy retirement
+
+No action is required. This release records the native-first ownership contract in
+[Native Ownership and Limits](docs/native-ownership-and-limits.md): what Swarm
+delegates to native Laravel AI, the limits it keeps on purpose, and the deprecation
+schedule. Two points to be aware of:
+
+- Structured-output agents still cannot be streamed — upstream `laravel/ai` v1.0.1
+  rejects it. Swarm fails loud early with `StructuredOutputStreamingException`; run
+  those agents with `prompt()` / `run()`, `queue()`, or durable non-streaming
+  execution. Nothing changes unless you stream a structured-output worker today.
+- Native conversation storage, authorization, retention, and encryption are owned by
+  your application and Laravel AI — Swarm capture and sealing do not cover native
+  rows. See [Native Conversation Upgrade](docs/native-conversation-upgrade.md).
+
+`BuiltByBerry\LaravelSwarm\Contracts\Agent`, deprecated since v0.23.0, remains
+available and unchanged; it is now tracked for removal in v1.0
+([#547](https://github.com/builtbyberry/laravel-swarm/issues/547)). New code should
+type-hint `Laravel\Ai\Contracts\Agent` directly. No symbol is removed in this release.
+
 ### Native chat protocol adapters
 
 Vercel and AG-UI projection is default-off. Applications with a published

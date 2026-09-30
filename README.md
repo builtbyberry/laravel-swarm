@@ -83,6 +83,10 @@ alone does not verify an application's workflow behavior. See the
 For the Laravel AI 1.0 transition, follow the [native conversation upgrade](docs/native-conversation-upgrade.md)
 and explicitly select the [new upgrade recipe](docs/upgrade-assistant.md#laravel-ai-10-recipe).
 
+See [Native Ownership and Limits](docs/native-ownership-and-limits.md) for what Swarm
+delegates to native Laravel AI, the limits it keeps on purpose (with evidence and
+reevaluation triggers), and the deprecation and legacy-retirement schedule.
+
 ## Installation
 
 Require the package with Composer, then run the interactive installer:
