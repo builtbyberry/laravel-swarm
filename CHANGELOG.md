@@ -98,6 +98,15 @@ Native feature access through Laravel Swarm workflows.
   The adapter adds no migration or persistent data; rollback is revert-safe
   after projected streams drain, cached config is rebuilt, and long-lived
   application workers are recycled.
+- Native ownership and limits contract ([docs/native-ownership-and-limits.md](docs/native-ownership-and-limits.md))
+  recording what belongs to native Laravel AI versus what Swarm retains, the limits
+  kept on purpose — the structured-output streaming rejection (early swarm-domain
+  failure via `StructuredOutputStreamingException` plus the synchronous coordinator,
+  verified against `laravel/ai` v1.0.1) each with its exact evidence, affected modes
+  and reevaluation trigger — native conversation storage as separately configured
+  from Swarm capture and sealing, and the legacy-retirement schedule, including the
+  `Contracts\Agent` (deprecated since v0.23.0) removal follow-up tracked for v1.0
+  (#547). Documentation only; no runtime change.
 
 ### Changed
 

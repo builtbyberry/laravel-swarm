@@ -106,6 +106,7 @@ The recommended reading path for new users.
 
 - [Configuration](configuration.md) — every config key, grouped and searchable
 - [Public Surface](public-surface.md)
+- [Native Ownership and Limits](native-ownership-and-limits.md) — what is native-owned versus Swarm-retained, the limits kept on purpose (with evidence and reevaluation triggers), and the deprecation and legacy-retirement schedule
 - [Maintenance](maintenance.md)
 - [APP_KEY Rotation](app-key-rotation.md) — runbook for rotating the application key alongside sealed swarm rows
 
