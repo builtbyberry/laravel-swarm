@@ -1,0 +1,12 @@
+{
+    "slug": "media-retrieval",
+    "title": "Native media & retrieval",
+    "topology": "sequential",
+    "summary": "Run native retrieval — embeddings, vector search and reranking — inside a Swarm workflow that ends in a grounded answer.",
+    "tokens": {
+        "namespaceSegment": "NativeMediaRetrieval",
+        "swarmClass": "MediaRetrievalPipeline",
+        "commandClass": "SwarmExampleMediaRetrievalCommand",
+        "commandSignature": "swarm:example:media-retrieval"
+    }
+}
