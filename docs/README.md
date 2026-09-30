@@ -21,6 +21,7 @@ The recommended reading path for new users.
 - [Structured Input](structured-input.md)
 - [Native Messages and Attachments](native-inputs.md) — default-off `UserMessage` input, explicit recipients, operational storage, deployment and rollback
 - [Native Step Results](native-step-results.md) — bounded native response fields on each completed step, with capture-aware persistence
+- [Native Media & Retrieval Capabilities](native-capabilities.md) — classification, images, audio/transcription, files/vector stores, embeddings and reranking inside a workflow, with a support matrix and unsupported combinations
 - [Testing](testing.md)
 - [Upgrading to v0.27.0 / Laravel AI 1.0](../UPGRADING.md#upgrading-to-v0270) — dependency, reader, usage and rollback boundaries
 - [Native Conversation Upgrade](native-conversation-upgrade.md) — application-owned migration, rehearsal, authorization and restore procedure
