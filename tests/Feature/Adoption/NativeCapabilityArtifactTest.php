@@ -49,25 +49,42 @@ function fakeImageOf(string $bytes): void
     ]);
 }
 
-function runImageArtifactWorkflow(): BuiltByBerry\LaravelSwarm\Responses\SwarmResponse
+/**
+ * Runs the image workflow and captures what the tool result actually put ON THE
+ * WIRE — the `function_call_output` fed back to the model on request 2. That is
+ * the workflow payload a leaked binary would travel in, so tests assert against it.
+ *
+ * @return array{response: BuiltByBerry\LaravelSwarm\Responses\SwarmResponse, tool_output: string}
+ */
+function runImageArtifactWorkflow(): array
 {
     $turns = 0;
-    Http::fake(function (Request $request) use (&$turns) {
+    $toolOutput = '';
+    Http::fake(function (Request $request) use (&$turns, &$toolOutput) {
         $turns++;
+        if ($turns === 1) {
+            return Http::response(NativeCapabilityWire::toolCall('GenerateImageTool', ['prompt' => 'a diagram']));
+        }
 
-        return Http::response($turns === 1
-            ? NativeCapabilityWire::toolCall('GenerateImageTool', ['prompt' => 'a diagram'])
-            : NativeCapabilityWire::message());
+        foreach ($request['input'] ?? [] as $item) {
+            if (($item['type'] ?? null) === 'function_call_output') {
+                $toolOutput = (string) $item['output'];
+            }
+        }
+
+        return Http::response(NativeCapabilityWire::message());
     });
 
-    return app(SwarmRunner::class)->agent(new CapabilityAgent([new GenerateImageTool]))->prompt('task');
+    $response = app(SwarmRunner::class)->agent(new CapabilityAgent([new GenerateImageTool]))->prompt('task');
+
+    return ['response' => $response, 'tool_output' => $toolOutput];
 }
 
 it('keeps generated image bytes on the disk and out of the persisted workflow payload', function () {
     Storage::fake(GenerateImageTool::DISK);
     fakeImageOf(ARTIFACT_MARKER);
 
-    runImageArtifactWorkflow();
+    ['tool_output' => $toolOutput] = runImageArtifactWorkflow();
 
     $path = GenerateImageTool::$effects[0]['path'];
 
@@ -75,8 +92,13 @@ it('keeps generated image bytes on the disk and out of the persisted workflow pa
     Storage::disk(GenerateImageTool::DISK)->assertExists($path);
     expect(Storage::disk(GenerateImageTool::DISK)->get($path))->toBe(ARTIFACT_MARKER);
 
-    // ...and neither the raw bytes nor their base64 wire form leak into any
-    // persisted workflow payload column.
+    // ...the workflow payload (the tool result on the wire) carries the stable
+    // reference, NOT the bytes or their base64 form.
+    expect($toolOutput)->toContain($path)
+        ->and($toolOutput)->not->toContain(ARTIFACT_MARKER)
+        ->and($toolOutput)->not->toContain(base64_encode(ARTIFACT_MARKER));
+
+    // ...and nothing leaks into the persisted step/history columns either.
     $persisted = collect(DB::table('swarm_run_steps')->get())
         ->merge(DB::table('swarm_run_histories')->get())
         ->map(fn ($row): string => json_encode($row, JSON_THROW_ON_ERROR))
