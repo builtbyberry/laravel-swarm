@@ -26,6 +26,7 @@ The recommended reading path for new users.
 - [Upgrading to v0.27.0 / Laravel AI 1.0](../UPGRADING.md#upgrading-to-v0270) — dependency, reader, usage and rollback boundaries
 - [Native Conversation Upgrade](native-conversation-upgrade.md) — application-owned migration, rehearsal, authorization and restore procedure
 - [Upgrade Assistant](upgrade-assistant.md#laravel-ai-10-recipe) — the explicit `0.26-to-0.27` recipe and guarded manifest edits
+- [Native-feature ecosystem proof (v0.28.0)](native-feature-ecosystem-proof.md) — combined candidate install proof, per-companion compatibility, F/R reconciliation and carried-forward limits
 - [Laravel AI 1.0 adoption evidence](ai-1-release-evidence.md) — reviewed core/companion candidates, preservation gates and publication boundaries
 - [Historical Laravel AI 0.11.2 adoption evidence](ai-0112-release-evidence.md) — v0.26 dispositions, executed proof and deletion manifest
 

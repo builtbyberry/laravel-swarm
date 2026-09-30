@@ -107,6 +107,7 @@ Native feature access through Laravel Swarm workflows.
   from Swarm capture and sealing, and the legacy-retirement schedule, including the
   `Contracts\Agent` (deprecated since v0.23.0) removal follow-up tracked for v1.0
   (#547). Documentation only; no runtime change.
+- Combined native-feature ecosystem proof ([docs/native-feature-ecosystem-proof.md](docs/native-feature-ecosystem-proof.md)): the v0.28.0 native features verified together with the four companions in a fresh application. The reproducible ecosystem harness is now release-agnostic (package and native pins come from `sources.json`), so one harness serves the ai-1 and v0.28 candidate sets. Records the frozen candidate set, the combined fresh-install proof with discriminating fault probes, per-companion core-0.28 CI evidence, the F1–F9 / R1–R9 assessment reconciliation, and the limits carried forward (the upstream Laravel 13.16 compatibility-lane advisory, the companion `^0.28` publication gate, and the permanent native-approval rejection boundary). Four sanctioned companion siblings (Pulse, Filament, MCP, memory-vector) add `^0.28` core compatibility in their own projects. Proof and docs only; no runtime change, and publication remains a later shipping gate.
 
 ### Changed
 

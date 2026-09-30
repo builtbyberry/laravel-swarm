@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 sys.dont_write_bytecode = True
-from proof import VERSIONS, check, digest, save, source_map, verify
+from proof import PACKAGES, check, digest, save, source_map, verify
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--proof', type=Path, required=True)
@@ -26,7 +26,8 @@ logs = root / 'fault-probes'
 check(not logs.exists(), 'Fault probe output already exists; preserve previous evidence')
 logs.mkdir()
 expected = report['expected']
-source = {n: expected[n] for n in VERSIONS}
+source = {n: expected[n] for n in PACKAGES}
+source['native'] = {n: expected[n] for n in expected if n not in PACKAGES}
 lock_path, installed_path = app / 'composer.lock', app / 'vendor/composer/installed.json'
 original = {p: p.read_bytes() for p in [lock_path, installed_path, app / 'database/database.sqlite']}
 original_hashes = {str(p.relative_to(app)): digest(p) for p in original}
@@ -60,7 +61,7 @@ try:
     probe('wrong-ref', bad, peer, source, 'Wrong source ref')
     bad_source = copy.deepcopy(source)
     bad_source['builtbyberry/laravel-swarm']['version'] = '0.26.2'
-    probe('wrong-version', lock, installed, bad_source, 'Wrong expected version')
+    probe('wrong-version', lock, installed, bad_source, 'Wrong version')
     bad = copy.deepcopy(lock)
     bad['packages'] = [p for p in bad['packages'] if p['name'] != 'builtbyberry/laravel-swarm-pulse']
     probe('missing-companion', bad, installed, source, 'Missing locked/installed package')

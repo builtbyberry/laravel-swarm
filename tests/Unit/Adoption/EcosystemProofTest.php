@@ -62,6 +62,19 @@ it('accepts only exact complete lock and installed ecosystem identities', functi
             case 'aliases':
                 $lock['aliases'] = [['alias' => '0.27.0']];
                 break;
+            case 'native-bad-ref':
+                $sources['native'] = [
+                    'laravel/ai' => ['version' => '1.0.0', 'reference' => 'main'],
+                    'laravel/framework' => ['version' => '13.33.0', 'reference' => '91188a17ceaa3dbace6e8a5f7abd0d042e466359'],
+                    'laravel/mcp' => ['version' => '1.0.0', 'reference' => 'cfa4f38f82873eeb6848527883545f98f871e229'],
+                ];
+                break;
+            case 'native-incomplete':
+                $sources['native'] = ['laravel/ai' => ['version' => '1.0.0', 'reference' => '101c7ea33cd8569d82570f753fbf38e48b7d3d95']];
+                break;
+            case 'non-exact-version':
+                $sources['builtbyberry/laravel-swarm']['version'] = '^0.28';
+                break;
         }
         foreach (['composer.lock' => $lock, 'vendor/composer/installed.json' => $installed, 'sources.json' => $sources] as $path => $value) {
             file_put_contents($root.'/'.$path, json_encode($value, JSON_THROW_ON_ERROR));
@@ -84,7 +97,34 @@ it('accepts only exact complete lock and installed ecosystem identities', functi
     'floating source' => ['floating', 'Immutable 40hex ref required'],
     'omitted expected companion' => ['incomplete-map', 'Expected exactly five ecosystem packages'],
     'alias' => ['aliases', 'Alias lock'],
+    'native block bad ref' => ['native-bad-ref', 'Immutable 40hex ref required'],
+    'native block incomplete' => ['native-incomplete', 'Native block must pin'],
+    'non-exact version' => ['non-exact-version', 'Expected an exact x.y.z version'],
 ]);
+
+it('uses the native override block, not the defaults, when present', function () {
+    [$root, $lock, $installed, $sources] = ecosystemProofFixture();
+    // The optional "native" block lets one harness serve every release's native pins.
+    // Override laravel/ai to a version the install does NOT carry (1.0.0): if the block
+    // were ignored and the defaults used, verify would pass; because it is honored, the
+    // override's version is checked against the install and the mismatch is rejected.
+    $sources['native'] = [
+        'laravel/ai' => ['version' => '9.9.9', 'reference' => '101c7ea33cd8569d82570f753fbf38e48b7d3d95'],
+        'laravel/framework' => ['version' => '13.33.0', 'reference' => '91188a17ceaa3dbace6e8a5f7abd0d042e466359'],
+        'laravel/mcp' => ['version' => '1.0.0', 'reference' => 'cfa4f38f82873eeb6848527883545f98f871e229'],
+    ];
+    try {
+        foreach (['composer.lock' => $lock, 'vendor/composer/installed.json' => $installed, 'sources.json' => $sources] as $path => $value) {
+            file_put_contents($root.'/'.$path, json_encode($value, JSON_THROW_ON_ERROR));
+        }
+        $command = new Process(['python3', dirname(__DIR__, 3).'/.github/scripts/ai1-ecosystem/verify.py', '--app', $root, '--sources', $root.'/sources.json']);
+        $command->run();
+        expect($command->getExitCode())->toBe(1);
+        expect($command->getOutput().$command->getErrorOutput())->toContain('Wrong version: laravel/ai');
+    } finally {
+        (new Filesystem)->deleteDirectory($root);
+    }
+});
 
 it('fails a stalled ecosystem command with bounded diagnostic output', function () {
     $root = sys_get_temp_dir().'/swarm-ecosystem-timeout-'.bin2hex(random_bytes(8));
