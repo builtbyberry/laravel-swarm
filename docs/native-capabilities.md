@@ -152,6 +152,15 @@ When a provider list is configured, a recoverable provider error raises
 - **Cleanup ownership.** `swarm:prune` prunes only Swarm-created persistence and
   native-input temporary files. An application-selected artifact disk is the
   application's to retain and prune.
+- **Permissions and tenant isolation.** A capability tool is stateless per call and
+  adds no cross-tenant surface, so this component does not re-prove the transport's
+  isolation. Attachment permissions (authorized, versioned file references) are the
+  native-input contract's ([native message inputs](native-inputs.md)); tenant
+  isolation of native settings, inputs, and results across interleaved and recovered
+  runs is proven by the settings-reconstruction and step-result components. What this
+  component proves is that concurrent capability workflows stay isolated across real
+  background processes (see
+  [NativeCapabilityConcurrencyTest](../tests/ProcessConcurrency/NativeCapabilityConcurrencyTest.php)).
 
 ## Proven by
 

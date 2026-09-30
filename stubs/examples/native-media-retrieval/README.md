@@ -1,17 +1,20 @@
 # Native Media & Retrieval
 
-Answer a question from a knowledge base using Laravel AI's **native** retrieval
-capabilities — embeddings, vector stores and reranking — all driven from inside a
-single Swarm workflow. Three agents run in order:
+A starter that shows how to **structure** native retrieval — embeddings, vector
+stores and reranking — inside a single Swarm workflow to answer a question from a
+knowledge base. It runs offline with scripted stand-ins (no provider, no API key);
+each agent's docblock and the "Plug in a real model" section below show the native
+calls to drop in. Three agents run in order:
 
 ```
 QueryPlanner → RetrievalAgent → AnswerSynthesizer
 ```
 
 `QueryPlanner` rewrites the question into a focused retrieval query.
-`RetrievalAgent` embeds that query, searches a native vector store and reranks the
-candidates, returning the winning passages. `AnswerSynthesizer` writes the final
-answer grounded in the top passage.
+`RetrievalAgent` is where retrieval happens — in production it embeds the query,
+searches a native vector store (via the `FileSearch` provider tool) and reranks the
+candidates; the shipped stand-in scores a small in-memory passage set so the demo
+runs offline. `AnswerSynthesizer` writes the final answer grounded in the top passage.
 
 ## Run it
 
