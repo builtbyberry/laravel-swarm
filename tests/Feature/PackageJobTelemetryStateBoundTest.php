@@ -77,7 +77,8 @@ function telemetryBoundProcess(QueueJobContract $queued, int $maxTries): ?Throwa
     return null;
 }
 
-beforeEach(function () {
+function telemetryBoundQueue(): void
+{
     config()->set('swarm.durable.job.tries', 5);
     config()->set('queue.connections.telemetry-bound', [
         'driver' => 'database', 'connection' => 'testing', 'table' => 'jobs',
@@ -92,7 +93,9 @@ beforeEach(function () {
         $table->unsignedInteger('available_at');
         $table->unsignedInteger('created_at');
     });
-});
+}
+
+beforeEach(fn () => telemetryBoundQueue());
 
 it('leaves no marker behind when a failed attempt is released for retry', function (string $jobClass) {
     $telemetry = telemetryBoundSink();
@@ -183,9 +186,11 @@ it('keeps a pending marker when another job is attempted before the failure is r
     $telemetry = telemetryBoundSink();
     telemetryBoundManager([new LogicException('outer attempt failed')]);
     $nested = 0;
-    Event::listen(JobExceptionOccurred::class, function () use (&$nested): void {
+    $pendingAfterNestedJob = null;
+    Event::listen(JobExceptionOccurred::class, function () use (&$nested, &$pendingAfterNestedJob): void {
         if ($nested++ === 0) {
             app('queue')->connection('sync')->push(new PackageJobTelemetryStateBoundUnrelatedJob);
+            $pendingAfterNestedJob = app(PackageJobTelemetryState::class)->pendingCount();
         }
     });
 
@@ -193,6 +198,7 @@ it('keeps a pending marker when another job is attempted before the failure is r
         ->toThrow(LogicException::class, 'outer attempt failed');
 
     expect($nested)->toBe(1)
+        ->and($pendingAfterNestedJob)->toBe(1)
         ->and($telemetry->recordsForCategory('job.failed'))->toHaveCount(1)
         ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe(0);
 });
@@ -216,23 +222,51 @@ it('still emits the fallback job.failed when the handler never ran', function ()
         ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe(0);
 });
 
-it('never lets a job that cannot report its attempt break the queue event', function () {
+it('never lets a queue job that cannot report its id break the queue event', function () {
     $state = app(PackageJobTelemetryState::class);
-    $state->markFailed('job:run:pending-uuid:1', 'pending-uuid', 1);
+    $state->markFailed('job:run:pending-uuid:1', 'pending-uuid');
     $job = new class extends FakeJob
     {
         public function getRawBody(): string
         {
-            return json_encode(['uuid' => 'pending-uuid'], JSON_THROW_ON_ERROR);
-        }
-
-        public function attempts(): int
-        {
-            throw new RuntimeException('attempt count unavailable');
+            throw new RuntimeException('payload unavailable');
         }
     };
 
     event(new JobAttempted('telemetry-bound', $job));
 
     expect($state->pendingCount())->toBe(1);
+});
+
+it('holds at most the cap when telemetry event listening is disabled', function () {
+    $cap = (new ReflectionClassConstant(PackageJobTelemetryState::class, 'MAX_PENDING'))->getValue();
+    $previous = getenv('SWARM_OBSERVABILITY_LISTEN_EVENTS');
+    putenv('SWARM_OBSERVABILITY_LISTEN_EVENTS=false');
+    $_ENV['SWARM_OBSERVABILITY_LISTEN_EVENTS'] = $_SERVER['SWARM_OBSERVABILITY_LISTEN_EVENTS'] = 'false';
+
+    try {
+        $this->refreshApplication();
+        telemetryBoundQueue();
+        expect(config('swarm.observability.listen_to_events'))->toBeFalse();
+
+        $telemetry = telemetryBoundSink();
+        $failures = $cap + 5;
+        telemetryBoundManager(array_fill(0, $failures, new LogicException('attempt failed')));
+        $queue = app('queue')->connection('telemetry-bound');
+
+        for ($run = 0; $run < $failures; $run++) {
+            $queue->push(new AdvanceDurableSwarm("bound-unlistened-run-{$run}", 0));
+            telemetryBoundProcess($queue->pop('test'), maxTries: 5);
+            $this->travel(10)->minutes();
+            DB::connection('testing')->table('jobs')->delete();
+        }
+
+        expect($telemetry->recordsForCategory('job.failed'))->toHaveCount($failures)
+            ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe($cap);
+    } finally {
+        $previous === false
+            ? putenv('SWARM_OBSERVABILITY_LISTEN_EVENTS')
+            : putenv("SWARM_OBSERVABILITY_LISTEN_EVENTS={$previous}");
+        unset($_ENV['SWARM_OBSERVABILITY_LISTEN_EVENTS'], $_SERVER['SWARM_OBSERVABILITY_LISTEN_EVENTS']);
+    }
 });

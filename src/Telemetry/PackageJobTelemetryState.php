@@ -8,7 +8,7 @@ namespace BuiltByBerry\LaravelSwarm\Telemetry;
  * Process-local guard for package job telemetry emitted inside job handlers.
  *
  * A marker is only useful for the attempt that left it, so the guard bounds
- * itself two ways: {@see forgetAttempt()} drops an attempt's marker once the
+ * itself two ways: {@see forgetJob()} drops a queue job's marker once its
  * attempt is over, and {@see markFailed()} evicts the oldest marker beyond
  * {@see MAX_PENDING} so a marker nobody discards cannot accumulate for the
  * life of the process. Evicting a marker that is still pending costs at most
@@ -21,16 +21,20 @@ class PackageJobTelemetryState
     protected const MAX_PENDING = 256;
 
     /**
-     * De-dup key => the queue attempt that left it ("jobId:attempt"), or null
-     * when the handler ran without an identifiable queue job.
+     * De-dup key => id of the queue job that left it, or null when the handler
+     * ran without an identifiable queue job.
      *
      * @var array<string, string|null>
      */
     protected array $failedJobs = [];
 
-    public function markFailed(string $key, ?string $jobId = null, int $attempt = 1): void
+    /**
+     * @param  string|null  $jobId  The queue job's id, so {@see forgetJob()} can find the
+     *                              marker later; null leaves it to {@see consumeFailed()} and the cap.
+     */
+    public function markFailed(string $key, ?string $jobId): void
     {
-        $this->failedJobs[$key] = $jobId === null ? null : $this->attemptHandle($jobId, $attempt);
+        $this->failedJobs[$key] = $jobId;
 
         if (count($this->failedJobs) > self::MAX_PENDING) {
             unset($this->failedJobs[array_key_first($this->failedJobs)]);
@@ -49,14 +53,12 @@ class PackageJobTelemetryState
     }
 
     /**
-     * Discard whatever marker the given queue attempt left, without reporting it.
+     * Discard every marker the given queue job left, without reporting it.
      */
-    public function forgetAttempt(string $jobId, int $attempt): void
+    public function forgetJob(string $jobId): void
     {
-        $handle = $this->attemptHandle($jobId, $attempt);
-
         foreach ($this->failedJobs as $key => $pending) {
-            if ($pending === $handle) {
+            if ($pending === $jobId) {
                 unset($this->failedJobs[$key]);
             }
         }
@@ -65,10 +67,5 @@ class PackageJobTelemetryState
     public function pendingCount(): int
     {
         return count($this->failedJobs);
-    }
-
-    protected function attemptHandle(string $jobId, int $attempt): string
-    {
-        return $jobId.':'.$attempt;
     }
 }

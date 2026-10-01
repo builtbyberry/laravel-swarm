@@ -173,7 +173,7 @@ Native feature access through Laravel Swarm workflows.
   attempt and released it only on the job's final failure, so retried attempts
   (and jobs that later succeeded) left entries behind for the life of the worker.
   The entry is now dropped when the attempt ends, and the guard holds at most 256
-  entries regardless. Emitted telemetry is unchanged.
+  entries regardless. Emitted telemetry is unchanged. (#476)
 
 ## v0.27.0 - 2026-09-24
 

@@ -31,6 +31,8 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\SyncQueue;
+use Illuminate\Queue\Worker;
 use Throwable;
 
 /**
@@ -292,11 +294,16 @@ class SwarmTelemetryEventListener
     }
 
     /**
-     * Drop the failure marker an attempt left once the attempt is over. Only a
-     * final failure consumes its marker through {@see handleJobFailed()}; an
-     * attempt released for retry never gets there. The queue dispatches this
-     * event after any failure event for the same attempt, and the marker is
-     * matched on the queue job's own id and attempt rather than its payload.
+     * Drop the failure marker a job left once its attempt is over. Only a final
+     * failure consumes its marker through {@see handleJobFailed()}; an attempt
+     * released for retry never gets there.
+     *
+     * The marker is found by the queue job's envelope id instead of the de-dup
+     * key built from the unserialized command, because this event fires for
+     * every job the application runs and {@see unserializePackageJob()} does not
+     * decode every package job. For where this event sits relative to the
+     * attempt's failure event, see {@see Worker::process()} and
+     * {@see SyncQueue::executeJob()}.
      */
     public function handleJobAttempted(JobAttempted $event): void
     {
@@ -308,12 +315,12 @@ class SwarmTelemetryEventListener
             $jobId = $this->queueJobId($event->job);
 
             if ($jobId !== null) {
-                $this->jobTelemetryState->forgetAttempt($jobId, $event->job->attempts());
+                $this->jobTelemetryState->forgetJob($jobId);
             }
         } catch (Throwable) {
-            // The queue dispatches this event while the attempt's own exception
-            // is still propagating; a throw here would replace it. A marker left
-            // behind is bounded by PackageJobTelemetryState itself.
+            // This handler must never replace the exception of the attempt it is
+            // cleaning up after. A marker left behind stays bounded; see
+            // PackageJobTelemetryState.
         }
     }
 

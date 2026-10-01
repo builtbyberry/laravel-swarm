@@ -41,7 +41,6 @@ trait EmitsSwarmJobTelemetry
                 $this->swarmJobTelemetryState()->markFailed(
                     $this->swarmJobTelemetryKey(),
                     $this->telemetryJobId(),
-                    $this->telemetryAttempt(),
                 );
             } finally {
                 NativeOutcomeValidator::rethrowIfUnsupported($exception);

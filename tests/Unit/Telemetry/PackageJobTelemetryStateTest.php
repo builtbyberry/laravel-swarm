@@ -14,7 +14,7 @@ test('markers nobody consumes cannot accumulate past the cap', function (): void
     $cap = packageJobTelemetryStateCap();
 
     for ($attempt = 1; $attempt <= $cap * 4; $attempt++) {
-        $state->markFailed("job:run:uuid:{$attempt}", 'uuid', $attempt);
+        $state->markFailed("job:run:uuid:{$attempt}", 'uuid');
     }
 
     expect($state->pendingCount())->toBe($cap);
@@ -25,7 +25,7 @@ test('the cap evicts the oldest marker and keeps the newest', function (): void 
     $cap = packageJobTelemetryStateCap();
 
     for ($attempt = 1; $attempt <= $cap + 1; $attempt++) {
-        $state->markFailed("job:run:uuid:{$attempt}", 'uuid', $attempt);
+        $state->markFailed("job:run:uuid:{$attempt}", 'uuid');
     }
 
     expect($state->consumeFailed('job:run:uuid:1'))->toBeFalse()
@@ -36,8 +36,8 @@ test('the cap evicts the oldest marker and keeps the newest', function (): void 
 test('a marker is consumed exactly once', function (): void {
     $state = new PackageJobTelemetryState;
 
-    $state->markFailed('job:run:uuid:1', 'uuid', 1);
-    $state->markFailed('job:run:uuid:1', 'uuid', 1);
+    $state->markFailed('job:run:uuid:1', 'uuid');
+    $state->markFailed('job:run:uuid:1', 'uuid');
 
     expect($state->pendingCount())->toBe(1)
         ->and($state->consumeFailed('job:run:uuid:1'))->toBeTrue()
@@ -48,24 +48,24 @@ test('a marker is consumed exactly once', function (): void {
 test('a marker left without a queue job is still consumable by its key', function (): void {
     $state = new PackageJobTelemetryState;
 
-    $state->markFailed('job:run::1');
+    $state->markFailed('job:run::1', null);
 
     expect($state->consumeFailed('job:run::1'))->toBeTrue();
 });
 
-test('forgetting an attempt drops only the marker that attempt left', function (): void {
+test('forgetting a queue job drops every marker that job left and no other', function (): void {
     $state = new PackageJobTelemetryState;
 
-    $state->markFailed('job:run:1:1', '1', 1);
-    $state->markFailed('job:run:11:1', '11', 1);
-    $state->markFailed('job:run:1:2', '1', 2);
-    $state->markFailed('job:run::1');
+    $state->markFailed('job:run:1:1', '1');
+    $state->markFailed('job:run:1:2', '1');
+    $state->markFailed('job:run:11:1', '11');
+    $state->markFailed('job:run::1', null);
 
-    $state->forgetAttempt('1', 1);
+    $state->forgetJob('1');
 
-    expect($state->pendingCount())->toBe(3)
+    expect($state->pendingCount())->toBe(2)
         ->and($state->consumeFailed('job:run:1:1'))->toBeFalse()
+        ->and($state->consumeFailed('job:run:1:2'))->toBeFalse()
         ->and($state->consumeFailed('job:run:11:1'))->toBeTrue()
-        ->and($state->consumeFailed('job:run:1:2'))->toBeTrue()
         ->and($state->consumeFailed('job:run::1'))->toBeTrue();
 });
