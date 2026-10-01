@@ -406,6 +406,18 @@ it('names the missing signing key when a signed callback reaches a process witho
     expect(cache()->has('cb:run-keyless-worker'))->toBeFalse();
 });
 
+it('deserializes nothing at all in a process without a signing key', function (): void {
+    DeserializationProbe::reset();
+    $id = pendingCallbackRowWithPayload('run-keyless-inject', DeserializationProbe::wire());
+
+    SerializableClosure::setSecretKey(null);
+    callbackOutbox()->deliver($id);
+
+    expect(DeserializationProbe::$woken)->toBe(0);
+    expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+    expect(callbackDeadLetterReason($id))->toContain('no APP_KEY signing key is configured');
+});
+
 // --- Terminal seam: history store flips callbacks atomically ------------------
 
 it('flips then to pending when the history store records completion', function (): void {

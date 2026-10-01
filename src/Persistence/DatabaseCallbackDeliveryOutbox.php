@@ -19,7 +19,6 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Laravel\SerializableClosure\Exceptions\InvalidSignatureException;
-use Laravel\SerializableClosure\Exceptions\MissingSecretKeyException;
 use Laravel\SerializableClosure\SerializableClosure;
 use Laravel\SerializableClosure\Serializers\Signed;
 use Psr\Log\LoggerInterface;
@@ -300,6 +299,12 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
                 return null;
             }
 
+            // With no signing key in this process nothing can be verified, so refuse
+            // before deserializing rather than rely on the library to reject it.
+            if (Signed::$signer === null) {
+                return null;
+            }
+
             $restored = unserialize($raw, ['allowed_classes' => self::CLOSURE_CLASSES]);
 
             if (! $restored instanceof SerializableClosure) {
@@ -338,28 +343,25 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             return 'callback payload could not be decrypted (possible APP_KEY rotation)';
         }
 
+        // resolveClosure() refuses to deserialize without a signing key; name that
+        // cause, and do not deserialize here either.
+        if (Signed::$signer === null) {
+            return self::NO_SIGNING_KEY_REASON;
+        }
+
         try {
             $restored = unserialize($raw, ['allowed_classes' => self::CLOSURE_CLASSES]);
         } catch (Throwable $exception) {
             // SerializableClosure verifies its HMAC on unserialize and throws
-            // InvalidSignatureException on a bad signature (tamper or an APP_KEY rotation),
-            // or MissingSecretKeyException when this process has no key to verify with.
-            return match (true) {
-                $exception instanceof InvalidSignatureException => 'callback signature verification failed (payload tampering or APP_KEY rotation)',
-                $exception instanceof MissingSecretKeyException => self::NO_SIGNING_KEY_REASON,
-                default => 'callback payload is not a readable serialized closure',
-            };
+            // InvalidSignatureException on a bad signature (tamper or an APP_KEY rotation).
+            return $exception instanceof InvalidSignatureException
+                ? 'callback signature verification failed (payload tampering or APP_KEY rotation)'
+                : 'callback payload is not a readable serialized closure';
         }
 
-        if (! $restored instanceof SerializableClosure) {
-            return 'callback payload is not a serialized closure';
-        }
-
-        // With no signing key in this process the closure body is unsigned, which the
-        // allow-list leaves unconstructed — name that cause rather than a generic failure.
-        return Signed::$signer === null
-            ? self::NO_SIGNING_KEY_REASON
-            : 'callback resolved but could not be invoked';
+        return $restored instanceof SerializableClosure
+            ? 'callback resolved but could not be invoked'
+            : 'callback payload is not a serialized closure';
     }
 
     protected function resolveContext(object $row): SwarmTerminalContext
