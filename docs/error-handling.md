@@ -278,7 +278,8 @@ The failed step is checkpointed. The `DurableRetry` policy applies (if configure
 
 Terminal callbacks are a convenience over the `SwarmCompleted` / `SwarmFailed` lifecycle
 events for the **whole workflow** — not a per-agent hook. They are off by default; enable
-with `swarm.callbacks.enabled=true`, which requires the database persistence driver.
+with `swarm.callbacks.enabled=true`, which requires the database persistence driver and an
+`APP_KEY` in every process that registers or delivers a callback (callbacks are signed with it).
 
 ```php
 // Queued or durable: then() on completion, catch() on failure.
@@ -357,6 +358,10 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   lane). If guaranteed delivery matters, listen to `SwarmCompleted` / `SwarmFailed` instead — those
   are the reliable path. A dead-letter caused by an **`APP_KEY` rotation** (which invalidates every
   in-flight callback's signature) is expected: rotate with no pending callbacks, or accept their loss.
+  The dead-letter log line carries the reason: `callback signature verification failed` means the
+  key changed or the row was tampered with; `no APP_KEY signing key is configured` means the
+  registering or delivering process has no `APP_KEY`; `callback payload is not a serialized closure`
+  means the row held something else entirely. None of these rows is ever constructed or run.
 - **Callbacks run without ambient request/tenant state.** A delivered callback runs later, in the
   relay/worker process, with no HTTP request and no ambient tenant context. Capture everything the
   closure needs (ids, not `tenant()` globals) at registration.

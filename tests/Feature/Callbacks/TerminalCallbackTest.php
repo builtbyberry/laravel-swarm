@@ -387,7 +387,23 @@ it('dead-letters and never invokes an unsigned callback registered without an ap
     $outbox->deliver($id);
 
     expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+    expect(callbackDeadLetterReason($id))->toContain('no APP_KEY signing key is configured');
     expect(cache()->has('cb:run-keyless'))->toBeFalse();
+});
+
+it('names the missing signing key when a signed callback reaches a process without one', function (): void {
+    $outbox = callbackOutbox();
+    $outbox->register('run-keyless-worker', CallbackSlot::Then, fn () => cache()->forever('cb:run-keyless-worker', 'invoked'));
+    $outbox->settle('run-keyless-worker', new SwarmTerminalContext('run-keyless-worker', CallbackSlot::Then, 'App\\Swarms\\S'));
+    $id = (int) callbackTable()->where('run_id', 'run-keyless-worker')->value('id');
+
+    // The delivering process has no signer; afterEach restores the previous one.
+    SerializableClosure::setSecretKey(null);
+    $outbox->deliver($id);
+
+    expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+    expect(callbackDeadLetterReason($id))->toContain('no APP_KEY signing key is configured');
+    expect(cache()->has('cb:run-keyless-worker'))->toBeFalse();
 });
 
 // --- Terminal seam: history store flips callbacks atomically ------------------

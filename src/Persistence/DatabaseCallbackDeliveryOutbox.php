@@ -19,6 +19,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Laravel\SerializableClosure\Exceptions\InvalidSignatureException;
+use Laravel\SerializableClosure\Exceptions\MissingSecretKeyException;
 use Laravel\SerializableClosure\SerializableClosure;
 use Laravel\SerializableClosure\Serializers\Signed;
 use Psr\Log\LoggerInterface;
@@ -54,6 +55,8 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
      * nothing in a tampered row is built or run ahead of the signature check.
      */
     protected const CLOSURE_CLASSES = [SerializableClosure::class, Signed::class];
+
+    protected const NO_SIGNING_KEY_REASON = 'callback is unsigned or cannot be verified: no APP_KEY signing key is configured (terminal callbacks require APP_KEY)';
 
     public function __construct(
         protected Connection $connection,
@@ -339,15 +342,24 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             $restored = unserialize($raw, ['allowed_classes' => self::CLOSURE_CLASSES]);
         } catch (Throwable $exception) {
             // SerializableClosure verifies its HMAC on unserialize and throws
-            // InvalidSignatureException on a bad signature (tamper or an APP_KEY rotation).
-            return $exception instanceof InvalidSignatureException
-                ? 'callback signature verification failed (payload tampering or APP_KEY rotation)'
-                : 'callback payload is not a readable serialized closure';
+            // InvalidSignatureException on a bad signature (tamper or an APP_KEY rotation),
+            // or MissingSecretKeyException when this process has no key to verify with.
+            return match (true) {
+                $exception instanceof InvalidSignatureException => 'callback signature verification failed (payload tampering or APP_KEY rotation)',
+                $exception instanceof MissingSecretKeyException => self::NO_SIGNING_KEY_REASON,
+                default => 'callback payload is not a readable serialized closure',
+            };
         }
 
-        return $restored instanceof SerializableClosure
-            ? 'callback resolved but could not be invoked'
-            : 'callback payload is not a serialized closure';
+        if (! $restored instanceof SerializableClosure) {
+            return 'callback payload is not a serialized closure';
+        }
+
+        // With no signing key in this process the closure body is unsigned, which the
+        // allow-list leaves unconstructed — name that cause rather than a generic failure.
+        return Signed::$signer === null
+            ? self::NO_SIGNING_KEY_REASON
+            : 'callback resolved but could not be invoked';
     }
 
     protected function resolveContext(object $row): SwarmTerminalContext

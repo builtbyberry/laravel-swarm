@@ -35,6 +35,9 @@ Native feature access through Laravel Swarm workflows.
   database persistence driver — registering a callback under any other driver fails closed); with
   the flag off, queued/durable `then()`/`catch()` throw the same error as before. Delivery records
   are inspected via `swarm:health` and pruned by `swarm:prune` (`swarm.callbacks.retention_days`).
+  Delivery deserializes a stored row only into a signed closure: any other payload — a foreign
+  object, or an unsigned closure body — is dead-lettered without being constructed or invoked.
+  Callbacks therefore require `APP_KEY` in every process that registers or delivers one.
 - Default-off native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input, with decisions-first approval rejection, explicit topology-stable attachment recipients, original-versus-predecessor text selection, and optional per-recipient provider/model/timeout overrides.
 - Versioned, cipher-sealed native-input operational envelopes for queue, concurrency and durable recovery. Queue payloads carry opaque references; staged envelopes record planned paths before private local/base64 attachments are promoted to an application-selected disk, recoverable headers/provider options are preserved as plain resolved values, content identity and authorization are rechecked, and `swarm:prune` owns only Swarm-created temporary files.
 - Default-off native per-run agent settings through `RunContext::withAgentConfiguration()`. Topology-stable recipients preserve Laravel AI `withTools()`, one-shot `withMessages()`, conversations, provider, model and timeout across sequential, real process-parallel, queued, durable, routed-worker, retry and recovered execution. Explicit empty tools/messages remain meaningful overrides; input routing and settings compose in either order. Tools use reconstructible class references or registered factories; recoverable conversations require an existing native conversation and a saved Eloquent participant.
@@ -71,7 +74,8 @@ Native feature access through Laravel Swarm workflows.
   advisory no-transform/no-buffering headers, while operators remain responsible
   for verifying end-to-end proxy/CDN flushing and application-wide process
   capacity (`concurrent live streams × max_branches`, with several descriptors
-  per branch).
+  per branch). Branch process result envelopes are deserialized with object
+  construction disabled.
 - Native Laravel AI agent onboarding through the upstream `make:agent` command,
   including structured-output generation and an executable provider-free test
   that drives a native tool call and Swarm stream with `Agent::fake()`.
@@ -160,19 +164,6 @@ Native feature access through Laravel Swarm workflows.
   rollback is unsafe after writes while affected identities can resume or retry:
   stop intake, drain work, deploy and restart all old workers before resuming,
   then handle schema removal only after evidence retention is satisfied.
-
-### Fixed
-
-- Terminal callback delivery no longer constructs anything from a stored row except a signed
-  closure. [DatabaseCallbackDeliveryOutbox](src/Persistence/DatabaseCallbackDeliveryOutbox.php)
-  previously deserialized the row before its signature was checked, so a tampered
-  `swarm_callback_deliveries` row could build arbitrary objects, or run an unsigned closure
-  body, ahead of verification. Deserialization is now restricted to the signed closure
-  wrapper; any other payload is dead-lettered without being constructed or invoked. As a
-  consequence, callbacks require `APP_KEY`: a row registered with no key is unsigned and is
-  dead-lettered rather than delivered. The parallel live-stream branch result envelope
-  ([ParallelStreamSession](src/Streaming/Parallel/ParallelStreamSession.php)) likewise no
-  longer constructs objects from child-process output.
 
 ## v0.27.0 - 2026-09-24
 
