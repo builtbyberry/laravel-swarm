@@ -240,9 +240,10 @@ it('never lets a queue job that cannot report its id break the queue event', fun
 
 it('holds at most the cap when telemetry event listening is disabled', function () {
     $cap = (new ReflectionClassConstant(PackageJobTelemetryState::class, 'MAX_PENDING'))->getValue();
-    $previous = getenv('SWARM_OBSERVABILITY_LISTEN_EVENTS');
-    putenv('SWARM_OBSERVABILITY_LISTEN_EVENTS=false');
-    $_ENV['SWARM_OBSERVABILITY_LISTEN_EVENTS'] = $_SERVER['SWARM_OBSERVABILITY_LISTEN_EVENTS'] = 'false';
+    $flag = 'SWARM_OBSERVABILITY_LISTEN_EVENTS';
+    $previous = [getenv($flag), $_ENV[$flag] ?? null, $_SERVER[$flag] ?? null];
+    putenv("{$flag}=false");
+    $_ENV[$flag] = $_SERVER[$flag] = 'false';
 
     try {
         $this->refreshApplication();
@@ -264,9 +265,19 @@ it('holds at most the cap when telemetry event listening is disabled', function 
         expect($telemetry->recordsForCategory('job.failed'))->toHaveCount($failures)
             ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe($cap);
     } finally {
-        $previous === false
-            ? putenv('SWARM_OBSERVABILITY_LISTEN_EVENTS')
-            : putenv("SWARM_OBSERVABILITY_LISTEN_EVENTS={$previous}");
-        unset($_ENV['SWARM_OBSERVABILITY_LISTEN_EVENTS'], $_SERVER['SWARM_OBSERVABILITY_LISTEN_EVENTS']);
+        [$process, $env, $server] = $previous;
+        $process === false ? putenv($flag) : putenv("{$flag}={$process}");
+
+        if ($env === null) {
+            unset($_ENV[$flag]);
+        } else {
+            $_ENV[$flag] = $env;
+        }
+
+        if ($server === null) {
+            unset($_SERVER[$flag]);
+        } else {
+            $_SERVER[$flag] = $server;
+        }
     }
 });
