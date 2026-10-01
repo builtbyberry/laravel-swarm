@@ -29,7 +29,10 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
+use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\SyncQueue;
+use Illuminate\Queue\Worker;
 use Throwable;
 
 /**
@@ -80,6 +83,7 @@ class SwarmTelemetryEventListener
         $events->listen(SwarmChildCompleted::class, [$this, 'handleSwarmChildCompleted']);
         $events->listen(SwarmChildFailed::class, [$this, 'handleSwarmChildFailed']);
         $events->listen(JobFailed::class, [$this, 'handleJobFailed']);
+        $events->listen(JobAttempted::class, [$this, 'handleJobAttempted']);
     }
 
     public function handleSwarmStarted(SwarmStarted $event): void
@@ -287,6 +291,37 @@ class SwarmTelemetryEventListener
     public function handleJobFailed(JobFailed $event): void
     {
         $this->emitJobFailureFallbackTelemetry($event->job, $event->exception);
+    }
+
+    /**
+     * Drop the failure marker a job left once its attempt is over. Only a final
+     * failure consumes its marker through {@see handleJobFailed()}; an attempt
+     * released for retry never gets there.
+     *
+     * The marker is found by the queue job's envelope id instead of the de-dup
+     * key built from the unserialized command, because this event fires for
+     * every job the application runs and {@see unserializePackageJob()} does not
+     * decode every package job. For where this event sits relative to the
+     * attempt's failure event, see {@see Worker::process()} and
+     * {@see SyncQueue::executeJob()}.
+     */
+    public function handleJobAttempted(JobAttempted $event): void
+    {
+        if ($this->jobTelemetryState->pendingCount() === 0) {
+            return;
+        }
+
+        try {
+            $jobId = $this->queueJobId($event->job);
+
+            if ($jobId !== null) {
+                $this->jobTelemetryState->forgetJob($jobId);
+            }
+        } catch (Throwable) {
+            // This handler must never replace the exception of the attempt it is
+            // cleaning up after. A marker left behind stays bounded; see
+            // PackageJobTelemetryState.
+        }
     }
 
     protected function emitJobFailureFallbackTelemetry(QueueJobContract $job, Throwable $exception): void

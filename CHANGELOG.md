@@ -165,6 +165,16 @@ Native feature access through Laravel Swarm workflows.
   stop intake, drain work, deploy and restart all old workers before resuming,
   then handle schema removal only after evidence retention is satisfied.
 
+### Fixed
+
+- Long-lived queue workers no longer accumulate memory for every package job
+  attempt that fails and is retried. The in-process guard that stops a failed
+  job's `job.failed` telemetry from being emitted twice kept one entry per failed
+  attempt and released it only on the job's final failure, so retried attempts
+  (and jobs that later succeeded) left entries behind for the life of the worker.
+  The entry is now dropped when the attempt ends, and the guard holds at most 256
+  entries regardless. Emitted telemetry is unchanged. (#476)
+
 ## v0.27.0 - 2026-09-24
 
 Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabilities.
