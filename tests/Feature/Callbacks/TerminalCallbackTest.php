@@ -317,6 +317,23 @@ function closureEnvelopeAround(string $serializedBody): string
     return sprintf('O:%d:"%s":1:{s:12:"serializable";%s}', strlen(SerializableClosure::class), SerializableClosure::class, $serializedBody);
 }
 
+/**
+ * A hand-written unsigned closure body whose code calls the probe when it is loaded.
+ */
+function unsignedClosureBodyRunningProbe(): string
+{
+    $code = '\\'.DeserializationProbe::class.'::execute() ?? fn () => null';
+
+    return sprintf(
+        'O:%d:"%s":5:{s:3:"use";a:0:{}s:8:"function";s:%d:"%s";s:5:"scope";N;s:4:"this";N;s:4:"self";s:32:"%s";}',
+        strlen(Native::class),
+        Native::class,
+        strlen($code),
+        $code,
+        str_repeat('0', 32),
+    );
+}
+
 it('never constructs a stored object that is not a closure, and dead-letters the row', function (): void {
     DeserializationProbe::reset();
     $id = pendingCallbackRowWithPayload('run-inject', DeserializationProbe::wire());
@@ -342,16 +359,7 @@ it('never constructs an object smuggled inside the closure envelope', function (
 
 it('never runs an unsigned closure body smuggled past the signature', function (): void {
     DeserializationProbe::reset();
-    $code = '\\'.DeserializationProbe::class.'::execute() ?? fn () => null';
-    $unsignedBody = sprintf(
-        'O:%d:"%s":5:{s:3:"use";a:0:{}s:8:"function";s:%d:"%s";s:5:"scope";N;s:4:"this";N;s:4:"self";s:32:"%s";}',
-        strlen(Native::class),
-        Native::class,
-        strlen($code),
-        $code,
-        str_repeat('0', 32),
-    );
-    $id = pendingCallbackRowWithPayload('run-inject-unsigned', closureEnvelopeAround($unsignedBody));
+    $id = pendingCallbackRowWithPayload('run-inject-unsigned', closureEnvelopeAround(unsignedClosureBodyRunningProbe()));
 
     callbackOutbox()->deliver($id);
 
@@ -416,6 +424,26 @@ it('deserializes nothing at all in a process without a signing key', function ()
     expect(DeserializationProbe::$woken)->toBe(0);
     expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
     expect(callbackDeadLetterReason($id))->toContain('no APP_KEY signing key is configured');
+});
+
+it('never runs a forged signed body in a process without a signing key', function (): void {
+    DeserializationProbe::reset();
+    $inner = unsignedClosureBodyRunningProbe();
+    $forged = sprintf(
+        'O:%d:"%s":2:{s:12:"serializable";s:%d:"%s";s:4:"hash";s:5:"bogus";}',
+        strlen(Signed::class),
+        Signed::class,
+        strlen($inner),
+        $inner,
+    );
+    $id = pendingCallbackRowWithPayload('run-keyless-forged', closureEnvelopeAround($forged));
+
+    SerializableClosure::setSecretKey(null);
+    callbackOutbox()->deliver($id);
+
+    expect(DeserializationProbe::$executed)->toBe(0);
+    expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+    expect(cache()->has('cb:run-keyless-forged'))->toBeFalse();
 });
 
 // --- Terminal seam: history store flips callbacks atomically ------------------
