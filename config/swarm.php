@@ -723,7 +723,7 @@ return [
          * (swarm.persistence.driver=database); under any other driver, registering a
          * callback fails closed rather than silently dropping it.
          * Callbacks are signed with APP_KEY, so every process that registers or delivers
-         * one needs it: an unsigned callback is dead-lettered, never run.
+         * one needs it: a process without it never runs a callback.
          */
         'enabled' => (bool) env('SWARM_CALLBACKS_ENABLED', false),
         /*
