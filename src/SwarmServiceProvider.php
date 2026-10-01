@@ -258,6 +258,10 @@ class SwarmServiceProvider extends ServiceProvider
 
         $this->app->singleton(SwarmTelemetrySink::class, NoOpSwarmTelemetrySink::class);
         $this->app->singleton(SwarmTelemetryDispatcher::class);
+        // Deliberately a singleton, not scoped: a job handler and the queue-event
+        // listener must reach the same instance for a failed attempt, and a scoped
+        // binding hands the handler a fresh one. The state bounds itself instead;
+        // see PackageJobTelemetryState.
         $this->app->singleton(PackageJobTelemetryState::class);
 
         // Bind the cipher with a lazy encrypter resolver rather than autowiring

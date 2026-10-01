@@ -38,7 +38,11 @@ trait EmitsSwarmJobTelemetry
             $durationMs = MonotonicTime::elapsedMilliseconds($startedAt);
             try {
                 $this->emitSwarmJobTelemetry('job.failed', 'failed', $durationMs, $exception, $startedAtMs);
-                $this->swarmJobTelemetryState()->markFailed($this->swarmJobTelemetryKey());
+                $this->swarmJobTelemetryState()->markFailed(
+                    $this->swarmJobTelemetryKey(),
+                    $this->telemetryJobId(),
+                    $this->telemetryAttempt(),
+                );
             } finally {
                 NativeOutcomeValidator::rethrowIfUnsupported($exception);
             }
