@@ -290,9 +290,10 @@ final class ParallelStreamSession
                 throw new SwarmException("Parallel stream branch [{$branchId}] process failed with exit code [{$result->exitCode()}]; {$this->diagnostic($result)}.");
             }
 
+            // Process stdout must never be allowed to construct an object here.
             $envelope = json_decode($result->output(), true);
             $value = is_array($envelope) && ($envelope['successful'] ?? null) === true
-                ? unserialize((string) ($envelope['result'] ?? ''))
+                ? unserialize((string) ($envelope['result'] ?? ''), ['allowed_classes' => false])
                 : null;
             if (! is_array($value)
                 || ($value['branch_id'] ?? null) !== $branchId

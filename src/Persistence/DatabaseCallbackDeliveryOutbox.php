@@ -20,6 +20,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Laravel\SerializableClosure\Exceptions\InvalidSignatureException;
 use Laravel\SerializableClosure\SerializableClosure;
+use Laravel\SerializableClosure\Serializers\Signed;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Throwable;
@@ -45,6 +46,16 @@ use Throwable;
 class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, ReadableCallbackDeliveryOutbox
 {
     use SafeReporting;
+
+    /**
+     * The only classes a stored callback may deserialize into: the closure wrapper
+     * and its signed body ({@see Signed}). Anything else in the stored bytes — a
+     * foreign object, or an unsigned closure body — is left unconstructed, so
+     * nothing in a tampered row is built or run ahead of the signature check.
+     */
+    protected const CLOSURE_CLASSES = [SerializableClosure::class, Signed::class];
+
+    protected const NO_SIGNING_KEY_REASON = 'callback is unsigned or cannot be verified: no APP_KEY signing key is configured (terminal callbacks require APP_KEY)';
 
     public function __construct(
         protected Connection $connection,
@@ -288,7 +299,13 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
                 return null;
             }
 
-            $restored = unserialize($raw);
+            // With no signing key in this process nothing can be verified, so refuse
+            // before deserializing rather than rely on the library to reject it.
+            if (Signed::$signer === null) {
+                return null;
+            }
+
+            $restored = unserialize($raw, ['allowed_classes' => self::CLOSURE_CLASSES]);
 
             if (! $restored instanceof SerializableClosure) {
                 return null;
@@ -326,8 +343,14 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             return 'callback payload could not be decrypted (possible APP_KEY rotation)';
         }
 
+        // resolveClosure() refuses to deserialize without a signing key; name that
+        // cause, and do not deserialize here either.
+        if (Signed::$signer === null) {
+            return self::NO_SIGNING_KEY_REASON;
+        }
+
         try {
-            $restored = unserialize($raw);
+            $restored = unserialize($raw, ['allowed_classes' => self::CLOSURE_CLASSES]);
         } catch (Throwable $exception) {
             // SerializableClosure verifies its HMAC on unserialize and throws
             // InvalidSignatureException on a bad signature (tamper or an APP_KEY rotation).
