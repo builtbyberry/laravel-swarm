@@ -20,6 +20,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Laravel\SerializableClosure\Exceptions\InvalidSignatureException;
 use Laravel\SerializableClosure\SerializableClosure;
+use Laravel\SerializableClosure\Serializers\Signed;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Throwable;
@@ -45,6 +46,14 @@ use Throwable;
 class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, ReadableCallbackDeliveryOutbox
 {
     use SafeReporting;
+
+    /**
+     * The only classes a stored callback may deserialize into: the closure wrapper
+     * and its signed body ({@see Signed}). Anything else in the stored bytes — a
+     * foreign object, or an unsigned closure body — is left unconstructed, so
+     * nothing in a tampered row is built or run ahead of the signature check.
+     */
+    protected const CLOSURE_CLASSES = [SerializableClosure::class, Signed::class];
 
     public function __construct(
         protected Connection $connection,
@@ -288,7 +297,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
                 return null;
             }
 
-            $restored = unserialize($raw);
+            $restored = unserialize($raw, ['allowed_classes' => self::CLOSURE_CLASSES]);
 
             if (! $restored instanceof SerializableClosure) {
                 return null;
@@ -327,7 +336,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         }
 
         try {
-            $restored = unserialize($raw);
+            $restored = unserialize($raw, ['allowed_classes' => self::CLOSURE_CLASSES]);
         } catch (Throwable $exception) {
             // SerializableClosure verifies its HMAC on unserialize and throws
             // InvalidSignatureException on a bad signature (tamper or an APP_KEY rotation).

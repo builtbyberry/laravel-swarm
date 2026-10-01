@@ -324,7 +324,9 @@ callbacks when you want to attach behavior to *this* run at the call site.
 - **A callback must be a serializable closure** (it is signed and sealed for later delivery in
   another process); capturing a non-serializable binding (a database handle, an open resource)
   throws at registration. Payload authorization is the closure signature — a tampered delivery
-  row is never invoked, it is dead-lettered.
+  row is never invoked, it is dead-lettered. Signing uses `APP_KEY`: a delivery row that is not a
+  signed closure, including one registered by an application with no `APP_KEY`, is never
+  constructed or run and is dead-lettered instead.
 - **A callback's own failure is isolated.** It runs after the workflow has already settled, in a
   separate process, so it can neither replay completed model or tool effects nor change the
   recorded result. A failing queue/durable callback is retried up to `swarm.callbacks.max_attempts`

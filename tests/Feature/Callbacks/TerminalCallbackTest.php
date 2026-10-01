@@ -23,12 +23,16 @@ use BuiltByBerry\LaravelSwarm\Testing\FakePendingDispatch;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Support\DeserializationProbe;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
+use Laravel\SerializableClosure\SerializableClosure;
+use Laravel\SerializableClosure\Serializers\Native;
+use Laravel\SerializableClosure\Serializers\Signed;
 use Mockery;
 
 function callbacksUseDatabase(bool $enabled = true): void
@@ -51,7 +55,19 @@ function callbackTable()
     return DB::table('swarm_callback_deliveries');
 }
 
-uses()->beforeEach(fn () => callbacksUseDatabase())->in(__FILE__);
+// The package test app sets app.key after the framework has read it, so closures are
+// unsigned by default. Callbacks are only delivered when signed, so sign them here and
+// put the previous signer back afterwards: it is process-global state.
+uses()
+    ->beforeEach(function (): void {
+        $this->previousClosureSigner = Signed::$signer;
+        SerializableClosure::setSecretKey('callback-test-signing-key');
+        callbacksUseDatabase();
+    })
+    ->afterEach(function (): void {
+        Signed::$signer = $this->previousClosureSigner;
+    })
+    ->in(__FILE__);
 
 // --- Registration: flag gating ------------------------------------------------
 
@@ -267,6 +283,111 @@ it('dead-letters and never invokes a callback whose stored payload is not a vali
 
     expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
     expect(cache()->has('cb:run-tamper'))->toBeFalse();
+});
+
+// --- Deserialization boundary: nothing is built ahead of the signature --------
+
+/**
+ * Arm a pending delivery row, then overwrite its stored callback bytes.
+ */
+function pendingCallbackRowWithPayload(string $runId, string $payload): int
+{
+    $outbox = callbackOutbox();
+    $outbox->register($runId, CallbackSlot::Then, fn () => cache()->forever('cb:'.$runId, 'invoked'));
+    $outbox->settle($runId, new SwarmTerminalContext($runId, CallbackSlot::Then, 'App\\Swarms\\S'));
+    $id = (int) callbackTable()->where('run_id', $runId)->value('id');
+
+    callbackTable()->where('id', $id)->update([
+        'callback' => app(SwarmPersistenceCipher::class)->seal($payload),
+    ]);
+
+    return $id;
+}
+
+function callbackDeadLetterReason(int $id): ?string
+{
+    return app(SwarmPersistenceCipher::class)->open((string) callbackTable()->where('id', $id)->value('last_error'));
+}
+
+/**
+ * Wrap a serialized closure body in the SerializableClosure envelope by hand.
+ */
+function closureEnvelopeAround(string $serializedBody): string
+{
+    return sprintf('O:%d:"%s":1:{s:12:"serializable";%s}', strlen(SerializableClosure::class), SerializableClosure::class, $serializedBody);
+}
+
+it('never constructs a stored object that is not a closure, and dead-letters the row', function (): void {
+    DeserializationProbe::reset();
+    $id = pendingCallbackRowWithPayload('run-inject', DeserializationProbe::wire());
+
+    callbackOutbox()->deliver($id);
+
+    expect(DeserializationProbe::$woken)->toBe(0);
+    expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+    expect(callbackDeadLetterReason($id))->toBe('callback payload is not a serialized closure');
+    expect(cache()->has('cb:run-inject'))->toBeFalse();
+});
+
+it('never constructs an object smuggled inside the closure envelope', function (): void {
+    DeserializationProbe::reset();
+    $id = pendingCallbackRowWithPayload('run-inject-nested', closureEnvelopeAround(DeserializationProbe::wire()));
+
+    callbackOutbox()->deliver($id);
+
+    expect(DeserializationProbe::$woken)->toBe(0);
+    expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+    expect(callbackDeadLetterReason($id))->toBe('callback signature verification failed (payload tampering or APP_KEY rotation)');
+});
+
+it('never runs an unsigned closure body smuggled past the signature', function (): void {
+    DeserializationProbe::reset();
+    $code = '\\'.DeserializationProbe::class.'::execute() ?? fn () => null';
+    $unsignedBody = sprintf(
+        'O:%d:"%s":5:{s:3:"use";a:0:{}s:8:"function";s:%d:"%s";s:5:"scope";N;s:4:"this";N;s:4:"self";s:32:"%s";}',
+        strlen(Native::class),
+        Native::class,
+        strlen($code),
+        $code,
+        str_repeat('0', 32),
+    );
+    $id = pendingCallbackRowWithPayload('run-inject-unsigned', closureEnvelopeAround($unsignedBody));
+
+    callbackOutbox()->deliver($id);
+
+    expect(DeserializationProbe::$executed)->toBe(0);
+    expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+    expect(callbackDeadLetterReason($id))->toBe('callback signature verification failed (payload tampering or APP_KEY rotation)');
+});
+
+it('still delivers a signed callback that captures an object', function (): void {
+    $captured = new ArrayObject(['value' => 'captured-object']);
+    $outbox = callbackOutbox();
+    $outbox->register('run-captured', CallbackSlot::Then, function () use ($captured): void {
+        cache()->forever('cb:run-captured', $captured['value']);
+    });
+    $outbox->settle('run-captured', new SwarmTerminalContext('run-captured', CallbackSlot::Then, 'App\\Swarms\\S'));
+    $id = (int) callbackTable()->where('run_id', 'run-captured')->value('id');
+
+    $outbox->deliver($id);
+
+    expect(cache()->get('cb:run-captured'))->toBe('captured-object');
+    expect(callbackTable()->where('id', $id)->exists())->toBeFalse();
+});
+
+it('dead-letters and never invokes an unsigned callback registered without an application key', function (): void {
+    // No signer for the life of this test; afterEach restores the previous one.
+    SerializableClosure::setSecretKey(null);
+
+    $outbox = callbackOutbox();
+    $outbox->register('run-keyless', CallbackSlot::Then, fn () => cache()->forever('cb:run-keyless', 'invoked'));
+    $outbox->settle('run-keyless', new SwarmTerminalContext('run-keyless', CallbackSlot::Then, 'App\\Swarms\\S'));
+    $id = (int) callbackTable()->where('run_id', 'run-keyless')->value('id');
+
+    $outbox->deliver($id);
+
+    expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+    expect(cache()->has('cb:run-keyless'))->toBeFalse();
 });
 
 // --- Terminal seam: history store flips callbacks atomically ------------------

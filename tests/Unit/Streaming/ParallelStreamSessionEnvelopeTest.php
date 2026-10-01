@@ -35,7 +35,7 @@ function validateParallelStreamEnvelope(string $serializedResult): void
 }
 
 beforeEach(function (): void {
-    DeserializationProbe::$woken = 0;
+    DeserializationProbe::reset();
 });
 
 test('a branch process result envelope is accepted when it is the class-free terminal array', function (): void {

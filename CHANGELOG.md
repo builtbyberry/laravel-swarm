@@ -161,6 +161,19 @@ Native feature access through Laravel Swarm workflows.
   stop intake, drain work, deploy and restart all old workers before resuming,
   then handle schema removal only after evidence retention is satisfied.
 
+### Fixed
+
+- Terminal callback delivery no longer constructs anything from a stored row except a signed
+  closure. [DatabaseCallbackDeliveryOutbox](src/Persistence/DatabaseCallbackDeliveryOutbox.php)
+  previously deserialized the row before its signature was checked, so a tampered
+  `swarm_callback_deliveries` row could build arbitrary objects, or run an unsigned closure
+  body, ahead of verification. Deserialization is now restricted to the signed closure
+  wrapper; any other payload is dead-lettered without being constructed or invoked. As a
+  consequence, callbacks require `APP_KEY`: a row registered with no key is unsigned and is
+  dead-lettered rather than delivered. The parallel live-stream branch result envelope
+  ([ParallelStreamSession](src/Streaming/Parallel/ParallelStreamSession.php)) likewise no
+  longer constructs objects from child-process output.
+
 ## v0.27.0 - 2026-09-24
 
 Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabilities.
