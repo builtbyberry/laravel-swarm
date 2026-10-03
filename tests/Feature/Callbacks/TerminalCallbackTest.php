@@ -134,6 +134,29 @@ it('rejects a non-serializable callback at registration', function (): void {
         }))->toThrow(SwarmException::class);
 });
 
+it('rejects a queued then/catch registered in a process without a signing key, storing nothing', function (): void {
+    // No signer for the life of this test; afterEach restores the previous one.
+    SerializableClosure::setSecretKey(null);
+
+    $response = new QueuedSwarmResponse(new FakePendingDispatch, 'run-keyless-register');
+
+    expect(fn () => $response->then(fn () => null))
+        ->toThrow(SwarmException::class, 'Terminal workflow callbacks require APP_KEY');
+    expect(fn () => $response->catch(fn () => null))
+        ->toThrow(SwarmException::class, 'Terminal workflow callbacks require APP_KEY');
+
+    expect(callbackTable()->where('run_id', 'run-keyless-register')->exists())->toBeFalse();
+});
+
+it('rejects a direct outbox registration in a process without a signing key, storing nothing', function (): void {
+    SerializableClosure::setSecretKey(null);
+
+    expect(fn () => callbackOutbox()->register('run-keyless-direct', CallbackSlot::Then, fn () => null))
+        ->toThrow(SwarmException::class, 'Terminal workflow callbacks require APP_KEY');
+
+    expect(callbackTable()->where('run_id', 'run-keyless-direct')->exists())->toBeFalse();
+});
+
 // --- Outbox lifecycle: settle / drain / deliver -------------------------------
 
 it('arms then and drops catch when a run completes, and delivers the then callback', function (): void {
@@ -383,20 +406,23 @@ it('still delivers a signed callback that captures an object', function (): void
     expect(callbackTable()->where('id', $id)->exists())->toBeFalse();
 });
 
-it('dead-letters and never invokes an unsigned callback registered without an application key', function (): void {
-    // No signer for the life of this test; afterEach restores the previous one.
+it('dead-letters and never invokes a callback row stored unsigned when a keyed worker delivers it', function (): void {
+    // Registration refuses a keyless process, so build the bytes such a process
+    // would have stored (before that guard, or written by something else) by hand.
+    $signer = Signed::$signer;
     SerializableClosure::setSecretKey(null);
+    $unsigned = serialize(new SerializableClosure(fn () => cache()->forever('cb:run-unsigned', 'invoked')));
+    Signed::$signer = $signer;
 
-    $outbox = callbackOutbox();
-    $outbox->register('run-keyless', CallbackSlot::Then, fn () => cache()->forever('cb:run-keyless', 'invoked'));
-    $outbox->settle('run-keyless', new SwarmTerminalContext('run-keyless', CallbackSlot::Then, 'App\\Swarms\\S'));
-    $id = (int) callbackTable()->where('run_id', 'run-keyless')->value('id');
+    expect($unsigned)->toContain(Native::class)->not->toContain(Signed::class);
 
-    $outbox->deliver($id);
+    $id = pendingCallbackRowWithPayload('run-unsigned', $unsigned);
+
+    callbackOutbox()->deliver($id);
 
     expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
-    expect(callbackDeadLetterReason($id))->toContain('no APP_KEY signing key is configured');
-    expect(cache()->has('cb:run-keyless'))->toBeFalse();
+    expect(callbackDeadLetterReason($id))->toBe('callback signature verification failed (payload tampering or APP_KEY rotation)');
+    expect(cache()->has('cb:run-unsigned'))->toBeFalse();
 });
 
 it('names the missing signing key when a signed callback reaches a process without one', function (): void {
