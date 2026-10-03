@@ -37,7 +37,8 @@ Native feature access through Laravel Swarm workflows.
   are inspected via `swarm:health` and pruned by `swarm:prune` (`swarm.callbacks.retention_days`).
   Delivery deserializes a stored row only into a signed closure: any other payload — a foreign
   object, or an unsigned closure body — is rejected without being constructed or invoked.
-  Callbacks therefore require `APP_KEY` in every process that registers or delivers one.
+  Callbacks therefore require `APP_KEY` in every process that registers or delivers one;
+  `then()` / `catch()` throw at registration in a process without it.
 - Default-off native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input, with decisions-first approval rejection, explicit topology-stable attachment recipients, original-versus-predecessor text selection, and optional per-recipient provider/model/timeout overrides.
 - Versioned, cipher-sealed native-input operational envelopes for queue, concurrency and durable recovery. Queue payloads carry opaque references; staged envelopes record planned paths before private local/base64 attachments are promoted to an application-selected disk, recoverable headers/provider options are preserved as plain resolved values, content identity and authorization are rechecked, and `swarm:prune` owns only Swarm-created temporary files.
 - Default-off native per-run agent settings through `RunContext::withAgentConfiguration()`. Topology-stable recipients preserve Laravel AI `withTools()`, one-shot `withMessages()`, conversations, provider, model and timeout across sequential, real process-parallel, queued, durable, routed-worker, retry and recovered execution. Explicit empty tools/messages remain meaningful overrides; input routing and settings compose in either order. Tools use reconstructible class references or registered factories; recoverable conversations require an existing native conversation and a saved Eloquent participant.

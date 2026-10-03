@@ -77,6 +77,20 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             );
         }
 
+        // With no signing key SerializableClosure stores an unsigned body, which
+        // delivery refuses to deserialize: the row could only ever dead-letter. Fail
+        // loud here so the caller learns at the then()/catch() call site.
+        if (! Signed::$signer) {
+            throw new SwarmException(
+                'Terminal workflow callbacks require APP_KEY: no closure signing key is configured '
+                .'in this process. A callback is signed at registration and verified at delivery, '
+                .'so one registered without a signing key could never be delivered. Laravel derives '
+                .'the signing key from APP_KEY when the application boots, so a key set afterwards '
+                .'does not sign. Set APP_KEY in every process that registers or delivers callbacks, '
+                .'or listen to the SwarmCompleted / SwarmFailed events instead of then()/catch().'
+            );
+        }
+
         try {
             $serialized = serialize(new SerializableClosure($callback));
         } catch (Throwable $exception) {
