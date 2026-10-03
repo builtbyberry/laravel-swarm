@@ -149,6 +149,9 @@ ContentPipelineSwarm::make()
 - When the workflow is long-running enough that a mid-job server restart would be expensive to replay from the beginning (use `dispatchDurable()`).
 
 **Gotchas:**
+- `queue()` encrypts the queued command with `APP_KEY` and fails before dispatch
+  when the key is missing or invalid. This also applies to sync queues and tests.
+  See [Encrypted queued swarm payloads](../UPGRADING.md#encrypted-queued-swarm-payloads).
 - By default one Laravel queue job owns the workflow; there is no per-agent recovery cursor. Opt-in generated hierarchical `multi_worker` coordination persists branch/join state and has [separate recovery](hierarchical-routing.md#queue). Static hierarchy keeps its in-process queued path. An ordinary queue retry may re-enter the workflow from the beginning; it is not an external-effect deduplicator.
 - Whole-workflow `then()` / `catch()` callbacks are opt-in via `swarm.callbacks.enabled` (default off, database driver required). When enabled, [QueuedSwarmResponse](../src/Responses/QueuedSwarmResponse.php) exposes them: `then` fires once on a settled completion, `catch` once on a settled failure — persisted and delivered at-least-once by `swarm:relay --type=callback` after the run settles. With the flag off, they throw `BadMethodCallException` and you listen to `SwarmCompleted` / `SwarmFailed` instead. Either way, stream `each()` / `then()` callbacks are unaffected. See [Terminal Workflow Callbacks](error-handling.md#terminal-workflow-callbacks).
 - Queued swarms are re-resolved from the container; do not rely on runtime instance state. Pass per-run data in the task payload or a `RunContext`.
@@ -268,6 +271,9 @@ ContentPipelineSwarm::make()
 events retain their branch identity in each broadcast envelope.
 
 **Gotchas:**
+- `broadcastOnQueue()` encrypts its queued command with `APP_KEY` and requires a
+  valid key even with the sync queue. In-process broadcast helpers do not queue
+  this job.
 - Broadcast helpers do not retry or buffer transport delivery. If Laravel broadcasting throws during event delivery, `broadcast()` / `broadcastNow()` rethrow the exception and `broadcastOnQueue()` lets the queued job fail.
 - If delivery fails before the terminal `swarm_stream_end` event, run history is marked failed. If delivery fails on the terminal event itself, swarm execution has already completed — history remains completed and persisted replay may include the terminal event.
 - Use Laravel's broadcast and queue infrastructure (retries, dead-letter queues) for transport-level reliability.

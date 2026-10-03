@@ -123,7 +123,13 @@ timing.
 The Laravel queue failure listener remains subscribed as a fallback for package
 job failures that occur before a handler can emit telemetry. In that fallback,
 `duration_ms` is `null`; normal package handler failures emit non-null
-`duration_ms` and suppress the fallback duplicate.
+`duration_ms` and suppress the fallback duplicate. If no configured key can
+decrypt an encrypted `InvokeSwarm` or `BroadcastSwarm` command, the handler never
+runs. The listener logs a warning beginning `laravel-swarm: a queued swarm job
+could not be decrypted` and emits a degraded `job.failed`. Its `run_id`,
+`duration_ms`, `queue_wait_ms`, and `total_elapsed_ms` are null. Its readable
+`displayName` and `data.commandName` supply `swarm_class` and `job_class`, and
+`exception_class` reports the decryption failure.
 
 ### Intentionally omitted (audit-only)
 

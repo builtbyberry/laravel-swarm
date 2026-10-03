@@ -13,11 +13,11 @@ records preserved contracts, exact removal scope and unsupported new integration
 | `Swarm::sequential()` / `parallel()` / `hierarchical()` | Run a multi-agent swarm inline without authoring a `Swarm` class; each pins its topology and returns a fluent `PendingSwarmRun` exposing the in-process modes (queued/durable need a Swarm class). | [Execution Modes: Inline Swarms](execution-modes.md#inline-swarms-swarmsequential--parallel--hierarchical) |
 | `prompt()` | Run a swarm synchronously and return `SwarmResponse`; accepts string, structured array, `RunContext`, default-off Laravel AI `UserMessage`, or a message-bearing `AgentInput` (approval decisions are rejected). | [README: Running A Swarm](../README.md#running-a-swarm), [Native Messages and Attachments](native-inputs.md), [Sequential Content Pipeline](../examples/sequential-content-pipeline/README.md) |
 | `run()` | Compatibility alias for `prompt()`. | [README: Running A Swarm](../README.md#running-a-swarm) |
-| `queue()` | Dispatch background work; generated hierarchy may opt into database-backed branch/join coordination. | [README: Queueing A Swarm](../README.md#queueing-a-swarm), [Queued Workflow Events](../examples/queued-workflow-events/README.md) |
+| `queue()` | Dispatch background work with a command encrypted by the required `APP_KEY`; generated hierarchy may opt into database-backed branch/join coordination. | [README: Queueing A Swarm](../README.md#queueing-a-swarm), [Encrypted queued payloads](../UPGRADING.md#encrypted-queued-swarm-payloads), [Queued Workflow Events](../examples/queued-workflow-events/README.md) |
 | `stream()` | Yield typed stream events for sequential, generated hierarchical, and static hierarchical paths. Top-level parallel live multiplexing is default-off, process-backed, branch-identified, and has no buffered fallback or global branch order. | [Streaming](streaming.md), [Parallel Live Multiplexing](streaming.md#parallel-live-multiplexing), [Static Hierarchical Topology](static-hierarchical-topology.md#streaming), [Streaming Progress](../examples/streaming-progress/README.md) |
 | `broadcast()` | Stream and broadcast typed events immediately. | [Streaming](streaming.md#broadcasting-stream-events) |
 | `broadcastNow()` | Stream and broadcast typed events with immediate delivery. | [Streaming](streaming.md#broadcasting-stream-events) |
-| `broadcastOnQueue()` | Queue a worker to stream and broadcast typed events. | [Streaming](streaming.md#broadcasting-stream-events) |
+| `broadcastOnQueue()` | Queue a worker with a command encrypted by the required `APP_KEY` to stream and broadcast typed events. | [Streaming](streaming.md#broadcasting-stream-events), [Encrypted queued payloads](../UPGRADING.md#encrypted-queued-swarm-payloads) |
 | `dispatchDurable()` | Dispatch a checkpointed durable run. | [Durable Execution](durable-execution.md), [Durable Compliance Review](../examples/durable-compliance-review/README.md) |
 
 ## Responses And Support Objects
@@ -307,6 +307,8 @@ background-compacted hot/cold durability and author-owned context bounding.
 ## Configuration Keys
 
 Notable configuration keys that affect observable behavior or operational decisions. See [Configuration](configuration.md) for the full reference.
+`APP_KEY` is required for every `queue()` and `broadcastOnQueue()` call, including
+when callbacks are disabled and when the sync queue is used.
 
 | Key | Default | Env Var | Description | Since |
 | --- | --- | --- | --- | --- |

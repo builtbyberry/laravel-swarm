@@ -169,9 +169,10 @@ Native feature access through Laravel Swarm workflows.
   `ShouldBeEncrypted`, so the run payload they carry inline — the prompt,
   structured data, metadata, and artifacts — is stored in the queue backend and in
   `failed_jobs` encrypted with `APP_KEY` instead of as plaintext. Queuing a swarm now
-  requires an application key. Jobs already queued before the upgrade still run.
-  The `job.failed` fallback telemetry decrypts these jobs, so it still reports a job
-  that fails before its handler runs. See [UPGRADING](UPGRADING.md#encrypted-queued-swarm-payloads).
+  requires an application key and fails early with `NonQueueableSwarmException`
+  when the key is missing or invalid. Jobs already queued before the upgrade still run.
+  Undecryptable package jobs log a warning and emit a degraded `job.failed`.
+  See [UPGRADING](UPGRADING.md#encrypted-queued-swarm-payloads).
 
 ### Fixed
 

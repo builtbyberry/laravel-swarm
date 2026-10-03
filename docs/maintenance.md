@@ -49,6 +49,9 @@ chunks to avoid long-running table locks on large datasets. Native-input cleanup
 deletes only Swarm-promoted files and retains the envelope for retry if any file
 delete fails.
 
+Queue backend records and `failed_jobs` are outside `swarm:prune`. Manage failed
+jobs with Laravel's `queue:prune-failed`, `queue:forget`, or `queue:flush`.
+
 Laravel Swarm protects active runs across persistence stores. While a run is
 `pending`, `running`, `waiting`, or `paused`, its history, context, artifact,
 stream replay, durable runtime, durable node state, durable run state,

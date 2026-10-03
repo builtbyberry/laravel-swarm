@@ -312,6 +312,8 @@ it only after every write succeeds; allowing an outer rollback could erase that
 locator after the filesystem write. Native marker jobs still default to Laravel's
 after-commit dispatch behavior once admission succeeds.
 
-Database sealing does not encrypt an application's filesystem, cache, or queue
-transport. Protect those systems independently and size attachment limits and
-retention for the application's data policy.
+Database sealing does not encrypt an application's filesystem, cache, or network
+transport. The queued `queue()` and `broadcastOnQueue()` command is separately
+encrypted with `APP_KEY` in the queue backend and `failed_jobs`. Protect the
+remaining systems independently and size attachment limits and retention for the
+application's data policy.

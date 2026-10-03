@@ -118,11 +118,11 @@ Distinct from `LostSwarmLeaseException`: missing schema is a configuration error
 
 **Full class:** `BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException`
 
-**When thrown:** when a swarm that cannot be safely container-resolved is dispatched via `queue()` or a parallel execution path. Laravel Swarm validates queueability before dispatch to prevent cryptic serialization failures inside queue workers.
+**When thrown:** when a swarm that cannot be safely container-resolved is dispatched via `queue()` or a parallel execution path, or when `queue()` / `broadcastOnQueue()` cannot resolve an encrypter from a valid `APP_KEY`. Laravel Swarm validates queueability before dispatch to prevent cryptic serialization failures inside queue workers.
 
 **Public properties:** none beyond the inherited `message`.
 
-**Catching it:** This exception fires at the call site, before any queue job is dispatched. Fix the swarm class to be container-resolvable (constructor-injectable dependencies only, no runtime instance state) rather than catching it:
+**Catching it:** This exception fires at the call site, before any queue job is dispatched. Set a valid `APP_KEY` for encrypted queued jobs. Otherwise, fix the swarm class to be container-resolvable (constructor-injectable dependencies only, no runtime instance state) rather than catching it:
 
 ```php
 // Wrong: swarm stores runtime state that can't serialize
