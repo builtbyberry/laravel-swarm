@@ -82,11 +82,12 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         // loud here so the caller learns at the then()/catch() call site.
         if (! Signed::$signer) {
             throw new SwarmException(
-                'Terminal workflow callbacks require APP_KEY: a callback is signed with it at '
-                .'registration and verified at delivery, so one registered by a process with no '
-                .'signing key could never be delivered. Set APP_KEY in every process that registers '
-                .'or delivers callbacks, or listen to the SwarmCompleted / SwarmFailed events '
-                .'instead of then()/catch().'
+                'Terminal workflow callbacks require APP_KEY: no closure signing key is configured '
+                .'in this process. A callback is signed at registration and verified at delivery, '
+                .'so one registered without a signing key could never be delivered. Laravel derives '
+                .'the signing key from APP_KEY when the application boots, so a key set afterwards '
+                .'does not sign. Set APP_KEY in every process that registers or delivers callbacks, '
+                .'or listen to the SwarmCompleted / SwarmFailed events instead of then()/catch().'
             );
         }
 
