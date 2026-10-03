@@ -326,8 +326,9 @@ callbacks when you want to attach behavior to *this* run at the call site.
   another process); capturing a non-serializable binding (a database handle, an open resource)
   throws at registration. Payload authorization is the closure signature — a tampered delivery
   row is never invoked, it is dead-lettered. Signing uses `APP_KEY`: a delivery row that is not a
-  signed closure is never constructed or run, and a callback registered or delivered by a process
-  with no `APP_KEY` is never run.
+  signed closure is never constructed or run. In a process with no `APP_KEY`, `then()` / `catch()`
+  throw `SwarmException` at registration, and a delivering process with no `APP_KEY` never runs a
+  callback.
 - **A callback's own failure is isolated.** It runs after the workflow has already settled, in a
   separate process, so it can neither replay completed model or tool effects nor change the
   recorded result. A failing queue/durable callback is retried up to `swarm.callbacks.max_attempts`
@@ -360,13 +361,14 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   in-flight callback's signature) is expected: rotate with no pending callbacks, or accept their loss.
   The dead-letter log line carries the reason. The ones tied to signing and sealing:
   `callback signature verification failed` — the delivering key is not the one that signed the row
-  (a rotation, or a row registered with no key), or the row was tampered with;
+  (a rotation, or a row stored unsigned), or the row was tampered with;
   `no APP_KEY signing key is configured` — the delivering process has no `APP_KEY`;
   `callback payload could not be decrypted` — at-rest encryption could not open the row, usually a
   rotation; `callback payload is not a serialized closure` — the row held something else entirely.
-  None of these rows is ever constructed or run. With at-rest encryption on (the default), a
-  process with no `APP_KEY` cannot seal a dead-letter reason either: registration throws, and a
-  delivery attempt errors and leaves the row pending until the key is restored.
+  None of these rows is ever constructed or run. A process with no `APP_KEY` cannot register a
+  callback at all — registration throws, with at-rest encryption on or off. With at-rest
+  encryption on (the default), a delivering process with no `APP_KEY` cannot seal a dead-letter
+  reason either: the delivery attempt errors and leaves the row pending until the key is restored.
 - **Callbacks run without ambient request/tenant state.** A delivered callback runs later, in the
   relay/worker process, with no HTTP request and no ambient tenant context. Capture everything the
   closure needs (ids, not `tenant()` globals) at registration.
