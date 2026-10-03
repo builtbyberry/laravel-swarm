@@ -152,13 +152,13 @@ it('leaves no marker behind when a retried job then succeeds', function () {
         ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe(0);
 });
 
-it('emits one job.failed for a final failure, also after the worker resets container scope', function () {
+it('emits one job.failed for a final failure, also after the worker resets container scope', function (string $jobClass) {
     config()->set('swarm.durable.job.tries', 1);
     $telemetry = telemetryBoundSink();
     $original = new LogicException('final attempt failed');
     telemetryBoundManager([$original]);
     $queue = app('queue')->connection('telemetry-bound');
-    $queue->push(new AdvanceDurableSwarm('bound-final-run', 0));
+    $queue->push(new $jobClass('bound-final-run', 0));
     $queued = $queue->pop('test');
 
     // What the queue worker's daemon loop does before every job.
@@ -170,9 +170,13 @@ it('emits one job.failed for a final failure, also after the worker resets conta
     expect($escaped)->toBe($original)
         ->and($queued->hasFailed())->toBeTrue()
         ->and($failed)->toHaveCount(1)
+        ->and($failed[0]['job_class'])->toBe($jobClass)
         ->and($failed[0]['duration_ms'])->toBeInt()
         ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe(0);
-});
+})->with([
+    'base job' => [AdvanceDurableSwarm::class],
+    'job subclass' => [AdvanceNativeInputDurableSwarm::class],
+]);
 
 it('emits one job.failed for a failure on the sync queue', function () {
     $telemetry = telemetryBoundSink();

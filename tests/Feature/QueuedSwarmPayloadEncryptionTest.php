@@ -216,10 +216,10 @@ it('emits the fallback job.failed for an encrypted job whose handler never ran',
     'broadcast native settings' => [BroadcastNativeAgentSettingsSwarm::class],
 ]);
 
-it('does not duplicate the job.failed an encrypted job emitted from its handler', function () {
+it('does not duplicate the job.failed an encrypted job emitted from its handler', function (string $class) {
     $telemetry = encryptedPayloadSink();
     $queue = app('queue')->connection('swarm-encrypted');
-    $queue->push(encryptedPayloadJob(InvokeSwarm::class, FailingQueuedSwarm::class, 'encrypted-dedup-run'));
+    $queue->push(encryptedPayloadJob($class, FailingQueuedSwarm::class, 'encrypted-dedup-run'));
 
     $escaped = encryptedPayloadProcess($queue->pop('test'), maxTries: 1);
 
@@ -228,9 +228,14 @@ it('does not duplicate the job.failed an encrypted job emitted from its handler'
     expect($escaped)->toBeInstanceOf(RuntimeException::class)
         ->and($failed)->toHaveCount(1)
         ->and($failed[0]['run_id'])->toBe('encrypted-dedup-run')
+        ->and($failed[0]['job_class'])->toBe($class)
         ->and($failed[0]['duration_ms'])->toBeInt()
         ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe(0);
-});
+})->with([
+    'invoke' => [InvokeSwarm::class],
+    'invoke native input' => [InvokeNativeInputSwarm::class],
+    'broadcast native settings' => [BroadcastNativeAgentSettingsSwarm::class],
+]);
 
 it('reports a job sealed under another key with a degraded job.failed and a warning', function (string $class) {
     $telemetry = encryptedPayloadSink();

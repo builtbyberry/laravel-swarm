@@ -160,7 +160,8 @@ for categories, redaction rules, and configuration (`swarm.observability.*`).
 
 Queued swarms run inside normal Laravel queue jobs owned by this package:
 `InvokeSwarm`, `BroadcastSwarm`, `AdvanceDurableSwarm`, `AdvanceDurableBranch`,
-and `ResumeQueuedHierarchicalSwarm`. To attach **queue** metadata to the same log
+and `ResumeQueuedHierarchicalSwarm`, plus their native-input and native-settings
+subclasses. To attach **queue** metadata to the same log
 lines, combine Swarm events with Laravel’s queue events, for example
 `Illuminate\Queue\Events\JobProcessing`, and merge `job->uuid()` (or your broker’s
 id) into your logging context for the duration of the job. When using the
