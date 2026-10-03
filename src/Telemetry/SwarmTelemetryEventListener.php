@@ -27,6 +27,7 @@ use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Illuminate\Queue\Events\JobAttempted;
@@ -391,6 +392,24 @@ class SwarmTelemetryEventListener
         }
 
         try {
+            // Invoke and broadcast jobs are ShouldBeEncrypted, so their command
+            // is ciphertext. Decode it the way CallQueuedHandler::getCommand()
+            // does: a plaintext command starts with "O:", anything else is
+            // decrypted. A command that cannot be decrypted (missing or rotated
+            // APP_KEY) yields no fallback telemetry, the same as one that
+            // cannot be unserialized.
+            if (! str_starts_with($serialized, 'O:')) {
+                if (! $this->container->bound(Encrypter::class)) {
+                    return null;
+                }
+
+                $serialized = $this->container->make(Encrypter::class)->decrypt($serialized);
+
+                if (! is_string($serialized)) {
+                    return null;
+                }
+            }
+
             $command = unserialize($serialized, [
                 'allowed_classes' => self::PACKAGE_JOB_CLASSES,
             ]);

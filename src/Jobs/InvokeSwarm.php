@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
@@ -20,7 +21,7 @@ use Illuminate\Queue\SerializesModels;
 /**
  * @internal
  */
-class InvokeSwarm implements ShouldQueue
+class InvokeSwarm implements ShouldBeEncrypted, ShouldQueue
 {
     use ConfiguresQueuedSwarmJob;
     use EmitsSwarmJobTelemetry;

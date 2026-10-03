@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Bus\Queueable;
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
@@ -28,7 +29,7 @@ use Laravel\Ai\Attributes\WithoutBroadcasting;
  *
  * @internal
  */
-class BroadcastSwarm implements ShouldQueue
+class BroadcastSwarm implements ShouldBeEncrypted, ShouldQueue
 {
     use ConfiguresQueuedSwarmJob;
     use EmitsSwarmJobTelemetry;
