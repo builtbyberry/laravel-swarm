@@ -5,7 +5,9 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeAgentSettingsSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeAgentSettingsSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -208,6 +210,10 @@ it('emits the fallback job.failed for an encrypted job whose handler never ran',
 })->with([
     'invoke' => [InvokeSwarm::class],
     'broadcast' => [BroadcastSwarm::class],
+    'invoke native input' => [InvokeNativeInputSwarm::class],
+    'invoke native settings' => [InvokeNativeAgentSettingsSwarm::class],
+    'broadcast native input' => [BroadcastNativeInputSwarm::class],
+    'broadcast native settings' => [BroadcastNativeAgentSettingsSwarm::class],
 ]);
 
 it('does not duplicate the job.failed an encrypted job emitted from its handler', function () {
@@ -254,6 +260,10 @@ it('reports a job sealed under another key with a degraded job.failed and a warn
 })->with([
     'invoke' => [InvokeSwarm::class],
     'broadcast' => [BroadcastSwarm::class],
+    'invoke native input' => [InvokeNativeInputSwarm::class],
+    'invoke native settings' => [InvokeNativeAgentSettingsSwarm::class],
+    'broadcast native input' => [BroadcastNativeInputSwarm::class],
+    'broadcast native settings' => [BroadcastNativeAgentSettingsSwarm::class],
 ]);
 
 it('leaves the application\'s own encrypted jobs alone', function () {

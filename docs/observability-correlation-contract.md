@@ -94,6 +94,10 @@ Only these job classes produce `job.*` telemetry:
 - `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch`
 - `BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm`
 
+Their native-input and native-settings subclasses (for example
+`InvokeNativeInputSwarm` and `AdvanceNativeAgentSettingsDurableSwarm`) are
+included, and `job_class` names the subclass.
+
 Payloads include `job_class`, `job_id`, `attempt`, `queue_connection`,
 `queue_name`, and `run_id` (resolved from the job payload or durable run row for
 advance jobs).

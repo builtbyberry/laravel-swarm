@@ -22,8 +22,18 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaitTimedOut;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeAgentSettingsSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeAgentSettingsSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeAgentSettingsQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeInputQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Container\Container;
@@ -46,14 +56,28 @@ use Throwable;
 class SwarmTelemetryEventListener
 {
     /**
+     * Every package job class, including the native-input and native-settings
+     * subclasses: the classes unserialize() may build when decoding a failed
+     * job, and the jobs the fallback reports on.
+     *
      * @var array<int, class-string>
      */
     protected const PACKAGE_JOB_CLASSES = [
         InvokeSwarm::class,
+        InvokeNativeInputSwarm::class,
+        InvokeNativeAgentSettingsSwarm::class,
         BroadcastSwarm::class,
+        BroadcastNativeInputSwarm::class,
+        BroadcastNativeAgentSettingsSwarm::class,
         AdvanceDurableSwarm::class,
+        AdvanceNativeInputDurableSwarm::class,
+        AdvanceNativeAgentSettingsDurableSwarm::class,
         AdvanceDurableBranch::class,
+        AdvanceNativeInputDurableBranch::class,
+        AdvanceNativeAgentSettingsDurableBranch::class,
         ResumeQueuedHierarchicalSwarm::class,
+        ResumeNativeInputQueuedHierarchicalSwarm::class,
+        ResumeNativeAgentSettingsQueuedHierarchicalSwarm::class,
     ];
 
     public function __construct(
