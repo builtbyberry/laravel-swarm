@@ -195,8 +195,13 @@ final class AppSwarmTelemetrySink implements SwarmTelemetrySink
 ```
 
 If you use **Laravel Horizon**, configure tags or metadata that include
-`swarm_run_id` from your job payload or from the first `SwarmStarted` event you
-see in that process.
+`swarm_run_id`, taken from the first `SwarmStarted` event you see in that process
+or added when the job is queued. Queued and broadcast swarm jobs are encrypted
+(`ShouldBeEncrypted`), so the stored job's `data.command` is ciphertext and you
+cannot read the run from it later. A `Queue::createPayloadUsing()` callback runs
+before encryption and receives the job object in `$payload['data']['command']`;
+return the run id under a top-level key of your own. The stored `displayName`
+(the swarm class) stays readable.
 
 ## Durable Runs Across Processes
 

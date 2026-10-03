@@ -34,6 +34,15 @@ The same applies to telemetry payloads emitted through `SwarmTelemetrySink`:
 they carry redacted or allowlisted fields only, and are not sealed by the
 package.
 
+Queued swarm jobs are a third case. The jobs behind `queue()` and
+`broadcastOnQueue()` are encrypted with `APP_KEY` in your queue backend and in
+`failed_jobs`, whatever persistence driver you use. Laravel's encrypter reads
+them with any key listed in `APP_PREVIOUS_KEYS`. When you rotate, keep the old
+key there until every job queued under it has completed or been removed —
+`queue:retry` re-queues the same ciphertext, so retrying is not enough. A job
+that no configured key can decrypt fails before its handler runs; your queue's
+retry policy then decides when it lands in `failed_jobs`.
+
 ## What Breaks After Rotation
 
 When `APP_KEY` no longer matches the key used to write the sealed rows,
