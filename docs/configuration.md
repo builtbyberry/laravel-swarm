@@ -219,6 +219,10 @@ Controls behavior specific to the dynamic `Hierarchical` topology when streamed 
 ## Queue
 
 Queue connection and name used for `queue()` execution and hierarchical parallel coordination.
+The jobs behind `queue()` and `broadcastOnQueue()` always encrypt their command
+with `APP_KEY`; there is no Swarm config opt-out. A valid key is required for
+sync and test queues too. See
+[Encrypted queued swarm payloads](../UPGRADING.md#encrypted-queued-swarm-payloads).
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|

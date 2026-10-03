@@ -4,8 +4,15 @@ declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmTelemetrySink;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeAgentSettingsQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeInputQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Telemetry\PackageJobTelemetryState;
 use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryDispatcher;
@@ -145,13 +152,13 @@ it('leaves no marker behind when a retried job then succeeds', function () {
         ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe(0);
 });
 
-it('emits one job.failed for a final failure, also after the worker resets container scope', function () {
+it('emits one job.failed for a final failure, also after the worker resets container scope', function (string $jobClass) {
     config()->set('swarm.durable.job.tries', 1);
     $telemetry = telemetryBoundSink();
     $original = new LogicException('final attempt failed');
     telemetryBoundManager([$original]);
     $queue = app('queue')->connection('telemetry-bound');
-    $queue->push(new AdvanceDurableSwarm('bound-final-run', 0));
+    $queue->push(new $jobClass('bound-final-run', 0));
     $queued = $queue->pop('test');
 
     // What the queue worker's daemon loop does before every job.
@@ -163,9 +170,13 @@ it('emits one job.failed for a final failure, also after the worker resets conta
     expect($escaped)->toBe($original)
         ->and($queued->hasFailed())->toBeTrue()
         ->and($failed)->toHaveCount(1)
+        ->and($failed[0]['job_class'])->toBe($jobClass)
         ->and($failed[0]['duration_ms'])->toBeInt()
         ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe(0);
-});
+})->with([
+    'base job' => [AdvanceDurableSwarm::class],
+    'job subclass' => [AdvanceNativeInputDurableSwarm::class],
+]);
 
 it('emits one job.failed for a failure on the sync queue', function () {
     $telemetry = telemetryBoundSink();
@@ -203,11 +214,12 @@ it('keeps a pending marker when another job is attempted before the failure is r
         ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe(0);
 });
 
-it('still emits the fallback job.failed when the handler never ran', function () {
+it('still emits the fallback job.failed when the handler never ran', function (Closure $makeJob) {
     $telemetry = telemetryBoundSink();
     telemetryBoundManager([]);
     $queue = app('queue')->connection('telemetry-bound');
-    $queue->push(new AdvanceDurableSwarm('bound-fallback-run', 0));
+    $job = $makeJob();
+    $queue->push($job);
     DB::connection('testing')->table('jobs')->update(['attempts' => 5]);
     $queued = $queue->pop('test');
 
@@ -218,9 +230,20 @@ it('still emits the fallback job.failed when the handler never ran', function ()
     expect($escaped)->toBeInstanceOf(MaxAttemptsExceededException::class)
         ->and($failed)->toHaveCount(1)
         ->and($failed[0]['run_id'])->toBe('bound-fallback-run')
+        ->and($failed[0]['job_class'])->toBe($job::class)
         ->and($failed[0]['duration_ms'])->toBeNull()
         ->and(app(PackageJobTelemetryState::class)->pendingCount())->toBe(0);
-});
+})->with([
+    'durable step' => [fn () => new AdvanceDurableSwarm('bound-fallback-run', 0)],
+    'native-input durable step' => [fn () => new AdvanceNativeInputDurableSwarm('bound-fallback-run', 0)],
+    'native-settings durable step' => [fn () => new AdvanceNativeAgentSettingsDurableSwarm('bound-fallback-run', 0)],
+    'durable branch' => [fn () => new AdvanceDurableBranch('bound-fallback-run', 'branch-1')],
+    'native-input durable branch' => [fn () => new AdvanceNativeInputDurableBranch('bound-fallback-run', 'branch-1')],
+    'native-settings durable branch' => [fn () => new AdvanceNativeAgentSettingsDurableBranch('bound-fallback-run', 'branch-1')],
+    'queued hierarchical resume' => [fn () => new ResumeQueuedHierarchicalSwarm('bound-fallback-run')],
+    'native-input queued hierarchical resume' => [fn () => new ResumeNativeInputQueuedHierarchicalSwarm('bound-fallback-run')],
+    'native-settings queued hierarchical resume' => [fn () => new ResumeNativeAgentSettingsQueuedHierarchicalSwarm('bound-fallback-run')],
+]);
 
 it('never lets a queue job that cannot report its id break the queue event', function () {
     $state = app(PackageJobTelemetryState::class);

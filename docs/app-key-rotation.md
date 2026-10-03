@@ -34,6 +34,18 @@ The same applies to telemetry payloads emitted through `SwarmTelemetrySink`:
 they carry redacted or allowlisted fields only, and are not sealed by the
 package.
 
+Queued jobs are a third case:
+
+- **Queue backend and `failed_jobs`.** The jobs behind `queue()` and
+  `broadcastOnQueue()` are encrypted with `APP_KEY`, whatever persistence driver
+  Swarm uses. Laravel's encrypter reads them with any key listed in
+  `APP_PREVIOUS_KEYS`. When you rotate, keep the old key there until every job
+  queued under it has completed or been removed — `queue:retry` re-queues the
+  same ciphertext, so retrying is not enough. Durable, resume, compaction, and
+  callback jobs carry only identifiers and are not encrypted by this boundary.
+  Failed-job retention is governed by `queue:prune-failed` / `queue:flush`, not
+  `swarm:prune`.
+
 ## What Breaks After Rotation
 
 When `APP_KEY` no longer matches the key used to write the sealed rows,
@@ -59,6 +71,15 @@ sealed, including persisted context input, legacy step I/O, and citation and
 provider-tool envelopes. Preserve unrelated JSON fields while rotating these values. Arbitrary
 `data`, `metadata`, or artifact content is not automatically sealed; any
 application-owned encryption has its own rotation requirements.
+
+An encrypted queued swarm job that no configured key can decrypt fails before
+its handler runs. Operators see a `failed_jobs` row and Laravel's
+`DecryptException` message `The MAC is invalid.` Laravel Swarm logs
+`laravel-swarm: a queued swarm job could not be decrypted ...` and emits a
+degraded `job.failed` with a null `run_id` and null timing fields. Add the old
+key to `APP_PREVIOUS_KEYS`, then run `queue:retry`; the retry reuses the same
+ciphertext. If the work must not run, remove the row with `queue:forget` or all
+failed rows with `queue:flush`.
 
 ## Citation And Replay Inventory
 
@@ -170,6 +191,9 @@ table categories:
   rows. Retain and re-encrypt them, or delete them explicitly under your
   application's retention policy; see the [streaming retention
   horizon](operator-runbook-streaming-substrate.md#4-the-retention-horizon).
+- **Queued commands and `failed_jobs`** use `APP_KEY` encryption and can read
+  `APP_PREVIOUS_KEYS`. Manage failed-job retention with `queue:prune-failed` or
+  `queue:flush`; `swarm:prune` does not remove these records.
 
 A drain-then-rotate plan is only as fast as the longest active retention. If
 you keep durable run history for 90 days and a durable run is currently

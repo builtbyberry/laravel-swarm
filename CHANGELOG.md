@@ -164,9 +164,22 @@ Native feature access through Laravel Swarm workflows.
   rollback is unsafe after writes while affected identities can resume or retry:
   stop intake, drain work, deploy and restart all old workers before resuming,
   then handle schema removal only after evidence retention is satisfied.
+- Queued and broadcast swarm jobs (`queue()`, `broadcastOnQueue()`, and their
+  native-input and native-settings variants) now implement Laravel's
+  `ShouldBeEncrypted`, so the run payload they carry inline — the prompt,
+  structured data, metadata, and artifacts — is stored in the queue backend and in
+  `failed_jobs` encrypted with `APP_KEY` instead of as plaintext. Queuing a swarm now
+  requires an application key and fails early with `NonQueueableSwarmException`
+  when the key is missing or invalid. Jobs already queued before the upgrade still run.
+  Undecryptable package jobs log a warning and emit a degraded `job.failed`.
+  See [UPGRADING](UPGRADING.md#encrypted-queued-swarm-payloads).
 
 ### Fixed
 
+- The `job.failed` fallback telemetry now covers the native-input and
+  native-settings job variants. When one of these jobs failed before its handler
+  ran (for example after exceeding its attempts), no `job.failed` was emitted,
+  because the queue failure listener only recognised the five base job classes.
 - Long-lived queue workers no longer accumulate memory for every package job
   attempt that fails and is retried. The in-process guard that stops a failed
   job's `job.failed` telemetry from being emitted twice kept one entry per failed

@@ -22,17 +22,29 @@ use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaitTimedOut;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeAgentSettingsSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeAgentSettingsSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeAgentSettingsQueuedHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeInputQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Queue\Job as QueueJobContract;
 use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\SyncQueue;
 use Illuminate\Queue\Worker;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -44,14 +56,28 @@ use Throwable;
 class SwarmTelemetryEventListener
 {
     /**
+     * Every package job class, including the native-input and native-settings
+     * subclasses: the classes unserialize() may build when decoding a failed
+     * job, and the jobs the fallback reports on.
+     *
      * @var array<int, class-string>
      */
     protected const PACKAGE_JOB_CLASSES = [
         InvokeSwarm::class,
+        InvokeNativeInputSwarm::class,
+        InvokeNativeAgentSettingsSwarm::class,
         BroadcastSwarm::class,
+        BroadcastNativeInputSwarm::class,
+        BroadcastNativeAgentSettingsSwarm::class,
         AdvanceDurableSwarm::class,
+        AdvanceNativeInputDurableSwarm::class,
+        AdvanceNativeAgentSettingsDurableSwarm::class,
         AdvanceDurableBranch::class,
+        AdvanceNativeInputDurableBranch::class,
+        AdvanceNativeAgentSettingsDurableBranch::class,
         ResumeQueuedHierarchicalSwarm::class,
+        ResumeNativeInputQueuedHierarchicalSwarm::class,
+        ResumeNativeAgentSettingsQueuedHierarchicalSwarm::class,
     ];
 
     public function __construct(
@@ -326,7 +352,7 @@ class SwarmTelemetryEventListener
 
     protected function emitJobFailureFallbackTelemetry(QueueJobContract $job, Throwable $exception): void
     {
-        $command = $this->unserializePackageJob($job);
+        $command = $this->unserializePackageJob($job, $exception);
 
         if ($command === null) {
             return;
@@ -381,7 +407,7 @@ class SwarmTelemetryEventListener
         return max(0, ((int) floor(microtime(true) * 1000)) - $command->enqueuedAtMs);
     }
 
-    protected function unserializePackageJob(QueueJobContract $job): ?object
+    protected function unserializePackageJob(QueueJobContract $job, Throwable $exception): ?object
     {
         $payload = $job->payload();
         $serialized = $payload['data']['command'] ?? null;
@@ -391,6 +417,31 @@ class SwarmTelemetryEventListener
         }
 
         try {
+            // Invoke and broadcast jobs are ShouldBeEncrypted, so their command
+            // is ciphertext. Decode it the way CallQueuedHandler::getCommand()
+            // does: a plaintext command starts with "O:", anything else is
+            // decrypted. Only package jobs are decrypted; the readable
+            // commandName says which job this is without touching the encrypter.
+            if (! str_starts_with($serialized, 'O:')) {
+                $commandName = $payload['data']['commandName'] ?? null;
+
+                if (! is_string($commandName) || ! in_array($commandName, self::PACKAGE_JOB_CLASSES, true)) {
+                    return null;
+                }
+
+                try {
+                    $serialized = $this->container->make(Encrypter::class)->decrypt($serialized);
+                } catch (Throwable $decryptFailure) {
+                    $this->reportUndecryptablePackageJob($job, $commandName, $exception, $decryptFailure);
+
+                    return null;
+                }
+
+                if (! is_string($serialized)) {
+                    return null;
+                }
+            }
+
             $command = unserialize($serialized, [
                 'allowed_classes' => self::PACKAGE_JOB_CLASSES,
             ]);
@@ -409,6 +460,53 @@ class SwarmTelemetryEventListener
         }
 
         return null;
+    }
+
+    /**
+     * A package job no configured key can decrypt fails before its handler
+     * runs, so nothing else reports it. Its run id is sealed inside the
+     * command, but the swarm class (displayName) and job class (commandName)
+     * are stored readable, so emit a job.failed with a null run_id and log
+     * where to look.
+     */
+    protected function reportUndecryptablePackageJob(QueueJobContract $job, string $commandName, Throwable $exception, Throwable $decryptFailure): void
+    {
+        $payload = $job->payload();
+        $swarmClass = is_string($payload['displayName'] ?? null) ? $payload['displayName'] : null;
+        $jobId = $this->queueJobId($job);
+        $connection = $job->getConnectionName();
+        $queue = $job->getQueue();
+
+        try {
+            $this->container->make(LoggerInterface::class)->warning(
+                'laravel-swarm: a queued swarm job could not be decrypted, so its run is unknown. Verify APP_KEY, and APP_PREVIOUS_KEYS after a key rotation, match the key that queued it.',
+                [
+                    'job_id' => $jobId,
+                    'job_class' => $commandName,
+                    'swarm_class' => $swarmClass,
+                    'queue_connection' => $connection,
+                    'queue_name' => $queue,
+                    'exception_class' => $decryptFailure::class,
+                ],
+            );
+        } catch (Throwable) {
+            // Logging must never replace the failure being reported.
+        }
+
+        $this->telemetry()->emit('job.failed', [
+            'run_id' => null,
+            'swarm_class' => $swarmClass,
+            'job_class' => $commandName,
+            'job_id' => $jobId,
+            'attempt' => $job->attempts(),
+            'queue_connection' => $connection,
+            'queue_name' => $queue,
+            'duration_ms' => null,
+            'queue_wait_ms' => null,
+            'total_elapsed_ms' => null,
+            'exception_class' => $exception::class,
+            'status' => 'failed',
+        ]);
     }
 
     protected function runIdFromPackageJob(object $command): ?string

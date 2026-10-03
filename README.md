@@ -277,6 +277,10 @@ $response = ContentPipeline::make()
 $response->runId;
 ```
 
+`queue()` and `broadcastOnQueue()` encrypt the queued command with `APP_KEY`.
+A valid key is required even with the sync queue in local or test environments.
+See [Encrypted queued swarm payloads](UPGRADING.md#encrypted-queued-swarm-payloads).
+
 Queued swarms are re-resolved from Laravel's container on the worker. Keep swarm definitions stateless across the queue boundary, and pass per-run data in the task payload:
 
 ```php

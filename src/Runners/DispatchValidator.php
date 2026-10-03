@@ -26,6 +26,7 @@ use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Container\BindingResolutionException;
+use Illuminate\Contracts\Encryption\Encrypter;
 use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Messages\UserMessage;
 use ReflectionClass;
@@ -34,6 +35,7 @@ use ReflectionNamedType;
 use ReflectionParameter;
 use ReflectionType;
 use ReflectionUnionType;
+use RuntimeException;
 
 /**
  * Dispatch-time validation for queued, durable, broadcast, and streaming entry points.
@@ -282,6 +284,25 @@ class DispatchValidator
                 "Queued swarms must be container-resolvable workflow definitions. [{$swarmClass}] ".
                 'could not be resolved from the container for queued execution. '.
                 "Underlying container error: {$exception->getMessage()}",
+                previous: $exception,
+            );
+        }
+    }
+
+    /**
+     * Queued invoke and broadcast jobs are ShouldBeEncrypted. Laravel only
+     * encrypts when the job is pushed, which happens after queue() returns,
+     * so resolve the encrypter now: a missing or invalid key fails here,
+     * before any native input is admitted.
+     */
+    public function ensureQueuePayloadEncryptable(Swarm $swarm): void
+    {
+        try {
+            Container::getInstance()->make(Encrypter::class);
+        } catch (RuntimeException $exception) {
+            throw new NonQueueableSwarmException(
+                'Queued swarms encrypt their job payload with the application key. ['.$swarm::class.'] '.
+                "cannot be queued: {$exception->getMessage()} Set APP_KEY wherever swarms are queued or worked.",
                 previous: $exception,
             );
         }

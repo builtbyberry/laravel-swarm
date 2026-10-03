@@ -294,6 +294,14 @@ Native operational envelopes are stricter: `swarm_native_inputs.payload` must be
 `sw0:` sealed and is rejected if plaintext or undecryptable. This prevents a
 recoverable worker from treating legacy plaintext as authorized attachment state.
 
+Queued `InvokeSwarm` and `BroadcastSwarm` commands are a separate inventory.
+They are always encrypted with `APP_KEY` in the queue backend and `failed_jobs`,
+regardless of the persistence driver or `swarm.persistence.encrypt_at_rest`.
+Laravel can read them with keys in `APP_PREVIOUS_KEYS`. Durable, resume,
+compaction, and callback jobs carry only identifiers and are not encrypted by
+this boundary. Failed-job retention uses `queue:prune-failed`, `queue:forget`,
+or `queue:flush`, not `swarm:prune`.
+
 Set `SWARM_ENCRYPT_AT_REST=false` only when you intentionally rely on
 database- or infrastructure-level encryption instead of application-layer
 sealing. Rotating `APP_KEY` without a re-encryption plan leaves existing sealed

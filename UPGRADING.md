@@ -22,6 +22,59 @@ available and unchanged; it is now tracked for removal in v1.0
 ([#547](https://github.com/builtbyberry/laravel-swarm/issues/547)). New code should
 type-hint `Laravel\Ai\Contracts\Agent` directly. No symbol is removed in this release.
 
+### Encrypted queued swarm payloads
+
+The jobs behind `queue()` and `broadcastOnQueue()` carry the run's input, data,
+metadata, and artifacts inline. They now implement Laravel's `ShouldBeEncrypted`,
+so that payload is encrypted with your `APP_KEY` in the queue backend and in
+`failed_jobs`, matching the at-rest sealing of `swarm_*` rows. Durable, resume,
+compaction, and callback jobs are unchanged: they carry only identifiers.
+There is no opt-out for queued swarm encryption. The queue carries the same
+regulated payload, and broker-level encryption does not cover a database queue
+or `failed_jobs`.
+
+- **An application key is now required to queue a swarm.** Applications that use
+  the default cache persistence may not have needed one for Swarm before. Without
+  a valid `APP_KEY`, `queue()` and `broadcastOnQueue()` throw
+  `NonQueueableSwarmException` at the call site, before input is admitted or a job
+  is queued. The message names the swarm class and `APP_KEY`; for a missing key,
+  the previous exception is Laravel's `MissingAppKeyException`. This also applies
+  to sync queues and tests because `SyncQueue` builds the encrypted payload.
+- **Every dispatcher and worker must share the same `APP_KEY`.** When you rotate it,
+  keep the old key in `APP_PREVIOUS_KEYS` until queued and failed swarm jobs written
+  under it have run or been flushed. A job that no configured key can decrypt fails
+  before its handler, logs a warning, and emits a degraded `job.failed` with a null
+  `run_id`. Add the old key to `APP_PREVIOUS_KEYS` before `queue:retry`, or remove
+  the row with `queue:forget` / `queue:flush`. See
+  [APP_KEY Rotation](docs/app-key-rotation.md).
+- **No queue drain is needed for encryption.** Laravel decides per job whether a
+  stored command is encrypted, not per class. A v0.28 worker runs plaintext jobs
+  queued by v0.27, and a v0.27 worker runs encrypted `InvokeSwarm` and
+  `BroadcastSwarm` jobs. `queue:retry` works for both. The native-input and
+  native-settings job classes exist only in v0.28, so keep the existing rule:
+  upgrade every worker before enabling those writers.
+- **Encryption only covers jobs queued after the upgrade.** Jobs already waiting in
+  the queue and existing `failed_jobs` rows stay plaintext, including through
+  `queue:retry`, until they complete or are removed with `queue:forget` /
+  `queue:flush`.
+- **Payloads grow.** An encrypted command is about 1.8x the size of the plaintext
+  one. If you queue large inline inputs, check your queue backend's maximum job
+  size. `swarm.limits.max_input_bytes` bounds the plaintext input before encryption,
+  not the stored queue payload.
+- **Rollback** is safe for job execution while the old worker has a matching key.
+  A rolled-back worker has none of the new encrypted fallback telemetry code, so a
+  failure before the handler produces no warning or degraded `job.failed` while
+  encrypted jobs remain.
+- Anything that read the run from a stored job's `data.command` now sees ciphertext.
+  `displayName` (the swarm class) and `data.commandName` stay readable. See
+  [Observability: logging and tracing](docs/observability-logging-tracing.md) for
+  safe payload correlation.
+- `Queue::createPayloadUsing()` hooks and `JobQueueing` / `JobQueued` listeners,
+  including Telescope, still receive the plaintext job object. Hook-added payload
+  keys are stored in plaintext and are not sealed by this change.
+- **Post-upgrade smoke check:** queue one swarm and confirm `job.completed` and
+  `run.completed`; a key mismatch should fail with `DecryptException`.
+
 ### Native chat protocol adapters
 
 Vercel and AG-UI projection is default-off. Applications with a published
