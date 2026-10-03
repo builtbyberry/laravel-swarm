@@ -434,6 +434,7 @@ class SwarmRunner
         $this->validator->validateForDispatch($swarm);
         $this->validator->ensureQueueable($swarm);
         $this->validator->ensureContainerResolvable($swarm);
+        $this->validator->ensureQueuePayloadEncryptable($swarm);
 
         $context = RunContext::fromTask($task);
         $topology = $this->resolver->resolveTopology($swarm);
@@ -484,6 +485,7 @@ class SwarmRunner
         $this->validator->validateForDispatch($swarm);
         $this->validator->ensureQueueable($swarm);
         $this->validator->ensureContainerResolvable($swarm);
+        $this->validator->ensureQueuePayloadEncryptable($swarm);
 
         $context = RunContext::fromTask($task);
         $topology = $this->resolver->resolveTopology($swarm);

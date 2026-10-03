@@ -19,6 +19,10 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
 /**
+ * Carries the run payload, including the prompt, inline, so it is
+ * ShouldBeEncrypted. Jobs that carry only identifiers (durable, resume,
+ * compaction, callback) reload state and are not encrypted.
+ *
  * @internal
  */
 class InvokeSwarm implements ShouldBeEncrypted, ShouldQueue

@@ -25,6 +25,9 @@ use Illuminate\Queue\SerializesModels;
 use Laravel\Ai\Attributes\WithoutBroadcasting;
 
 /**
+ * Carries the run payload, including the prompt, inline, so it is
+ * ShouldBeEncrypted, like InvokeSwarm.
+ *
  * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  *
  * @internal

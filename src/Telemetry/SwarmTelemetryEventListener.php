@@ -34,6 +34,7 @@ use Illuminate\Queue\Events\JobAttempted;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\SyncQueue;
 use Illuminate\Queue\Worker;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -327,7 +328,7 @@ class SwarmTelemetryEventListener
 
     protected function emitJobFailureFallbackTelemetry(QueueJobContract $job, Throwable $exception): void
     {
-        $command = $this->unserializePackageJob($job);
+        $command = $this->unserializePackageJob($job, $exception);
 
         if ($command === null) {
             return;
@@ -382,7 +383,7 @@ class SwarmTelemetryEventListener
         return max(0, ((int) floor(microtime(true) * 1000)) - $command->enqueuedAtMs);
     }
 
-    protected function unserializePackageJob(QueueJobContract $job): ?object
+    protected function unserializePackageJob(QueueJobContract $job, Throwable $exception): ?object
     {
         $payload = $job->payload();
         $serialized = $payload['data']['command'] ?? null;
@@ -395,15 +396,22 @@ class SwarmTelemetryEventListener
             // Invoke and broadcast jobs are ShouldBeEncrypted, so their command
             // is ciphertext. Decode it the way CallQueuedHandler::getCommand()
             // does: a plaintext command starts with "O:", anything else is
-            // decrypted. A command that cannot be decrypted (missing or rotated
-            // APP_KEY) yields no fallback telemetry, the same as one that
-            // cannot be unserialized.
+            // decrypted. Only package jobs are decrypted; the readable
+            // commandName says which job this is without touching the encrypter.
             if (! str_starts_with($serialized, 'O:')) {
-                if (! $this->container->bound(Encrypter::class)) {
+                $commandName = $payload['data']['commandName'] ?? null;
+
+                if (! is_string($commandName) || ! in_array($commandName, self::PACKAGE_JOB_CLASSES, true)) {
                     return null;
                 }
 
-                $serialized = $this->container->make(Encrypter::class)->decrypt($serialized);
+                try {
+                    $serialized = $this->container->make(Encrypter::class)->decrypt($serialized);
+                } catch (Throwable $decryptFailure) {
+                    $this->reportUndecryptablePackageJob($job, $commandName, $exception, $decryptFailure);
+
+                    return null;
+                }
 
                 if (! is_string($serialized)) {
                     return null;
@@ -428,6 +436,53 @@ class SwarmTelemetryEventListener
         }
 
         return null;
+    }
+
+    /**
+     * A package job no configured key can decrypt fails before its handler
+     * runs, so nothing else reports it. Its run id is sealed inside the
+     * command, but the swarm class (displayName) and job class (commandName)
+     * are stored readable, so emit a job.failed with a null run_id and log
+     * where to look.
+     */
+    protected function reportUndecryptablePackageJob(QueueJobContract $job, string $commandName, Throwable $exception, Throwable $decryptFailure): void
+    {
+        $payload = $job->payload();
+        $swarmClass = is_string($payload['displayName'] ?? null) ? $payload['displayName'] : null;
+        $jobId = $this->queueJobId($job);
+        $connection = $job->getConnectionName();
+        $queue = $job->getQueue();
+
+        try {
+            $this->container->make(LoggerInterface::class)->warning(
+                'laravel-swarm: a queued swarm job could not be decrypted, so its run is unknown. Verify APP_KEY, and APP_PREVIOUS_KEYS after a key rotation, match the key that queued it.',
+                [
+                    'job_id' => $jobId,
+                    'job_class' => $commandName,
+                    'swarm_class' => $swarmClass,
+                    'queue_connection' => $connection,
+                    'queue_name' => $queue,
+                    'exception_class' => $decryptFailure::class,
+                ],
+            );
+        } catch (Throwable) {
+            // Logging must never replace the failure being reported.
+        }
+
+        $this->telemetry()->emit('job.failed', [
+            'run_id' => null,
+            'swarm_class' => $swarmClass,
+            'job_class' => $commandName,
+            'job_id' => $jobId,
+            'attempt' => $job->attempts(),
+            'queue_connection' => $connection,
+            'queue_name' => $queue,
+            'duration_ms' => null,
+            'queue_wait_ms' => null,
+            'total_elapsed_ms' => null,
+            'exception_class' => $exception::class,
+            'status' => 'failed',
+        ]);
     }
 
     protected function runIdFromPackageJob(object $command): ?string
