@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
+use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Support\ToolResultEncoding;
 use Laravel\Ai\Responses\Data\ToolResult;
 
@@ -20,6 +21,7 @@ final class SwarmToolResult extends SwarmStreamEvent
         public int $timestamp,
         public bool $preliminary = false,
         public bool $denied = false,
+        public PayloadAvailability $payloadAvailability = PayloadAvailability::Unknown,
     ) {}
 
     /**
@@ -49,8 +51,7 @@ final class SwarmToolResult extends SwarmStreamEvent
 
         return [
             'id' => $this->id,
-            'invocation_id' => $this->invocationId,
-            'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'type' => 'swarm_tool_result',
             'run_id' => $this->runId,
             'step_index' => $this->stepIndex,
@@ -59,6 +60,9 @@ final class SwarmToolResult extends SwarmStreamEvent
             'successful' => $this->successful,
             'preliminary' => $this->preliminary,
             'denied' => $this->denied,
+            ...($this->payloadAvailability === PayloadAvailability::Unknown
+                ? []
+                : ['payload_status' => $this->payloadAvailability->value]),
             'error' => $this->error,
             'timestamp' => $this->timestamp,
         ];
@@ -92,6 +96,8 @@ final class SwarmToolResult extends SwarmStreamEvent
             denied: is_bool($payload['denied'] ?? null)
                 ? $payload['denied']
                 : (is_bool($toolResult['denied'] ?? null) ? $toolResult['denied'] : false),
+            payloadAvailability: PayloadAvailability::tryFrom(self::stringValue($payload, 'payload_status'))
+                ?? PayloadAvailability::Unknown,
         );
     }
 }

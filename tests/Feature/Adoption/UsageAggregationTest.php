@@ -69,7 +69,9 @@ it('preserves unknown usage through executed workflows and stored raw steps', fu
             'input_tokens' => 30, 'output_tokens' => 8, 'cache_read_input_tokens' => null, 'cache_write_input_tokens' => 0, 'reasoning_tokens' => 3,
         ])
         ->and($history['steps'][0]['metadata']['usage']['cache_read_input_tokens'])->toBe(4)
-        ->and($history['steps'][1]['metadata']['usage']['cache_read_input_tokens'])->toBeNull();
+        ->and($history['steps'][1]['metadata']['usage']['cache_read_input_tokens'])->toBeNull()
+        ->and(array_filter(array_map(static fn (array $step): ?string => $step['native_result']['invocation_id'] ?? null, $history['steps'])))->toHaveCount(3)
+        ->and(array_unique(array_map(static fn (array $step): ?string => $step['native_result']['invocation_id'] ?? null, $history['steps'])))->toHaveCount(3);
 })->with(['prompt', 'stream', 'parallel', 'queue', 'static-prompt', 'static-stream']);
 
 it('joins completed durable branches with legacy or missing reports without repeating agents', function (string $kind) {
@@ -84,6 +86,8 @@ it('joins completed durable branches with legacy or missing reports without repe
     $legacyOrEmpty = $kind === 'legacy' ? ['prompt_tokens' => 11, 'completion_tokens' => 2, 'cache_read_input_tokens' => 7] : [];
     DB::table('swarm_durable_branches')->where('run_id', $runId)->where('branch_id', $branches[0]['branch_id'])->update(['usage' => json_encode($legacyOrEmpty, JSON_THROW_ON_ERROR)]);
     $before = $store->branchesFor($runId, 'parallel');
+    expect(array_filter(array_map(static fn (array $branch): ?string => $branch['native_result']['invocation_id'] ?? null, $before)))->toHaveCount(3)
+        ->and(array_unique(array_map(static fn (array $branch): ?string => $branch['native_result']['invocation_id'] ?? null, $before)))->toHaveCount(3);
     (new AdvanceDurableSwarm($runId, 3))->handle($manager);
     $history = app(RunHistoryStore::class)->find($runId);
     expect($history['status'])->toBe('completed')
@@ -149,6 +153,7 @@ it('retains conservative accounting through a persisted coordinated queue join',
         ]);
     }
     $before = array_column($store->branchesFor($context->runId, 'parallel'), 'usage');
+    expect(array_filter(array_map(static fn (array $branch): ?string => $branch['native_result']['invocation_id'] ?? null, $store->branchesFor($context->runId, 'parallel'))))->toHaveCount(2);
     (new ResumeQueuedHierarchicalSwarm($context->runId))->handle(app(QueuedHierarchicalCoordinator::class));
     $history = app(RunHistoryStore::class)->find($context->runId);
     expect($history['status'])->toBe('completed')

@@ -47,8 +47,8 @@ class RecordNormalizer extends ScriptedAgent implements HasStructuredOutput
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable + HasStructuredOutput
-        // agent to have a live model normalise the record. The deterministic
+        // For model behavior, generate RecordNormalizer with make:agent --structured
+        // and port this schema. The deterministic
         // validation below mirrors the guarantees the schema encodes so the
         // example produces a genuinely validated result with no provider.
         /** @var array<string, mixed> $extracted */

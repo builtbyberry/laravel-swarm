@@ -37,6 +37,9 @@ test('make:swarm:blueprint scaffolds a renamed swarm, agents, and command', func
     ]);
 
     expect($exit)->toBe(0);
+    expect(Artisan::output())
+        ->toContain('keep ScriptedAgent for deterministic offline runs')
+        ->toContain('php artisan make:agent');
 
     $swarm = app_path('Ai/Swarms/SupportTriage/SupportTriage.php');
     $agent = app_path('Ai/Agents/SupportTriage/MarketScout.php');

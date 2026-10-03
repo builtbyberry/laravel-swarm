@@ -5,6 +5,9 @@ For native provider activity, capture, storage, replay and attempt semantics, se
 
 For final and per-step sources, capture rules, and migration requirements, see [citation evidence](citations.md).
 
+For bounded native response fields on completed steps, capture-shaped storage,
+and schema/rollback requirements, see [native step results](native-step-results.md).
+
 
 Laravel Swarm can persist three kinds of run data:
 
@@ -266,6 +269,12 @@ Durable execution also requires the database driver. Durable runtime state is
 stored separately from run history, but the public inspection surface remains
 the same history, context, and artifact records.
 
+Recoverable native `UserMessage` input uses the dedicated
+`swarm.tables.native_inputs` operational table (default `swarm_native_inputs`).
+Jobs and contexts carry only its opaque reference; prompt text, attachment
+locators, recipient bindings, and invocation options live in the sealed payload.
+This operational storage is required independently of capture settings.
+
 Database TTL is prune-based retention. Expired rows remain queryable until you
 run the prune command described in [Maintenance](maintenance.md).
 
@@ -280,6 +289,18 @@ durable run outputs plus top-level `input` inside stored `context_payload` JSON)
 using Laravel’s encrypter and your application `APP_KEY`—the same family of
 primitive as encrypted Eloquent casts. Stored values are prefixed (`sw0:`) so
 older plaintext rows remain readable.
+
+Native operational envelopes are stricter: `swarm_native_inputs.payload` must be
+`sw0:` sealed and is rejected if plaintext or undecryptable. This prevents a
+recoverable worker from treating legacy plaintext as authorized attachment state.
+
+Queued `InvokeSwarm` and `BroadcastSwarm` commands are a separate inventory.
+They are always encrypted with `APP_KEY` in the queue backend and `failed_jobs`,
+regardless of the persistence driver or `swarm.persistence.encrypt_at_rest`.
+Laravel can read them with keys in `APP_PREVIOUS_KEYS`. Durable, resume,
+compaction, and callback jobs carry only identifiers and are not encrypted by
+this boundary. Failed-job retention uses `queue:prune-failed`, `queue:forget`,
+or `queue:flush`, not `swarm:prune`.
 
 Set `SWARM_ENCRYPT_AT_REST=false` only when you intentionally rely on
 database- or infrastructure-level encryption instead of application-layer
@@ -306,6 +327,10 @@ The default swarm tables are created during normal application migrations even
 when your current persistence driver is `cache`. This keeps local and
 production migration behavior predictable. If you do not want the default table
 names, publish the migrations and update them to match `swarm.tables.*`.
+
+The native-input table is pruned with its execution deadline. Cleanup removes
+only Swarm-promoted files; application-owned files are never deleted, and a row
+is retained when any owned-file deletion fails so the locator can be retried.
 
 ## Privacy And Data Capture
 
@@ -493,6 +518,10 @@ runtime.
 Database history uses both `swarm.tables.history` and
 `swarm.tables.history_steps`. If you customize the history table name, customize
 the normalized step table name as well.
+
+`swarm.tables.native_inputs` must also match the native-input migration. Deploy
+that additive table and the `swarm_contexts.native_input_ref` column before
+enabling native admissions on any worker.
 
 If you publish the package migrations, update the table names there as well so
 your schema matches your runtime configuration.

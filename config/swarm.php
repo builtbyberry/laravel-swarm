@@ -27,6 +27,21 @@ return [
         'max_bytes' => 262144,
     ],
 
+    // Safe, versioned projection of the Laravel AI response that completed each
+    // step. These bounds apply independently of ordinary output limits and never
+    // permit raw response objects or provider payloads to enter persistence.
+    'native_results' => [
+        'max_bytes' => (int) env('SWARM_NATIVE_RESULTS_MAX_BYTES', 262144),
+        // Native-result bytes carried by one broadcastable stream event. The
+        // hard 8 KiB ceiling leaves framing headroom for supported broadcasters.
+        'max_event_bytes' => (int) env('SWARM_NATIVE_RESULTS_MAX_EVENT_BYTES', 4096),
+        'max_generation_steps' => (int) env('SWARM_NATIVE_RESULTS_MAX_GENERATION_STEPS', 64),
+        'max_tool_statuses' => (int) env('SWARM_NATIVE_RESULTS_MAX_TOOL_STATUSES', 256),
+        'max_structured_depth' => (int) env('SWARM_NATIVE_RESULTS_MAX_STRUCTURED_DEPTH', 32),
+        'max_structured_items' => (int) env('SWARM_NATIVE_RESULTS_MAX_STRUCTURED_ITEMS', 4096),
+        'max_reasoning_bytes' => (int) env('SWARM_NATIVE_RESULTS_MAX_REASONING_BYTES', 65536),
+    ],
+
     // Bound arbitrary provider activity data, retaining identity with an explicit
     // partial/limit marker when data is withheld. Limits do not cap event count.
     'provider_tools' => [
@@ -37,8 +52,9 @@ return [
 
     'topology' => env('SWARM_TOPOLOGY', Topology::Sequential->value),
 
-    // Best-effort orchestration deadline checked before and between swarm steps.
-    // This does not hard-cancel an in-flight provider call.
+    // Ordinary modes check this deadline at step boundaries. Process-backed parallel
+    // streams also enforce it while multiplexing and terminate local branch processes;
+    // neither path guarantees cancellation of remote provider work already accepted.
     'timeout' => (int) env('SWARM_TIMEOUT', 300),
 
     'max_agent_steps' => (int) env('SWARM_MAX_AGENT_STEPS', 10),
@@ -106,6 +122,44 @@ return [
          * structured JSON in the database; encrypt_at_rest seals designated string columns only.
          * Do not store secrets inside JSON payloads unless your application encrypts them.
          */
+    ],
+
+    /*
+     * Native Laravel AI UserMessage input is an additive, default-off rollout.
+     * Enable only after this package's migration and v1 readers are present on
+     * every worker. Recoverable/cross-process input requires database persistence,
+     * encrypt_at_rest, and a private disk named below. Swarm-owned promoted files
+     * use the same retention window as their sealed operational envelope.
+     */
+    'native_inputs' => [
+        // Admit new UserMessage workflow input. Readers continue draining existing references when false.
+        'enabled' => filter_var(env('SWARM_NATIVE_INPUTS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+
+        // Private disk for Swarm-promoted local/base64 files and approved stored references.
+        'disk' => env('SWARM_NATIVE_INPUTS_DISK'),
+
+        // Reader deadline for queued/durable work; keep longer than the maximum workflow lifetime.
+        'retention_seconds' => (int) env('SWARM_NATIVE_INPUTS_RETENTION_SECONDS', 86400),
+
+        // Admission ceiling across every attachment modality in one UserMessage.
+        'max_attachments' => (int) env('SWARM_NATIVE_INPUTS_MAX_ATTACHMENTS', 8),
+
+        // Per-file admission ceiling for locally readable and configured-disk files.
+        'max_attachment_bytes' => (int) env('SWARM_NATIVE_INPUTS_MAX_ATTACHMENT_BYTES', 10485760),
+    ],
+
+    /*
+     * Per-run Laravel AI tools, messages, and conversation bindings use the
+     * sealed native-input envelope and require its base writer to be enabled.
+     * The additional v2 writer flag lets a mixed fleet keep settings admission
+     * off until every worker understands v2.
+     */
+    'native_agent_settings' => [
+        // Admit new v2 settings envelopes. Readers continue draining existing v2 references when false.
+        'enabled' => filter_var(env('SWARM_NATIVE_AGENT_SETTINGS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+
+        // Stable application identifier => class implementing NativeAgentToolFactory.
+        'tool_factories' => [],
     ],
 
     /*
@@ -587,6 +641,29 @@ return [
     ],
 
     'streaming' => [
+        'native_protocols' => [
+            /*
+             * Default-off HTTP projection through Laravel AI's Vercel and AG-UI
+             * encoders. Enable only after the application has chosen its
+             * projection and added tenant authorization around persisted replay.
+             */
+            'enabled' => filter_var(env('SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+        ],
+        /*
+         * Default-off live multiplexing for parallel topology. This requires
+         * Laravel's process concurrency driver plus local loopback sockets. It
+         * never falls back to buffered completion: unsupported environments fail
+         * before invoking an agent so callers can choose prompt() explicitly.
+         */
+        'parallel' => [
+            'enabled' => filter_var(env('SWARM_PARALLEL_STREAMING_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+            // Maximum branch processes admitted to one live stream; each branch uses multiple descriptors.
+            'max_branches' => (int) env('SWARM_PARALLEL_STREAMING_MAX_BRANCHES', 32),
+            // Byte ceiling for one atomic branch event or terminal outcome frame; frames are never split.
+            'max_frame_bytes' => (int) env('SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES', 2097152),
+            // Grace before forcibly terminating sibling workers on failure/disconnect.
+            'cancel_grace_milliseconds' => (int) env('SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS', 250),
+        ],
         'replay' => [
             'enabled' => env('SWARM_STREAM_REPLAY_ENABLED', false),
             'driver' => $swarmStreamReplayDriver,
@@ -628,6 +705,53 @@ return [
                 'name' => env('SWARM_QUEUE_HIERARCHICAL_PARALLEL_RESUME_NAME'),
             ],
         ],
+    ],
+
+    /*
+     * Terminal workflow callbacks: the queue/durable then() / catch() and stream
+     * catch() conveniences. Stream catch() runs in-process and needs nothing here.
+     * The queue/durable callbacks are persisted (as signed, sealed SerializableClosures)
+     * and delivered at-least-once by `swarm:relay --type=callback`; schedule the relay
+     * for them to fire. See [error handling](../docs/error-handling.md#terminal-workflow-callbacks).
+     */
+    'callbacks' => [
+        /*
+         * Off by default, and the operator kill switch. When false, then()/catch() on a
+         * QueuedSwarmResponse or DurableSwarmResponse throw BadMethodCallException exactly
+         * as before this feature existed, and the relay stops delivering already-registered
+         * callbacks. Enabling requires database-backed persistence
+         * (swarm.persistence.driver=database); under any other driver, registering a
+         * callback fails closed rather than silently dropping it.
+         * Callbacks are signed with APP_KEY, so every process that registers or delivers
+         * one needs it: a process without it never runs a callback.
+         */
+        'enabled' => (bool) env('SWARM_CALLBACKS_ENABLED', false),
+        /*
+         * Maximum delivery attempts before a callback row moves to 'dead_letter' and
+         * stops being re-claimed. Attempts are counted at claim time, so a delivery that
+         * dies mid-flight still advances toward this cap. Delivery is at-least-once; a
+         * callback must be idempotent.
+         */
+        'max_attempts' => (int) env('SWARM_CALLBACKS_MAX_ATTEMPTS', 5),
+        /*
+         * How long a claimed-but-undelivered callback row stays reserved before another
+         * relay run may re-claim it. Null falls back to swarm.durable.relay.reservation_timeout_seconds
+         * (default 60). Set a callback-specific value when callbacks can run longer than
+         * the durable relay's window, to avoid re-dispatching a still-in-flight delivery.
+         */
+        'reservation_timeout_seconds' => env('SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS') !== null
+            ? (int) env('SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS')
+            : null,
+        /*
+         * Retention window for dead-lettered callback rows, in days. Default null keeps
+         * them indefinitely (operators inspect failures via `swarm:health`, which reports
+         * dead-letter counts and detail). Set a positive integer to opt into automatic
+         * pruning via `swarm:prune`. Registered/pending rows are never pruned by this
+         * policy — orphaned rows for a terminal run are pruned with their run instead.
+         */
+        'dead_letter_retention_days' => env('SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS') !== null
+            ? (int) env('SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS')
+            : null,
     ],
 
     'durable' => [
@@ -835,9 +959,12 @@ return [
         'durable_webhook_idempotency' => env('SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE', 'swarm_durable_webhook_idempotency'),
         'durable_outbox' => env('SWARM_DURABLE_OUTBOX_TABLE', 'swarm_durable_outbox'),
         'audit_outbox' => env('SWARM_AUDIT_OUTBOX_TABLE', 'swarm_audit_outbox'),
+        'callback_deliveries' => env('SWARM_CALLBACK_DELIVERIES_TABLE', 'swarm_callback_deliveries'),
         'memories' => env('SWARM_MEMORIES_TABLE', 'swarm_memories'),
         'memory_snapshots' => env('SWARM_MEMORY_SNAPSHOTS_TABLE', 'swarm_memory_snapshots'),
         'stream_step_checkpoints' => env('SWARM_STREAM_STEP_CHECKPOINTS_TABLE', 'swarm_stream_step_checkpoints'),
         'cold_archives' => env('SWARM_COLD_ARCHIVES_TABLE', 'swarm_cold_archives'),
+        // Operational native-input envelopes; changing this requires the matching migration/table.
+        'native_inputs' => env('SWARM_NATIVE_INPUTS_TABLE', 'swarm_native_inputs'),
     ],
 ];

@@ -28,6 +28,7 @@ final readonly class SwarmStep implements Arrayable, JsonSerializable
         public array $artifacts = [],
         public array $metadata = [],
         ?CitationEvidence $citationEvidence = null,
+        public ?NativeStepResult $nativeResult = null,
     ) {
         $this->citationEvidence = $citationEvidence ?? new CitationEvidence;
         $this->citations = $this->citationEvidence->items;
@@ -48,6 +49,7 @@ final readonly class SwarmStep implements Arrayable, JsonSerializable
                 $this->artifacts,
             ),
             'metadata' => $this->metadata,
+            ...($this->nativeResult !== null ? ['native_result' => $this->nativeResult->toArray()] : []),
         ];
     }
 

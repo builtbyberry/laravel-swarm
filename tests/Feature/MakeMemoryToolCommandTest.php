@@ -25,8 +25,8 @@ final class MakeMemoryToolCommandWithVector extends MakeMemoryToolCommand
 }
 
 afterEach(function () {
-    foreach (glob(app_path('Ai/Tools/*.php')) ?: [] as $file) {
-        File::delete($file);
+    foreach (['TenantRecall', 'DomainRemember', 'ScopedTool', 'Keeper', 'Replaceable', 'CustomStubTool', 'ShapeParityTool', 'VectorRecallShape'] as $class) {
+        File::delete(app_path("Ai/Tools/{$class}.php"));
     }
 });
 

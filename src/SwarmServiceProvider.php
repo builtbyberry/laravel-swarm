@@ -45,6 +45,9 @@ use BuiltByBerry\LaravelSwarm\Compaction\SwarmCompactor;
 use BuiltByBerry\LaravelSwarm\Contracts\ActorResolver;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\AuthorizesNativeAgentConversation;
+use BuiltByBerry\LaravelSwarm\Contracts\AuthorizesNativeInputAttachment;
+use BuiltByBerry\LaravelSwarm\Contracts\CallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\CausalLogStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ColdArchiveDriver;
@@ -56,7 +59,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\InspectsDurableRuns;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryPropagationPolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\NativeInputStore;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SinkFailureHandler;
@@ -88,12 +93,15 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseAuditOutbox;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCausalLogStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseDurableRunStore;
+use BuiltByBerry\LaravelSwarm\Persistence\DatabaseNativeInputStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Persistence\NoOpCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use BuiltByBerry\LaravelSwarm\Persistence\TieredStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Runners\DispatchValidator;
@@ -124,7 +132,9 @@ use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\LeaseManager;
+use BuiltByBerry\LaravelSwarm\Runners\ParallelAgentResolver;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelRunner;
+use BuiltByBerry\LaravelSwarm\Runners\ParallelStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialStreamRunner;
@@ -135,8 +145,12 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmGuardrailRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\ContextGrowthGovernor;
+use BuiltByBerry\LaravelSwarm\Streaming\Parallel\ParallelProcessStreamTransport;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\DenyExternalNativeInputAttachments;
+use BuiltByBerry\LaravelSwarm\Support\DenyNativeAgentConversations;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmEventRecorder;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
@@ -147,6 +161,7 @@ use BuiltByBerry\LaravelSwarm\Telemetry\SwarmTelemetryEventListener;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Foundation\CachesConfiguration;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -160,10 +175,7 @@ class SwarmServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->mergeConfigFrom(
-            __DIR__.'/../config/swarm.php',
-            'swarm',
-        );
+        $this->mergeSwarmConfiguration();
 
         $this->app->singleton(SwarmAuditSink::class, NoOpSwarmAuditSink::class);
         $this->app->singleton(ActorResolver::class, DefaultActorResolver::class);
@@ -217,6 +229,21 @@ class SwarmServiceProvider extends ServiceProvider
 
             return $outbox;
         });
+        $this->app->singleton(CallbackDeliveryOutbox::class, function (Application $app): CallbackDeliveryOutbox {
+            $driver = $app->make(ConfigRepository::class)->get('swarm.persistence.driver');
+
+            return $driver === 'database'
+                ? $app->make(DatabaseCallbackDeliveryOutbox::class)
+                : $app->make(NoOpCallbackDeliveryOutbox::class);
+        });
+        // Read-only health seam over the callback-delivery outbox; the bound
+        // CallbackDeliveryOutbox instance (database or no-op) already implements it.
+        $this->app->singleton(ReadableCallbackDeliveryOutbox::class, function (Application $app): ReadableCallbackDeliveryOutbox {
+            $outbox = $app->make(CallbackDeliveryOutbox::class);
+            assert($outbox instanceof ReadableCallbackDeliveryOutbox);
+
+            return $outbox;
+        });
         $this->app->singleton(SwarmAuditDispatcher::class, function (Application $app): SwarmAuditDispatcher {
             return new SwarmAuditDispatcher(
                 sink: $app->make(SwarmAuditSink::class),
@@ -231,6 +258,10 @@ class SwarmServiceProvider extends ServiceProvider
 
         $this->app->singleton(SwarmTelemetrySink::class, NoOpSwarmTelemetrySink::class);
         $this->app->singleton(SwarmTelemetryDispatcher::class);
+        // Deliberately a singleton, not scoped: a job handler and the queue-event
+        // listener must reach the same instance for a failed attempt, and a scoped
+        // binding hands the handler a fresh one. The state bounds itself instead;
+        // see PackageJobTelemetryState.
         $this->app->singleton(PackageJobTelemetryState::class);
 
         // Bind the cipher with a lazy encrypter resolver rather than autowiring
@@ -244,12 +275,19 @@ class SwarmServiceProvider extends ServiceProvider
             logger: $app->make(LoggerInterface::class),
         ));
         $this->app->singleton(SwarmAttributeResolver::class);
+        $this->app->singleton(AuthorizesNativeInputAttachment::class, DenyExternalNativeInputAttachments::class);
+        $this->app->singleton(AuthorizesNativeAgentConversation::class, DenyNativeAgentConversations::class);
+        $this->app->singleton(NativeInputStore::class, DatabaseNativeInputStore::class);
+        $this->app->singleton(NativeInputManager::class);
         $this->app->singleton(ContextGrowthGovernor::class);
         $this->app->singleton(StreamEventMapper::class);
         $this->app->singleton(SequentialRunner::class);
         $this->app->singleton(SequentialStreamRunner::class);
 
         $this->app->singleton(ParallelRunner::class);
+        $this->app->singleton(ParallelAgentResolver::class);
+        $this->app->singleton(ParallelProcessStreamTransport::class);
+        $this->app->singleton(ParallelStreamRunner::class);
 
         $this->app->singleton(HierarchicalRunner::class);
         $this->app->singleton(StaticHierarchicalRunner::class);
@@ -455,6 +493,46 @@ class SwarmServiceProvider extends ServiceProvider
             NullStreamStepCheckpointStore::class,
             DatabaseStreamStepCheckpointStore::class,
         ));
+    }
+
+    /**
+     * Backfill nested package defaults without appending defaults to published lists.
+     */
+    private function mergeSwarmConfiguration(): void
+    {
+        if ($this->app instanceof CachesConfiguration && $this->app->configurationIsCached()) {
+            return;
+        }
+
+        $config = $this->app->make(ConfigRepository::class);
+
+        /** @var array<array-key, mixed> $defaults */
+        $defaults = require __DIR__.'/../config/swarm.php';
+        /** @var array<array-key, mixed> $overrides */
+        $overrides = $config->get('swarm', []);
+
+        $config->set('swarm', self::mergeConfigurationMaps($defaults, $overrides));
+    }
+
+    /**
+     * @param  array<array-key, mixed>  $defaults
+     * @param  array<array-key, mixed>  $overrides
+     * @return array<array-key, mixed>
+     */
+    private static function mergeConfigurationMaps(array $defaults, array $overrides): array
+    {
+        foreach ($overrides as $key => $override) {
+            $default = $defaults[$key] ?? null;
+
+            $defaults[$key] = is_array($default)
+                && is_array($override)
+                && ! array_is_list($default)
+                && ($override === [] || ! array_is_list($override))
+                    ? self::mergeConfigurationMaps($default, $override)
+                    : $override;
+        }
+
+        return $defaults;
     }
 
     /**

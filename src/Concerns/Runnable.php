@@ -18,6 +18,8 @@ use BuiltByBerry\LaravelSwarm\Testing\SwarmFake as SwarmFakeInstance;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Container\Container;
 use Illuminate\Testing\Assert as PHPUnit;
+use Laravel\Ai\Contracts\AgentInput;
+use Laravel\Ai\Messages\UserMessage;
 use ReflectionClass;
 
 /**
@@ -61,7 +63,7 @@ trait Runnable
      *
      * @param  SwarmTaskInput  $task
      */
-    public function prompt(string|array|RunContext $task): SwarmResponse
+    public function prompt(string|array|RunContext|AgentInput|UserMessage $task): SwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->run($this, $task);
     }
@@ -73,7 +75,7 @@ trait Runnable
      *
      * @param  SwarmTaskInput  $task
      */
-    public function run(string|array|RunContext $task): SwarmResponse
+    public function run(string|array|RunContext|AgentInput|UserMessage $task): SwarmResponse
     {
         return $this->prompt($task);
     }
@@ -83,7 +85,7 @@ trait Runnable
      *
      * @param  SwarmTaskInput  $task
      */
-    public function stream(string|array|RunContext $task): StreamableSwarmResponse
+    public function stream(string|array|RunContext|AgentInput|UserMessage $task): StreamableSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->stream($this, $task);
     }
@@ -94,7 +96,7 @@ trait Runnable
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcast(string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
+    public function broadcast(string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->broadcast($this, $task, $channels, $now);
     }
@@ -105,7 +107,7 @@ trait Runnable
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcastNow(string|array|RunContext $task, Channel|array $channels): StreamableSwarmResponse
+    public function broadcastNow(string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels): StreamableSwarmResponse
     {
         return $this->broadcast($task, $channels, now: true);
     }
@@ -115,7 +117,7 @@ trait Runnable
      *
      * @param  SwarmTaskInput  $task
      */
-    public function queue(string|array|RunContext $task): QueuedSwarmResponse
+    public function queue(string|array|RunContext|AgentInput|UserMessage $task): QueuedSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->queue($this, $task);
     }
@@ -126,7 +128,7 @@ trait Runnable
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcastOnQueue(string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
+    public function broadcastOnQueue(string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels): QueuedSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->broadcastOnQueue($this, $task, $channels);
     }
@@ -134,7 +136,7 @@ trait Runnable
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function dispatchDurable(string|array|RunContext $task): DurableSwarmResponse
+    public function dispatchDurable(string|array|RunContext|AgentInput|UserMessage $task): DurableSwarmResponse
     {
         return Container::getInstance()->make(SwarmRunner::class)->dispatchDurable($this, $task);
     }
@@ -158,7 +160,7 @@ trait Runnable
      *
      * @param  SwarmAssertTask  $task
      */
-    public static function assertPrompted(string|array|callable $task): void
+    public static function assertPrompted(string|array|AgentInput|UserMessage|callable $task): void
     {
         $resolved = Container::getInstance()->make(static::class);
 
@@ -194,7 +196,7 @@ trait Runnable
      *
      * @param  SwarmAssertTask  $task
      */
-    public static function assertRan(string|array|callable $task): void
+    public static function assertRan(string|array|AgentInput|UserMessage|callable $task): void
     {
         $resolved = Container::getInstance()->make(static::class);
 
@@ -230,7 +232,7 @@ trait Runnable
      *
      * @param  SwarmAssertTask  $task
      */
-    public static function assertQueued(string|array|callable $task): void
+    public static function assertQueued(string|array|AgentInput|UserMessage|callable $task): void
     {
         $resolved = Container::getInstance()->make(static::class);
 
@@ -264,7 +266,7 @@ trait Runnable
     /**
      * @param  SwarmAssertTask  $task
      */
-    public static function assertDispatchedDurably(string|array|callable $task): void
+    public static function assertDispatchedDurably(string|array|AgentInput|UserMessage|callable $task): void
     {
         $resolved = Container::getInstance()->make(static::class);
 
@@ -364,7 +366,7 @@ trait Runnable
      *
      * @param  SwarmAssertTask  $task
      */
-    public static function assertStreamed(string|array|callable $task): void
+    public static function assertStreamed(string|array|AgentInput|UserMessage|callable $task): void
     {
         $resolved = Container::getInstance()->make(static::class);
 

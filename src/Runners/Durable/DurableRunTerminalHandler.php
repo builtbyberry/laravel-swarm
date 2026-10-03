@@ -17,6 +17,8 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentSettingsAttempt;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmPayloadLimits;
@@ -38,6 +40,7 @@ class DurableRunTerminalHandler
         protected DurablePayloadCapture $payloads,
         protected DurableBranchCoordinator $branches,
         protected DurableChildSwarmCoordinator $children,
+        protected NativeInputManager $nativeInputs,
     ) {}
 
     /**
@@ -103,7 +106,7 @@ class DurableRunTerminalHandler
     /**
      * @param  array<string, mixed>  $run
      */
-    public function completeRun(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?SwarmStep $step, ?DurableHierarchicalStepResult $hierarchicalResult = null, ?CitationEvidence $citationEvidence = null): void
+    public function completeRun(array $run, string $token, RunContext $context, int $stepLeaseSeconds, ?SwarmStep $step, ?DurableHierarchicalStepResult $hierarchicalResult = null, ?CitationEvidence $citationEvidence = null, ?NativeAgentSettingsAttempt $nativeSettingsAttempt = null): void
     {
         $runId = (string) $run['run_id'];
         if ($hierarchicalResult !== null) {
@@ -133,7 +136,17 @@ class DurableRunTerminalHandler
         );
 
         $capturedResponse = $this->limits->response($this->capture->response($response));
-        $this->recorder->complete($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step);
+        $this->recorder->complete(
+            $runId,
+            $token,
+            $context,
+            $capturedResponse,
+            $stepLeaseSeconds,
+            $step,
+            $nativeSettingsAttempt === null ? null : function () use ($context, $nativeSettingsAttempt): void {
+                $this->nativeInputs->commitConsumedMessages($context, $nativeSettingsAttempt);
+            },
+        );
         $this->children->markChildTerminalIfNeeded($runId, 'completed', $capturedResponse->output, null);
 
         $this->events->dispatch(new SwarmCompleted(

@@ -1,5 +1,194 @@
 # Changelog
 
+## v0.28.0 - unreleased
+
+Native feature access through Laravel Swarm workflows.
+
+### Added
+
+- Native media and retrieval capabilities proven inside workflows: classification,
+  image generation, audio text-to-speech, transcription, provider files and vector
+  stores, embeddings, and reranking, each exercised from an application-owned native
+  agent or tool participating in a Swarm run (via `prompt()` and the queued path;
+  other execution modes inherit the same in-tool-loop path). Ships a runnable
+  `native-media-retrieval` starter example (`swarm:example:media-retrieval`, offline
+  via `ScriptedAgent`) and a [native capabilities guide](docs/native-capabilities.md)
+  with a feature/mode/provider support matrix and the unsupported combinations
+  (verified against `laravel/ai` v1.0.1 source, with image-on-Anthropic proven to
+  fail loud in-workflow). Generated artifacts (images, speech, provider files,
+  vector-store documents) thread stable references, keeping large binaries off the
+  workflow payload; a nested capability's typed result and usage are consumed at the
+  tool layer, never folded into the outer agent's step or text-token total. Proof
+  only — tests, docs, and stubs; no runtime change.
+- Default-off terminal workflow callbacks: `then()` / `catch()` on queued
+  ([QueuedSwarmResponse](src/Responses/QueuedSwarmResponse.php)) and durable
+  ([DurableSwarmResponse](src/Responses/DurableSwarmResponse.php)) responses, and `catch()` on the
+  streaming response ([StreamableSwarmResponse](src/Responses/StreamableSwarmResponse.php)). `then`
+  fires once only when the whole workflow settles as completed and `catch` once only when it settles
+  as a failure — including the permanent unsupported-native-approval boundary — never on an
+  intermediate agent success, a recoverable error, or cancellation; a callback's own failure never
+  replays completed model or tool effects and never changes the already-settled result. Queue and
+  durable callbacks are persisted as HMAC-signed, cipher-sealed serializable closures in a new
+  `swarm_callback_deliveries` table and delivered **at-least-once (never exactly-once)** by
+  `swarm:relay --type=callback` after the run settles, so they must be idempotent; the stream
+  `catch()` runs in-process. Feature-gated by `swarm.callbacks.enabled` (default off, requires the
+  database persistence driver — registering a callback under any other driver fails closed); with
+  the flag off, queued/durable `then()`/`catch()` throw the same error as before. Delivery records
+  are inspected via `swarm:health` and pruned by `swarm:prune` (`swarm.callbacks.retention_days`).
+  Delivery deserializes a stored row only into a signed closure: any other payload — a foreign
+  object, or an unsigned closure body — is rejected without being constructed or invoked.
+  Callbacks therefore require `APP_KEY` in every process that registers or delivers one;
+  `then()` / `catch()` throw at registration in a process without it.
+- Default-off native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input, with decisions-first approval rejection, explicit topology-stable attachment recipients, original-versus-predecessor text selection, and optional per-recipient provider/model/timeout overrides.
+- Versioned, cipher-sealed native-input operational envelopes for queue, concurrency and durable recovery. Queue payloads carry opaque references; staged envelopes record planned paths before private local/base64 attachments are promoted to an application-selected disk, recoverable headers/provider options are preserved as plain resolved values, content identity and authorization are rechecked, and `swarm:prune` owns only Swarm-created temporary files.
+- Default-off native per-run agent settings through `RunContext::withAgentConfiguration()`. Topology-stable recipients preserve Laravel AI `withTools()`, one-shot `withMessages()`, conversations, provider, model and timeout across sequential, real process-parallel, queued, durable, routed-worker, retry and recovered execution. Explicit empty tools/messages remain meaningful overrides; input routing and settings compose in either order. Tools use reconstructible class references or registered factories; recoverable conversations require an existing native conversation and a saved Eloquent participant.
+- Atomic one-shot history consumption and v2 capability-marker jobs. Database-backed terminal history and consumption commit together, so a failed attempt or rolled-back checkpoint receives the history again while a committed step does not; tools remain available at every invocation. `swarm:health` reports active and retained v2 envelopes for rollout and reader removal. Sealed operational settings remain separate from capture evidence, whose audit shape exposes counts and presence only, and existing v2 work drains while new v2 admission is disabled.
+- Deterministic direct-native versus through-Swarm wire parity coverage using Laravel AI's real mocked HTTP request construction, plus legacy payload, capture-independent reconstruction, mixed-version, expiry/revocation/mutation and confidentiality guards.
+- Executable proof of Laravel AI's public native approval pause, inspection,
+  ownership, decision, and continuation contracts, including exact controlled
+  provider wire, approve/reject/edit behavior, repeated pauses, and fresh-process
+  `SIGKILL` crash and recovery classification at every named boundary. Unsafe
+  effect windows remain explicitly non-automatable. The proof documents that a saved
+  result cannot presently resume the same native turn through a supported public
+  operation, defines the minimal upstream requirement and safe operator
+  alternative, and keeps the production bridge default-off and blocked.
+- Bounded, versioned native Laravel AI result access on every completed
+  `SwarmStep`, preserving structured values, reasoning, provider/model, native
+  invocation and conversation/message identities, generation evidence, and
+  normalized tool status across sync, process, queue, durable, and supported
+  streaming paths. Full and Redact remain distinct; the shipped false capture
+  flag maps to Redact, while custom Skip policies write only an omitted status.
+  Database envelopes are sealed and bounded. History, durable, checkpoint, and
+  hot replay envelopes prune with their owners; cold archives remain application-owned.
+- Default-off, process-backed top-level parallel live streaming and broadcast
+  multiplexing. Native Laravel AI branch streams now deliver concurrently with
+  bounded authenticated frames, per-event acknowledgements/backpressure, an
+  absolute deadline, sibling cancellation, and deterministic process cleanup.
+  Branch events add stable `branch_id`, request-local `attempt_id`, and
+  per-attempt `branch_sequence` without rewriting reusable native IDs or
+  inventing a global cross-branch order. The parent remains the sole owner of
+  guardrails, history, replay, capture/redaction, citation/native-result evidence,
+  and once-only usage accounting. Unsupported concurrency drivers fail before
+  provider invocation; `prompt()` remains the explicit buffered alternative.
+  `swarm:health --parallel-streaming` exercises the real provider-free child and
+  authenticated loopback handshake before enablement. SSE responses send
+  advisory no-transform/no-buffering headers, while operators remain responsible
+  for verifying end-to-end proxy/CDN flushing and application-wide process
+  capacity (`concurrent live streams × max_branches`, with several descriptors
+  per branch). Branch process result envelopes are deserialized with object
+  construction disabled.
+- Native Laravel AI agent onboarding through the upstream `make:agent` command,
+  including structured-output generation and an executable provider-free test
+  that drives a native tool call and Swarm stream with `Agent::fake()`.
+- Default-off Vercel AI SDK and AG-UI projection through Laravel AI's native
+  protocol encoders. Complete workflow projection uses capture-safe custom
+  progress with run/node/branch/attempt/sequence identity across every live
+  topology, including process-parallel multiplexing without invented global
+  order. A sequential-only final-agent projection buffers until workflow
+  success, preserves real content-block and optional native conversation-row
+  identities, and emits standard text/tool/citation frames only when their
+  payloads are actually available. Raw text and function-tool events carry
+  capture availability; legacy rows without that field remain `unknown` and are
+  never promoted to standard protocol content. Unsupported approvals, unmatched
+  final steps, incomplete replay, invalid aggregate usage, and stream failures
+  terminate with protocol errors and no success/finish frame. Adapter-created
+  failures dispatch an inspection-safe `NativeProtocolProjectionFailed` event
+  for application monitoring without claiming client delivery. Those lazy
+  failure callbacks retain only Laravel's event dispatcher, not the owning
+  stream runner and its orchestration graph, so replay-failure teardown does
+  not inherit the runner lifetime. Older published config, including empty
+  associative sections, receives missing nested defaults through recursive
+  merging while published list values remain atomic instead of receiving
+  appended package defaults.
+  The adapter adds no migration or persistent data; rollback is revert-safe
+  after projected streams drain, cached config is rebuilt, and long-lived
+  application workers are recycled.
+- Native ownership and limits contract ([docs/native-ownership-and-limits.md](docs/native-ownership-and-limits.md))
+  recording what belongs to native Laravel AI versus what Swarm retains, the limits
+  kept on purpose — the structured-output streaming rejection (early swarm-domain
+  failure via `StructuredOutputStreamingException` plus the synchronous coordinator,
+  verified against `laravel/ai` v1.0.1) each with its exact evidence, affected modes
+  and reevaluation trigger — native conversation storage as separately configured
+  from Swarm capture and sealing, and the legacy-retirement schedule, including the
+  `Contracts\Agent` (deprecated since v0.23.0) removal follow-up tracked for v1.0
+  (#547). Documentation only; no runtime change.
+- Combined native-feature ecosystem proof ([docs/native-feature-ecosystem-proof.md](docs/native-feature-ecosystem-proof.md)): the v0.28.0 native features verified together with the four companions in a fresh application. The reproducible ecosystem harness is now release-agnostic (package and native pins come from `sources.json`), so one harness serves the ai-1 and v0.28 candidate sets. Records the frozen candidate set, the combined fresh-install proof with discriminating fault probes, per-companion core-0.28 CI evidence, the F1–F9 / R1–R9 assessment reconciliation, and the limits carried forward (the upstream Laravel 13.16 compatibility-lane advisory, the companion `^0.28` publication gate, and the permanent native-approval rejection boundary). Four sanctioned companion siblings (Pulse, Filament, MCP, memory-vector) add `^0.28` core compatibility in their own projects. Proof and docs only; no runtime change, and publication remains a later shipping gate.
+
+### Changed
+
+- Hosted Pest 5 coverage and mutation workflows now use Xdebug after repeated
+  PCOV exit-139 crashes on the expanded v0.28 suite. The four PHP/dependency
+  matrix jobs retain the complete coverage command and 80% floor; the
+  moving-development nightly loads no coverage driver because it does not
+  collect coverage. The informational mutation job now has a four-hour timeout
+  so its slower Xdebug baseline can complete rather than being cancelled at the
+  former two-hour ceiling. A subsequent exact P8 run reproduced exit 139 under
+  both Xdebug and the coverage-disabled nightly, showing that the crash was not
+  coverage-driver-specific and implicating the monolithic Pest 5 process.
+  Hosted Pest 5 now runs the same configured Unit, Feature, and Installer suites
+  across four concurrent ParaTest workers. A later coverage-disabled nightly
+  still exited 139 in `ProviderToolPreservationTest`, showing that concurrency
+  was bounded but each persistent worker's lifetime was not. A 32-file recycle
+  bound passed on its corrective branch, but the larger P8 suite changed worker
+  history and reproduced the same coverage-disabled crash with identical PHP,
+  Laravel AI, Pest, and ParaTest versions. Hosted Pest 5 now starts a fresh
+  worker for every parallel test file while retaining four-way concurrency.
+  Fresh P8 runs then isolated exit 139 to the database-heavy
+  `ProviderToolPreservationTest` inside ParaTest across all four Xdebug rows and
+  the coverage-disabled moving-development row, without establishing a PHP,
+  framework, database, or coverage-driver root cause. That one named
+  `ci-serial` group now runs in a fresh non-parallel Pest process after the
+  parallel pass with a bounded 512 MB PHP memory limit. Coverage from the
+  remaining parallel tests is measured against
+  the complete source filter before the unchanged 80% aggregate floor is
+  enforced; the serial behavior-verification process contributes no coverage
+  data, and both processes must pass. The ordinary local `composer test` path
+  remains sequential. Generator tests now remove only the files they own, so
+  parallel workers cannot delete a sibling worker's generated artifact.
+- Installation, generator, starter, example, testing, README, and upgrade
+  guidance now present native Laravel AI agents as the normal model-agent path.
+  `make:swarm:agent` and deprecated `make:swarm --single` remain deterministic
+  offline compatibility scaffolds with their existing arguments, namespaces,
+  class shapes, and application-published stub precedence. Existing classes and
+  published `swarm.agent.stub` / `swarm.single-agent.stub` files are not rewritten.
+
+- Native input preserves the v0.27.0 background envelope for inline swarms and
+  does not itself add an execution mode. Top-level parallel streaming separately adds default-off,
+  process-backed top-level parallel live multiplexing. Approval `Decisions`
+  remain outside fresh-run input and fail with continuation guidance.
+- Authored parallel and hierarchical workers now reconstruct the declared swarm and stable slot/node inside concurrency workers, preserving configuration expressed by `agents()`. When native per-run settings admission is enabled, ad-hoc concurrent builders require explicit configuration for every reconstructed slot/node and fail before dispatch instead of silently discarding live instance state.
+- Native settings admission now validates known agent compatibility before queue or concurrency dispatch, applies attachment authorization and byte limits to request-local and recovered one-shot messages, bounds the complete recoverable envelope before persistence, resolves conversation policies per invocation, and rejects recoverable message attachment profiles that Laravel AI cannot reconstruct faithfully.
+- Native step results keep final usage and citations on their existing Swarm
+  surfaces, preserve unknown/mixed historical usage semantics, never serialize
+  raw native responses or unrestricted provider payloads, and do not fabricate
+  absent native identifiers. Deploy the additive schema before writers. Code
+  rollback is unsafe after writes while affected identities can resume or retry:
+  stop intake, drain work, deploy and restart all old workers before resuming,
+  then handle schema removal only after evidence retention is satisfied.
+- Queued and broadcast swarm jobs (`queue()`, `broadcastOnQueue()`, and their
+  native-input and native-settings variants) now implement Laravel's
+  `ShouldBeEncrypted`, so the run payload they carry inline — the prompt,
+  structured data, metadata, and artifacts — is stored in the queue backend and in
+  `failed_jobs` encrypted with `APP_KEY` instead of as plaintext. Queuing a swarm now
+  requires an application key and fails early with `NonQueueableSwarmException`
+  when the key is missing or invalid. Jobs already queued before the upgrade still run.
+  Undecryptable package jobs log a warning and emit a degraded `job.failed`.
+  See [UPGRADING](UPGRADING.md#encrypted-queued-swarm-payloads).
+
+### Fixed
+
+- The `job.failed` fallback telemetry now covers the native-input and
+  native-settings job variants. When one of these jobs failed before its handler
+  ran (for example after exceeding its attempts), no `job.failed` was emitted,
+  because the queue failure listener only recognised the five base job classes.
+- Long-lived queue workers no longer accumulate memory for every package job
+  attempt that fails and is retried. The in-process guard that stops a failed
+  job's `job.failed` telemetry from being emitted twice kept one entry per failed
+  attempt and released it only on the job's final failure, so retried attempts
+  (and jobs that later succeeded) left entries behind for the life of the worker.
+  The entry is now dropped when the attempt ends, and the guard holds at most 256
+  entries regardless. Emitted telemetry is unchanged. (#476)
+
 ## v0.27.0 - 2026-09-24
 
 Adopt official Laravel AI 1.0 while preserving Laravel Swarm workflow capabilities.

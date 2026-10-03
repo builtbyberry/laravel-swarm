@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 
 /**
  * Immutable streamed-step checkpoint carrying output and usage for the
@@ -33,6 +34,7 @@ final readonly class StreamStepCheckpoint
         public ?string $recordedAt = null,
         public ?string $updatedAt = null,
         ?CitationEvidence $citationEvidence = null,
+        public ?NativeStepResult $nativeResult = null,
     ) {
         $this->citationEvidence = $citationEvidence ?? new CitationEvidence;
     }
@@ -54,6 +56,7 @@ final readonly class StreamStepCheckpoint
         ?string $recordedAt = null,
         ?string $updatedAt = null,
         ?CitationEvidence $citationEvidence = null,
+        ?NativeStepResult $nativeResult = null,
     ): self {
         return new self(
             citationEvidence: $citationEvidence,
@@ -63,6 +66,7 @@ final readonly class StreamStepCheckpoint
             usage: $usage,
             recordedAt: $recordedAt,
             updatedAt: $updatedAt,
+            nativeResult: $nativeResult,
         );
     }
 }

@@ -8,7 +8,7 @@ Every swarm run can fail at multiple points — input validation, agent executio
 - **Agent execution** — during an individual agent's LLM call; provider errors, tool call failures, and malformed responses surface here
 - **Step guardrail** — after an agent completes, before that step is recorded; blocks before the output is persisted
 - **Output guardrail** — after the last agent, before the run is marked completed; blocks before `SwarmCompleted` fires
-- **Timeout** — orchestration deadline exceeded; checked between steps, not mid-generation
+- **Timeout** — orchestration deadline exceeded; ordinary modes check at step boundaries, while process-backed top-level parallel streams also enforce it during live multiplexing
 - **Lease loss** — a durable or queued run lost its database lease; handled by recovery for durable runs
 - **Provider error** — network or API error from the AI provider; surfaces as a `SwarmStreamProviderException` in stream mode or as a plain exception in other modes
 
@@ -118,11 +118,11 @@ Distinct from `LostSwarmLeaseException`: missing schema is a configuration error
 
 **Full class:** `BuiltByBerry\LaravelSwarm\Exceptions\NonQueueableSwarmException`
 
-**When thrown:** when a swarm that cannot be safely container-resolved is dispatched via `queue()` or a parallel execution path. Laravel Swarm validates queueability before dispatch to prevent cryptic serialization failures inside queue workers.
+**When thrown:** when a swarm that cannot be safely container-resolved is dispatched via `queue()` or a parallel execution path, or when `queue()` / `broadcastOnQueue()` cannot resolve an encrypter from a valid `APP_KEY`. Laravel Swarm validates queueability before dispatch to prevent cryptic serialization failures inside queue workers.
 
 **Public properties:** none beyond the inherited `message`.
 
-**Catching it:** This exception fires at the call site, before any queue job is dispatched. Fix the swarm class to be container-resolvable (constructor-injectable dependencies only, no runtime instance state) rather than catching it:
+**Catching it:** This exception fires at the call site, before any queue job is dispatched. Set a valid `APP_KEY` for encrypted queued jobs. Otherwise, fix the swarm class to be container-resolvable (constructor-injectable dependencies only, no runtime instance state) rather than catching it:
 
 ```php
 // Wrong: swarm stores runtime state that can't serialize
@@ -230,7 +230,8 @@ class ComplianceReviewSwarm implements Swarm
 
 **How the deadline works:**
 
-- The deadline is checked **between steps**, not mid-generation. An in-progress LLM call is never hard-cancelled.
+- Ordinary prompt, queue, sequential-stream, hierarchical, and durable paths check the deadline at their documented step boundaries; an in-progress remote LLM call is not hard-cancelled.
+- Opt-in top-level parallel live streaming also checks the absolute deadline while polling sockets and waiting for consumer acknowledgement. It terminates and reaps local branch processes on expiry, but cannot guarantee cancellation of remote provider work already accepted.
 - When the deadline is exceeded at a step boundary, the step that was in progress completes normally, and then the run fails with `SwarmTimeoutException`.
 - Run history is written with a `failed` status and `SwarmFailed` fires.
 - For `prompt()`, the exception propagates to the caller.
@@ -263,15 +264,121 @@ try {
 
 Ordinary `InvokeSwarm` / `BroadcastSwarm` jobs use `swarm.queue.tries` (default 1), overriding the worker's tries default. A retry may restart uncheckpointed workflow work and repeat effects. `SwarmFailed` is emitted by the [runner failure path](../src/Runners/SwarmRunner.php), not only after Laravel exhausts retries. Generated hierarchical `multi_worker` execution has separate branch/join recovery; its [resume job](../src/Jobs/ResumeQueuedHierarchicalSwarm.php) uses the durable advance retry profile. [Unsupported native approval outcomes](native-outcome-boundary.md) are nonretryable regardless of these settings.
 
-Queued whole-workflow `then()` / `catch()` callbacks are unavailable; listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead. Stream callbacks remain supported.
+Queued whole-workflow `then()` / `catch()` callbacks are opt-in — see [Terminal Workflow Callbacks](#terminal-workflow-callbacks). With `swarm.callbacks.enabled` off (the default) they throw `BadMethodCallException`; listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead. Stream callbacks remain supported.
 
 ### `stream()`
 
-The stream terminates. A `swarm_stream_error` event is yielded, run history is marked failed, and `SwarmFailed` fires. Partial events already delivered to the client (SSE bytes already flushed) cannot be recalled. The exception is re-thrown to the caller after the stream terminates, so a try/catch around the `foreach` loop will see it. Recovery is not available — a failed stream must be re-submitted as a new run.
+The stream terminates. A `swarm_stream_error` event is yielded, run history is marked failed, and `SwarmFailed` fires. Partial events already delivered to the client (SSE bytes already flushed) cannot be recalled. The exception is re-thrown to the caller after the stream terminates, so a try/catch around the `foreach` loop will see it. You may also register an in-process `catch()` handler on the [StreamableSwarmResponse](../src/Responses/StreamableSwarmResponse.php) (see [Terminal Workflow Callbacks](#terminal-workflow-callbacks)); it runs on the failure and the original exception still propagates — `catch()` is a handler, not a suppressor. Recovery is not available — a failed stream must be re-submitted as a new run.
 
 ### `dispatchDurable()`
 
 The failed step is checkpointed. The `DurableRetry` policy applies (if configured) and `swarm:recover` redispatches due retries without replaying completed steps. `SwarmFailed` fires when the run reaches a terminal failed state. See [Durable Recovery](#durable-recovery) below.
+
+## Terminal Workflow Callbacks
+
+Terminal callbacks are a convenience over the `SwarmCompleted` / `SwarmFailed` lifecycle
+events for the **whole workflow** — not a per-agent hook. They are off by default; enable
+with `swarm.callbacks.enabled=true`, which requires the database persistence driver and an
+`APP_KEY` in every process that registers or delivers a callback (callbacks are signed with it).
+
+```php
+// Queued or durable: then() on completion, catch() on failure.
+ReportSwarm::make()
+    ->queue(['user_id' => $user->id])
+    ->then(fn (SwarmTerminalContext $ctx) => Log::info("run {$ctx->runId} completed"))
+    ->catch(fn (SwarmTerminalContext $ctx) => Log::warning("run {$ctx->runId} failed: {$ctx->exceptionClass}"));
+
+// Streaming: catch() handles a failed stream in-process.
+ArticlePipeline::make()->stream($input)
+    ->catch(fn (Throwable $e) => report($e))
+    ->each(fn ($event) => broadcast(...));
+```
+
+### Callbacks versus events
+
+| | Terminal callbacks | Lifecycle events |
+|---|---|---|
+| Enable | `swarm.callbacks.enabled` (DB driver) | always on |
+| Registered | fluently, per run | globally, per listener |
+| Queue/durable delivery | at-least-once via `swarm:relay` | synchronous, in the settling process |
+| Payload | `SwarmTerminalContext` summary | full event object |
+
+Reach for events when you need a global, always-on hook or the full event payload; reach for
+callbacks when you want to attach behavior to *this* run at the call site.
+
+### Semantics
+
+- **`then` fires once, only on a settled completion. `catch` fires once, only on a settled
+  failure.** Neither fires on cancellation, an intermediate agent success, or a recoverable
+  error. The permanent `UnsupportedNativeApprovalException` boundary is a terminal failure:
+  `catch` runs once, `then` never.
+- **Queue and durable callbacks are delivered asynchronously, at-least-once**, by
+  `swarm:relay --type=callback` after the run settles — in a separate process from the run.
+  Never exactly-once: a crash after the callback runs but before its delivery row is removed
+  re-delivers it. **Make your callbacks idempotent.** Schedule `swarm:relay` for them to fire
+  at all. The stream `catch()` runs in-process, synchronously, on the failing iteration.
+- **A queue/durable callback receives a `SwarmTerminalContext`**, not the full `SwarmResponse`:
+  a lightweight, always-available summary (run id, swarm class, topology, and, for `catch`, the
+  settled exception class/message) built from the terminal record. Capture is off by default and
+  payloads are sensitive, so the full response is not reconstructed at delivery time — read it
+  from `SwarmHistory` by run id when you need it. The stream `catch()` receives the live `Throwable`.
+- **A callback must be a serializable closure** (it is signed and sealed for later delivery in
+  another process); capturing a non-serializable binding (a database handle, an open resource)
+  throws at registration. Payload authorization is the closure signature — a tampered delivery
+  row is never invoked, it is dead-lettered. Signing uses `APP_KEY`: a delivery row that is not a
+  signed closure is never constructed or run. In a process with no `APP_KEY`, `then()` / `catch()`
+  throw `SwarmException` at registration, and a delivering process with no `APP_KEY` never runs a
+  callback.
+- **A callback's own failure is isolated.** It runs after the workflow has already settled, in a
+  separate process, so it can neither replay completed model or tool effects nor change the
+  recorded result. A failing queue/durable callback is retried up to `swarm.callbacks.max_attempts`
+  and then dead-lettered; a throwing stream `catch()` is reported and swallowed so it cannot mask
+  the workflow's own error.
+
+### Operating the delivery outbox
+
+Callback deliveries are persisted in `swarm_callback_deliveries`.
+
+- **Schedule the relay.** Delivery only happens through `swarm:relay` — a plain `queue()`
+  app that had no reason to schedule the relay before **must schedule it now** once callbacks
+  are enabled, or callbacks never fire (and their rows are eventually pruned as orphans once
+  the run's history expires). `swarm:health` warns with "is swarm:relay scheduled?" as a nudge.
+- **Deliver:** `swarm:relay --type=callback` (or a bare `swarm:relay`, which drains every lane).
+- **Kill switch.** Setting `swarm.callbacks.enabled=false` stops both registration and delivery:
+  the relay lane goes inert and in-flight `DeliverSwarmCallback` jobs no-op, so it is a safe way
+  to halt callback execution during an incident. Re-enabling resumes the pending rows.
+- **Reservation window.** A claimed-but-undelivered row is re-claimed after
+  `swarm.callbacks.reservation_timeout_seconds` (falling back to the durable relay timeout). If a
+  delivery job sits in a backed-up queue longer than that window it is re-dispatched, so a callback
+  can run more than once — delivery is at-least-once, **make callbacks idempotent**. Size this
+  timeout above your worst-case callback latency to reduce duplicate deliveries.
+- **Inspect:** `swarm:health` reports registered, pending, and dead-lettered callback counts when
+  the feature is enabled, and warns while any row is dead-lettered.
+- **Dead-letters are not auto-recovered.** A callback that exhausts `swarm.callbacks.max_attempts`
+  moves to `dead_letter` and stops being delivered; there is no requeue command (unlike the audit
+  lane). If guaranteed delivery matters, listen to `SwarmCompleted` / `SwarmFailed` instead — those
+  are the reliable path. A dead-letter caused by an **`APP_KEY` rotation** (which invalidates every
+  in-flight callback's signature) is expected: rotate with no pending callbacks, or accept their loss.
+  The dead-letter log line carries the reason. The ones tied to signing and sealing:
+  `callback signature verification failed` — the delivering key is not the one that signed the row
+  (a rotation, or a row stored unsigned), or the row was tampered with;
+  `no APP_KEY signing key is configured` — the delivering process has no `APP_KEY`;
+  `callback payload could not be decrypted` — at-rest encryption could not open the row, usually a
+  rotation; `callback payload is not a serialized closure` — the row held something else entirely.
+  None of these rows is ever constructed or run. A process with no `APP_KEY` cannot register a
+  callback at all — registration throws, with at-rest encryption on or off. With at-rest
+  encryption on (the default), a delivering process with no `APP_KEY` cannot seal a dead-letter
+  reason either: the delivery attempt errors and leaves the row pending until the key is restored.
+- **Callbacks run without ambient request/tenant state.** A delivered callback runs later, in the
+  relay/worker process, with no HTTP request and no ambient tenant context. Capture everything the
+  closure needs (ids, not `tenant()` globals) at registration.
+- **Prune:** `swarm:prune` removes delivery records for terminal, expired runs, and dead-lettered
+  rows older than `swarm.callbacks.dead_letter_retention_days` (null keeps them indefinitely). It
+  honors `swarm.retention.prevent_prune`.
+- **Rollback / drain:** undelivered rows are lost on the down-migration, and draining only moves
+  rows into delivery jobs. To revert safely: stop dispatching new runs, run
+  `swarm:relay --type=callback --drain-until-empty`, **wait for the callback queue workers to
+  finish** the dispatched `DeliverSwarmCallback` jobs, then revert the migration.
 
 ## Queue Retry vs Durable Retry
 

@@ -44,8 +44,13 @@ can inspect counts while pruning is disabled.
 The command prunes the history, context, artifact, stream replay, durable
 runtime, durable node state, durable run state, durable node-output, durable
 branch, signal, wait, label, detail, progress, child-run, and durable webhook
-idempotency tables in bounded chunks to avoid long-running table locks on large
-datasets.
+idempotency tables, plus expired native-input operational envelopes, in bounded
+chunks to avoid long-running table locks on large datasets. Native-input cleanup
+deletes only Swarm-promoted files and retains the envelope for retry if any file
+delete fails.
+
+Queue backend records and `failed_jobs` are outside `swarm:prune`. Manage failed
+jobs with Laravel's `queue:prune-failed`, `queue:forget`, or `queue:flush`.
 
 Laravel Swarm protects active runs across persistence stores. While a run is
 `pending`, `running`, `waiting`, or `paused`, its history, context, artifact,
@@ -148,6 +153,17 @@ swarm execution:
 ```bash
 php artisan swarm:health
 ```
+
+Before enabling top-level parallel live streaming, exercise its actual
+provider-free child bootstrap and authenticated loopback transport:
+
+```bash
+php artisan swarm:health --parallel-streaming
+```
+
+Require the `Parallel live streaming` row to report `ok`. The check validates
+the effective branch/frame/cancellation limits and cannot be combined with the
+audit-only option. After the writer is enabled, bare `swarm:health` runs it too.
 
 For deployments using `dispatchDurable()` or coordinated multi-worker
 hierarchical queueing, include the durable runtime tables:
@@ -499,38 +515,59 @@ as runtime state. Do not begin with broad rollout across document-heavy or
 approval-critical workflows until storage growth, recovery behavior, and
 operator procedures have been proven in production-like use.
 
-## Informational CI workflows
+## CI monitoring and release proof
 
-Laravel Swarm ships two scheduled GitHub Actions workflows that are
-intentionally non-blocking. Both run with `continue-on-error: true`, so a red
-run never gates a PR merge or release. They produce a signal the maintainer is
-expected to act on, not a gate the CI system enforces.
+Laravel Swarm ships two scheduled GitHub Actions workflows with different
+failure policies. The moving-development nightly is a hard pull-request and
+pre-tag proof. The daily mutation workflow is informational and uses
+`continue-on-error: true`. The maintainer reviews both weekly as part of
+release-readiness and again before tagging any release.
 
-These workflows rot silently if no one looks at them. The maintainer reviews
-their state weekly as part of release-readiness, and again before tagging any
-release.
-
-### Nightly Laravel dev-main
+### Nightly Laravel 13.x and Laravel AI 1.x moving branches
 
 `.github/workflows/nightly.yml`
 
-- **Purpose.** Canary against `laravel/framework:dev-main` and the matching
-  `illuminate/*` packages aliased to `13.x-dev`. Surfaces breakage from
-  upstream Laravel changes before a tagged release reaches the package's
-  supported version matrix.
-- **What it runs.** `composer test`, `composer test:process-concurrency:ci`,
-  and `composer analyse` on PHP 8.5 against the dev-main dependency set.
-- **Trigger.** Daily at 06:17 UTC and on `workflow_dispatch`.
+- **Purpose.** Canary against the exact official branch heads of
+  `laravel/framework:13.x-dev` and `laravel/ai:1.x-dev`. Surfaces breaking
+  upstream changes before a tagged release reaches the package's supported
+  version matrix.
+- **What it runs.** `composer test:ci` (the Unit, Feature, and Installer suites
+  across four concurrent ParaTest workers, with a fresh worker for every
+  parallel test-file assignment, followed by the database-heavy `ci-serial`
+  provider-tool group in a fresh non-parallel Pest process),
+  `composer test:process-concurrency:ci`,
+  `composer analyse`, `composer test:compliance`, and `composer lint` on PHP
+  8.5 against the moving dependency set.
+- **Trigger.** Every pull request, daily at 06:17 UTC, and on
+  `workflow_dispatch`. Pull requests prove the candidate before merge. After
+  an authorized release-branch merge, run it once against `main`; that
+  successful post-main run is required before tagging.
 - **Owner and cadence of review.** The maintainer reviews failures weekly
   during release-readiness, and rechecks before cutting a release.
-- **What to do when it fails.** Open the failing run and read the test or
-  analyse output. If the failure reflects a real upstream change, file an
-  issue tagged `laravel-canary` describing the breaking change, the offending
-  Laravel commit (if identifiable), and the package code affected. If the
-  failure is transient (network, package source flake), re-run the workflow
-  manually before filing. Do not block a release on a nightly failure unless
-  the same breakage is reproducible against a tagged Laravel release in the
-  supported matrix.
+- **What to do when it fails.** A pull-request failure blocks merge; a
+  post-main failure blocks tagging. Open the failing run and read the output
+  from the failed test, analysis, compliance, or lint gate. Re-run once when
+  the evidence points to transient network or package-source failure. If the
+  failure reproduces, file an issue tagged `laravel-canary` with the pinned
+  Laravel or Laravel AI commit, the failing gate, and the affected package
+  code, then keep the release gate closed until the incompatibility or workflow
+  defect is resolved.
+
+  Per-file worker startup is intentionally slower than persistent workers. It
+  prevents suite growth or file-order changes from carrying accumulated process
+  state into a later test file, so maintainers should treat a proposal to raise
+  `--max-batch-size` as a reliability change that requires fresh no-coverage and
+  Xdebug proof on the complete current suite. The hosted `ci-serial` exclusion
+  is equally deliberate: exact P8 runs isolated exit 139 to
+  `ProviderToolPreservationTest` inside fresh ParaTest workers across four
+  Xdebug rows and the coverage-disabled moving-development row, without proving
+  a PHP, framework, database, or coverage-driver root cause. `composer test:ci`
+  and `composer test:coverage:ci` therefore exclude only that named group from
+  ParaTest and require it to pass immediately afterward in a fresh serial
+  process with a bounded 512 MB PHP memory limit. The coverage percentage uses
+  the complete source filter and the
+  parallel non-`ci-serial` execution data; serial verification is not merged
+  into that report. Do not remove either half or lower the 80% floor.
 
 ### Daily Pest mutation
 
@@ -541,10 +578,12 @@ release.
   alone hides. Replaced Infection in v0.3.5.
 - **What it runs.** `composer test:mutation`, which invokes
   `vendor/bin/pest --mutate --coverage --parallel --covered-only` on PHP 8.5
-  with pcov. Wall time is hours, not minutes, which is why it runs daily on a
-  schedule rather than per PR.
-- **Trigger.** Daily at 07:17 UTC and on `workflow_dispatch`. Timeout is 120
-  minutes.
+  with Xdebug, the same hosted coverage driver as the ordinary coverage gate.
+  Wall time is hours, not minutes, which is why it runs daily on a schedule
+  rather than per PR.
+- **Trigger.** Daily at 07:17 UTC and on `workflow_dispatch`. Timeout is 240
+  minutes so the slower Xdebug-backed baseline can finish and report a usable
+  score instead of being cancelled at the former two-hour ceiling.
 - **Owner and cadence of review.** The maintainer reviews the mutation score
   trend weekly during release-readiness. There is no per-PR signal to react
   to.

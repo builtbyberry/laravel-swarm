@@ -6,11 +6,14 @@ namespace BuiltByBerry\LaravelSwarm\Commands;
 
 use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
+use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Filesystem\Factory as FilesystemFactory;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Symfony\Component\Console\Attribute\AsCommand;
+use Throwable;
 
 #[AsCommand(name: 'swarm:prune')]
 class SwarmPruneCommand extends Command
@@ -23,6 +26,10 @@ class SwarmPruneCommand extends Command
 
     public function handle(Connection $connection, ConfigRepository $config, SwarmAuditDispatcher $audit): int
     {
+        /** @var SwarmPersistenceCipher $cipher */
+        $cipher = $this->laravel->make(SwarmPersistenceCipher::class);
+        /** @var FilesystemFactory $filesystems */
+        $filesystems = $this->laravel->make(FilesystemFactory::class);
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
         $preventPrune = $config->get('swarm.retention.prevent_prune', false) === true;
 
@@ -61,6 +68,8 @@ class SwarmPruneCommand extends Command
             'durable_webhook_idempotency' => (string) $config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'),
             'durable_outbox' => (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox'),
             'audit_outbox' => (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox'),
+            'callback_deliveries' => (string) $config->get('swarm.tables.callback_deliveries', 'swarm_callback_deliveries'),
+            'native_inputs' => (string) $config->get('swarm.tables.native_inputs', 'swarm_native_inputs'),
         ];
 
         // Seed every table key to zero so the count shape is fully known: the
@@ -88,7 +97,9 @@ class SwarmPruneCommand extends Command
 
             $counts[$name] = $dryRun
                 ? $this->countPrunableRows($connection, $config, $name, $table, $tables['history'])
-                : $this->pruneTable($connection, $config, $name, $table, $tables['history']);
+                : ($name === 'native_inputs'
+                    ? $this->pruneNativeInputs($connection, $config, $table, $tables['history'], $cipher, $filesystems)
+                    : $this->pruneTable($connection, $config, $name, $table, $tables['history']));
         }
 
         $audit->emit('command.prune', [
@@ -152,6 +163,16 @@ class SwarmPruneCommand extends Command
             $verb,
             $counts['audit_outbox'],
         ));
+        $this->components->info(sprintf(
+            '%s %d callback delivery record(s).',
+            $verb,
+            $counts['callback_deliveries'],
+        ));
+        $this->components->info(sprintf(
+            '%s %d expired native input operational envelope(s).',
+            $verb,
+            $counts['native_inputs'],
+        ));
 
         return self::SUCCESS;
     }
@@ -213,6 +234,32 @@ class SwarmPruneCommand extends Command
                 $query->where('status', 'dead_letter')
                     ->where('last_attempted_at', '<', now()->subDays($retentionDays));
             }
+        } elseif ($role === 'callback_deliveries') {
+            // Two prune targets, neither of which can drop an undelivered callback for a
+            // still-live run:
+            //   1. Orphans — any row (registered/pending/dead_letter) whose run has
+            //      reached a terminal, EXPIRED history row. Delivery had the full run TTL
+            //      window; a lingering row after that is abandoned (mirrors durable_outbox).
+            //   2. Dead-letter rows past the opt-in retention window
+            //      (swarm.callbacks.dead_letter_retention_days); null keeps them
+            //      indefinitely for inspection, matching the audit outbox default.
+            $retentionDays = $config->get('swarm.callbacks.dead_letter_retention_days');
+
+            $query->where(function ($query) use ($historyTable, $retentionDays): void {
+                $query->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                    $subquery->from($historyTable)
+                        ->select('run_id')
+                        ->where('expires_at', '<', now())
+                        ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                });
+
+                if (is_int($retentionDays) && $retentionDays >= 1) {
+                    $query->orWhere(function ($query) use ($retentionDays): void {
+                        $query->where('status', 'dead_letter')
+                            ->where('last_attempted_at', '<', now()->subDays($retentionDays));
+                    });
+                }
+            });
         } elseif ($role === 'durable_webhook_idempotency') {
             $staleCutoff = now()->subSeconds((int) $config->get('swarm.durable.webhooks.idempotency_ttl', 3600));
 
@@ -262,6 +309,83 @@ class SwarmPruneCommand extends Command
             }
 
             $deleted += $chunk;
+        }
+    }
+
+    protected function pruneNativeInputs(Connection $connection, ConfigRepository $config, string $table, string $historyTable, SwarmPersistenceCipher $cipher, FilesystemFactory $filesystems): int
+    {
+        $deleted = 0;
+        $lastId = null;
+
+        while (true) {
+            $query = $this->pruneQuery($connection, $config, 'native_inputs', $table, $historyTable);
+            if (is_string($lastId)) {
+                $query->where('id', '>', $lastId);
+            }
+
+            $rows = $query->orderBy('id')->limit(self::CHUNK_SIZE)
+                ->get(['id', 'run_id', 'payload']);
+
+            if ($rows->isEmpty()) {
+                return $deleted;
+            }
+
+            $lastId = (string) $rows->last()->id;
+
+            $ids = [];
+            foreach ($rows as $row) {
+                try {
+                    $sealed = (string) $row->payload;
+                    if (! str_starts_with($sealed, SwarmPersistenceCipher::PREFIX)) {
+                        throw new \RuntimeException('payload is not sealed');
+                    }
+
+                    $payload = json_decode((string) $cipher->openStrict($sealed), true, 512, JSON_THROW_ON_ERROR);
+                    $allDeleted = true;
+                    $attachments = $payload['attachments'] ?? [];
+                    foreach ($payload['recipients'] ?? [] as $recipient) {
+                        if (! is_array($recipient)) {
+                            continue;
+                        }
+                        foreach ($recipient['messages'] ?? [] as $message) {
+                            if (is_array($message) && ($message['type'] ?? null) === 'user' && is_array($message['attachments'] ?? null)) {
+                                $attachments = array_merge($attachments, $message['attachments']);
+                            }
+                        }
+                    }
+                    foreach ($attachments as $attachment) {
+                        if (! is_array($attachment) || ($attachment['swarm_owned'] ?? false) !== true) {
+                            continue;
+                        }
+
+                        $disk = $attachment['disk'] ?? null;
+                        $path = $attachment['path'] ?? null;
+                        if (! is_string($disk) || ! is_string($path)
+                            || ! str_starts_with($path, 'swarm/native-inputs/'.(string) $row->run_id.'/')) {
+                            $allDeleted = false;
+
+                            continue;
+                        }
+
+                        $filesystem = $filesystems->disk($disk);
+                        if ($filesystem->exists($path) && ! $filesystem->delete($path)) {
+                            $allDeleted = false;
+                        }
+                    }
+
+                    if ($allDeleted) {
+                        $ids[] = $row->id;
+                    } else {
+                        $this->components->warn("Retaining native input envelope [{$row->id}] because one or more owned files could not be deleted.");
+                    }
+                } catch (Throwable $exception) {
+                    $this->components->warn("Retaining native input envelope [{$row->id}] because cleanup failed: {$exception->getMessage()}");
+                }
+            }
+
+            if ($ids !== []) {
+                $deleted += $connection->table($table)->whereIn('id', $ids)->delete();
+            }
         }
     }
 }

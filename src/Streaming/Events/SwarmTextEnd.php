@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
+use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
+
 final class SwarmTextEnd extends SwarmStreamEvent
 {
     public function __construct(
@@ -13,6 +15,7 @@ final class SwarmTextEnd extends SwarmStreamEvent
         public string $agentClass,
         public string $messageId,
         public int $timestamp,
+        public PayloadAvailability $payloadAvailability = PayloadAvailability::Unknown,
     ) {}
 
     /**
@@ -22,13 +25,13 @@ final class SwarmTextEnd extends SwarmStreamEvent
     {
         return [
             'id' => $this->id,
-            'invocation_id' => $this->invocationId,
-            'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'type' => 'swarm_text_end',
             'run_id' => $this->runId,
             'step_index' => $this->stepIndex,
             'agent_class' => $this->agentClass,
             'message_id' => $this->messageId,
+            ...($this->payloadAvailability === PayloadAvailability::Unknown ? [] : ['payload_status' => $this->payloadAvailability->value]),
             'timestamp' => $this->timestamp,
         ];
     }
@@ -45,6 +48,7 @@ final class SwarmTextEnd extends SwarmStreamEvent
             agentClass: self::stringValue($payload, 'agent_class'),
             messageId: self::stringValue($payload, 'message_id'),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
+            payloadAvailability: PayloadAvailability::tryFrom(self::stringValue($payload, 'payload_status')) ?? PayloadAvailability::Unknown,
         );
     }
 }

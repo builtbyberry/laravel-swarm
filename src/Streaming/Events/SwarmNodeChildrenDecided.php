@@ -33,8 +33,7 @@ final class SwarmNodeChildrenDecided extends SwarmStreamEvent
     {
         return [
             'id' => $this->id,
-            'invocation_id' => $this->invocationId,
-            'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'type' => 'swarm_node_children_decided',
             'run_id' => $this->runId,
             'child_node_ids' => $this->childNodeIds,

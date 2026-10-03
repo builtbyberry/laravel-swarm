@@ -34,14 +34,18 @@ The same class-free ergonomics extend to multi-agent swarms. Each builder pins i
 // Sequential — each agent's output feeds the next.
 Swarm::sequential([$researcher, $writer, $editor])->prompt($task);
 
-// Parallel — every agent runs against the same task. (parallel can't stream — use prompt())
+// Parallel — prompt() is buffered; stream() is default-off and process-only.
 Swarm::parallel([$a, $b, $c])->prompt($task);
 
 // Hierarchical — the coordinator (first argument) routes over its workers.
 Swarm::hierarchical($coordinator, [$writer, $editor])->stream($task);
 ```
 
-Like `Swarm::agent()`, the inline builders expose the **in-process** modes (`prompt`/`run`/`stream`/`broadcast`/`broadcastNow`); `stream()`/`broadcast()` require a streamable topology (sequential, hierarchical, or static-hierarchical — not parallel). For queued or durable execution, author a `Swarm` class.
+Like `Swarm::agent()`, the inline builders expose the **in-process** modes
+(`prompt`/`run`/`stream`/`broadcast`/`broadcastNow`). Parallel live streaming is
+default-off and requires the `process` driver; the other three topologies retain
+their existing stream paths. For queued or durable execution, author a `Swarm`
+class.
 
 Guardrails work the same way as on `Swarm::agent()` — globally configured guardrails always apply, and `->guardrails([...])` layers per-call ones on top:
 
@@ -65,6 +69,10 @@ Prefer a full `Swarm` class when the same topology is reused across your app, be
 | `dispatchDurable()` | `DurableSwarmResponse` | Yes | No | Yes | Yes | High |
 
 The table describes default dispatch behavior. Generated hierarchical `multi_worker` queueing adds branch/join coordination and recovery, not a checkpoint after every routed step. Non-durable streams have [bounded snapshot/checkpoint resume](streaming.md#crash-replay-durability); durable per-node streaming records causal evidence rather than returning a live `StreamableSwarmResponse`.
+
+Laravel AI `UserMessage` input follows this same matrix. Attachments do not make
+unsupported combinations available and are delivered only to explicitly selected
+slots/nodes; see [Native messages and attachments](native-inputs.md).
 
 **Streaming** column means typed token events are emitted while the run progresses. **Checkpointing** means per-step state is persisted so the run can be resumed after a worker death. **Recovery** means a crashed or stalled run can be automatically advanced by `swarm:recover` without re-running completed steps.
 
@@ -141,8 +149,11 @@ ContentPipelineSwarm::make()
 - When the workflow is long-running enough that a mid-job server restart would be expensive to replay from the beginning (use `dispatchDurable()`).
 
 **Gotchas:**
+- `queue()` encrypts the queued command with `APP_KEY` and fails before dispatch
+  when the key is missing or invalid. This also applies to sync queues and tests.
+  See [Encrypted queued swarm payloads](../UPGRADING.md#encrypted-queued-swarm-payloads).
 - By default one Laravel queue job owns the workflow; there is no per-agent recovery cursor. Opt-in generated hierarchical `multi_worker` coordination persists branch/join state and has [separate recovery](hierarchical-routing.md#queue). Static hierarchy keeps its in-process queued path. An ordinary queue retry may re-enter the workflow from the beginning; it is not an external-effect deduplicator.
-- Whole-workflow `then()` / `catch()` callbacks are unavailable: [QueuedSwarmResponse](../src/Responses/QueuedSwarmResponse.php) proxies only methods present on its pending dispatch. Listen to `SwarmCompleted` and `SwarmFailed` lifecycle events. This does not remove stream `each()` / `then()` callbacks.
+- Whole-workflow `then()` / `catch()` callbacks are opt-in via `swarm.callbacks.enabled` (default off, database driver required). When enabled, [QueuedSwarmResponse](../src/Responses/QueuedSwarmResponse.php) exposes them: `then` fires once on a settled completion, `catch` once on a settled failure — persisted and delivered at-least-once by `swarm:relay --type=callback` after the run settles. With the flag off, they throw `BadMethodCallException` and you listen to `SwarmCompleted` / `SwarmFailed` instead. Either way, stream `each()` / `then()` callbacks are unaffected. See [Terminal Workflow Callbacks](error-handling.md#terminal-workflow-callbacks).
 - Queued swarms are re-resolved from the container; do not rely on runtime instance state. Pass per-run data in the task payload or a `RunContext`.
 
 #### Queue retry & timeout
@@ -197,10 +208,15 @@ return ContentPipelineSwarm::make()->stream([
 - Streaming chat or copilot UIs backed by a single HTTP connection.
 - Any workflow where step lifecycle events (`swarm_step_start`, `swarm_step_end`) provide meaningful UX progress.
 
-**Topology constraint — not parallel.** Sequential, hierarchical, and static-hierarchical swarms stream (for hierarchical, the coordinator runs synchronously and worker nodes stream). A **parallel** swarm cannot stream — concurrent agents do not map to a single ordered event stream — so use `prompt()` for parallel, or a sequential swarm if you need streamed output.
+**Topology constraint.** Sequential, hierarchical, and static-hierarchical
+swarms stream by default (for hierarchical, the coordinator runs synchronously
+and worker nodes stream). Parallel live multiplexing is default-off and requires
+Laravel's `process` concurrency driver. Its branch events have explicit
+branch/attempt/sequence identity and no global order. Use `prompt()` where that
+transport is unavailable.
 
 **When NOT to use:**
-- Top-level parallel topology (generated and static hierarchical topologies are supported).
+- Top-level parallel topology when the opt-in or process transport is unavailable.
 - When the client might disconnect mid-stream — events already emitted to the transport cannot be recalled, and if the run fails after partial emission there is no automatic recovery.
 - When you need the run to outlive the HTTP request (use `broadcastOnQueue()` or `dispatchDurable()`).
 
@@ -250,9 +266,14 @@ ContentPipelineSwarm::make()
 - `broadcastOnQueue()` dispatches a queue job. The HTTP response returns immediately, and a worker handles streaming and broadcasting. This is the right default for production when the client uses WebSockets and you do not want to tie up HTTP workers.
 - `broadcastNow()` is `broadcast()` with forced immediate delivery — it bypasses any configured queue for the broadcast transport itself.
 
-**Topology constraint — not parallel.** Same reason as `stream()`: broadcast helpers emit an ordered event stream, so they support sequential/hierarchical/static-hierarchical but not parallel.
+**Topology constraint.** Broadcast helpers support the same topology paths as
+`stream()`, including enabled process-backed parallel multiplexing. Parallel
+events retain their branch identity in each broadcast envelope.
 
 **Gotchas:**
+- `broadcastOnQueue()` encrypts its queued command with `APP_KEY` and requires a
+  valid key even with the sync queue. In-process broadcast helpers do not queue
+  this job.
 - Broadcast helpers do not retry or buffer transport delivery. If Laravel broadcasting throws during event delivery, `broadcast()` / `broadcastNow()` rethrow the exception and `broadcastOnQueue()` lets the queued job fail.
 - If delivery fails before the terminal `swarm_stream_end` event, run history is marked failed. If delivery fails on the terminal event itself, swarm execution has already completed — history remains completed and persisted replay may include the terminal event.
 - Use Laravel's broadcast and queue infrastructure (retries, dead-letter queues) for transport-level reliability.
@@ -298,7 +319,7 @@ $detail = $response->inspect(); // DurableRunDetail
 - Schedule `swarm:prune` to retire expired run records.
 
 **Gotchas:**
-- `DurableSwarmResponse` does not support `then()` / `catch()` callbacks. Listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead.
+- `DurableSwarmResponse` supports `then()` / `catch()` only when `swarm.callbacks.enabled` is on (default off); they are persisted at registration and delivered at-least-once by `swarm:relay --type=callback` once the durable run settles. With the flag off they throw `BadMethodCallException` — listen to `SwarmCompleted` and `SwarmFailed` lifecycle events instead. See [Terminal Workflow Callbacks](error-handling.md#terminal-workflow-callbacks).
 - `dispatchDurable()` adds operational overhead: the relay schedule, recovery monitoring, and prune jobs must be wired up or stalled runs accumulate silently.
 - `swarm:recover` can be inspected with `swarm:status` — the **Phase** column shows `parallel_join` when a hierarchical coordinated run is waiting on parallel branches.
 

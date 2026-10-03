@@ -72,6 +72,16 @@ abstract class SwarmStreamEvent extends StreamEvent
             $event->withAttemptEpoch($payload['attempt_epoch']);
         }
 
+        if (is_string($payload['branch_id'] ?? null)
+            && is_string($payload['attempt_id'] ?? null)
+            && is_int($payload['branch_sequence'] ?? null)) {
+            $event->withBranchIdentity(
+                $payload['branch_id'],
+                $payload['attempt_id'],
+                $payload['branch_sequence'],
+            );
+        }
+
         // Old stored events retain their original raw-ID target semantics.
         $event->storageEventId = is_string($payload['storage_event_uuid'] ?? null)
             ? $payload['storage_event_uuid']

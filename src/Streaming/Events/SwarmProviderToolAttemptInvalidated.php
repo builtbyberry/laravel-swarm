@@ -23,7 +23,7 @@ final class SwarmProviderToolAttemptInvalidated extends SwarmStreamEvent
     public function toArray(): array
     {
         return ['id' => $this->id, 'invocation_id' => $this->invocationId, 'type' => 'swarm_provider_tool_attempt_invalidated',
-            'run_id' => $this->runId, 'node_id' => $this->nodeId,
+            'run_id' => $this->runId, 'node_id' => $this->nodeId, ...$this->branchIdentity(),
             'before_epoch' => $this->beforeEpoch, 'timestamp' => $this->timestamp];
     }
 

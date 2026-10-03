@@ -23,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmTelemetrySink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FailingQueuedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\PendingDispatchTestHelper;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Jobs\FakeJob;
 use Illuminate\Support\Facades\Artisan;
@@ -176,6 +177,8 @@ test('durable advance step correlates audit and telemetry run lifecycle', functi
         ->and($telemetrySteps[0]['run_id'])->toBe($auditSteps[0]['run_id'])
         ->and($telemetrySteps[0]['run_id'])->toBe($runId)
         ->and($telemetrySteps[0]['execution_mode'])->toBe('durable');
+
+    PendingDispatchTestHelper::dispatchAndDetach($response);
 });
 
 test('sync step telemetry includes execution mode', function (): void {
@@ -211,6 +214,8 @@ test('durable progress telemetry includes swarm and topology correlation fields'
         ->and($progress['swarm_class'])->toBe(FakeSequentialSwarm::class)
         ->and($progress['topology'])->toBe('sequential')
         ->and($progress['execution_mode'])->toBe('durable');
+
+    PendingDispatchTestHelper::dispatchAndDetach($response);
 });
 
 test('package job failure telemetry includes worker attempt duration and rethrows', function (): void {
@@ -285,6 +290,8 @@ test('durable package job telemetry includes routing and timing fields', functio
         ->and($completed['run_id'])->toBe($response->runId)
         ->and($completed['duration_ms'])->toBeInt()
         ->and($completed['total_elapsed_ms'])->toBeInt();
+
+    PendingDispatchTestHelper::dispatchAndDetach($response);
 });
 
 test('telemetry payloads omit sensitive strings when capture is disabled', function (): void {

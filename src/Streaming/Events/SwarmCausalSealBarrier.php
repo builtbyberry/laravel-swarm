@@ -27,8 +27,7 @@ final class SwarmCausalSealBarrier extends SwarmStreamEvent
     {
         return [
             'id' => $this->id,
-            'invocation_id' => $this->invocationId,
-            'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'type' => 'swarm_causal_seal_barrier',
             'run_id' => $this->runId,
             'timestamp' => $this->timestamp,

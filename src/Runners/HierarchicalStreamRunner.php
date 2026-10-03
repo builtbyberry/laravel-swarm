@@ -23,12 +23,16 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamError;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamStart;
+use BuiltByBerry\LaravelSwarm\Streaming\NativeProtocolFailureReporter;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\AgentInput;
+use Laravel\Ai\Messages\UserMessage;
 use Throwable;
 
 /**
@@ -50,12 +54,17 @@ use Throwable;
  */
 class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
 {
+    protected function nativeRecipientPrefix(): string
+    {
+        return 'generated:';
+    }
+
     protected const string COORDINATOR_NODE_ID = '__coordinator__';
 
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
+    public function stream(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task): StreamableSwarmResponse
     {
         $agents = $swarm->agents();
 
@@ -171,6 +180,9 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                 $abandonStreamStart = MonotonicTime::now();
                 $this->failStream($state, $context, $contextTtl, $swarm, $exception, $startedAt, $abandonStreamStart, $abandonStreamSeq);
             },
+            topology: $topology->value,
+            nativeChatProtocolsEnabled: (bool) $this->config->get('swarm.streaming.native_protocols.enabled', false),
+            onNativeProtocolFailure: NativeProtocolFailureReporter::callback($this->events),
         );
     }
 
@@ -281,8 +293,9 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
             ActiveRunContext::enter($context->runId, $swarm::class, $context);
 
             try {
-                $this->citationStorage->check();
-                $coordinatorResponse = $coordinator->prompt($context->input);
+                $this->evidenceStorage->check();
+                $invocation = $context->nativeInvocation('generated:coordinator', $context->input, $state->nativeSettingsAttempt);
+                $coordinatorResponse = NativeAgentInvoker::prompt($coordinator, $invocation);
                 $this->outcomes->validateResponse($coordinatorResponse);
             } finally {
                 ActiveRunContext::exit();
@@ -309,6 +322,7 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                 usage: $coordinatorUsage,
                 durationMs: $coordinatorDurationMs,
                 metadata: $coordinatorStepMetadata,
+                nativeResult: $this->stepsRecorder->nativeResult($coordinatorResponse),
             );
 
             $coordinatorStepOutput = $this->capture->applyOutput((string) ($coordinatorStep->artifacts[0]->content ?? $coordinatorOutput), $context);
@@ -324,12 +338,14 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
                 durationMs: $coordinatorDurationMs,
                 metadata: ['usage' => $coordinatorUsage],
                 timestamp: SwarmStreamEvent::timestamp(),
+                nativeResult: $this->capture->nativeResultForStreamEvent($coordinatorStep->nativeResult, $context),
             ))->withNodeId(static::COORDINATOR_NODE_ID);
             yield $coordinatorStepEndEvent;
             $this->recordStreamTelemetry($swarm, $state, $coordinatorStepEndEvent, $streamSequenceIndex, $streamTelemetryStart, false);
 
             // Parse the coordinator's output into a route plan.
             $plan = $this->planner->fromCoordinatorOutput($coordinator, $agents, $coordinatorOutput, $swarm::class);
+            $context->assertNativeNodeRecipients('generated:', $plan->workerNodeIds());
 
             // Budget check: coordinator (1) + all reachable workers.
             $required = 1 + $plan->reachableWorkerCount();
@@ -414,7 +430,13 @@ class HierarchicalStreamRunner extends StaticHierarchicalStreamRunner
 
             $capturedResponse = $this->limits->response($this->capture->response($response));
             $this->contextStore->put($this->capture->terminalContext($context), $contextTtl);
-            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
+            $this->nativeInputs->commitTerminal(
+                $context,
+                $state->nativeSettingsAttempt,
+                function () use ($context, $capturedResponse, $contextTtl): void {
+                    $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl);
+                },
+            );
             $this->events->dispatch(new SwarmCompleted(
                 runId: $context->runId,
                 swarmClass: $swarm::class,
