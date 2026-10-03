@@ -42,8 +42,10 @@ interface CallbackDeliveryOutbox
      * registration time, before the run can settle.
      *
      * @throws SwarmException when the outbox is
-     *                        unavailable (fail-closed under a non-database driver) so a missing
-     *                        guarantee is never silently swallowed at registration.
+     *                        unavailable (fail-closed under a non-database driver), or the process
+     *                        has no APP_KEY signing key (the callback would be stored unsigned and
+     *                        could never be delivered), so a missing guarantee is never silently
+     *                        swallowed at registration.
      */
     public function register(string $runId, CallbackSlot $slot, Closure $callback): void;
 

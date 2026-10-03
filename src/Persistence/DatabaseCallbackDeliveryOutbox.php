@@ -77,6 +77,19 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             );
         }
 
+        // With no signing key SerializableClosure stores an unsigned body, which
+        // delivery refuses to deserialize: the row could only ever dead-letter. Fail
+        // loud here so the caller learns at the then()/catch() call site.
+        if (! Signed::$signer) {
+            throw new SwarmException(
+                'Terminal workflow callbacks require APP_KEY: a callback is signed with it at '
+                .'registration and verified at delivery, so one registered by a process with no '
+                .'signing key could never be delivered. Set APP_KEY in every process that registers '
+                .'or delivers callbacks, or listen to the SwarmCompleted / SwarmFailed events '
+                .'instead of then()/catch().'
+            );
+        }
+
         try {
             $serialized = serialize(new SerializableClosure($callback));
         } catch (Throwable $exception) {
