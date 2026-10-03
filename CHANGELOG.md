@@ -176,6 +176,10 @@ Native feature access through Laravel Swarm workflows.
 
 ### Fixed
 
+- The `job.failed` fallback telemetry now covers the native-input and
+  native-settings job variants. When one of these jobs failed before its handler
+  ran (for example after exceeding its attempts), no `job.failed` was emitted,
+  because the queue failure listener only recognised the five base job classes.
 - Long-lived queue workers no longer accumulate memory for every package job
   attempt that fails and is retried. The in-process guard that stops a failed
   job's `job.failed` telemetry from being emitted twice kept one entry per failed
