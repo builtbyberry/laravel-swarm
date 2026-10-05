@@ -59,6 +59,18 @@ or later.
 releases. If an application uses a companion, upgrade core only after the
 companion release that permits `^0.28` is available.
 
+### Laravel AI provider-tool filtering
+
+Laravel AI releases that expose
+`Laravel\Ai\Gateway\TextGenerationLoop::toolsSupportedBy()` skip a provider tool
+the selected provider does not support and send the request without it, so
+provider failover continues. Laravel AI v1.0.1 and earlier throw before any
+request is sent. Swarm inherits whichever behavior is installed: it adds no
+compatibility check and emits no event for a skipped tool. If an application
+needs strict rejection, validate provider and tool compatibility in application
+code. Detect the installed behavior with
+`method_exists(\Laravel\Ai\Gateway\TextGenerationLoop::class, 'toolsSupportedBy')`.
+
 ### Native ownership, limits, and legacy retirement
 
 No action is required. This release records the native-first ownership contract in
@@ -154,6 +166,41 @@ the audit outbox must newly schedule the relay before enabling callbacks. A bare
 `swarm:relay --type=callback` selects only callback deliveries. Code that
 matches `RelayLane` exhaustively must handle the new `RelayLane::Callback` case.
 
+This fix adds four callback delivery settings:
+
+- `swarm.callbacks.queue.connection` /
+  `SWARM_CALLBACKS_QUEUE_CONNECTION` (default `null`) routes delivery jobs to a
+  queue connection.
+- `swarm.callbacks.queue.name` / `SWARM_CALLBACKS_QUEUE` (default `null`) routes
+  delivery jobs to a queue; null routing uses the application's defaults.
+- `swarm.callbacks.retry_backoff_seconds` /
+  `SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS` (default `60`) delays a retry after a
+  callback or queue-dispatch failure.
+- `swarm.callbacks.stale_warning_threshold_seconds` /
+  `SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS` (default `0`) controls when
+  eligible work warns in `swarm:health`; zero means twice the effective
+  reservation timeout.
+
+Size `swarm.callbacks.reservation_timeout_seconds` /
+`SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS` above the longest expected
+callback execution, including queue delay. Delivery is at-least-once, and an
+expired lease can overlap a still-running callback, so callbacks must be
+idempotent. The `swarm.callbacks.enabled` kill switch stops registration and
+deliveries that have not started; rows registered earlier still settle with
+their run and resume after re-enablement. A delivery already executing is not
+interrupted.
+
+A callback exception is reported through the application's exception handler
+before the outbox retries or dead-letters it. The stored `last_error` reason is
+sealed; the package's dead-letter log line includes identifiers, attempts, a
+static reason, and the exception class, but never the exception message.
+`swarm:health` warns on aged eligible work, stale reservations/deliveries, and
+dead letters. `swarm:prune` removes eligible callback rows before their expired
+run history, never prunes a `delivering` row, and retains dead letters unless
+`swarm.callbacks.dead_letter_retention_days` is a positive integer. Restart
+long-lived workers after callback migrations or configuration changes because
+callback readiness is cached per process.
+
 Before rolling back the callback migration, stop new callback registration and
 run:
 
@@ -165,6 +212,20 @@ Wait for the dispatched callback deliveries to finish before running the down
 migration, which drops any rows still present. See
 [Terminal workflow callbacks](docs/error-handling.md#terminal-workflow-callbacks)
 for the runtime contract and operating guidance.
+
+#### Run history is write-once on database persistence
+
+No configuration action is required. A stored database terminal outcome is now
+write-once for terminal writers: without an execution token, they cannot change
+a run already marked `completed`, `failed`, or `cancelled`.
+`failWithMetadata()` and `recordPreflightFailure()` also leave the finished row
+and its metadata untouched. The cache history store is unchanged.
+
+This protects stored history only. A failure event can still follow a completed
+run when an exception occurs after completion, unchanged from v0.27 and tracked
+for a later release. Even with callbacks disabled, each finished database run
+performs one indexed callback-existence check; callback-free terminal writes add
+no transaction.
 
 ### Native chat protocol adapters
 
@@ -369,6 +430,21 @@ limits as background work. Recoverable message attachments with headers or provi
 options fail before dispatch; move those files to top-level native input when their
 invocation profile must be frozen. The complete encoded operational envelope is
 also bounded by `swarm.limits.max_input_bytes` before persistence or file promotion.
+
+Seeded `withMessages()` history is bounded per recipient: 100 messages and 1 MiB
+encoded by default, on both request-local and recoverable admission. Raise
+`SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGES` or
+`SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGE_BYTES` before enabling the writer when
+larger bounded histories are required; configured values are capped at 1,000
+messages and 16 MiB. For durable runs, keep every per-recipient provider timeout
+below `SWARM_DURABLE_STEP_TIMEOUT` (300 seconds by default) so the step lease
+cannot expire mid-call.
+
+Before removing native-input v2 readers, `swarm:health` must report zero active,
+zero total v2, and zero expired-unpruned envelopes. If `swarm:prune` retains an
+envelope, restore its disk and delete permissions or its encryption key
+(`APP_PREVIOUS_KEYS` is honored) and rerun prune; there is no force-discard
+option.
 
 These settings do not propagate into durable child swarms. Child recovery and
 inheritance remain v0.29 work; configure a child explicitly rather than depending

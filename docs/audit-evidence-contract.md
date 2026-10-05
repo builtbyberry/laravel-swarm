@@ -264,6 +264,20 @@ The payload contains `run_id`, `recipient`, `attachment_count`, boolean
 contains no prompt text, attachment contents, tool configuration, or message
 history.
 
+### Terminal Callback Delivery
+
+| Category             | Description                                                        |
+|----------------------|--------------------------------------------------------------------|
+| `callback.delivered` | A queue or durable terminal callback completed and its row was removed. |
+
+The record is emitted only after the delivery row is deleted. It contains
+`delivery_id` (int), `run_id` (string), `slot` (string), and `attempts` (int).
+It never includes the closure, terminal context, callback result, or exception
+message. In the audit evidence contract, callback dead letters are log-only;
+there is no callback dead-letter evidence category. This is an additive
+category and does not change `schema_version`; sinks must tolerate unknown
+categories.
+
 ### Durable State Transitions
 
 | Category                         | Description                                                |
@@ -606,6 +620,25 @@ Frozen fields on `native_input.released` evidence:
 | `messages_configured` | bool   | Whether messages were configured.          |
 | `message_count`       | int    | Number of configured messages.             |
 | `conversation_mode`   | string | `none`, `start`, or `continue`.             |
+
+#### Terminal Callback Delivery
+
+| Category             |
+|----------------------|
+| `callback.delivered` |
+
+Frozen fields on `callback.delivered` evidence:
+
+| Field         | Type   | Notes                                      |
+|---------------|--------|--------------------------------------------|
+| `delivery_id` | int    | Removed callback delivery row identifier.  |
+| `run_id`      | string | Settled workflow run identifier.           |
+| `slot`        | string | Delivered terminal slot (`then` or `catch`). |
+| `attempts`    | int    | Delivery acquisitions including this one.  |
+
+The event is emitted after the row is removed and never includes the closure,
+terminal context, callback result, or exception message. In the audit evidence
+contract, dead letters are log-only and have no evidence category.
 
 #### Durable Runtime
 
