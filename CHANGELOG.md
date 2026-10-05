@@ -24,21 +24,26 @@ Native feature access through Laravel Swarm workflows.
   ([QueuedSwarmResponse](src/Responses/QueuedSwarmResponse.php)) and durable
   ([DurableSwarmResponse](src/Responses/DurableSwarmResponse.php)) responses, and `catch()` on the
   streaming response ([StreamableSwarmResponse](src/Responses/StreamableSwarmResponse.php)). `then`
-  fires once only when the whole workflow settles as completed and `catch` once only when it settles
-  as a failure — including the permanent unsupported-native-approval boundary — never on an
-  intermediate agent success, a recoverable error, or cancellation; a callback's own failure never
-  replays completed model or tool effects and never changes the already-settled result. Queue and
-  durable callbacks are persisted as HMAC-signed, cipher-sealed serializable closures in a new
+  is armed once only when the whole workflow settles as completed and `catch` is armed once only
+  when it settles as a failure — including the permanent unsupported-native-approval boundary —
+  never on an intermediate agent success, recoverable error, or cancellation. Queue and durable
+  callbacks are HMAC-signed, cipher-sealed serializable closures in a new
   `swarm_callback_deliveries` table and delivered **at-least-once (never exactly-once)** by
-  `swarm:relay --type=callback` after the run settles, so they must be idempotent; the stream
-  `catch()` runs in-process. Feature-gated by `swarm.callbacks.enabled` (default off, requires the
-  database persistence driver — registering a callback under any other driver fails closed); with
-  the flag off, queued/durable `then()`/`catch()` throw the same error as before. Delivery records
-  are inspected via `swarm:health` and pruned by `swarm:prune` (`swarm.callbacks.dead_letter_retention_days`).
-  Delivery deserializes a stored row only into a signed closure: any other payload — a foreign
-  object, or an unsigned closure body — is rejected without being constructed or invoked.
-  Callbacks therefore require `APP_KEY` in every process that registers or delivers one;
-  `then()` / `catch()` throw at registration in a process without it.
+  `swarm:relay --type=callback`; make them idempotent. Delivery is lease-based and fenced by an
+  opaque claim token. An attempt is counted only when a delivery job acquires the current token,
+  not when the relay reserves it; failures become eligible after
+  `swarm.callbacks.retry_backoff_seconds`, and jobs can use
+  `swarm.callbacks.queue.connection` / `.name`. The default-off
+  `swarm.callbacks.enabled` kill switch requires database persistence, stops registration and new
+  deliveries, and leaves earlier rows to settle with their run and resume when re-enabled. With it
+  off, queued/durable `then()` / `catch()` throw as before; stream `catch()` remains in-process.
+  Successful delivery removes the row before emitting `callback.delivered`. `swarm:health` warns
+  on aged or stale callback work and dead letters; `swarm:prune` removes eligible callback rows
+  before their run history, never a row being delivered, with dead-letter retention controlled by
+  `swarm.callbacks.dead_letter_retention_days`. A callback failure never replays model/tool effects
+  or changes the settled result. Delivery restores only a signed closure, rejecting foreign objects
+  and unsigned bodies without invoking them; every registering or delivering process needs
+  `APP_KEY`, and registration without it throws.
 - Default-off native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input, with decisions-first approval rejection, explicit topology-stable attachment recipients, original-versus-predecessor text selection, and optional per-recipient provider/model/timeout overrides.
 - Versioned, cipher-sealed native-input operational envelopes for queue, concurrency and durable recovery. Queue payloads carry opaque references; staged envelopes record planned paths before private local/base64 attachments are promoted to an application-selected disk, recoverable headers/provider options are preserved as plain resolved values, content identity and authorization are rechecked, and `swarm:prune` owns only Swarm-created temporary files.
 - Default-off native per-run agent settings through `RunContext::withAgentConfiguration()`. Topology-stable recipients preserve Laravel AI `withTools()`, one-shot `withMessages()`, conversations, provider, model and timeout across sequential, real process-parallel, queued, durable, routed-worker, retry and recovered execution. Explicit empty tools/messages remain meaningful overrides; input routing and settings compose in either order. Tools use reconstructible class references or registered factories; recoverable conversations require an existing native conversation and a saved Eloquent participant.
@@ -146,6 +151,15 @@ Native feature access through Laravel Swarm workflows.
   identities can resume or retry: stop intake, drain work, deploy and restart all
   old workers before resuming, then handle schema removal only after evidence
   retention is satisfied.
+- **BREAKING (database run history is write-once):** On database persistence, a
+  terminal write without an execution token can no longer change a run that is
+  already `completed`, `failed`, or `cancelled`. `failWithMetadata()` and
+  `recordPreflightFailure()` leave a finished run untouched, including its
+  metadata; the cache history store is unchanged. A failure event may still
+  follow a completed run after a post-completion exception, as in v0.27; that
+  event/history distinction is tracked for a later release. Applications that
+  have not enabled callbacks pay one indexed callback-existence check per
+  finished database run, with no added transaction.
 - Hosted Pest 5 runs the configured Unit, Feature, and Installer suites across
   four fresh-per-file ParaTest workers with Xdebug in the four coverage matrix
   jobs. `ProviderToolPreservationTest` runs separately in the `ci-serial` group
@@ -174,6 +188,8 @@ Native feature access through Laravel Swarm workflows.
   process-backed top-level parallel live multiplexing. Approval `Decisions`
   remain outside fresh-run input and fail with continuation guidance.
 - Native settings admission now validates known agent compatibility before queue or concurrency dispatch, applies attachment authorization and byte limits to request-local and recovered one-shot messages, bounds the complete recoverable envelope before persistence, resolves conversation policies per invocation, and rejects recoverable message attachment profiles that Laravel AI cannot reconstruct faithfully.
+- `SWARM_CALLBACKS_ENABLED` is parsed as a boolean, so `off` and `no` now
+  disable terminal callbacks.
 - The Laravel 13.16 compatibility lane ignores advisory `PKSA-d5tc-s1qs-h781`
   (CVE-2026-102279, fixed upstream only in Laravel 13.30.0) in its temporary lane
   manifest, so it can keep installing the exact 13.16.0 release that proves the
@@ -181,9 +197,32 @@ Native feature access through Laravel Swarm workflows.
   any other advisory against 13.16.0 still fails the lane. Composer's process
   timeout is raised to 900 seconds so the sequential local `composer test` gate is
   no longer killed at the 300-second default.
+- Laravel AI's provider-tool filtering is adopted as-is. On Laravel AI releases
+  that include it (detectable with
+  `method_exists(\Laravel\Ai\Gateway\TextGenerationLoop::class, 'toolsSupportedBy')`),
+  a provider tool the selected provider does not support is skipped and the
+  request is sent without it, so provider failover keeps working. On Laravel AI
+  v1.0.1 and earlier the same case throws before any request. Swarm adds no
+  compatibility check of its own and emits nothing for a skipped tool. See
+  [UPGRADING](UPGRADING.md#laravel-ai-provider-tool-filtering).
+- Seeded `withMessages()` history is bounded per recipient on request-local and
+  recoverable admission: 100 messages and 1 MiB encoded by default
+  (`swarm.native_agent_settings.max_messages` / `max_message_bytes`), with hard
+  ceilings of 1,000 messages and 16 MiB. Recovered worker admission no longer
+  rebuilds every configured tool or re-authorizes every conversation in bulk;
+  the tool and conversation an invocation uses are still resolved and authorized
+  at that invocation.
+- `swarm:prune` counts expired native-input envelopes it could not clean up
+  (undecryptable payload, unavailable disk, or a failed file delete): the count is
+  printed, recorded as `counts.native_inputs_retained` in the `command.prune`
+  audit event, and logged with the envelope and run identifiers only.
+  `swarm:health` warns while expired envelopes remain unpruned.
 
 ### Fixed
 
+- `swarm:health` no longer aborts when its native-input check cannot reach the
+  database. The check now returns a failed row instead of throwing, and skips
+  database probes under cache persistence when the native-input writers are off.
 - The `job.failed` fallback telemetry now covers the native-input and
   native-settings job variants. When one of these jobs failed before its handler
   ran (for example after exceeding its attempts), no `job.failed` was emitted,

@@ -355,10 +355,23 @@ falls back to log-and-swallow automatically; no migration required.
 
 When terminal workflow callbacks are enabled, the same scheduled
 `swarm:relay` invocation drains their delivery records. Use
-`swarm:relay --type=callback` for focused recovery. The
-`swarm.callbacks.enabled` flag is the registration and delivery kill switch,
-`swarm:health` reports the callback delivery row, and `swarm:prune` removes
-eligible callback delivery records. See
+`swarm:relay --type=callback` for focused recovery. Route delivery jobs with
+`swarm.callbacks.queue.connection` / `.name`. A failed dispatch or callback is
+eligible again after `swarm.callbacks.retry_backoff_seconds`; only a delivery
+job that acquires the current claim token consumes an attempt. Set
+`swarm.callbacks.reservation_timeout_seconds` above queue delay plus the longest
+callback execution, because an expired lease can overlap a still-running
+callback.
+
+`swarm.callbacks.enabled` stops new registration and delivery that has not
+started. Existing rows still settle with their terminal run, remain as a paused
+backlog, and resume after re-enablement. `swarm:health` reports counts while
+disabled and warns on aged eligible work, stale pending reservations, stale
+deliveries, and dead letters. `swarm:prune` removes eligible callback rows before
+their expired run history and never removes a `delivering` row; dead-letter
+retention is opt-in through `swarm.callbacks.dead_letter_retention_days`.
+Restart long-lived workers after callback migrations or configuration changes,
+because outbox readiness is cached per process. See
 [Terminal workflow callbacks](error-handling.md#terminal-workflow-callbacks) for
 the complete operating and rollback contract.
 

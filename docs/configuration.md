@@ -247,6 +247,26 @@ uses [ConfiguresDurableAdvanceJob](../src/Jobs/Concerns/ConfiguresDurableAdvance
 for retries, backoff and timeout; ordinary `swarm.queue.tries` / `timeout` do not
 configure it.
 
+## Callbacks
+
+Queue and durable terminal callbacks require database persistence and are
+delivered by `swarm:relay --type=callback`. Stream `catch()` runs in-process and
+does not use these settings.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.callbacks.enabled` | bool | `false` | `SWARM_CALLBACKS_ENABLED` | Registration and delivery kill switch. Boolean strings such as `off` and `no` are false. Earlier rows still settle while disabled and resume after re-enablement. |
+| `swarm.callbacks.queue.connection` | string\|null | `null` | `SWARM_CALLBACKS_QUEUE_CONNECTION` | Queue connection for callback delivery jobs; `null` uses the application default. |
+| `swarm.callbacks.queue.name` | string\|null | `null` | `SWARM_CALLBACKS_QUEUE` | Queue name for callback delivery jobs; `null` uses the connection default. |
+| `swarm.callbacks.max_attempts` | int | `5` | `SWARM_CALLBACKS_MAX_ATTEMPTS` | Delivery acquisitions allowed before dead-lettering. Relay reservations and queue-dispatch attempts do not consume this count. |
+| `swarm.callbacks.reservation_timeout_seconds` | int\|null | `null` | `SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS` | Delivery lease; `null` uses `swarm.durable.relay.reservation_timeout_seconds` (default `60`). Set above queue delay plus the longest callback execution. |
+| `swarm.callbacks.retry_backoff_seconds` | int | `60` | `SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS` | Delay after callback or queue-dispatch failure before another relay claim is eligible. |
+| `swarm.callbacks.stale_warning_threshold_seconds` | int | `0` | `SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS` | Age at which eligible work warns in `swarm:health`; `0` means twice the effective reservation timeout. |
+| `swarm.callbacks.dead_letter_retention_days` | int\|null | `null` | `SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS` | Positive days enable dead-letter pruning; `null` retains dead letters indefinitely. |
+
+Callbacks are delivered at least once. Keep them idempotent and schedule the
+relay whenever this feature is enabled.
+
 ## Streaming / Replay
 
 Controls HTTP protocol projection, process-backed parallel streaming, and the
@@ -430,7 +450,9 @@ SWARM_MEMORY_REPLAY_MODE=frozen_view
 
 ## Tables
 
-Table name overrides for all database-backed stores. If you change these, publish and update the package migrations as well.
+Table name overrides for all database-backed stores. If you change these,
+publish and update the package migrations unless the row states that the
+package migration honors the configured name.
 
 | Key | Default Table | Env Var |
 |-----|---------------|---------|
@@ -455,7 +477,7 @@ Table name overrides for all database-backed stores. If you change these, publis
 | `swarm.tables.durable_child_runs` | `swarm_durable_child_runs` | `SWARM_DURABLE_CHILD_RUNS_TABLE` |
 | `swarm.tables.durable_webhook_idempotency` | `swarm_durable_webhook_idempotency` | `SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE` |
 | `swarm.tables.durable_outbox` | `swarm_durable_outbox` | `SWARM_DURABLE_OUTBOX_TABLE` |
-| `swarm.tables.callback_deliveries` | `swarm_callback_deliveries` | `SWARM_CALLBACK_DELIVERIES_TABLE` |
+| `swarm.tables.callback_deliveries` | `swarm_callback_deliveries` (the package migration honors the configured name) | `SWARM_CALLBACK_DELIVERIES_TABLE` |
 | `swarm.tables.cold_archives` | `swarm_cold_archives` | `SWARM_COLD_ARCHIVES_TABLE` |
 
 Table names are honored by all database repositories at runtime.
