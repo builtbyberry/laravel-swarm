@@ -15,9 +15,10 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
  * Adds terminal-workflow `then()` / `catch()` to a dispatch-backed response
  * (queued or durable).
  *
- * A `then` callback fires once when the whole workflow settles as completed; a
- * `catch` callback fires once when it settles as a failure. The callback must be a
- * serializable, idempotent closure and receives a {@see SwarmTerminalContext} summary.
+ * A `then` callback is armed once when the whole workflow settles as completed; a
+ * `catch` callback is armed once when it settles as a failure. Either is delivered at least once,
+ * so the serializable closure must be idempotent; it receives a
+ * {@see SwarmTerminalContext} summary.
  * The delivery semantics (at-least-once, the relay lane, the events-vs-callbacks
  * contract, the terminal outcomes that do and do not fire) live in
  * docs/error-handling.md § Terminal Workflow Callbacks — this trait only registers

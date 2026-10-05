@@ -118,7 +118,7 @@ class SwarmHealthCommand extends Command
         }
 
         // Terminal workflow callback delivery health (off by default; a note when disabled).
-        $results[] = $this->runCallbackOutboxCheck($config);
+        $results[] = $this->runCallbackOutboxCheck($app, $config);
 
         $hasFailure = collect($results)->contains(fn (array $result): bool => $result['status'] === 'failed');
 
@@ -508,33 +508,59 @@ class SwarmHealthCommand extends Command
     /**
      * @return array{component: string, driver: string, store: string, status: string, details: string}
      */
-    protected function runCallbackOutboxCheck(ConfigRepository $config): array
+    protected function runCallbackOutboxCheck(Application $app, ConfigRepository $config): array
     {
         $base = ['component' => 'Callback delivery', 'driver' => 'database', 'store' => 'n/a'];
-
-        if ((bool) $config->get('swarm.callbacks.enabled', false) !== true) {
-            return $base + ['driver' => 'n/a', 'status' => 'note', 'details' => 'terminal workflow callbacks disabled (swarm.callbacks.enabled=false)'];
-        }
+        $enabled = (bool) $config->get('swarm.callbacks.enabled', false);
 
         try {
-            $summary = $this->laravel->make(ReadableCallbackDeliveryOutbox::class)->healthSummary();
+            $summary = $app->make(ReadableCallbackDeliveryOutbox::class)->healthSummary();
         } catch (Throwable $exception) {
+            if (! $enabled) {
+                return $base + [
+                    'status' => 'note',
+                    'details' => 'terminal workflow callbacks disabled; schema not ready for callbacks: '.$exception->getMessage(),
+                ];
+            }
+
             return $base + ['status' => 'failed', 'details' => 'callback outbox health read failed: '.$exception->getMessage()];
         }
 
         if (($summary['available'] ?? false) !== true) {
+            if (! $enabled) {
+                return $base + [
+                    'driver' => (string) $config->get('swarm.persistence.driver', 'n/a'),
+                    'status' => 'note',
+                    'details' => $config->get('swarm.persistence.driver') !== 'database'
+                        ? 'terminal workflow callbacks disabled; database persistence is required before enabling them'
+                        : 'terminal workflow callbacks disabled; schema not ready for callbacks',
+                ];
+            }
+
             return $base + ['status' => 'failed', 'details' => 'callback outbox unavailable — swarm.callbacks.enabled requires the database driver and the swarm_callback_deliveries migration'];
         }
 
         $deadLetter = (int) ($summary['dead_letter'] ?? 0);
         $pending = (int) ($summary['pending'] ?? 0);
         $registered = (int) ($summary['registered'] ?? 0);
+        $delivering = (int) ($summary['delivering'] ?? 0);
+        $stalePending = (int) ($summary['stale_pending_reservations'] ?? 0);
+        $staleDelivering = (int) ($summary['stale_deliveries'] ?? 0);
+        $agedEligible = (int) ($summary['aged_eligible'] ?? 0);
+        $counts = "{$registered} registered, {$pending} pending, {$delivering} delivering, {$deadLetter} dead-lettered";
 
-        if ($deadLetter > 0) {
-            return $base + ['status' => 'warning', 'details' => "{$deadLetter} dead-lettered callback(s) — inspect and prune; {$pending} pending, {$registered} registered"];
+        if (! $enabled) {
+            return $base + ['status' => 'note', 'details' => "terminal workflow callbacks disabled; delivery paused by kill switch; {$counts}"];
         }
 
-        return $base + ['status' => 'ok', 'details' => "{$pending} pending, {$registered} registered — is swarm:relay scheduled?"];
+        if ($deadLetter > 0 || $stalePending > 0 || $staleDelivering > 0 || $agedEligible > 0) {
+            return $base + [
+                'status' => 'warning',
+                'details' => "{$counts}; {$stalePending} stale pending, {$staleDelivering} stale delivering, {$agedEligible} aged eligible — inspect relay scheduling, callback duration, and dead letters",
+            ];
+        }
+
+        return $base + ['status' => 'ok', 'details' => "{$counts} — is swarm:relay scheduled?"];
     }
 
     /**

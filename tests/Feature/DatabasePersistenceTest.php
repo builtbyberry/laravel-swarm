@@ -682,15 +682,24 @@ test('database run history store persists start step completion and failure payl
     expect(json_decode(DB::table('swarm_run_histories')->where('run_id', 'history-run-id')->value('steps'), true))->toBe([]);
     expect(DB::table('swarm_run_histories')->where('run_id', 'history-run-id')->value('expires_at'))->not->toBeNull();
 
-    $history->fail('history-run-id', new Exception('stream failed'), 60);
+    $failureRunId = 'history-failure-run-id';
+    $history->start(
+        $failureRunId,
+        'ExampleSwarm',
+        'sequential',
+        RunContext::from('history-failure-task', $failureRunId),
+        ['run_id' => $failureRunId],
+        60,
+    );
+    $history->fail($failureRunId, new Exception('stream failed'), 60);
 
-    expect($history->find('history-run-id')['error'])->toBe([
+    expect($history->find($failureRunId)['error'])->toBe([
         'message' => 'stream failed',
         'class' => Exception::class,
     ]);
-    expect($history->find('history-run-id')['finished_at'])->not->toBeNull();
+    expect($history->find($failureRunId)['finished_at'])->not->toBeNull();
 
-    expect($history->query(limit: 10)[0]['run_id'])->toBe('history-run-id');
+    expect(collect($history->query(limit: 10))->pluck('run_id'))->toContain('history-run-id');
     expect($history->query(status: 'failed', limit: 10)[0]['status'])->toBe('failed');
 });
 

@@ -7,23 +7,21 @@ namespace BuiltByBerry\LaravelSwarm\Responses;
 /**
  * Result of a single CallbackDeliveryOutbox::drain() invocation.
  *
- * The callback lane claims pending rows, increments each row's attempt count at
- * claim time (so a delivery that dies mid-flight still advances toward the cap and
- * cannot be re-invoked forever), and hands rows under the cap to a
- * DeliverSwarmCallback job. A row that has exhausted swarm.callbacks.max_attempts
- * across claims is dead-lettered at claim time instead of dispatched.
+ * The callback lane leases eligible rows with an opaque claim token and hands each
+ * to a DeliverSwarmCallback job. Attempts increment only when that job atomically
+ * acquires pending → delivering. A stale delivering row that exhausted the budget is
+ * dead-lettered instead of receiving a replacement lease; this also covers pending
+ * rows already at the cap after an operator lowers max_attempts.
  *
  * - dispatched: rows handed to a delivery job this drain (reserved + job queued).
- * - dead_lettered: rows that reached the attempt cap and were moved to 'dead_letter'
- *                  at claim time instead of being dispatched again.
+ * - dead_lettered: eligible pending or stale-delivering rows already at the attempt cap.
  * - failed:       rows that could not be handed to a job due to a transient error
- *                 (queue driver unavailable, etc.). NOT dispatched — the reservation
- *                 is LEFT IN PLACE so the row is re-claimable after the reservation
- *                 timeout.
- * - claimed:      total rows atomically reserved (and attempt-incremented) this drain.
- * - reclaimed:    subset of claimed rows whose reserved_at was already set before this
- *                 drain — indicates a prior relay run or delivery claimed but did not
- *                 complete.
+ *                 (queue driver unavailable, etc.). NOT dispatched — the lease is
+ *                 released with retry backoff.
+ * - claimed:      total rows selected under lock this drain, including capped work
+ *                 dead-lettered instead of receiving a new lease.
+ * - reclaimed:    subset of selected rows whose reserved_at was already set before this
+ *                 drain — indicates a prior relay claim or delivery did not complete.
  *
  * total() returns dispatched + dead_lettered (rows that left the pending-dispatch set
  * this drain); failed rows remain claimable and are not counted.

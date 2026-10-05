@@ -311,13 +311,25 @@ class SwarmRelayCommand extends Command
         }
 
         if ($hasUnresolvedTransient) {
-            $stuck = $lastDurableFailed + $lastAuditFailed + $lastCallbackFailed;
-            $this->components->warn(
-                $stuck.' outbox entr'.($stuck === 1 ? 'y' : 'ies').' could not be dispatched due to a transient error'
-                .($maxAttempts !== null ? ' after '.$attempts.' attempt'.($attempts === 1 ? '' : 's') : '')
-                .'. The '.($stuck === 1 ? 'entry' : 'entries').' will be re-claimed after the reservation timeout.'
-                .' Check your error tracker and queue driver.'
-            );
+            $legacyStuck = $lastDurableFailed + $lastAuditFailed;
+
+            if ($legacyStuck > 0) {
+                $this->components->warn(
+                    $legacyStuck.' outbox entr'.($legacyStuck === 1 ? 'y' : 'ies').' could not be dispatched due to a transient error'
+                    .($maxAttempts !== null ? ' after '.$attempts.' attempt'.($attempts === 1 ? '' : 's') : '')
+                    .'. The '.($legacyStuck === 1 ? 'entry' : 'entries').' will be re-claimed after the reservation timeout.'
+                    .' Check your error tracker and queue driver.'
+                );
+            }
+
+            if ($lastCallbackFailed > 0) {
+                $this->components->warn(
+                    $lastCallbackFailed.' callback deliver'.($lastCallbackFailed === 1 ? 'y' : 'ies').' could not be dispatched due to a transient error'
+                    .($maxAttempts !== null ? ' after '.$attempts.' attempt'.($attempts === 1 ? '' : 's') : '')
+                    .'. The '.($lastCallbackFailed === 1 ? 'delivery' : 'deliveries').' remain eligible according to the callback retry delay or delivery lease timeout.'
+                    .' Check your error tracker and queue driver.'
+                );
+            }
 
             return self::FAILURE;
         }

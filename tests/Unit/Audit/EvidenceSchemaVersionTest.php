@@ -66,6 +66,8 @@ const AUDIT_CATEGORIES = [
     'progress.recorded',
     // job lifecycle
     'job.failed',
+    // callback delivery
+    'callback.delivered',
     // command.* (actor-unified in v0.5.0)
     'command.audit_reconcile',
     'command.cancel',

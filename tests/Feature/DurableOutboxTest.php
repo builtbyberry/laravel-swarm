@@ -834,7 +834,9 @@ test('swarm:relay output includes transient failure count and retry advice', fun
 
     $output = Artisan::output();
     expect($output)->toContain('Dispatched 2')
-        ->and($output)->toContain('transient error');
+        ->and($output)->toContain('transient error')
+        ->and($output)->toContain('will be re-claimed after the reservation timeout.')
+        ->and($output)->not->toContain('remain eligible according to their lane retry delay');
 });
 
 test('swarm:relay "no pending entries found" is only printed when the outbox is truly empty', function (): void {

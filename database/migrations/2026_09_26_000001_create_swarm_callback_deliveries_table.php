@@ -21,15 +21,28 @@ use Illuminate\Support\Facades\Schema;
  *   row, so an FK there could not cover every mode. Orphan rows are collected by swarm:prune
  *   against the run's terminal history instead of via a cascade.
  * - callback, context, and last_error are sealed at rest by SwarmPersistenceCipher.
- * - the (status, reserved_at) index serves the drain claim query.
+ * - the (status, available_at, reserved_at) index serves the drain claim query.
  */
 return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('swarm_callback_deliveries', function (Blueprint $table): void {
+        $tableName = (string) config('swarm.tables.callback_deliveries', 'swarm_callback_deliveries');
+
+        if (Schema::hasTable($tableName)) {
+            return;
+        }
+
+        $drainIndex = $tableName === 'swarm_callback_deliveries'
+            ? 'swarm_callback_deliveries_drain_idx'
+            : substr($tableName, 0, 45).'_drain_idx';
+        $runIndex = $tableName === 'swarm_callback_deliveries'
+            ? 'swarm_callback_deliveries_run_idx'
+            : substr($tableName, 0, 45).'_run_idx';
+
+        Schema::create($tableName, function (Blueprint $table) use ($drainIndex, $runIndex): void {
             $table->id();
-            $table->string('run_id')->index();
+            $table->string('run_id')->index($runIndex);
             $table->string('slot');
             $table->longText('callback');
             // Sealed terminal-context JSON, populated at the terminal flip (null while
@@ -43,15 +56,17 @@ return new class extends Migration
             $table->text('last_error')->nullable();
             $table->timestamp('last_attempted_at')->nullable();
             $table->timestamp('reserved_at')->nullable();
+            $table->string('claim_token', 64)->nullable();
+            $table->timestamp('available_at')->nullable();
             $table->timestamp('created_at');
             $table->timestamp('updated_at');
 
-            $table->index(['status', 'reserved_at'], 'swarm_callback_deliveries_drain_idx');
+            $table->index(['status', 'available_at', 'reserved_at'], $drainIndex);
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('swarm_callback_deliveries');
+        Schema::dropIfExists((string) config('swarm.tables.callback_deliveries', 'swarm_callback_deliveries'));
     }
 };

@@ -56,11 +56,11 @@ interface ReadableCallbackDeliveryOutbox
     public function deadLettered(int $limit = 100): array;
 
     /**
-     * A non-mutating health summary: row counts by delivery state, the number of
-     * rows currently reserved by a drainer, and the oldest pending timestamp. No
-     * decryption — counts and timestamps only.
+     * A non-mutating health summary: row counts by delivery state, fresh and stale
+     * leases, aged eligible work, and its oldest timestamp. No decryption — counts
+     * and timestamps only.
      *
-     * @return array{available: bool, registered: int, pending: int, dead_letter: int, reserved: int, oldest_pending_at: ?string}
+     * @return array{available: bool, registered: int, pending: int, delivering: int, dead_letter: int, fresh_reservations: int, stale_pending_reservations: int, stale_deliveries: int, aged_eligible: int, oldest_eligible_at: ?string}
      */
     public function healthSummary(): array;
 }

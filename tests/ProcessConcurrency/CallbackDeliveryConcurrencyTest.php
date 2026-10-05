@@ -3,10 +3,15 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\CallbackDeliveryOutbox;
+use BuiltByBerry\LaravelSwarm\Enums\CallbackSlot;
+use BuiltByBerry\LaravelSwarm\Responses\SwarmTerminalContext;
 use BuiltByBerry\LaravelSwarm\SwarmServiceProvider;
 use Illuminate\Concurrency\ConcurrencyManager;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Laravel\SerializableClosure\SerializableClosure;
+use Laravel\SerializableClosure\Serializers\Signed;
 
 /**
  * Process-concurrency coverage for DatabaseCallbackDeliveryOutbox::drain() under
@@ -60,6 +65,41 @@ function callbackConcurrencyWorker(?int $perWorker = null): Closure
     };
 }
 
+/**
+ * Deliver one claimed callback in a child process. Two copies of this worker
+ * receive the same id/token to exercise the delivery compare-and-set itself.
+ */
+function callbackDuplicateDeliveryWorker(int $id, string $claimToken): Closure
+{
+    return static function () use ($id, $claimToken): bool {
+        config()->set('swarm.persistence.driver', 'database');
+        config()->set('swarm.persistence.encrypt_at_rest', false);
+        config()->set('swarm.callbacks.enabled', true);
+
+        if (! app()->providerIsLoaded(SwarmServiceProvider::class)) {
+            app()->register(SwarmServiceProvider::class);
+        }
+
+        app()->forgetInstance(CallbackDeliveryOutbox::class);
+        app(CallbackDeliveryOutbox::class)->deliver($id, $claimToken);
+
+        return true;
+    };
+}
+
+/**
+ * Build the persisted callback outside Pest's generated test-case scope so a
+ * fresh child process can deserialize it without loading Pest's runtime class.
+ */
+function callbackDuplicateDeliveryCounter(): Closure
+{
+    return static function (): void {
+        DB::table('swarm_callback_concurrency_counters')
+            ->where('name', 'duplicate')
+            ->increment('value');
+    };
+}
+
 function seedPendingCallback(string $runId, ?Carbon $reservedAt = null): void
 {
     DB::table('swarm_callback_deliveries')->insert([
@@ -72,12 +112,16 @@ function seedPendingCallback(string $runId, ?Carbon $reservedAt = null): void
         'last_error' => null,
         'last_attempted_at' => null,
         'reserved_at' => $reservedAt,
+        'claim_token' => null,
+        'available_at' => null,
         'created_at' => Carbon::now('UTC'),
         'updated_at' => Carbon::now('UTC'),
     ]);
 }
 
 beforeEach(function (): void {
+    $this->previousClosureSigner = Signed::$signer;
+
     if (! callbackConcurrencyDriverSupported()) {
         $this->markTestSkipped(
             'Callback outbox SKIP LOCKED concurrency test requires a shared database engine that '
@@ -90,6 +134,20 @@ beforeEach(function (): void {
     app()->forgetInstance(CallbackDeliveryOutbox::class);
 
     DB::table('swarm_callback_deliveries')->truncate();
+
+    Schema::dropIfExists('swarm_callback_concurrency_counters');
+    Schema::create('swarm_callback_concurrency_counters', function ($table): void {
+        $table->string('name')->primary();
+        $table->unsignedInteger('value')->default(0);
+    });
+});
+
+afterEach(function (): void {
+    Signed::$signer = $this->previousClosureSigner;
+
+    if (callbackConcurrencyDriverSupported()) {
+        Schema::dropIfExists('swarm_callback_concurrency_counters');
+    }
 });
 
 test('two parallel drains claim disjoint subsets of pending callbacks', function (): void {
@@ -124,4 +182,80 @@ test('two parallel drains reclaim a single stale reservation exactly once', func
     expect($a['claimed'] + $b['claimed'])->toBe(1);
     expect($a['reclaimed'] + $b['reclaimed'])->toBe(1);
     expect($a['dispatched'] + $b['dispatched'])->toBe(1);
+});
+
+test('duplicate delivery jobs with one claim token execute the callback once', function (): void {
+    /** @var ConcurrencyManager $concurrency */
+    $concurrency = $this->app->make(ConcurrencyManager::class);
+
+    $appKey = (string) config('app.key');
+    $signingKey = str_starts_with($appKey, 'base64:')
+        ? base64_decode(substr($appKey, strlen('base64:')), true)
+        : $appKey;
+    $environment = [
+        'APP_KEY' => $appKey,
+        'TESTBENCH_WORKING_PATH' => dirname(__DIR__, 2),
+    ];
+    $previousEnvironment = [];
+    $previousClosureSigner = Signed::$signer;
+
+    foreach ($environment as $name => $value) {
+        $previousEnvironment[$name] = [
+            'process' => getenv($name),
+            'env_exists' => array_key_exists($name, $_ENV),
+            'env' => $_ENV[$name] ?? null,
+            'server_exists' => array_key_exists($name, $_SERVER),
+            'server' => $_SERVER[$name] ?? null,
+        ];
+    }
+
+    try {
+        foreach ($environment as $name => $value) {
+            putenv($name.'='.$value);
+            $_ENV[$name] = $_SERVER[$name] = $value;
+        }
+
+        SerializableClosure::setSecretKey($signingKey);
+        DB::table('swarm_callback_concurrency_counters')->insert(['name' => 'duplicate', 'value' => 0]);
+
+        $outbox = app(CallbackDeliveryOutbox::class);
+        $outbox->register('r-cb-duplicate-delivery', CallbackSlot::Then, callbackDuplicateDeliveryCounter());
+        $outbox->settle(
+            'r-cb-duplicate-delivery',
+            new SwarmTerminalContext('r-cb-duplicate-delivery', CallbackSlot::Then, 'App\\Ai\\Swarms\\ConcurrentSwarm'),
+        );
+
+        $id = (int) DB::table('swarm_callback_deliveries')
+            ->where('run_id', 'r-cb-duplicate-delivery')
+            ->value('id');
+        $claimToken = bin2hex(random_bytes(32));
+        DB::table('swarm_callback_deliveries')->where('id', $id)->update([
+            'claim_token' => $claimToken,
+            'reserved_at' => Carbon::now('UTC'),
+        ]);
+
+        $worker = callbackDuplicateDeliveryWorker($id, $claimToken);
+        $concurrency->driver('process')->run([$worker, $worker]);
+
+        expect(DB::table('swarm_callback_concurrency_counters')->where('name', 'duplicate')->value('value'))->toBe(1);
+        expect(DB::table('swarm_callback_deliveries')->where('id', $id)->exists())->toBeFalse();
+    } finally {
+        Signed::$signer = $previousClosureSigner;
+
+        foreach ($previousEnvironment as $name => $previous) {
+            putenv($previous['process'] === false ? $name : $name.'='.$previous['process']);
+
+            if ($previous['env_exists']) {
+                $_ENV[$name] = $previous['env'];
+            } else {
+                unset($_ENV[$name]);
+            }
+
+            if ($previous['server_exists']) {
+                $_SERVER[$name] = $previous['server'];
+            } else {
+                unset($_SERVER[$name]);
+            }
+        }
+    }
 });

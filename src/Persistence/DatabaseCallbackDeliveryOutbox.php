@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Persistence;
 
+use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\CallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\ReadableCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Enums\CallbackSlot;
@@ -36,10 +37,10 @@ use Throwable;
  * to the {@see DeliverSwarmCallback} delivery job.
  *
  * Delivery is at-least-once, never exactly-once: a crash after the closure runs but
- * before its row delete re-delivers on the next drain. Registered/pending rows are
- * re-claimable after the reservation timeout (shared with the durable relay,
- * swarm.durable.relay.reservation_timeout_seconds). Rows that exceed
- * swarm.callbacks.max_attempts move to 'dead_letter' and stop being re-claimed.
+ * before its row delete re-delivers after the lease expires. Each claim has an opaque
+ * token; only that token can acquire pending → delivering and count an attempt. Failed
+ * dispatches/executions release with backoff. Eligible work already at the current
+ * attempt cap, or a final allowed callback failure, moves to 'dead_letter'.
  *
  * @internal
  */
@@ -47,11 +48,17 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 {
     use SafeReporting;
 
+    protected ?bool $readiness = null;
+
+    protected ?string $readinessFailure = null;
+
+    protected ?bool $settlementAvailability = null;
+
     /**
      * The only classes a stored callback may deserialize into: the closure wrapper
-     * and its signed body ({@see Signed}). Anything else in the stored bytes — a
-     * foreign object, or an unsigned closure body — is left unconstructed, so
-     * nothing in a tampered row is built or run ahead of the signature check.
+     * and its signed body ({@see Signed}). Those wrappers may be restored so the
+     * signature can be verified; foreign payload objects and unsigned closure bodies
+     * are never constructed or invoked.
      */
     protected const CLOSURE_CLASSES = [SerializableClosure::class, Signed::class];
 
@@ -62,6 +69,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         protected ConfigRepository $config,
         protected SwarmPersistenceCipher $cipher,
         protected BusDispatcher $bus,
+        protected SwarmAuditDispatcher $audit,
         protected ?LoggerInterface $logger = null,
     ) {
         $this->logger ??= new NullLogger;
@@ -69,13 +77,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
     public function register(string $runId, CallbackSlot $slot, Closure $callback): void
     {
-        if (! $this->isAvailable()) {
-            throw new SwarmException(
-                'Terminal workflow callbacks require database-backed persistence. Set '
-                .'swarm.persistence.driver to "database" and run the package migrations, or listen '
-                .'to the SwarmCompleted / SwarmFailed events instead of then()/catch().'
-            );
-        }
+        $this->assertReady();
 
         // With no signing key SerializableClosure stores an unsigned body, which
         // delivery refuses to deserialize: the row could only ever dead-letter. Fail
@@ -118,6 +120,8 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             'last_error' => null,
             'last_attempted_at' => null,
             'reserved_at' => null,
+            'claim_token' => null,
+            'available_at' => null,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
@@ -125,7 +129,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
     public function settle(string $runId, SwarmTerminalContext $context): void
     {
-        if (! $this->isAvailable()) {
+        if (! $this->isSettlementAvailable()) {
             return;
         }
 
@@ -138,6 +142,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         $this->table()
             ->where('run_id', $runId)
             ->where('slot', $other->value)
+            ->where('status', 'registered')
             ->delete();
 
         // Flip only 'registered' rows: a duplicated terminal event re-enters here,
@@ -156,7 +161,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
     public function discard(string $runId): void
     {
-        if (! $this->isAvailable()) {
+        if (! $this->isSettlementAvailable()) {
             return;
         }
 
@@ -165,7 +170,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
     public function hasFor(string $runId): bool
     {
-        if (! $this->isAvailable()) {
+        if (! $this->isSettlementAvailable()) {
             return false;
         }
 
@@ -180,17 +185,31 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             return new CallbackDrainResult(0, 0, 0, 0, 0);
         }
 
+        $this->assertReady();
+
         $reservationTimeoutSeconds = $this->reservationTimeoutSeconds();
-        $maxAttempts = max(1, (int) $this->config->get('swarm.callbacks.max_attempts', 5));
+        $maxAttempts = $this->maxAttempts();
         $now = Carbon::now('UTC');
         $staleThreshold = $now->copy()->subSeconds($reservationTimeoutSeconds);
 
-        $entries = $this->connection->transaction(function () use ($now, $staleThreshold, $limit) {
+        $result = $this->connection->transaction(function () use ($now, $staleThreshold, $limit, $maxAttempts): array {
             $query = $this->table()
-                ->where('status', 'pending')
-                ->where(function ($q) use ($staleThreshold): void {
-                    $q->whereNull('reserved_at')
-                        ->orWhere('reserved_at', '<', $staleThreshold);
+                ->where(function ($query) use ($staleThreshold): void {
+                    $query->where(function ($pending) use ($staleThreshold): void {
+                        $pending->where('status', 'pending')
+                            ->where(function ($lease) use ($staleThreshold): void {
+                                $lease->whereNull('reserved_at')
+                                    ->orWhere('reserved_at', '<', $staleThreshold);
+                            });
+                    })->orWhere(function ($delivering) use ($staleThreshold): void {
+                        $delivering->where('status', 'delivering')
+                            ->whereNotNull('reserved_at')
+                            ->where('reserved_at', '<', $staleThreshold);
+                    });
+                })
+                ->where(function ($available) use ($now): void {
+                    $available->whereNull('available_at')
+                        ->orWhere('available_at', '<=', $now);
                 })
                 ->orderBy('id')
                 ->limit($limit);
@@ -201,54 +220,82 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
             $entries = $query->get();
 
-            if ($entries->isEmpty()) {
-                return $entries;
+            $claims = [];
+            $deadLetters = [];
+
+            foreach ($entries as $entry) {
+                $reclaimed = $entry->reserved_at !== null;
+
+                if ((int) $entry->attempts >= $maxAttempts) {
+                    $attempts = (int) $entry->attempts;
+                    $error = "configured attempt cap of {$maxAttempts} was reached after {$attempts} attempt(s)";
+                    $this->table()->where('id', $entry->id)->where('status', $entry->status)->update([
+                        'status' => 'dead_letter',
+                        'last_error' => $this->cipher->seal($error),
+                        'reserved_at' => null,
+                        'claim_token' => null,
+                        'available_at' => null,
+                        'updated_at' => $now,
+                    ]);
+                    $deadLetters[] = ['row' => $entry, 'error' => $error, 'reclaimed' => $reclaimed];
+
+                    continue;
+                }
+
+                $token = bin2hex(random_bytes(32));
+                $this->table()->where('id', $entry->id)->update([
+                    'status' => 'pending',
+                    'claim_token' => $token,
+                    'reserved_at' => $now,
+                    'available_at' => null,
+                    'updated_at' => $now,
+                ]);
+                $claims[] = ['row' => $entry, 'token' => $token, 'reclaimed' => $reclaimed];
             }
 
-            // Increment the attempt count AT CLAIM TIME, not in deliver(). A delivery
-            // job that dies mid-closure (SIGKILL, OOM, worker timeout) never reaches
-            // deliver()'s success-delete or failure-write, so an attempt counted only
-            // there would let a killed row be reclaimed and re-invoked forever. Counting
-            // at claim advances every row — including ones whose delivery died — toward
-            // the cap, so it eventually dead-letters instead of looping.
-            $this->table()->whereIn('id', $entries->pluck('id')->all())
-                ->increment('attempts', 1, ['reserved_at' => $now, 'updated_at' => $now]);
-
-            return $entries;
+            return ['claims' => $claims, 'dead_letters' => $deadLetters];
         });
 
-        if ($entries->isEmpty()) {
+        $claims = $result['claims'];
+        $deadLetters = $result['dead_letters'];
+
+        foreach ($deadLetters as $deadLetter) {
+            $this->logDeadLetter($deadLetter['row'], 'configured attempt cap reached');
+        }
+
+        if ($claims === [] && $deadLetters === []) {
             return new CallbackDrainResult(0, 0, 0, 0, 0);
         }
 
-        $claimed = $entries->count();
-        $reclaimed = $entries->filter(fn (object $e): bool => $e->reserved_at !== null)->count();
+        $claimed = count($claims) + count($deadLetters);
+        $reclaimed = count(array_filter($claims, static fn (array $claim): bool => $claim['reclaimed']))
+            + count(array_filter($deadLetters, static fn (array $deadLetter): bool => $deadLetter['reclaimed']));
 
         $dispatched = 0;
-        $deadLettered = 0;
+        $deadLettered = count($deadLetters);
         $failed = 0;
 
-        foreach ($entries as $entry) {
-            $attempts = (int) $entry->attempts + 1;
-
-            if ($attempts > $maxAttempts) {
-                // Delivery budget exhausted across claims (including deaths that never
-                // recorded an outcome). Stop reclaiming this row.
-                $this->markDeadLetter((int) $entry->id, $attempts, 'exceeded max delivery attempts');
-                $deadLettered++;
-
-                continue;
-            }
-
+        foreach ($claims as $claim) {
+            $entry = $claim['row'];
+            $token = $claim['token'];
             try {
-                // Only the row id travels to the delivery job; the sealed closure
-                // stays at rest in this table (never in a queue payload).
-                $this->bus->dispatch(new DeliverSwarmCallback((int) $entry->id));
+                $job = new DeliverSwarmCallback((int) $entry->id, $token);
+                $connection = $this->queueSetting('connection');
+                $queue = $this->queueSetting('name');
+
+                if ($connection !== null) {
+                    $job->onConnection($connection);
+                }
+
+                if ($queue !== null) {
+                    $job->onQueue($queue);
+                }
+
+                $this->bus->dispatch($job);
                 $dispatched++;
             } catch (Throwable $exception) {
-                // Transient dispatch failure (queue driver unavailable). Leave the
-                // reservation in place; the row is re-claimable after the timeout.
                 $this->safeReport($exception);
+                $this->releaseClaimAfterDispatchFailure((int) $entry->id, $token, mb_substr($exception->getMessage(), 0, 1000));
                 $failed++;
             }
         }
@@ -256,20 +303,56 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         return new CallbackDrainResult($dispatched, $deadLettered, $failed, $claimed, $reclaimed);
     }
 
-    public function deliver(int $id): void
+    public function deliver(int $id, string $claimToken): void
     {
         // Honor the kill switch here too: an already-dispatched delivery job must not
         // execute a stored closure once the operator has turned the feature off.
-        if (! $this->isAvailable() || ! $this->featureEnabled()) {
+        if (! $this->featureEnabled()) {
             return;
         }
 
-        /** @var object|null $row */
-        $row = $this->table()->where('id', $id)->first();
+        $this->assertReady();
 
-        // Idempotent: a missing row (already delivered) or one not in the pending
-        // delivery state is a no-op — a duplicate dispatch never double-arms it.
-        if ($row === null || $row->status !== 'pending') {
+        /** @var object|null $row */
+        $row = $this->connection->transaction(function () use ($id, $claimToken): ?object {
+            $row = $this->table()
+                ->where('id', $id)
+                ->where('status', 'pending')
+                ->where('claim_token', $claimToken)
+                ->lockForUpdate()
+                ->first();
+
+            if ($row === null) {
+                return null;
+            }
+
+            $now = Carbon::now('UTC');
+            $attempts = (int) $row->attempts + 1;
+            $updated = $this->table()
+                ->where('id', $id)
+                ->where('status', 'pending')
+                ->where('claim_token', $claimToken)
+                ->update([
+                    'status' => 'delivering',
+                    'attempts' => $attempts,
+                    'last_attempted_at' => $now,
+                    'reserved_at' => $now,
+                    'updated_at' => $now,
+                ]);
+
+            if ($updated !== 1) {
+                return null;
+            }
+
+            $row->status = 'delivering';
+            $row->attempts = $attempts;
+            $row->last_attempted_at = $now;
+            $row->reserved_at = $now;
+
+            return $row;
+        });
+
+        if ($row === null) {
             return;
         }
 
@@ -279,7 +362,13 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             // A closure that cannot be unsealed or whose signature does not verify can
             // never be invoked (tamper, or an APP_KEY rotation that invalidated the
             // signature). Dead-letter it permanently rather than reclaiming forever.
-            $this->markDeadLetter($id, (int) $row->attempts, $this->unreadableReason($row));
+            $this->markDeadLetter(
+                $id,
+                $claimToken,
+                (int) $row->attempts,
+                $this->unreadableReason($row),
+                'callback payload rejected',
+            );
 
             return;
         }
@@ -292,16 +381,41 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             // The callback ran in this delivery process, entirely separate from the
             // settled workflow: its failure can neither replay the workflow's model or
             // tool effects nor change the already-recorded terminal result. It only
-            // affects this delivery row. Release the reservation so the next drain
-            // re-claims it — that claim increments the attempt count and eventually
-            // dead-letters, so the retry budget is enforced at claim time.
+            // affects this delivery row. The final allowed failure dead-letters; an
+            // earlier failure releases the lease after the configured retry backoff.
             $this->safeReport($exception);
-            $this->releaseForRetry($id, mb_substr($exception->getMessage(), 0, 1000));
+            $error = mb_substr($exception->getMessage(), 0, 1000);
+
+            if ((int) $row->attempts >= $this->maxAttempts()) {
+                $this->markDeadLetter(
+                    $id,
+                    $claimToken,
+                    (int) $row->attempts,
+                    $error,
+                    'callback execution failed',
+                    $exception::class,
+                );
+            } else {
+                $this->releaseForRetry($id, $claimToken, $error);
+            }
 
             return;
         }
 
-        $this->table()->where('id', $id)->delete();
+        $deleted = $this->table()
+            ->where('id', $id)
+            ->where('status', 'delivering')
+            ->where('claim_token', $claimToken)
+            ->delete();
+
+        if ($deleted === 1) {
+            $this->audit->emit('callback.delivered', [
+                'delivery_id' => $id,
+                'run_id' => (string) $row->run_id,
+                'slot' => (string) $row->slot,
+                'attempts' => (int) $row->attempts,
+            ]);
+        }
     }
 
     protected function resolveClosure(object $row): ?Closure
@@ -428,69 +542,181 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         $callback = $this->config->get('swarm.callbacks.reservation_timeout_seconds');
 
         if (is_int($callback) && $callback > 0) {
-            return $callback;
+            return min(86400, $callback);
         }
 
-        return max(1, (int) $this->config->get('swarm.durable.relay.reservation_timeout_seconds', 60));
+        return max(1, min(86400, (int) $this->config->get('swarm.durable.relay.reservation_timeout_seconds', 60)));
+    }
+
+    protected function releaseForRetry(int $id, string $claimToken, string $error): void
+    {
+        $now = Carbon::now('UTC');
+
+        $this->table()
+            ->where('id', $id)
+            ->where('status', 'delivering')
+            ->where('claim_token', $claimToken)
+            ->update([
+                'status' => 'pending',
+                'last_error' => $this->cipher->seal($error),
+                'reserved_at' => null,
+                'claim_token' => null,
+                'available_at' => $now->copy()->addSeconds($this->retryBackoffSeconds()),
+                'updated_at' => $now,
+            ]);
+    }
+
+    protected function releaseClaimAfterDispatchFailure(int $id, string $claimToken, string $error): void
+    {
+        $now = Carbon::now('UTC');
+
+        $this->table()
+            ->where('id', $id)
+            ->where('status', 'pending')
+            ->where('claim_token', $claimToken)
+            ->update([
+                'last_error' => $this->cipher->seal($error),
+                'reserved_at' => null,
+                'claim_token' => null,
+                'available_at' => $now->copy()->addSeconds($this->retryBackoffSeconds()),
+                'updated_at' => $now,
+            ]);
+    }
+
+    protected function markDeadLetter(
+        int $id,
+        string $claimToken,
+        int $attempts,
+        string $error,
+        string $reason,
+        ?string $exceptionClass = null,
+    ): void {
+        $now = Carbon::now('UTC');
+        $row = $this->table()->where('id', $id)->first(['run_id', 'slot']);
+        $updated = $this->table()
+            ->where('id', $id)
+            ->where('status', 'delivering')
+            ->where('claim_token', $claimToken)
+            ->update([
+                'status' => 'dead_letter',
+                'last_error' => $this->cipher->seal($error),
+                'last_attempted_at' => $now,
+                'reserved_at' => null,
+                'claim_token' => null,
+                'available_at' => null,
+                'updated_at' => $now,
+            ]);
+
+        if ($updated !== 1 || $row === null) {
+            return;
+        }
+
+        $row->id = $id;
+        $row->attempts = $attempts;
+        $this->logDeadLetter($row, $reason, $exceptionClass);
+    }
+
+    protected function logDeadLetter(object $row, string $reason, ?string $exceptionClass = null): void
+    {
+        $this->safeLog($this->logger, 'error', 'Swarm terminal callback reached dead_letter status.', [
+            'id' => (int) $row->id,
+            'run_id' => (string) $row->run_id,
+            'slot' => (string) $row->slot,
+            'attempts' => (int) $row->attempts,
+            'reason' => mb_substr($reason, 0, 100),
+            'exception_class' => $exceptionClass,
+        ]);
+    }
+
+    protected function maxAttempts(): int
+    {
+        return max(1, min(1000, (int) $this->config->get('swarm.callbacks.max_attempts', 5)));
+    }
+
+    protected function retryBackoffSeconds(): int
+    {
+        return max(0, min(86400, (int) $this->config->get('swarm.callbacks.retry_backoff_seconds', 60)));
+    }
+
+    protected function queueSetting(string $key): ?string
+    {
+        $value = $this->config->get('swarm.callbacks.queue.'.$key);
+
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
+    }
+
+    protected function staleWarningThresholdSeconds(): int
+    {
+        $configured = (int) $this->config->get('swarm.callbacks.stale_warning_threshold_seconds', 0);
+
+        return $configured > 0
+            ? min(604800, $configured)
+            : min(604800, $this->reservationTimeoutSeconds() * 2);
     }
 
     /**
-     * Release a reservation without touching the attempt count — the claim in drain()
-     * owns the increment, so a transiently-failing closure advances toward the cap on
-     * its next claim rather than here.
+     * Terminal settlement uses only columns from the original callback table.
+     * Cache only the table-existence probe so the common callback-free terminal
+     * write pays one cold schema query and one indexed run_id existence query.
      */
-    protected function releaseForRetry(int $id, string $error): void
+    protected function isSettlementAvailable(): bool
     {
-        $now = Carbon::now('UTC');
+        if ($this->settlementAvailability !== null) {
+            return $this->settlementAvailability;
+        }
 
-        $this->table()->where('id', $id)->update([
-            'last_error' => $this->cipher->seal($error),
-            'last_attempted_at' => $now,
-            'reserved_at' => null,
-            'updated_at' => $now,
-        ]);
-    }
+        if ($this->config->get('swarm.persistence.driver') !== 'database') {
+            return $this->settlementAvailability = false;
+        }
 
-    protected function markDeadLetter(int $id, int $attempts, string $error): void
-    {
-        $now = Carbon::now('UTC');
-
-        $this->table()->where('id', $id)->update([
-            'status' => 'dead_letter',
-            'last_error' => $this->cipher->seal($error),
-            'last_attempted_at' => $now,
-            'reserved_at' => null,
-            'updated_at' => $now,
-        ]);
-
-        $this->safeLog($this->logger, 'error', 'Swarm terminal callback reached dead_letter status.', [
-            'id' => $id,
-            'attempts' => $attempts,
-            'last_error' => $error,
-        ]);
+        return $this->settlementAvailability = $this->connection
+            ->getSchemaBuilder()
+            ->hasTable($this->tableName());
     }
 
     public function isAvailable(): bool
     {
+        if ($this->readiness !== null) {
+            return $this->readiness;
+        }
+
+        $table = $this->tableName();
+
         if ($this->config->get('swarm.persistence.driver') !== 'database') {
-            return false;
+            $this->readinessFailure = 'Terminal workflow callbacks require database-backed persistence. Set '
+                .'swarm.persistence.driver to "database" and run the package migrations, or listen '
+                .'to the SwarmCompleted / SwarmFailed events instead of then()/catch().';
+
+            return $this->readiness = false;
         }
 
         try {
-            return $this->connection->getSchemaBuilder()->hasTable($this->tableName());
-        } catch (Throwable) {
-            return false;
+            $schema = $this->connection->getSchemaBuilder();
+
+            if (! $schema->hasTable($table)) {
+                $this->readinessFailure = "Callback delivery outbox requires the [{$table}] table. Run the package migrations and restart callback workers.";
+
+                return $this->readiness = false;
+            }
+
+            if (! $schema->hasColumns($table, ['claim_token', 'available_at'])) {
+                $this->readinessFailure = "Callback delivery outbox requires [{$table}.claim_token] and [{$table}.available_at]. Bring the unreleased callback migration schema up to date and restart callback workers.";
+
+                return $this->readiness = false;
+            }
+
+            return $this->readiness = true;
+        } catch (Throwable $exception) {
+            $this->readinessFailure = "Callback delivery outbox readiness failed for [{$table}]: {$exception->getMessage()}";
+
+            return $this->readiness = false;
         }
     }
 
     public function assertReady(): void
     {
         if (! $this->isAvailable()) {
-            throw new SwarmException(
-                'Callback delivery outbox is not available. The swarm_callback_deliveries table is '
-                .'required for terminal workflow then()/catch() callbacks (swarm.callbacks.enabled=true). '
-                .'Run the package migrations or disable the feature.'
-            );
+            throw new SwarmException($this->readinessFailure ?? 'Callback delivery outbox is not available.');
         }
     }
 
@@ -527,37 +753,61 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
     public function healthSummary(): array
     {
         if (! $this->isAvailable()) {
+            if ($this->readinessFailure !== null) {
+                throw new SwarmException($this->readinessFailure);
+            }
+
             return [
                 'available' => false,
                 'registered' => 0,
                 'pending' => 0,
+                'delivering' => 0,
                 'dead_letter' => 0,
-                'reserved' => 0,
-                'oldest_pending_at' => null,
+                'fresh_reservations' => 0,
+                'stale_pending_reservations' => 0,
+                'stale_deliveries' => 0,
+                'aged_eligible' => 0,
+                'oldest_eligible_at' => null,
             ];
         }
 
-        // Use the same reservation timeout drain() reclaims against, so the reported
-        // "reserved" (in-flight) count matches the actual reclaim threshold.
-        $freshThreshold = Carbon::now('UTC')->subSeconds($this->reservationTimeoutSeconds());
+        $now = Carbon::now('UTC');
+        $freshThreshold = $now->copy()->subSeconds($this->reservationTimeoutSeconds());
+        $agedThreshold = $now->copy()->subSeconds($this->staleWarningThresholdSeconds());
 
-        $registered = (int) $this->table()->where('status', 'registered')->count();
-        $pending = (int) $this->table()->where('status', 'pending')->count();
-        $deadLetter = (int) $this->table()->where('status', 'dead_letter')->count();
-        $reserved = (int) $this->table()
-            ->where('status', 'pending')
-            ->whereNotNull('reserved_at')
-            ->where('reserved_at', '>=', $freshThreshold)
-            ->count();
-        $oldestPendingAt = $this->table()->where('status', 'pending')->min('created_at');
+        $summary = $this->table()->selectRaw(<<<'SQL'
+            COALESCE(SUM(CASE WHEN status = 'registered' THEN 1 ELSE 0 END), 0) AS registered,
+            COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+            COALESCE(SUM(CASE WHEN status = 'delivering' THEN 1 ELSE 0 END), 0) AS delivering,
+            COALESCE(SUM(CASE WHEN status = 'dead_letter' THEN 1 ELSE 0 END), 0) AS dead_letter,
+            COALESCE(SUM(CASE WHEN status IN ('pending', 'delivering') AND reserved_at IS NOT NULL AND reserved_at >= ? THEN 1 ELSE 0 END), 0) AS fresh_reservations,
+            COALESCE(SUM(CASE WHEN status = 'pending' AND reserved_at IS NOT NULL AND reserved_at < ? THEN 1 ELSE 0 END), 0) AS stale_pending_reservations,
+            COALESCE(SUM(CASE WHEN status = 'delivering' AND reserved_at IS NOT NULL AND reserved_at < ? THEN 1 ELSE 0 END), 0) AS stale_deliveries,
+            COALESCE(SUM(CASE WHEN status = 'pending' AND reserved_at IS NULL AND (available_at IS NULL OR available_at <= ?) AND ((available_at IS NOT NULL AND available_at <= ?) OR (available_at IS NULL AND created_at <= ?)) THEN 1 ELSE 0 END), 0) AS aged_eligible,
+            MIN(CASE WHEN status = 'pending' AND reserved_at IS NULL AND (available_at IS NULL OR available_at <= ?) THEN COALESCE(available_at, created_at) ELSE NULL END) AS oldest_eligible_at
+            SQL, [
+            $freshThreshold,
+            $freshThreshold,
+            $freshThreshold,
+            $now,
+            $agedThreshold,
+            $agedThreshold,
+            $now,
+        ])->first();
+
+        $oldestEligibleAt = $summary->oldest_eligible_at;
 
         return [
             'available' => true,
-            'registered' => $registered,
-            'pending' => $pending,
-            'dead_letter' => $deadLetter,
-            'reserved' => $reserved,
-            'oldest_pending_at' => $oldestPendingAt !== null ? (string) $oldestPendingAt : null,
+            'registered' => (int) ($summary->registered ?? 0),
+            'pending' => (int) ($summary->pending ?? 0),
+            'delivering' => (int) ($summary->delivering ?? 0),
+            'dead_letter' => (int) ($summary->dead_letter ?? 0),
+            'fresh_reservations' => (int) ($summary->fresh_reservations ?? 0),
+            'stale_pending_reservations' => (int) ($summary->stale_pending_reservations ?? 0),
+            'stale_deliveries' => (int) ($summary->stale_deliveries ?? 0),
+            'aged_eligible' => (int) ($summary->aged_eligible ?? 0),
+            'oldest_eligible_at' => is_string($oldestEligibleAt) ? $oldestEligibleAt : null,
         ];
     }
 

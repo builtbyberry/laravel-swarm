@@ -22,9 +22,9 @@ use Closure;
  *   register()  → status 'registered' (a signed, sealed SerializableClosure)
  *   settle()    → matching-outcome rows 'registered' → 'pending' (in the terminal
  *                 transaction); the other outcome's rows are deleted
- *   drain()     → claim 'pending' rows and hand each to a DeliverSwarmCallback job
- *   deliver()   → the job unseals + verifies + invokes, then deletes on success or
- *                 increments attempts / dead-letters on failure
+ *   drain()     → lease eligible rows with a claim token and dispatch a delivery job
+ *   deliver()   → atomically acquire pending → delivering, increment attempts, then
+ *                 unseal + verify + invoke; delete on success or retry/dead-letter
  *
  * Delivery is at-least-once, never exactly-once. Callbacks MUST be idempotent.
  *
@@ -60,8 +60,9 @@ interface CallbackDeliveryOutbox
     /**
      * Settle a run's callbacks for its terminal outcome. Flips the matching-outcome
      * rows from 'registered' to 'pending' (recording the terminal context for
-     * delivery) and DELETES the other outcome's rows. MUST be called inside the same
-     * DB transaction as the terminal state write so the flip is atomic with it.
+     * delivery) and deletes only still-registered rows for the other outcome. MUST be
+     * called inside the same DB transaction as the terminal state write so the flip is
+     * atomic with it.
      *
      * A no-op when the outbox is unavailable or the run registered no callbacks.
      */
@@ -76,23 +77,21 @@ interface CallbackDeliveryOutbox
 
     /**
      * Claim pending rows and hand each to a DeliverSwarmCallback job. The sealed
-     * closure never leaves the table — only the row id travels to the job.
+     * closure never leaves the table — only the row id and opaque claim token travel.
      */
     public function drain(int $limit = 100): CallbackDrainResult;
 
     /**
-     * Deliver a single claimed row (invoked by DeliverSwarmCallback): unseal and
-     * verify the closure signature, invoke it with the row's terminal context, then
-     * delete the row on success. On failure, increment attempts and release the
-     * reservation; after swarm.callbacks.max_attempts move the row to 'dead_letter'.
-     * Idempotent: a row that is missing or no longer deliverable is a no-op.
+     * Deliver a single claimed row (invoked by DeliverSwarmCallback). Only the job
+     * holding the current token may atomically acquire pending → delivering and count
+     * an attempt. Duplicate and obsolete jobs are no-ops.
      */
-    public function deliver(int $id): void;
+    public function deliver(int $id, string $claimToken): void;
 
     /**
      * Whether the outbox is backed by a working store. Returns false under a
-     * non-database persistence driver and when the swarm_callback_deliveries table
-     * is missing.
+     * non-database persistence driver, when the configured callback table is missing,
+     * or when its required claim-token/backoff columns are absent.
      */
     public function isAvailable(): bool;
 
