@@ -276,6 +276,12 @@ The failed step is checkpointed. The `DurableRetry` policy applies (if configure
 
 ## Terminal Workflow Callbacks
 
+> **Experimental in v0.28.** Queued and durable `then()` / `catch()` callbacks, their
+> `swarm.callbacks.*` settings, the callback relay lane, and the
+> `CallbackDeliveryOutbox` contracts are new and may change or be removed in a later
+> `0.x` release without a deprecation cycle. The `SwarmCompleted` / `SwarmFailed`
+> lifecycle events are the stable, always-on way to react to a workflow finishing.
+
 Terminal callbacks are a convenience over the `SwarmCompleted` / `SwarmFailed` lifecycle
 events for the **whole workflow** — not a per-agent hook. They are off by default; enable
 with `swarm.callbacks.enabled=true`, which requires the database persistence driver and an

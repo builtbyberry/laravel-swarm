@@ -146,6 +146,11 @@ or `failed_jobs`.
 
 ### Terminal workflow callbacks
 
+Terminal workflow callbacks are **experimental** in v0.28: the feature, its
+settings, and its contracts may change or be removed in a later `0.x` release
+without a deprecation cycle (see [Experimental surfaces](#experimental-surfaces)).
+Lifecycle events remain the stable path.
+
 Terminal workflow callbacks are default-off behind
 `swarm.callbacks.enabled` / `SWARM_CALLBACKS_ENABLED`. Registration requires the
 database persistence driver, and every process that registers or delivers a
@@ -715,6 +720,18 @@ reachable through the public surfaces above is treated as public.
 Static analysis tools that respect `@internal` (PHPStan, Psalm) will flag
 application code that reaches into marked classes. Treat those warnings as a
 signal to switch to a public verb or open an issue describing the use case.
+
+### Experimental surfaces
+
+A surface documented as **experimental** is shipped for early use and feedback.
+It is outside the deprecation policy below: it may change or be removed in any
+later `0.x` release, minor or patch, and the change is recorded in the changelog.
+Experimental features are default-off. In v0.28 the experimental surface is
+terminal workflow callbacks: queued and durable `then()` / `catch()`, the
+`swarm.callbacks.*` configuration, `swarm:relay --type=callback`, the
+`CallbackDeliveryOutbox` and `ReadableCallbackDeliveryOutbox` contracts,
+`CallbackDrainResult`, `SwarmTerminalContext`, the `swarm_callback_deliveries`
+table, and the `callback.delivered` audit category.
 
 ### Deprecation policy
 
