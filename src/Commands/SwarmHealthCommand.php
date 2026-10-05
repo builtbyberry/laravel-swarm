@@ -198,83 +198,119 @@ class SwarmHealthCommand extends Command
         $settingsEnabled = (bool) $config->get('swarm.native_agent_settings.enabled', false);
         $table = (string) $config->get('swarm.tables.native_inputs', 'swarm_native_inputs');
         $contextTable = (string) $config->get('swarm.tables.contexts', 'swarm_contexts');
-        $schema = $connection->getSchemaBuilder();
+        $persistenceDriver = (string) $config->get('swarm.persistence.driver', 'cache');
 
-        $problems = [];
-        if ($config->get('swarm.persistence.driver') !== 'database') {
-            $problems[] = 'swarm.persistence.driver must be database';
-        }
-        if (! (bool) $config->get('swarm.persistence.encrypt_at_rest', false)) {
-            $problems[] = 'swarm.persistence.encrypt_at_rest must be enabled';
-        }
-        if (! $schema->hasTable($table)
-            || ! $schema->hasColumns($table, ['id', 'run_id', 'format_version', 'state', 'payload', 'payload_hash', 'expires_at'])) {
-            $problems[] = "native input table [{$table}] is missing required columns";
-        }
-        if (! $schema->hasTable($contextTable) || ! $schema->hasColumn($contextTable, 'native_input_ref')) {
-            $problems[] = "context table [{$contextTable}] is missing native_input_ref";
-        }
-        if ($settingsEnabled && ! $enabled) {
-            $problems[] = 'swarm.native_agent_settings.enabled requires swarm.native_inputs.enabled';
-        }
-
-        $disk = $config->get('swarm.native_inputs.disk');
-        if (! is_string($disk) || $disk === '') {
-            $problems[] = 'swarm.native_inputs.disk is not configured';
-        } else {
-            try {
-                $app->make(Factory::class)->disk($disk);
-            } catch (Throwable $exception) {
-                $problems[] = "native input disk [{$disk}] cannot be resolved: {$exception->getMessage()}";
-            }
-        }
-
-        $hasStateTable = $schema->hasTable($table) && $schema->hasColumn($table, 'state');
-        $hasVersionedTable = $hasStateTable && $schema->hasColumn($table, 'format_version');
-        $activeV2 = $hasVersionedTable
-            ? (int) $connection->table($table)->where('format_version', 2)->where('state', 'active')->count()
-            : null;
-        $remainingV2 = $hasVersionedTable
-            ? (int) $connection->table($table)->where('format_version', 2)->count()
-            : null;
-        $settingsStatus = $activeV2 === null || $remainingV2 === null
-            ? 'v2 drain cannot be verified because the table is absent'
-            : ($settingsEnabled
-                ? "v2 writer enabled; {$activeV2} active and {$remainingV2} total v2 envelope(s) remain"
-                : "v2 writer disabled; {$activeV2} active and {$remainingV2} total v2 envelope(s) remain; prune to zero before removing v2 readers");
-
-        if (! $enabled) {
-            $active = $hasStateTable
-                ? (int) $connection->table($table)->where('state', 'active')->count()
-                : null;
-            $drain = $active === null
-                ? 'active envelope drain cannot be verified because the table is absent'
-                : ($active === 0
-                    ? 'no active native input envelopes remain'
-                    : "{$active} active native input envelope(s) must drain before removing readers");
-            $preflight = $problems === []
-                ? "sealed v1/v2 envelope table and private disk [{$disk}] are ready"
-                : 'pre-enable readiness: '.implode('; ', $problems);
+        if ($persistenceDriver !== 'database') {
+            $invalidSettingsState = $settingsEnabled && ! $enabled;
 
             return [
                 'component' => 'Native inputs',
-                'driver' => 'disabled',
+                'driver' => $enabled ? $persistenceDriver : 'disabled',
                 'store' => $table,
-                'status' => $settingsEnabled
-                    || (is_string($disk) && $disk !== '' && $problems !== []) ? 'failed' : 'note',
-                'details' => "writer disabled; {$drain}; {$settingsStatus}; {$preflight}",
+                'status' => $enabled || $invalidSettingsState ? 'failed' : 'note',
+                'details' => $enabled
+                    ? "writer enabled but swarm.persistence.driver must be database; database probes skipped for [{$persistenceDriver}] persistence"
+                    : 'writer disabled; database probes skipped because persistence is not database'
+                        .($invalidSettingsState ? '; swarm.native_agent_settings.enabled requires swarm.native_inputs.enabled' : ''),
             ];
         }
 
-        return [
-            'component' => 'Native inputs',
-            'driver' => 'database',
-            'store' => $table,
-            'status' => $problems === [] ? 'ok' : 'failed',
-            'details' => $problems === []
-                ? "sealed v1/v2 envelope table and private disk [{$disk}] are ready; {$settingsStatus}"
-                : implode('; ', $problems),
-        ];
+        try {
+            $schema = $connection->getSchemaBuilder();
+
+            $problems = [];
+            if (! (bool) $config->get('swarm.persistence.encrypt_at_rest', false)) {
+                $problems[] = 'swarm.persistence.encrypt_at_rest must be enabled';
+            }
+            if (! $schema->hasTable($table)
+                || ! $schema->hasColumns($table, ['id', 'run_id', 'format_version', 'state', 'payload', 'payload_hash', 'expires_at'])) {
+                $problems[] = "native input table [{$table}] is missing required columns";
+            }
+            if (! $schema->hasTable($contextTable) || ! $schema->hasColumn($contextTable, 'native_input_ref')) {
+                $problems[] = "context table [{$contextTable}] is missing native_input_ref";
+            }
+            if ($settingsEnabled && ! $enabled) {
+                $problems[] = 'swarm.native_agent_settings.enabled requires swarm.native_inputs.enabled';
+            }
+
+            $disk = $config->get('swarm.native_inputs.disk');
+            if (! is_string($disk) || $disk === '') {
+                $problems[] = 'swarm.native_inputs.disk is not configured';
+            } else {
+                try {
+                    $app->make(Factory::class)->disk($disk);
+                } catch (Throwable $exception) {
+                    $problems[] = "native input disk [{$disk}] is unavailable: {$exception->getMessage()}";
+                }
+            }
+
+            $hasStateTable = $schema->hasTable($table) && $schema->hasColumn($table, 'state');
+            $hasVersionedTable = $hasStateTable && $schema->hasColumn($table, 'format_version');
+            $activeV2 = $hasVersionedTable
+                ? (int) $connection->table($table)->where('format_version', 2)->where('state', 'active')->count()
+                : null;
+            $remainingV2 = $hasVersionedTable
+                ? (int) $connection->table($table)->where('format_version', 2)->count()
+                : null;
+            $expired = $hasStateTable && $schema->hasColumn($table, 'expires_at')
+                ? (int) $connection->table($table)->where('expires_at', '<', now())->count()
+                : null;
+            $settingsStatus = $activeV2 === null || $remainingV2 === null
+                ? 'v2 drain cannot be verified because the table is absent'
+                : ($settingsEnabled
+                    ? "v2 writer enabled; {$activeV2} active and {$remainingV2} total v2 envelope(s) remain"
+                    : "v2 writer disabled; {$activeV2} active and {$remainingV2} total v2 envelope(s) remain; prune to zero before removing v2 readers");
+            $retentionStatus = $expired === null
+                ? 'expired-envelope cleanup cannot be verified because the table is absent'
+                : ($expired === 0
+                    ? 'no expired native input envelopes remain unpruned'
+                    : "{$expired} expired native input envelope(s) remain unpruned; restore cleanup dependencies and rerun swarm:prune");
+
+            if (! $enabled) {
+                $active = $hasStateTable
+                    ? (int) $connection->table($table)->where('state', 'active')->count()
+                    : null;
+                $drain = $active === null
+                    ? 'active envelope drain cannot be verified because the table is absent'
+                    : ($active === 0
+                        ? 'no active native input envelopes remain'
+                        : "{$active} active native input envelope(s) must drain before removing readers");
+                $preflight = $problems === []
+                    ? "sealed v1/v2 envelope table and private disk [{$disk}] are ready"
+                    : 'pre-enable readiness: '.implode('; ', $problems);
+                $configuredPreflightFailed = is_string($disk) && $disk !== '' && $problems !== [];
+
+                return [
+                    'component' => 'Native inputs',
+                    'driver' => 'disabled',
+                    'store' => $table,
+                    'status' => $settingsEnabled || $configuredPreflightFailed
+                        ? 'failed'
+                        : ($expired !== null && $expired > 0 ? 'warning' : 'note'),
+                    'details' => "writer disabled; {$drain}; {$settingsStatus}; {$retentionStatus}; {$preflight}",
+                ];
+            }
+
+            return [
+                'component' => 'Native inputs',
+                'driver' => 'database',
+                'store' => $table,
+                'status' => $problems !== []
+                    ? 'failed'
+                    : ($expired !== null && $expired > 0 ? 'warning' : 'ok'),
+                'details' => $problems === []
+                    ? "sealed v1/v2 envelope table and private disk [{$disk}] are ready; {$settingsStatus}; {$retentionStatus}"
+                    : implode('; ', $problems),
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'component' => 'Native inputs',
+                'driver' => $enabled ? 'database' : 'disabled',
+                'store' => $table,
+                'status' => 'failed',
+                'details' => 'native input readiness check failed: '.$exception->getMessage(),
+            ];
+        }
     }
 
     /**

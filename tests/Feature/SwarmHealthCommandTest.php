@@ -232,6 +232,7 @@ test('swarm health json output is structured', function (): void {
 });
 
 test('disabled native-input health reports an absent table as unverifiable instead of an empty drain', function (): void {
+    config()->set('swarm.persistence.driver', 'database');
     config()->set('swarm.native_inputs.enabled', false);
     config()->set('swarm.tables.native_inputs', 'missing_native_input_envelopes');
 
@@ -241,6 +242,24 @@ test('disabled native-input health reports an absent table as unverifiable inste
 
     expect($native['details'])->toContain('drain cannot be verified because the table is absent')
         ->and($native['details'])->toContain('pre-enable readiness');
+});
+
+test('disabled native inputs on cache persistence do not probe an unreachable database', function (): void {
+    config()->set('swarm.persistence.driver', 'cache');
+    config()->set('swarm.native_inputs.enabled', false);
+    config()->set('swarm.native_agent_settings.enabled', false);
+    config()->set('database.connections.native-health-unreachable', [
+        'driver' => 'sqlite',
+        'database' => base_path('missing-native-health/database.sqlite'),
+        'prefix' => '',
+    ]);
+    config()->set('database.default', 'native-health-unreachable');
+    DB::purge('native-health-unreachable');
+
+    expect(Artisan::call('swarm:health'))->toBe(0);
+    expect(Artisan::output())
+        ->toContain('Native inputs')
+        ->toContain('writer disabled');
 });
 
 test('configured pre-enable native-input rollout fails health when migrations are not ready', function (): void {
@@ -289,6 +308,32 @@ test('native-input health reports v2 writer and drain state independently', func
     config()->set('swarm.native_agent_settings.enabled', true);
     expect(Artisan::call('swarm:health'))->toBe(1);
     expect(Artisan::output())->toContain('native_agent_settings.enabled requires swarm.native_inputs.enabled');
+});
+
+test('native-input health warns about expired envelopes retained for cleanup recovery', function (): void {
+    config()->set('swarm.native_inputs.enabled', true);
+    config()->set('swarm.native_inputs.disk', 'local');
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+
+    DB::table('swarm_native_inputs')->insert([
+        'id' => 'health-expired-retained',
+        'run_id' => 'health-expired-retained-run',
+        'format_version' => 1,
+        'state' => 'revoked',
+        'payload' => 'undecryptable',
+        'payload_hash' => hash('sha256', 'undecryptable'),
+        'expires_at' => now()->subMinute(),
+        'created_at' => now()->subHour(),
+        'updated_at' => now()->subHour(),
+    ]);
+
+    Artisan::call('swarm:health', ['--json' => true]);
+    $native = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks'])
+        ->firstWhere('component', 'Native inputs');
+
+    expect($native['status'])->toBe('warning')
+        ->and($native['details'])->toContain('1 expired native input envelope(s) remain unpruned');
 });
 
 test('swarm health identifies failing cache component', function (): void {

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStarted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
@@ -13,7 +14,9 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\EmptyParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\InvalidReconstructedParallelSlotSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableAuthoredParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\UnresolvableParallelSwarm;
 use Carbon\CarbonInterval;
 use Illuminate\Concurrency\ConcurrencyManager;
@@ -57,6 +60,20 @@ test('authored parallel swarms reconstruct configured agent slots through the sw
 
     expect((string) UnresolvableParallelSwarm::make()->run('shared-task'))
         ->toBe('authored-slot');
+});
+
+test('authored parallel swarms must be container resolvable before concurrency dispatch', function () {
+    expect(fn () => (new UnresolvableAuthoredParallelSwarm('runtime-only'))->run('shared-task'))
+        ->toThrow(SwarmException::class, 'authored parallel swarms must be container-resolvable so worker slots can be reconstructed.');
+});
+
+test('authored parallel agent slots must reconstruct to Laravel AI agents', function () {
+    $reconstructed = Mockery::mock(Swarm::class);
+    $reconstructed->shouldReceive('agents')->andReturn([new stdClass]);
+    app()->instance(InvalidReconstructedParallelSlotSwarm::class, $reconstructed);
+
+    expect(fn () => (new InvalidReconstructedParallelSlotSwarm)->run('shared-task'))
+        ->toThrow(SwarmException::class, 'authored parallel agent slot [0] must reconstruct to a Laravel AI agent.');
 });
 
 test('parallel swarm crosses the concurrency serialization boundary without agent instance state', function () {

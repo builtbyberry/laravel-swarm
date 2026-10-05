@@ -37,6 +37,17 @@ identity, and accounting.
 | Usage accounting, including the unknown-usage distinction | Swarm | Unknown or non-scalar usage fields are omitted rather than treated as provider payload, and mixed legacy/native generations stay unavailable in aggregate while raw steps keep meaning. Proven by `tests/Feature/Adoption/UsageAggregationTest.php` and `tests/Unit/Adoption/UsageAccountingTest.php`; see [Native Step Results](native-step-results.md). |
 | Run/step identity, history, replay, and citations | Swarm | Preserved across every supported execution path. |
 
+Provider-tool support filtering also remains native-owned. Swarm adds no
+preflight check, event, or log entry for an unsupported provider tool. Laravel AI
+releases containing `TextGenerationLoop::toolsSupportedBy()` omit unsupported
+provider tools and continue the request, which allows a provider failover target
+with a smaller tool surface to run. For unsupported `ToolSearch`, the wrapper is
+removed and its deferred tools become ordinary function tools. Laravel AI v1.0.1
+and earlier throw before any request or local tool effect. An application can
+distinguish the installed behavior with
+`method_exists(\Laravel\Ai\Gateway\TextGenerationLoop::class, 'toolsSupportedBy')`;
+Swarm does not compare version strings.
+
 ## Retained and replaced decisions carried forward
 
 The v0.28.0 native-feature adoption assessment tracked findings (`F1`–`F9`) and

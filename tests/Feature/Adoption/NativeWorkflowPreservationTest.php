@@ -34,6 +34,7 @@ use Laravel\Ai\Events\AgentPrompted;
 use Laravel\Ai\Events\AgentStreamed;
 use Laravel\Ai\Events\PromptingAgent;
 use Laravel\Ai\Events\StreamingAgent;
+use Laravel\Ai\Gateway\TextGenerationLoop;
 
 covers(SequentialRunner::class, SequentialStreamRunner::class, HierarchicalRoutePlanner::class);
 
@@ -47,6 +48,50 @@ beforeEach(function () {
     WorkflowAgent::$trace = [];
     WorkflowAgent::$generationSteps = [];
     WorkflowTool::$effects = [];
+});
+
+function laravelAiSkipsUnsupportedProviderTools(string $loopClass = TextGenerationLoop::class): bool
+{
+    return (new ReflectionClass($loopClass))->hasMethod('toolsSupportedBy');
+}
+
+function unsupportedSearchGeminiResponse(bool $stream): array|string
+{
+    $interaction = [
+        'id' => 'interaction',
+        'model' => 'gemini-2.5-flash',
+        'status' => 'completed',
+        'steps' => [[
+            'type' => 'model_output',
+            'content' => [['type' => 'text', 'text' => 'native-answer']],
+        ]],
+        'usage' => ['total_input_tokens' => 2, 'total_output_tokens' => 3],
+    ];
+    if (! $stream) {
+        return $interaction;
+    }
+
+    return implode('', array_map(
+        static fn (array $event): string => 'data: '.json_encode($event, JSON_THROW_ON_ERROR)."\n\n",
+        [
+            ['event_type' => 'interaction.start', 'interaction' => ['model' => 'gemini-2.5-flash']],
+            ['event_type' => 'step.start', 'index' => 0, 'step' => ['type' => 'model_output']],
+            ['event_type' => 'step.delta', 'index' => 0, 'delta' => ['type' => 'text', 'text' => 'native-answer']],
+            ['event_type' => 'step.stop', 'index' => 0],
+            ['event_type' => 'interaction.completed', 'interaction' => $interaction],
+        ],
+    ));
+}
+
+test('unsupported provider tool capability probe detects the installed Laravel AI code path', function () {
+    $legacy = new class {};
+    $skipping = new class
+    {
+        protected function toolsSupportedBy(): void {}
+    };
+
+    expect(laravelAiSkipsUnsupportedProviderTools($legacy::class))->toBeFalse()
+        ->and(laravelAiSkipsUnsupportedProviderTools($skipping::class))->toBeTrue();
 });
 
 it('preserves native middleware order options prompt identity and successful usage', function (string $mode) {
@@ -147,13 +192,41 @@ it('uses native deferred discovery and returns the paired tool result on the wir
     Http::assertSentCount(2);
 })->with(['prompt', 'stream']);
 
-it('retains native discovery restrictions before requests and effects', function (string $mode, string $restriction) {
+it('adopts installed native discovery restrictions before effects', function (string $mode, string $restriction) {
     config()->set('tests.adoption.tools', $restriction === 'duplicate' ? 'duplicate' : 'search');
     if ($restriction === 'stateless') {
         config()->set('ai.providers.openai.store', false);
     }
-    Http::fake();
     $agent = $restriction === 'unsupported' ? new UnsupportedSearchAgent : new WorkflowAgent;
+
+    if ($restriction === 'unsupported' && laravelAiSkipsUnsupportedProviderTools()) {
+        Http::fake(function (Request $request) use ($mode) {
+            expect($request['tools'])->toHaveCount(1)
+                ->and($request['tools'][0]['type'])->toBe('function')
+                ->and($request['tools'][0]['name'])->toBe('WorkflowTool')
+                ->and(collect($request['tools'])->pluck('type'))->not->toContain('tool_search');
+
+            return Http::response(
+                unsupportedSearchGeminiResponse($mode === 'stream'),
+                200,
+                $mode === 'stream' ? ['Content-Type' => 'text/event-stream'] : [],
+            );
+        });
+
+        $response = app(SwarmRunner::class)->agent($agent)->{$mode}('task');
+        if ($mode === 'stream') {
+            iterator_to_array($response);
+            $response = $response->streamedResponse;
+        }
+
+        expect($response->output)->toBe('native-answer')
+            ->and(WorkflowTool::$effects)->toBe([]);
+        Http::assertSentCount(1);
+
+        return;
+    }
+
+    Http::fake();
     expect(function () use ($mode, $agent) {
         $response = app(SwarmRunner::class)->agent($agent)->{$mode}('task');
         if ($mode === 'stream') {

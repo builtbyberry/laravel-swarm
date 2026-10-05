@@ -12,6 +12,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Filesystem\Factory as FilesystemFactory;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Throwable;
 
@@ -24,12 +25,17 @@ class SwarmPruneCommand extends Command
 
     protected const CHUNK_SIZE = 1000;
 
+    protected int $nativeInputsRetained = 0;
+
     public function handle(Connection $connection, ConfigRepository $config, SwarmAuditDispatcher $audit): int
     {
         /** @var SwarmPersistenceCipher $cipher */
         $cipher = $this->laravel->make(SwarmPersistenceCipher::class);
         /** @var FilesystemFactory $filesystems */
         $filesystems = $this->laravel->make(FilesystemFactory::class);
+        /** @var LoggerInterface $logger */
+        $logger = $this->laravel->make(LoggerInterface::class);
+        $this->nativeInputsRetained = 0;
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
         $preventPrune = $config->get('swarm.retention.prevent_prune', false) === true;
 
@@ -39,7 +45,7 @@ class SwarmPruneCommand extends Command
                 'dry_run' => false,
                 'prevent_prune' => true,
                 'status' => 'skipped',
-                'counts' => [],
+                'counts' => ['native_inputs_retained' => 0],
                 ...$audit->metadata($actorMetadata),
             ]);
 
@@ -98,9 +104,10 @@ class SwarmPruneCommand extends Command
             $counts[$name] = $dryRun
                 ? $this->countPrunableRows($connection, $config, $name, $table, $tables['history'])
                 : ($name === 'native_inputs'
-                    ? $this->pruneNativeInputs($connection, $config, $table, $tables['history'], $cipher, $filesystems)
+                    ? $this->pruneNativeInputs($connection, $config, $table, $tables['history'], $cipher, $filesystems, $logger)
                     : $this->pruneTable($connection, $config, $name, $table, $tables['history']));
         }
+        $counts['native_inputs_retained'] = $this->nativeInputsRetained;
 
         $audit->emit('command.prune', [
             'dry_run' => $dryRun,
@@ -173,6 +180,12 @@ class SwarmPruneCommand extends Command
             $verb,
             $counts['native_inputs'],
         ));
+        $this->components->info($dryRun
+            ? 'Retained native input cleanup recovery count is evaluated only during a non-dry run.'
+            : sprintf(
+                'Retained %d expired native input operational envelope(s) for cleanup recovery.',
+                $counts['native_inputs_retained'],
+            ));
 
         return self::SUCCESS;
     }
@@ -312,7 +325,7 @@ class SwarmPruneCommand extends Command
         }
     }
 
-    protected function pruneNativeInputs(Connection $connection, ConfigRepository $config, string $table, string $historyTable, SwarmPersistenceCipher $cipher, FilesystemFactory $filesystems): int
+    protected function pruneNativeInputs(Connection $connection, ConfigRepository $config, string $table, string $historyTable, SwarmPersistenceCipher $cipher, FilesystemFactory $filesystems, LoggerInterface $logger): int
     {
         $deleted = 0;
         $lastId = null;
@@ -376,10 +389,10 @@ class SwarmPruneCommand extends Command
                     if ($allDeleted) {
                         $ids[] = $row->id;
                     } else {
-                        $this->components->warn("Retaining native input envelope [{$row->id}] because one or more owned files could not be deleted.");
+                        $this->retainNativeInput((string) $row->id, (string) $row->run_id, $logger, 'owned_file_delete_failed');
                     }
                 } catch (Throwable $exception) {
-                    $this->components->warn("Retaining native input envelope [{$row->id}] because cleanup failed: {$exception->getMessage()}");
+                    $this->retainNativeInput((string) $row->id, (string) $row->run_id, $logger, 'cleanup_failed', $exception);
                 }
             }
 
@@ -387,5 +400,17 @@ class SwarmPruneCommand extends Command
                 $deleted += $connection->table($table)->whereIn('id', $ids)->delete();
             }
         }
+    }
+
+    protected function retainNativeInput(string $envelopeId, string $runId, LoggerInterface $logger, string $reason, ?Throwable $exception = null): void
+    {
+        $this->nativeInputsRetained++;
+        $this->components->warn("Retaining native input envelope [{$envelopeId}] for run [{$runId}] because cleanup could not complete.");
+        $logger->warning('Laravel Swarm retained an expired native input envelope for cleanup recovery.', array_filter([
+            'envelope_id' => $envelopeId,
+            'run_id' => $runId,
+            'reason' => $reason,
+            'exception' => $exception === null ? null : get_debug_type($exception),
+        ]));
     }
 }

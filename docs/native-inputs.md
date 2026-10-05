@@ -80,7 +80,10 @@ NativeInputRecipient::parallel(0, attachments: [0])
 ```
 
 Absent values are not synthesized; the agent/provider declarations remain in
-control. The timeout is a provider-call timeout, not a hard workflow cancel.
+control. The timeout is a provider-call timeout, not a hard workflow cancel. Under
+durable execution it must remain below `swarm.durable.step_timeout` (default 300
+seconds), or the durable step lease can expire while the provider call is still
+running.
 
 ## Per-run native agent settings
 
@@ -141,6 +144,15 @@ headers or provider options because Laravel AI's message descriptor does not ret
 those profiles; use a top-level attachment when an invocation profile must be
 frozen across workers.
 
+Seeded `withMessages()` history is bounded only when native agent settings are
+enabled. Each recipient admits at most 100 messages and 1 MiB of encoded message
+data by default, configurable through
+`swarm.native_agent_settings.max_messages` and
+`swarm.native_agent_settings.max_message_bytes`. The hard ceilings are 1,000
+messages and 16 MiB. Swarm applies both limits to request-local and recoverable
+admission and rejects an over-limit run before any provider request. Applications
+that leave native agent settings disabled are unaffected.
+
 Settings work across sequential, real process-parallel, queued, durable,
 generated/static routed-worker, retry and recovered execution within the existing
 execution matrix. They do not add an unsupported topology/mode combination.
@@ -158,6 +170,8 @@ For application-owned dynamic selection, register a stable factory identifier:
 // config/swarm.php
 'native_agent_settings' => [
     'enabled' => env('SWARM_NATIVE_AGENT_SETTINGS_ENABLED', false),
+    'max_messages' => env('SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGES', 100),
+    'max_message_bytes' => env('SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGE_BYTES', 1048576),
     'tool_factories' => [
         'tenant-catalog' => App\Ai\TenantCatalogToolFactory::class,
     ],
@@ -285,13 +299,26 @@ stored files.
 
 `SWARM_NATIVE_INPUTS_RETENTION_SECONDS` is an execution deadline as well as a
 retention setting. Size it beyond the longest queue delay plus the longest
-durable workflow/recovery window. Schedule `swarm:prune`; rows whose owned-file
-cleanup fails are retained for a later retry instead of losing the retry locator.
-`swarm:health` reports whether native readers are ready, rejects the invalid state
-where the settings writer is on while the base native-input writer is off, and
-reports active and retained v2 envelope counts. Before removing v2 readers, disable
-settings admission, let active work drain, run `swarm:prune` after the retention
-window, and require the total v2 count to reach zero.
+durable workflow/recovery window. Schedule `swarm:prune`. An expired envelope is
+retained when its payload cannot be decrypted, its configured disk is unavailable,
+or a Swarm-owned file cannot be deleted. The prune summary and `command.prune`
+audit count expose `native_inputs_retained`; the warning log identifies only the
+envelope ID, run ID and failure class/reason, never payload content. `swarm:health`
+warns while expired envelopes remain unpruned.
+
+Recover retained envelopes by restoring the referenced disk and delete permissions
+or by restoring the encryption key, then rerun `swarm:prune`. Laravel's encrypter
+honors keys configured through `APP_PREVIOUS_KEYS`, so a previous application key
+can remain available during rotation. There is deliberately no force-discard path:
+if recovery is impossible, review and remove the affected rows and any referenced
+Swarm-owned files through an application-controlled administrative process.
+
+`swarm:health` also reports whether native readers are ready, rejects the invalid
+state where the settings writer is on while the base native-input writer is off,
+and reports active and total v2 envelope counts. Before removing v2 readers,
+disable settings admission, let active work drain, run `swarm:prune` after the
+retention window, and require the active count, total v2 count and expired-unpruned
+count all to reach zero.
 
 ## Deployment and rollback
 
@@ -303,8 +330,9 @@ window, and require the total v2 count to reach zero.
 5. Before rollback, disable settings admission and then native-input admission.
    Existing opaque references remain readable while the flags are off. Restart
    workers, let active work drain, allow the retention window to pass, run
-   `swarm:prune`, and confirm `swarm:health` reports zero active and zero retained
-   v2 envelopes before removing v2 readers or rolling back the migration.
+   `swarm:prune`, and confirm `swarm:health` reports zero active, zero total v2 and
+   zero expired-unpruned envelopes before removing v2 readers or rolling back the
+   migration.
 
 Recoverable native admission must begin outside an open database transaction.
 Swarm stages the sealed cleanup locator before promoting file bytes, then activates

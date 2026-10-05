@@ -45,6 +45,7 @@ use Laravel\Ai\Files\File;
 use Laravel\Ai\Files\RemoteDocument;
 use Laravel\Ai\Files\StoredDocument;
 use Laravel\Ai\Messages\UserMessage;
+use Psr\Log\LoggerInterface;
 
 beforeEach(function () {
     config()->set('swarm.native_inputs.enabled', true);
@@ -630,10 +631,24 @@ test('native prune isolates poisoned envelopes and keeps processing later rows',
     $healthy = $makeExpired('healthy');
     DB::table('swarm_native_inputs')->where('id', $poisoned->nativeInputReference())->update(['payload' => 'not-sealed']);
 
+    $audit = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $audit);
+    app()->forgetInstance(SwarmAuditDispatcher::class);
+    $logger = Mockery::spy(LoggerInterface::class);
+    app()->instance(LoggerInterface::class, $logger);
+
     Artisan::call('swarm:prune');
 
     expect(DB::table('swarm_native_inputs')->where('id', $poisoned->nativeInputReference())->exists())->toBeTrue()
-        ->and(DB::table('swarm_native_inputs')->where('id', $healthy->nativeInputReference())->exists())->toBeFalse();
+        ->and(DB::table('swarm_native_inputs')->where('id', $healthy->nativeInputReference())->exists())->toBeFalse()
+        ->and(Artisan::output())->toContain('Retained 1 expired native input operational envelope(s) for cleanup recovery.')
+        ->and($audit->recordsFor('command.prune')[0]['counts']['native_inputs_retained'])->toBe(1);
+    $logger->shouldHaveReceived('warning')->once()->withArgs(
+        fn (string $message, array $context): bool => str_contains($message, 'retained an expired native input envelope')
+            && $context['envelope_id'] === $poisoned->nativeInputReference()
+            && $context['run_id'] === $poisoned->runId
+            && ! array_key_exists('payload', $context),
+    );
 });
 
 test('native input migration is retry-safe after a partial application', function () {
