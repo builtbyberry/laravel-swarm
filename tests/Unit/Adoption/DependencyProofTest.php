@@ -151,7 +151,11 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     $normalSetup = array_values(array_filter($normal['steps'], fn (array $step): bool => str_starts_with($step['uses'] ?? '', 'shivammathur/setup-php@')))[0];
     expect($normalSetup['with']['coverage'])->toBe('xdebug');
     expect($normalSetup['with']['ini-values'])->toBe('memory_limit=1G');
+    $normalCommands = implode("\n", array_column($normal['steps'], 'run'));
+    expect($normalCommands)->not->toContain('policy.advisories.ignore', 'policy.advisories.block');
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
+    $productionAdvisoryPolicy = $manifest['config']['policy']['advisories'] ?? [];
+    expect($productionAdvisoryPolicy)->not->toHaveKeys(['ignore-id', 'ignore', 'block']);
     expect($manifest['scripts']['test'])->toBe('vendor/bin/pest tests/Feature tests/Unit tests/Installer')
         ->and($manifest['scripts']['test:ci'])->toBe([
             'vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --exclude-group=ci-serial',
@@ -208,9 +212,17 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
         }
     }
     $commands = implode("\n", $runs);
-    expect($commands)->not->toContain('|| true', '--ignore-platform', '--no-security-blocking', '--coverage');
+    $advisoryIgnoreCommands = array_values(array_filter(
+        $runs,
+        fn (string $run): bool => str_starts_with($run, 'composer config policy.advisories.ignore-id '),
+    ));
+    expect($advisoryIgnoreCommands)->toBe([
+        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781',
+    ]);
+    expect($commands)->not->toContain('|| true', '--ignore-platform', '--no-security-blocking', '--coverage', 'policy.advisories.block', 'policy.advisories.ignore laravel/framework');
     $ordered = [
         'cp composer.json /tmp/swarm-production-composer.json',
+        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781',
         'composer require --no-update --dev "pestphp/pest:^4.7" "pestphp/pest-plugin-laravel:^4.1" "laravel/framework:13.16.0"',
         'composer update --with laravel/ai:1.0.0 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress',
         'cp /tmp/swarm-production-composer.json composer.json',
