@@ -10,7 +10,18 @@ use Laravel\Ai\Tools\Request;
 
 final class NativeSettingsTool implements Tool
 {
-    public function __construct(public readonly string $tenant = 'default') {}
+    public static int $constructions = 0;
+
+    public static bool $failConstruction = false;
+
+    public function __construct(public readonly string $tenant = 'default')
+    {
+        self::$constructions++;
+
+        if (self::$failConstruction) {
+            throw new \RuntimeException('Native settings tool construction is disabled.');
+        }
+    }
 
     public function description(): string
     {

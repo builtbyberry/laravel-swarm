@@ -82,6 +82,8 @@ beforeEach(function () {
     config()->set('swarm.persistence.encrypt_at_rest', true);
     Storage::fake('native-settings-test');
     NativeSettingsToolFactory::$calls = 0;
+    NativeSettingsTool::$constructions = 0;
+    NativeSettingsTool::$failConstruction = false;
 });
 
 test('native message codec preserves every reconstructible Laravel AI message field', function () {
@@ -143,6 +145,7 @@ test('invalid tool references fail during admission before dispatch', function (
 
     expect(fn () => app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue))
         ->toThrow(SwarmException::class, 'must resolve to a Laravel AI Agent, Tool, or ProviderTool');
+    expect(DB::table('swarm_native_inputs')->count())->toBe(0);
 });
 
 test('v2 writers are independently default off while admitted v2 work keeps draining', function () {
@@ -511,6 +514,148 @@ test('conversation access is authorized at admission and again before reconstruc
         ->toThrow(SwarmException::class, 'not authorized for this actor or tenant');
 });
 
+test('native conversation access is denied by the shipped application binding', function () {
+    Schema::create('native_settings_participants', function (Blueprint $table): void {
+        $table->id();
+    });
+    $participant = NativeSettingsParticipant::query()->create();
+    $store = Mockery::mock(ConversationStore::class, VerifiesConversationOwnership::class);
+    $store->shouldReceive('conversationBelongsTo')->andReturnTrue();
+    app()->instance(ConversationStore::class, $store);
+
+    $context = RunContext::fromTask('inspect')->withAgentConfiguration([
+        NativeInputRecipient::sequential(0)->withConversation(
+            NativeAgentConversation::continue('conversation-1', $participant),
+        ),
+    ]);
+
+    expect(fn () => app(NativeInputManager::class)->admit($context, Topology::Sequential, ExecutionMode::Run))
+        ->toThrow(SwarmException::class, 'not authorized for this actor or tenant');
+});
+
+test('recovered tools resolve once immediately before invocation', function () {
+    $context = RunContext::fromTask('inspect')->withAgentConfiguration([
+        NativeInputRecipient::parallel(0)->withTools([
+            new NativeAgentToolReference(NativeSettingsTool::class),
+        ]),
+        NativeInputRecipient::parallel(1)->withTools([
+            new NativeAgentToolReference(NativeSettingsTool::class),
+        ]),
+    ]);
+    app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue);
+    expect(NativeSettingsTool::$constructions)->toBe(2);
+    NativeSettingsTool::$constructions = 0;
+
+    $recovered = RunContext::fromPayload($context->toQueuePayload());
+    app(NativeInputManager::class)->admit($recovered, Topology::Parallel, ExecutionMode::Queue);
+    expect(NativeSettingsTool::$constructions)->toBe(0);
+
+    $invocation = $recovered->nativeInvocation('parallel:0', 'inspect');
+    expect(NativeSettingsTool::$constructions)->toBe(0);
+
+    FakeResearcher::fake(['done']);
+    NativeAgentInvoker::prompt(new FakeResearcher, $invocation);
+
+    expect(NativeSettingsTool::$constructions)->toBe(1);
+});
+
+test('recovered conversations authorize once for each invocation', function () {
+    Schema::create('native_settings_participants', function (Blueprint $table): void {
+        $table->id();
+    });
+    $participant = NativeSettingsParticipant::query()->create();
+    $policy = new class implements AuthorizesNativeAgentConversation
+    {
+        public int $calls = 0;
+
+        public function authorize(?string $conversationId, object $participant, RunContext $context): bool
+        {
+            $this->calls++;
+
+            return true;
+        }
+    };
+    $store = Mockery::mock(ConversationStore::class, VerifiesConversationOwnership::class);
+    $store->shouldReceive('conversationBelongsTo')->andReturnTrue();
+    app()->instance(AuthorizesNativeAgentConversation::class, $policy);
+    app()->instance(ConversationStore::class, $store);
+    app()->forgetInstance(NativeInputManager::class);
+
+    $context = RunContext::fromTask('inspect')->withAgentConfiguration([
+        NativeInputRecipient::parallel(0)->withConversation(
+            NativeAgentConversation::continue('conversation-1', $participant),
+        ),
+        NativeInputRecipient::parallel(1)->withConversation(
+            NativeAgentConversation::continue('conversation-2', $participant),
+        ),
+    ]);
+    app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue);
+    expect($policy->calls)->toBe(2);
+    $policy->calls = 0;
+
+    $recovered = RunContext::fromPayload($context->toQueuePayload());
+    app(NativeInputManager::class)->admit($recovered, Topology::Parallel, ExecutionMode::Queue);
+    expect($policy->calls)->toBe(0);
+
+    $recovered->nativeInvocation('parallel:0', 'inspect');
+
+    expect($policy->calls)->toBe(1);
+});
+
+test('recovered invocation rejects conversation access revoked after admission', function () {
+    Schema::create('native_settings_participants', function (Blueprint $table): void {
+        $table->id();
+    });
+    $participant = NativeSettingsParticipant::query()->create();
+    $policy = new class implements AuthorizesNativeAgentConversation
+    {
+        public bool $allowed = true;
+
+        public function authorize(?string $conversationId, object $participant, RunContext $context): bool
+        {
+            return $this->allowed;
+        }
+    };
+    $store = Mockery::mock(ConversationStore::class, VerifiesConversationOwnership::class);
+    $store->shouldReceive('conversationBelongsTo')->andReturnTrue();
+    app()->instance(AuthorizesNativeAgentConversation::class, $policy);
+    app()->instance(ConversationStore::class, $store);
+    app()->forgetInstance(NativeInputManager::class);
+
+    $context = RunContext::fromTask('inspect')->withAgentConfiguration([
+        NativeInputRecipient::parallel(0)->withConversation(
+            NativeAgentConversation::continue('conversation-1', $participant),
+        ),
+    ]);
+    app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue);
+    $policy->allowed = false;
+
+    $recovered = RunContext::fromPayload($context->toQueuePayload());
+    app(NativeInputManager::class)->admit($recovered, Topology::Parallel, ExecutionMode::Queue);
+
+    expect(fn () => $recovered->nativeInvocation('parallel:0', 'inspect'))
+        ->toThrow(SwarmException::class, 'not authorized for this actor or tenant');
+});
+
+test('recovered tool references fail before the provider request when they no longer resolve', function () {
+    $context = RunContext::fromTask('inspect')->withAgentConfiguration([
+        NativeInputRecipient::parallel(0)->withTools([
+            new NativeAgentToolReference(NativeSettingsTool::class),
+        ]),
+    ]);
+    app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue);
+    NativeSettingsTool::$failConstruction = true;
+
+    $recovered = RunContext::fromPayload($context->toQueuePayload());
+    app(NativeInputManager::class)->admit($recovered, Topology::Parallel, ExecutionMode::Queue);
+    $invocation = $recovered->nativeInvocation('parallel:0', 'inspect');
+    FakeResearcher::fake(['provider-was-called']);
+
+    expect(fn () => NativeAgentInvoker::prompt(new FakeResearcher, $invocation))
+        ->toThrow(SwarmException::class, 'cannot be reconstructed from its declared arguments');
+    FakeResearcher::assertNeverPrompted();
+});
+
 test('native conversation settings call the Laravel AI conversation API for the request-local agent', function () {
     (require base_path('vendor/laravel/ai/database/migrations/2026_01_11_000001_create_agent_conversations_table.php'))->up();
     Schema::create('native_settings_participants', function (Blueprint $table): void {
@@ -734,6 +879,125 @@ test('encoded operational settings honor the aggregate input limit before persis
     expect(DB::table('swarm_native_inputs')->count())->toBe(0)
         ->and(Storage::disk('native-settings-test')->allFiles())->toBeEmpty();
 });
+
+test('seeded message count and byte limits reject request-local and recoverable admission', function (ExecutionMode $mode, Topology $topology, string $recipient) {
+    Http::fake();
+    $messages = [new UserMessage('one'), new UserMessage('two')];
+    config()->set('swarm.native_agent_settings.max_messages', 1);
+    $countContext = RunContext::fromTask('inspect')->withAgentConfiguration([
+        $recipient === 'sequential'
+            ? NativeInputRecipient::sequential(0)->withMessages($messages)
+            : NativeInputRecipient::parallel(0)->withMessages($messages),
+    ]);
+
+    expect(fn () => app(NativeInputManager::class)->admit($countContext, $topology, $mode))
+        ->toThrow(SwarmException::class, 'swarm.native_agent_settings.max_messages');
+
+    config()->set('swarm.native_agent_settings.max_messages', 10);
+    $encodedBytes = strlen(json_encode(NativeMessageCodec::encode($messages[0]), JSON_THROW_ON_ERROR));
+    config()->set('swarm.native_agent_settings.max_message_bytes', $encodedBytes - 1);
+    $bytesContext = RunContext::fromTask('inspect')->withAgentConfiguration([
+        $recipient === 'sequential'
+            ? NativeInputRecipient::sequential(0)->withMessages([$messages[0]])
+            : NativeInputRecipient::parallel(0)->withMessages([$messages[0]]),
+    ]);
+
+    expect(fn () => app(NativeInputManager::class)->admit($bytesContext, $topology, $mode))
+        ->toThrow(SwarmException::class, 'swarm.native_agent_settings.max_message_bytes');
+    expect(DB::table('swarm_native_inputs')->count())->toBe(0);
+    Http::assertNothingSent();
+})->with([
+    'request-local' => [ExecutionMode::Run, Topology::Sequential, 'sequential'],
+    'recoverable' => [ExecutionMode::Queue, Topology::Parallel, 'parallel'],
+]);
+
+test('seeded message limits admit their exact count and byte boundaries', function (ExecutionMode $mode, Topology $topology, string $recipient) {
+    $messages = [new UserMessage('one'), new UserMessage('two')];
+    $encodedBytes = array_sum(array_map(
+        static fn (Message $message): int => strlen(json_encode(NativeMessageCodec::encode($message), JSON_THROW_ON_ERROR)),
+        $messages,
+    ));
+    config()->set('swarm.native_agent_settings.max_messages', count($messages));
+    config()->set('swarm.native_agent_settings.max_message_bytes', $encodedBytes);
+    $context = RunContext::fromTask('inspect')->withAgentConfiguration([
+        $recipient === 'sequential'
+            ? NativeInputRecipient::sequential(0)->withMessages($messages)
+            : NativeInputRecipient::parallel(0)->withMessages($messages),
+    ]);
+
+    app(NativeInputManager::class)->admit($context, $topology, $mode);
+
+    expect($context->nativeRecipient($recipient.':0')?->messages)->toHaveCount(2);
+})->with([
+    'request-local' => [ExecutionMode::Run, Topology::Sequential, 'sequential'],
+    'recoverable' => [ExecutionMode::Queue, Topology::Parallel, 'parallel'],
+]);
+
+test('seeded message limits do not affect applications with native settings disabled', function () {
+    config()->set('swarm.native_inputs.enabled', false);
+    config()->set('swarm.native_agent_settings.enabled', false);
+    config()->set('swarm.native_agent_settings.max_messages', 1);
+    config()->set('swarm.native_agent_settings.max_message_bytes', 1);
+    FakeResearcher::fake(['done']);
+
+    $response = app(SwarmRunner::class)->agent(new FakeResearcher)->prompt('plain task');
+
+    expect($response->output)->toBe('done');
+});
+
+test('seeded message limit configuration clamps to the documented inclusive bounds', function (string $key, mixed $configured, int $effective) {
+    config()->set('swarm.native_agent_settings.max_messages', 1000);
+    config()->set('swarm.native_agent_settings.max_message_bytes', 16777216);
+    config()->set($key, $configured);
+
+    $messages = $key === 'swarm.native_agent_settings.max_messages'
+        ? array_fill(0, $effective + 1, new UserMessage('bounded'))
+        : [new UserMessage(str_repeat('x', $effective))];
+    $context = RunContext::fromTask('inspect')->withAgentConfiguration([
+        NativeInputRecipient::sequential(0)->withMessages($messages),
+    ]);
+
+    expect(fn () => app(NativeInputManager::class)->admit($context, Topology::Sequential, ExecutionMode::Run))
+        ->toThrow(SwarmException::class, "limit of [{$effective}]");
+})->with([
+    'message count zero clamps to one' => ['swarm.native_agent_settings.max_messages', 0, 1],
+    'message count negative clamps to one' => ['swarm.native_agent_settings.max_messages', -10, 1],
+    'message count non-numeric clamps to one' => ['swarm.native_agent_settings.max_messages', 'invalid', 1],
+    'message count exact ceiling remains the ceiling' => ['swarm.native_agent_settings.max_messages', 1000, 1000],
+    'message count above ceiling clamps to the ceiling' => ['swarm.native_agent_settings.max_messages', 1001, 1000],
+    'message bytes zero clamps to one' => ['swarm.native_agent_settings.max_message_bytes', 0, 1],
+    'message bytes negative clamps to one' => ['swarm.native_agent_settings.max_message_bytes', -10, 1],
+    'message bytes non-numeric clamps to one' => ['swarm.native_agent_settings.max_message_bytes', 'invalid', 1],
+    'message bytes exact ceiling remains the ceiling' => ['swarm.native_agent_settings.max_message_bytes', 16777216, 16777216],
+    'message bytes above ceiling clamps to the ceiling' => ['swarm.native_agent_settings.max_message_bytes', 16777217, 16777216],
+]);
+
+test('recovered worker admission reapplies native input and settings bounds', function (string $limit) {
+    $message = new UserMessage('inspect', [
+        new Base64Document(base64_encode('first'), 'text/plain'),
+        new Base64Document(base64_encode('second'), 'text/plain'),
+    ]);
+    $context = RunContext::fromTask($message)
+        ->withAgentInput($message, [NativeInputRecipient::parallel(0)])
+        ->withAgentConfiguration([
+            NativeInputRecipient::parallel(0)->withMessages([
+                new UserMessage('one'),
+                new UserMessage('two'),
+            ]),
+        ]);
+    app(NativeInputManager::class)->admit($context, Topology::Parallel, ExecutionMode::Queue);
+
+    [$key, $error] = match ($limit) {
+        'attachments' => ['swarm.native_inputs.max_attachments', 'accepts at most [1] attachments'],
+        'messages' => ['swarm.native_agent_settings.max_messages', 'limit of [1] messages'],
+        'envelope' => ['swarm.limits.max_input_bytes', 'native input operational envelope exceeds'],
+    };
+    config()->set($key, 1);
+    $recovered = RunContext::fromPayload($context->toQueuePayload());
+
+    expect(fn () => app(NativeInputManager::class)->admit($recovered, Topology::Parallel, ExecutionMode::Queue))
+        ->toThrow(SwarmException::class, $error);
+})->with(['attachments', 'messages', 'envelope']);
 
 test('invocation-only declarations satisfy ad-hoc parallel reconstruction safety', function () {
     FakeResearcher::fake(['research']);

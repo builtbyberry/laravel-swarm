@@ -46,8 +46,18 @@ runtime, durable node state, durable run state, durable node-output, durable
 branch, signal, wait, label, detail, progress, child-run, durable webhook
 idempotency, and callback delivery tables, plus expired native-input operational
 envelopes, in bounded chunks to avoid long-running table locks on large
-datasets. Native-input cleanup deletes only Swarm-promoted files and retains the
-envelope for retry if any file delete fails.
+datasets. Native-input cleanup deletes only Swarm-promoted files. An envelope is retained for cleanup recovery if
+its payload cannot be decrypted, its configured disk is unavailable, or a
+Swarm-owned file cannot be deleted. The command prints the retained count, records
+it as `counts.native_inputs_retained` in the `command.prune` audit event, and logs a
+warning with the envelope ID and run ID without logging payload content.
+
+Restore the referenced disk and delete permissions or restore the encryption key,
+then rerun `swarm:prune`. Laravel's encrypter honors `APP_PREVIOUS_KEYS`, which can
+keep old ciphertext readable during key rotation. `swarm:health` warns while
+expired native-input envelopes remain unpruned. There is no force-discard option;
+if recovery is impossible, use an application-controlled administrative process to
+review and remove the retained rows and any referenced Swarm-owned files.
 
 Queue backend records and `failed_jobs` are outside `swarm:prune`. Manage failed
 jobs with Laravel's `queue:prune-failed`, `queue:forget`, or `queue:flush`.

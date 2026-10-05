@@ -105,12 +105,24 @@ object is not placed on the step (it is consumed in the tool).
 
 ## Unsupported combinations (preserved, not worked around)
 
-Provider/model limitations are Laravel AI's. Swarm surfaces them unchanged — an
-unsupported capability fails loud before any provider call rather than silently
-degrading. Choose a provider that offers the capability. The rows below are
+Provider/model limitations are Laravel AI's. Swarm adds no compatibility check of
+its own. Most unsupported capability methods fail loud before any provider call;
+provider tools used during text generation are the version-dependent exception
+described below. Choose a provider that offers the capability. The rows below are
 verified against `laravel/ai` v1.0.1 gateway source; image generation on Anthropic
 is additionally proven to fail loud **from inside a workflow tool loop**
 ([NativeCapabilityWireTest](../tests/Feature/Adoption/NativeCapabilityWireTest.php)).
+
+Laravel AI releases containing `TextGenerationLoop::toolsSupportedBy()` skip a
+provider tool that the selected provider does not support and still send the
+request without that provider tool, preserving provider failover. On a provider
+without hosted tool search, the unsupported `ToolSearch` wrapper is removed and
+its deferred function tools are sent as ordinary tools. Laravel AI v1.0.1 and
+earlier instead throw `LogicException` (including "does not support tool search")
+before any request or local tool effect. Swarm neither overrides nor logs the
+skip. Applications can detect the installed behavior with
+`method_exists(\Laravel\Ai\Gateway\TextGenerationLoop::class, 'toolsSupportedBy')`;
+the method's presence identifies the skip-capable implementation.
 
 | Capability | Not supported on | Behaviour |
 |---|---|---|

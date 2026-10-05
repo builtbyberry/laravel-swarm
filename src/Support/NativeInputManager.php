@@ -33,6 +33,10 @@ use Throwable;
 
 final class NativeInputManager
 {
+    protected const MAX_SEEDED_MESSAGES = 1000;
+
+    protected const MAX_SEEDED_MESSAGE_BYTES = 16777216;
+
     protected Container $container;
 
     public function __construct(
@@ -50,8 +54,10 @@ final class NativeInputManager
     {
         $manifest = $context->nativeInput();
         $hasOperationalReference = $context->nativeInputReference() !== null;
+        $loadedOperationalReference = false;
         if ($manifest === null && $hasOperationalReference) {
             $this->invocation($context, '__load__', $context->input);
+            $loadedOperationalReference = true;
             $manifest = $context->nativeInput();
             if ($manifest !== null) {
                 $context->input = $manifest->text;
@@ -81,8 +87,14 @@ final class NativeInputManager
         if ($requiresOperationalReference) {
             $this->assertRecoverableSources($manifest->attachments);
         }
-        $this->authorizeExternalAttachments($manifest, $context);
-        $this->validateNativeSettings($manifest, $context, $requiresOperationalReference);
+        if (! $loadedOperationalReference) {
+            $this->authorizeExternalAttachments($manifest, $context);
+            $this->authorizeNativeMessageAttachments($manifest, $context);
+        }
+        $this->validateNativeSettingsEnvelope($manifest, $requiresOperationalReference);
+        if (! $hasOperationalReference) {
+            $this->validateNativeSettingsAdmission($manifest, $context);
+        }
 
         if ($requiresOperationalReference && $this->hasConsumableMessages($manifest)
             && $this->config->get('swarm.history.driver') !== 'database') {
@@ -110,14 +122,7 @@ final class NativeInputManager
             'actor' => $context->metadata['actor'] ?? null,
             'tenant_id' => $context->metadata['tenant_id'] ?? null,
         ];
-        $encodedPayload = json_encode($payload, JSON_THROW_ON_ERROR);
-        $configuredMaxInputBytes = $this->config->get('swarm.limits.max_input_bytes');
-        $maxInputBytes = is_numeric($configuredMaxInputBytes) && (int) $configuredMaxInputBytes > 0
-            ? (int) $configuredMaxInputBytes
-            : null;
-        if ($maxInputBytes !== null && strlen($encodedPayload) > $maxInputBytes) {
-            throw new SwarmException("The encoded native input operational envelope exceeds the configured [swarm.limits.max_input_bytes] limit of [{$maxInputBytes}] bytes.");
-        }
+        $encodedPayload = $this->encodeOperationalEnvelope($payload);
         $hash = hash('sha256', $encodedPayload);
         $id = (string) Str::uuid();
         $expiresAt = time() + max(60, (int) $this->config->get('swarm.native_inputs.retention_seconds', 86400));
@@ -178,12 +183,12 @@ final class NativeInputManager
                 throw new SwarmException("Native input envelope [{$reference}] format column [{$columnVersion}] does not match sealed payload version [{$version}].");
             }
 
+            $this->encodeOperationalEnvelope($row['payload']);
             $this->validateRecoveredDescriptors($row['payload'], $context->runId);
             $this->authorizeRecoveredMessageAttachments($row['payload'], $context);
             $manifest = NativeInputManifest::fromArray($row['payload']);
             $this->validateAttachmentLimits($manifest->attachments);
             $this->authorizeExternalAttachments($manifest, $context);
-            $this->validateNativeSettings($manifest, $context, true);
             $context->setNativeInput($manifest);
         }
 
@@ -710,37 +715,36 @@ final class NativeInputManager
         }
     }
 
-    protected function validateNativeSettings(NativeInputManifest $manifest, RunContext $context, bool $recoverable): void
+    protected function validateNativeSettingsEnvelope(NativeInputManifest $manifest, bool $recoverable): void
     {
         foreach ($manifest->recipients as $recipient) {
             foreach ($recipient->tools as $reference) {
                 if (! $reference instanceof NativeAgentToolReference) {
                     throw new SwarmException("Native agent configuration [{$recipient->settingsId()}] contains a tool class that cannot be reconstructed.");
                 }
-                NativeAgentToolResolver::resolve($reference, $this->container);
             }
 
-            foreach ($recipient->messages as $messageIndex => $message) {
-                NativeMessageCodec::encode($message);
+            $maxMessages = $this->nativeSettingsLimit('max_messages', 100, self::MAX_SEEDED_MESSAGES);
+            if (count($recipient->messages) > $maxMessages) {
+                throw new SwarmException("Native withMessages history exceeds the configured [swarm.native_agent_settings.max_messages] limit of [{$maxMessages}] messages.");
+            }
+
+            $messageBytes = 0;
+            foreach ($recipient->messages as $message) {
+                $encodedMessage = NativeMessageCodec::encode($message);
+                $messageBytes += strlen(json_encode($encodedMessage, JSON_THROW_ON_ERROR));
                 if ($message instanceof UserMessage) {
                     $attachments = $this->messageAttachments($message);
                     $this->validateAttachmentLimits($attachments);
                     if ($recoverable) {
                         $this->assertRecoverableSources($attachments);
                     }
-
-                    foreach ($attachments as $attachmentIndex => $attachment) {
-                        if ($recipient->ownsMessageAttachment($messageIndex, $attachmentIndex)
-                            || ! $attachment instanceof Arrayable) {
-                            continue;
-                        }
-                        $type = (string) ($attachment->toArray()['type'] ?? '');
-                        if ((str_starts_with($type, 'stored-') || str_starts_with($type, 'provider-'))
-                            && ! $this->authorizer->authorize($attachment, $context)) {
-                            throw new SwarmException("Native withMessages attachment [{$attachmentIndex}] is not authorized for this actor or tenant.");
-                        }
-                    }
                 }
+            }
+
+            $maxMessageBytes = $this->nativeSettingsLimit('max_message_bytes', 1048576, self::MAX_SEEDED_MESSAGE_BYTES);
+            if ($messageBytes > $maxMessageBytes) {
+                throw new SwarmException("Native withMessages history exceeds the configured [swarm.native_agent_settings.max_message_bytes] limit of [{$maxMessageBytes}] bytes.");
             }
 
             if ($recipient->conversation === null) {
@@ -753,9 +757,66 @@ final class NativeInputManager
             if ($recoverable) {
                 $recipient->conversation->toArray();
             }
-
-            $this->authorizeConversation($recipient->conversation, $context);
         }
+    }
+
+    protected function validateNativeSettingsAdmission(NativeInputManifest $manifest, RunContext $context): void
+    {
+        foreach ($manifest->recipients as $recipient) {
+            foreach ($recipient->tools as $reference) {
+                if (! $reference instanceof NativeAgentToolReference) {
+                    throw new SwarmException("Native agent configuration [{$recipient->settingsId()}] contains a tool class that cannot be reconstructed.");
+                }
+                NativeAgentToolResolver::resolve($reference, $this->container);
+            }
+
+            if ($recipient->conversation !== null) {
+                $this->authorizeConversation($recipient->conversation, $context);
+            }
+        }
+    }
+
+    protected function authorizeNativeMessageAttachments(NativeInputManifest $manifest, RunContext $context): void
+    {
+        foreach ($manifest->recipients as $recipient) {
+            foreach ($recipient->messages as $messageIndex => $message) {
+                if (! $message instanceof UserMessage) {
+                    continue;
+                }
+
+                foreach ($this->messageAttachments($message) as $attachmentIndex => $attachment) {
+                    if ($recipient->ownsMessageAttachment($messageIndex, $attachmentIndex)
+                        || ! $attachment instanceof Arrayable) {
+                        continue;
+                    }
+                    $type = (string) ($attachment->toArray()['type'] ?? '');
+                    if ((str_starts_with($type, 'stored-') || str_starts_with($type, 'provider-'))
+                        && ! $this->authorizer->authorize($attachment, $context)) {
+                        throw new SwarmException("Native withMessages attachment [{$attachmentIndex}] is not authorized for this actor or tenant.");
+                    }
+                }
+            }
+        }
+    }
+
+    protected function nativeSettingsLimit(string $key, int $default, int $ceiling): int
+    {
+        return max(1, min((int) $this->config->get('swarm.native_agent_settings.'.$key, $default), $ceiling));
+    }
+
+    /** @param array<string, mixed> $payload */
+    protected function encodeOperationalEnvelope(array $payload): string
+    {
+        $encodedPayload = json_encode($payload, JSON_THROW_ON_ERROR);
+        $configuredMaxInputBytes = $this->config->get('swarm.limits.max_input_bytes');
+        $maxInputBytes = is_numeric($configuredMaxInputBytes) && (int) $configuredMaxInputBytes > 0
+            ? (int) $configuredMaxInputBytes
+            : null;
+        if ($maxInputBytes !== null && strlen($encodedPayload) > $maxInputBytes) {
+            throw new SwarmException("The encoded native input operational envelope exceeds the configured [swarm.limits.max_input_bytes] limit of [{$maxInputBytes}] bytes.");
+        }
+
+        return $encodedPayload;
     }
 
     protected function authorizeConversation(NativeAgentConversation $conversation, RunContext $context): void

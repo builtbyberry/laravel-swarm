@@ -158,6 +158,12 @@ return [
         // Admit new v2 settings envelopes. Readers continue draining existing v2 references when false.
         'enabled' => filter_var(env('SWARM_NATIVE_AGENT_SETTINGS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
 
+        // Seeded withMessages history per recipient; values clamp to 1..1,000.
+        'max_messages' => (int) env('SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGES', 100),
+
+        // Encoded seeded-message bytes per recipient; values clamp to 1 byte..16 MiB.
+        'max_message_bytes' => (int) env('SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGE_BYTES', 1048576),
+
         // Stable application identifier => class implementing NativeAgentToolFactory.
         'tool_factories' => [],
     ],
