@@ -30,17 +30,22 @@ Native feature access through Laravel Swarm workflows.
   callbacks are HMAC-signed, cipher-sealed serializable closures in a new
   `swarm_callback_deliveries` table and delivered **at-least-once (never exactly-once)** by
   `swarm:relay --type=callback`; make them idempotent. Delivery is lease-based and fenced by an
-  opaque claim token. An attempt is counted only when a delivery job acquires the current token,
-  not when the relay reserves it; failures become eligible after
+  opaque claim token. Reclaiming an expired pending reservation retains its token so an earlier
+  queue-delayed job can still acquire it, while reclaiming stale `delivering` work rotates the token
+  and fences the earlier lease. An attempt is counted only when a delivery job acquires the current
+  token, not when the relay reserves it; failures become eligible after
   `swarm.callbacks.retry_backoff_seconds`, and jobs can use
   `swarm.callbacks.queue.connection` / `.name`. The default-off
   `swarm.callbacks.enabled` kill switch requires database persistence, stops registration and new
   deliveries, and leaves earlier rows to settle with their run and resume when re-enabled. With it
   off, queued/durable `then()` / `catch()` throw as before; stream `catch()` remains in-process.
-  Successful delivery removes the row before emitting `callback.delivered`. `swarm:health` warns
-  on aged or stale callback work and dead letters; `swarm:prune` removes eligible callback rows
-  before their run history, never a row being delivered, with dead-letter retention controlled by
-  `swarm.callbacks.dead_letter_retention_days`. A callback failure never replays model/tool effects
+  Successful delivery removes the row before emitting `callback.delivered`. Settlement starts the
+  eligible-work age clock. `swarm:health` warns on aged or stale callback work and dead letters,
+  validates a configured callback queue connection, and reminds operators that the relay and a
+  worker for that queue must both run. `swarm:prune` removes eligible callback rows before their run
+  history and never a row being delivered; a positive dead-letter retention setting may prune
+  sooner, while null still permits removal after terminal run-history expiry. A callback failure
+  never replays model/tool effects
   or changes the settled result. Delivery restores only a signed closure, rejecting foreign objects
   and unsigned bodies without invoking them; every registering or delivering process needs
   `APP_KEY`, and registration without it throws.
@@ -121,6 +126,16 @@ Native feature access through Laravel Swarm workflows.
 
 ### Changed
 
+- Terminal callback workers now cache only positive schema readiness, clear a warm settlement cache
+  after a callback-table query fails, and re-probe missing or transiently unreadable schema without
+  restart. `swarm.callbacks.retry_backoff_seconds` is clamped to at least one second.
+  `recordPreflightFailure()` always uses one database transaction so its terminal write-once check is
+  atomic even with callbacks disabled. Unreadable callback dead-letter logs carry the fixed specific
+  package reason category without exception messages.
+- Text and function-tool stream events now carry the additive optional `payload_status` wire key by
+  default, without a feature flag; text events also carry `message_id` when the native event has one.
+  Existing replay rows may omit these keys.
+
 - **BREAKING (authored parallel/hierarchical swarms):** An authored parallel
   swarm class must now be container-resolvable, and every declared slot must
   reconstruct to a Laravel AI agent, even when every v0.28 feature flag is off.
@@ -159,7 +174,8 @@ Native feature access through Laravel Swarm workflows.
   follow a completed run after a post-completion exception, as in v0.27; that
   event/history distinction is tracked for a later release. Applications that
   have not enabled callbacks pay one indexed callback-existence check per
-  finished database run, with no added transaction.
+  finished database run. Callback-free writes add no transaction except
+  `recordPreflightFailure()`, whose write-once guard now always runs transactionally.
 - Hosted Pest 5 runs the configured Unit, Feature, and Installer suites across
   four fresh-per-file ParaTest workers with Xdebug in the four coverage matrix
   jobs. `ProviderToolPreservationTest` runs separately in the `ci-serial` group
