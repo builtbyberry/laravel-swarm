@@ -43,11 +43,11 @@ can inspect counts while pruning is disabled.
 
 The command prunes the history, context, artifact, stream replay, durable
 runtime, durable node state, durable run state, durable node-output, durable
-branch, signal, wait, label, detail, progress, child-run, and durable webhook
-idempotency tables, plus expired native-input operational envelopes, in bounded
-chunks to avoid long-running table locks on large datasets. Native-input cleanup
-deletes only Swarm-promoted files and retains the envelope for retry if any file
-delete fails.
+branch, signal, wait, label, detail, progress, child-run, durable webhook
+idempotency, and callback delivery tables, plus expired native-input operational
+envelopes, in bounded chunks to avoid long-running table locks on large
+datasets. Native-input cleanup deletes only Swarm-promoted files and retains the
+envelope for retry if any file delete fails.
 
 Queue backend records and `failed_jobs` are outside `swarm:prune`. Manage failed
 jobs with Laravel's `queue:prune-failed`, `queue:forget`, or `queue:flush`.
@@ -85,10 +85,12 @@ which rows are safe to delete.
 
 The package migration
 `2026_05_04_000001_add_run_id_foreign_keys_to_swarm_tables` adds `ON DELETE CASCADE`
-foreign keys from every child table to its parent (`swarm_run_histories` for the
-history family, `swarm_durable_runs` for the durable family). The prune command
-deletes parents before children, so the cascade fires on already-targeted rows
-and does not produce orphan rows or constraint errors.
+foreign keys from its child tables to their parent (`swarm_run_histories` for
+the history family, `swarm_durable_runs` for the durable family). The later
+`swarm_native_inputs.run_id` and `swarm_callback_deliveries.run_id` columns are
+indexed without foreign keys and are pruned explicitly. The prune command
+deletes parents before constrained children, so the cascade fires on
+already-targeted rows and does not produce orphan rows or constraint errors.
 
 `swarm_durable_runs.parent_run_id` and `swarm_durable_webhook_idempotency.run_id`
 use `ON DELETE SET NULL` so a pruned parent does not block child-run or
@@ -322,7 +324,7 @@ through the same `swarm:relay` schedule that handles durable dispatches.
 ### Migration and scheduling
 
 On database persistence, run `php artisan migrate` to create the
-`swarm_audit_outbox` table. The existing relay schedule covers both lanes:
+`swarm_audit_outbox` table. The existing relay schedule covers all three lanes:
 
 ```php
 Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
@@ -332,11 +334,23 @@ To drain a single lane during focused recovery:
 
 ```bash
 php artisan swarm:relay --type=audit    # audit only
+php artisan swarm:relay --type=callback # callback delivery only
 php artisan swarm:relay --type=step --type=branch    # durable only
 ```
 
 On cache persistence the audit outbox is unavailable and the dispatcher
 falls back to log-and-swallow automatically; no migration required.
+
+### Callback delivery lane
+
+When terminal workflow callbacks are enabled, the same scheduled
+`swarm:relay` invocation drains their delivery records. Use
+`swarm:relay --type=callback` for focused recovery. The
+`swarm.callbacks.enabled` flag is the registration and delivery kill switch,
+`swarm:health` reports the callback delivery row, and `swarm:prune` removes
+eligible callback delivery records. See
+[Terminal workflow callbacks](error-handling.md#terminal-workflow-callbacks) for
+the complete operating and rollback contract.
 
 ### Health checks
 
@@ -485,7 +499,8 @@ Before cutting a release tag, work through the checklist in [CONTRIBUTING.md § 
 For production database persistence:
 
 - schedule `swarm:prune`
-- schedule `swarm:relay` (required for durable execution — drains the outbox after each checkpoint)
+- schedule `swarm:relay` (required for durable execution, queued audit retry,
+  and enabled terminal workflow callbacks; one schedule drains all three lanes)
 - schedule `swarm:recover` when using durable execution
 - treat pruning, relay, and recovery as required operating discipline for
   database-backed durable workflows, not optional cleanup

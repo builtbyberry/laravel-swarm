@@ -16,7 +16,9 @@ interface NativeInputStore
      */
     public function find(string $id): ?array;
 
+    /** Mark the matching envelope active without changing its payload or expiry. */
     public function activate(string $id, string $runId): void;
 
+    /** Mark the matching envelope revoked and immediately expired. */
     public function revoke(string $id, string $runId): void;
 }

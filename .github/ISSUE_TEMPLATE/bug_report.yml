@@ -53,11 +53,31 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Native inputs / attachments
+        - Native protocol projection
+        - Terminal callbacks
+        - Parallel streaming
+        - Durable execution
+        - Guardrails
+        - Testing utilities
+        - Observability (telemetry / audit)
+        - Persistence and history
+        - Artisan commands
+        - Documentation
+        - Other
+    validations:
+      required: true
+
   - type: input
     id: swarm_version
     attributes:
       label: Laravel Swarm version
-      placeholder: "e.g. 0.3.2"
+      placeholder: "e.g. 0.28.0"
     validations:
       required: true
 

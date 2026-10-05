@@ -36,6 +36,10 @@ body:
       options:
         - Topologies (sequential / parallel / hierarchical)
         - Execution modes (prompt / queue / stream / durable)
+        - Native inputs / attachments
+        - Native protocol projection
+        - Terminal callbacks
+        - Parallel streaming
         - Durable execution
         - Guardrails
         - Testing utilities

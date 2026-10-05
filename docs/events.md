@@ -155,6 +155,29 @@ Event::listen(SwarmFailed::class, function (SwarmFailed $event): void {
 
 ---
 
+### `NativeProtocolProjectionFailed`
+
+**Full class:** `BuiltByBerry\LaravelSwarm\Events\NativeProtocolProjectionFailed`
+
+**When it fires:** when the native Vercel or AG-UI adapter cannot produce a safe
+projection. This is a server-side diagnostic, not an access audit record or
+proof that the client received the failure.
+
+| Property | Type | Description |
+|---|---|---|
+| `$runId` | `string` | Run identifier for the source swarm stream. |
+| `$protocol` | `string` | Native protocol being projected. |
+| `$projection` | `NativeProtocolProjection` | `Workflow` or `FinalAgent`. |
+| `$reason` | `string` | Stable bounded failure category. |
+| `$timestamp` | `int` | Event timestamp. |
+
+The event carries no prompt, output, tool payload, tenant identity, or client
+acknowledgement. See
+[Completion, errors, cancellation, and replay](native-chat-protocols.md#completion-errors-cancellation-and-replay)
+for the reason-code catalog.
+
+---
+
 ### `SwarmStepStarted`
 
 **Full class:** `BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted`

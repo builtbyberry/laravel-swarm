@@ -32,16 +32,17 @@ class SwarmRelayCommand extends Command
     protected $description = 'Drain the durable, audit, and callback swarm outboxes (durable dispatches queue jobs; audit re-emits failed evidence records through the bound sink; callback delivers terminal workflow then/catch)';
 
     protected $help = <<<'HELP'
-        This command drains the swarm_durable_outbox table and dispatches the
-        corresponding queue jobs. It must be scheduled to run regularly so that
-        durable runs can advance:
+        This command drains the durable, audit, and callback outbox lanes. It
+        dispatches durable work, re-emits failed audit evidence, and delivers
+        terminal workflow callbacks. Schedule it to run regularly:
 
           Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(
               max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60))
           );
 
-        Without the relay, durable runs will stall permanently after writing to
-        the outbox. Use --drain-until-empty to clear backlogs in a single invocation.
+        Without the relay, durable runs stall after writing to the outbox, failed
+        audit evidence remains pending, and enabled terminal callbacks are not
+        delivered. Use --drain-until-empty to clear backlogs in one invocation.
 
         The command also owns a finite atomic lease. Configure its store and duration
         with swarm.commands.overlap; the lease must exceed the worst-case drain time.
@@ -75,6 +76,7 @@ class SwarmRelayCommand extends Command
           php artisan swarm:relay
           php artisan swarm:relay --type=step --type=branch
           php artisan swarm:relay --type=audit
+          php artisan swarm:relay --type=callback
           php artisan swarm:relay --limit=500 --drain-until-empty
           php artisan swarm:relay --drain-until-empty --max-attempts=10
         HELP;
