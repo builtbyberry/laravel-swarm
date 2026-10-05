@@ -514,9 +514,12 @@ class SwarmHealthCommand extends Command
         $enabled = (bool) $config->get('swarm.callbacks.enabled', false);
         $queueConnection = $config->get('swarm.callbacks.queue.connection');
 
+        // Mirrors QueueManager::getConfig(): `null` is Laravel's built-in null driver,
+        // and any other name resolves through the dotted queue.connections path.
         if (is_string($queueConnection)
             && trim($queueConnection) !== ''
-            && ! array_key_exists(trim($queueConnection), (array) $config->get('queue.connections', []))) {
+            && trim($queueConnection) !== 'null'
+            && $config->get('queue.connections.'.trim($queueConnection)) === null) {
             $value = trim($queueConnection);
 
             return $base + [

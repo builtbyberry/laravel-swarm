@@ -425,6 +425,24 @@ test('callback health reports an undefined configured queue connection', functio
     'disabled' => [false, 'note'],
 ]);
 
+test('callback health accepts queue connections Laravel can resolve', function (string $connection, array $connections): void {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.callbacks.enabled', true);
+    config()->set('swarm.callbacks.queue.connection', $connection);
+    config()->set('queue.connections', $connections);
+    app()->forgetInstance(CallbackDeliveryOutbox::class);
+    app()->forgetInstance(ReadableCallbackDeliveryOutbox::class);
+
+    Artisan::call('swarm:health', ['--json' => true]);
+    $callback = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks'])
+        ->firstWhere('component', 'Callback delivery');
+
+    expect($callback['details'])->not->toContain('is not defined under queue.connections');
+})->with([
+    'the built-in null driver' => ['null', ['sync' => ['driver' => 'sync']]],
+    'a dotted connection name' => ['tenants.callbacks', ['tenants' => ['callbacks' => ['driver' => 'sync']]]],
+]);
+
 test('callback health treats unreadable schema as informational only while callbacks are disabled', function (string $schemaState): void {
     $originalTable = config('swarm.tables.callback_deliveries');
     $table = 'callback_health_'.$schemaState;
