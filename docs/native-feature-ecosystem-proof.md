@@ -83,6 +83,20 @@ its own map), so this run and the ai-1 run share one harness.
   from released packages; a fresh default-Packagist five-package install after all
   releases remains a separate shipping gate.
 
+### Post-proof addendum (not re-run)
+
+The frozen proof above predates later v0.28.0 changes merged after the pinned core
+commit: [PR #550](https://github.com/builtbyberry/laravel-swarm/pull/550) makes the
+callback outbox deserialize only signed closures;
+[PR #551](https://github.com/builtbyberry/laravel-swarm/pull/551) bounds the job
+telemetry guard; [PR #552](https://github.com/builtbyberry/laravel-swarm/pull/552)
+encrypts queued swarm payloads and makes queuing require `APP_KEY`; and
+[PR #553](https://github.com/builtbyberry/laravel-swarm/pull/553) makes callback
+registration throw without a signing key, plus CI-only
+[PR #555](https://github.com/builtbyberry/laravel-swarm/pull/555). The combined
+fresh-install proof was **not** re-run against those changes; they are covered by
+this package's own test suite.
+
 ## Per-companion compatibility (core 0.28 lanes green)
 
 Each companion sibling's pinned core-0.28 CI lanes install the frozen core candidate
@@ -129,7 +143,7 @@ in-workflow by the cited merged tests.
 | R3 | P4 native-agent-onboarding | completed adapter | Explicit offline demonstration path (`ScriptedAgent`) — [native-agent-onboarding.md](native-agent-onboarding.md) |
 | R4 | P11 | explicitly accepted limitation | Structured-output streaming unsupported (upstream), with reopen trigger — [native-ownership-and-limits.md](native-ownership-and-limits.md#limits-kept-on-purpose) |
 | R5 | P3 / P11 | demonstrated retained guarantee | Distinct privacy for live access vs persistence, retained and tested |
-| R6 | P11 | explicitly accepted limitation | Other recorded limits (no completion-receipt reconciliation, no whole-workflow queued `then()`/`catch()`) |
+| R6 | P11 | explicitly accepted limitation | No completion-receipt reconciliation; whole-workflow queued `then()`/`catch()` exist as default-off terminal callbacks, not a receipt-reconciliation guarantee |
 | R7 | P1 / P5 / P11 | demonstrated retained guarantee | Explicit topology-stable attachment recipients and isolation |
 | R8 | P3 / P7 / P8 / P11 | demonstrated retained guarantee | Result and stream mapping preserves capture, identity, and replay |
 | R9 | P1 / P3 / P5 / P11 | demonstrated retained guarantee | Native content and identity preserved across every supported path |

@@ -645,7 +645,10 @@ Event::listen(SwarmFailed::class, function (SwarmFailed $event): void {
 });
 ```
 
-Durable responses do not use queued `then()` / `catch()` callbacks.
+Durable response `then()` / `catch()` methods are
+[opt-in terminal callbacks](../../docs/error-handling.md#terminal-workflow-callbacks),
+default off and enabled with `swarm.callbacks.enabled` when using the database
+persistence driver. Lifecycle events remain the always-on, guaranteed path.
 
 ## Operator Controls
 

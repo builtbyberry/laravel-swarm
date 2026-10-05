@@ -62,8 +62,11 @@ Their responses use the Swarm-owned internal
 job-shaped object and no dispatch on destruction. Fluent queue configuration
 returns the same response without scheduling work or updating durable routing.
 Condition callbacks passed to `when()` / `unless()` still run normally; deferred
-chain and deduplicator callbacks do not. Queued `then()` / `catch()` remain
-unsupported and throw rather than simulate completion.
+chain and deduplicator callbacks do not. With `swarm.callbacks.enabled` off (the
+default), queued `then()` / `catch()` throw. With it on and the database persistence
+driver configured, `SwarmFake::queue()` returns a real `QueuedSwarmResponse` whose
+[`then()` / `catch()`](error-handling.md#terminal-workflow-callbacks) register against
+the real callback outbox. Lifecycle events remain the always-on, guaranteed path.
 
 Fake intent does not prove provider calls, queue serialization, worker execution,
 durable coordination, database writes, or audit effects. Execute real Swarm jobs

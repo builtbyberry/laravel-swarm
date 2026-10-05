@@ -329,6 +329,8 @@ callbacks when you want to attach behavior to *this* run at the call site.
   signed closure is never constructed or run. In a process with no `APP_KEY`, `then()` / `catch()`
   throw `SwarmException` at registration, and a delivering process with no `APP_KEY` never runs a
   callback.
+  A registration failure rejects only that callback: the queued or durable run already exists and
+  is still dispatched if the caller catches the exception, with no callback attached.
 - **A callback's own failure is isolated.** It runs after the workflow has already settled, in a
   separate process, so it can neither replay completed model or tool effects nor change the
   recorded result. A failing queue/durable callback is retried up to `swarm.callbacks.max_attempts`

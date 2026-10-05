@@ -34,7 +34,7 @@ Native feature access through Laravel Swarm workflows.
   `catch()` runs in-process. Feature-gated by `swarm.callbacks.enabled` (default off, requires the
   database persistence driver — registering a callback under any other driver fails closed); with
   the flag off, queued/durable `then()`/`catch()` throw the same error as before. Delivery records
-  are inspected via `swarm:health` and pruned by `swarm:prune` (`swarm.callbacks.retention_days`).
+  are inspected via `swarm:health` and pruned by `swarm:prune` (`swarm.callbacks.dead_letter_retention_days`).
   Delivery deserializes a stored row only into a signed closure: any other payload — a foreign
   object, or an unsigned closure body — is rejected without being constructed or invoked.
   Callbacks therefore require `APP_KEY` in every process that registers or delivers one;
@@ -174,6 +174,13 @@ Native feature access through Laravel Swarm workflows.
   when the key is missing or invalid. Jobs already queued before the upgrade still run.
   Undecryptable package jobs log a warning and emit a degraded `job.failed`.
   See [UPGRADING](UPGRADING.md#encrypted-queued-swarm-payloads).
+- The Laravel 13.16 compatibility lane ignores advisory `PKSA-d5tc-s1qs-h781`
+  (CVE-2026-102279, fixed upstream only in Laravel 13.30.0) in its temporary lane
+  manifest, so it can keep installing the exact 13.16.0 release that proves the
+  declared floor. The package's requirements and advisory policy are unchanged, and
+  any other advisory against 13.16.0 still fails the lane. Composer's process
+  timeout is raised to 900 seconds so the sequential local `composer test` gate is
+  no longer killed at the 300-second default.
 
 ### Fixed
 

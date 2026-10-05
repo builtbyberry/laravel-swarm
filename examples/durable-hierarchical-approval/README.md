@@ -195,8 +195,11 @@ swarm task.
 
 ## Events
 
-Durable responses do not support `then()` or `catch()`. Use lifecycle events or
-persisted history to continue your application workflow.
+Durable response `then()` / `catch()` methods are
+[opt-in terminal callbacks](../../docs/error-handling.md#terminal-workflow-callbacks),
+default off and enabled with `swarm.callbacks.enabled` when using the database
+persistence driver. Lifecycle events remain the always-on, guaranteed path;
+persisted history remains available for continuing your application workflow.
 
 ```php
 use App\Ai\Swarms\ApprovalReviewSwarm;

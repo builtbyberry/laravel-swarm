@@ -745,7 +745,7 @@ return [
         /*
          * Retention window for dead-lettered callback rows, in days. Default null keeps
          * them indefinitely (operators inspect failures via `swarm:health`, which reports
-         * dead-letter counts and detail). Set a positive integer to opt into automatic
+         * dead-letter counts). Set a positive integer to opt into automatic
          * pruning via `swarm:prune`. Registered/pending rows are never pruned by this
          * policy — orphaned rows for a terminal run are pruned with their run instead.
          */

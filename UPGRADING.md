@@ -2,6 +2,10 @@
 
 ## Upgrading to v0.28.0
 
+There is no `0.27-to-0.28` upgrade-assistant recipe, and none is needed. The existing
+assistant reports a core-0.28 application as an unsupported source and infers no
+actions; follow the Composer and migration rollout steps in this block instead.
+
 ### Native ownership, limits, and legacy retirement
 
 No action is required. This release records the native-first ownership contract in
