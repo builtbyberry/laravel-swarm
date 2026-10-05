@@ -763,20 +763,20 @@ return [
             : null,
         /*
          * Delay before a queue-dispatch or callback failure becomes eligible for
-         * another relay claim. Clamped to a non-negative number of seconds.
+         * another relay claim. Clamped to at least one second.
          */
-        'retry_backoff_seconds' => max(0, (int) env('SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS', 60)),
+        'retry_backoff_seconds' => max(1, (int) env('SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS', 60)),
         /*
          * Age at which eligible unclaimed callback work warns in swarm:health. Zero
          * means twice the effective callback reservation timeout.
          */
         'stale_warning_threshold_seconds' => max(0, (int) env('SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS', 0)),
         /*
-         * Retention window for dead-lettered callback rows, in days. Default null keeps
-         * them indefinitely (operators inspect failures via `swarm:health`, which reports
-         * dead-letter counts). Set a positive integer to opt into automatic
-         * pruning via `swarm:prune`. Registered/pending rows are never pruned by this
-         * policy — orphaned rows for a terminal run are pruned with their run instead.
+         * Retention window for dead-lettered callback rows, in days. Default null disables
+         * age-based dead-letter pruning, but non-delivering rows are still removed when
+         * their terminal run history expires. Set a positive integer to allow earlier
+         * dead-letter pruning via `swarm:prune`. Registered/pending rows are never pruned
+         * by this policy — orphaned rows for a terminal run are pruned with their run.
          */
         'dead_letter_retention_days' => env('SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS') !== null
             ? (int) env('SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS')

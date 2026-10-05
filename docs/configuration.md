@@ -260,9 +260,9 @@ does not use these settings.
 | `swarm.callbacks.queue.name` | string\|null | `null` | `SWARM_CALLBACKS_QUEUE` | Queue name for callback delivery jobs; `null` uses the connection default. |
 | `swarm.callbacks.max_attempts` | int | `5` | `SWARM_CALLBACKS_MAX_ATTEMPTS` | Delivery acquisitions allowed before dead-lettering. Relay reservations and queue-dispatch attempts do not consume this count. |
 | `swarm.callbacks.reservation_timeout_seconds` | int\|null | `null` | `SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS` | Delivery lease; `null` uses `swarm.durable.relay.reservation_timeout_seconds` (default `60`). Set above queue delay plus the longest callback execution. |
-| `swarm.callbacks.retry_backoff_seconds` | int | `60` | `SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS` | Delay after callback or queue-dispatch failure before another relay claim is eligible. |
+| `swarm.callbacks.retry_backoff_seconds` | int | `60` | `SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS` | Delay after callback or queue-dispatch failure before another relay claim is eligible; clamped to at least 1 second. |
 | `swarm.callbacks.stale_warning_threshold_seconds` | int | `0` | `SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS` | Age at which eligible work warns in `swarm:health`; `0` means twice the effective reservation timeout. |
-| `swarm.callbacks.dead_letter_retention_days` | int\|null | `null` | `SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS` | Positive days enable dead-letter pruning; `null` retains dead letters indefinitely. |
+| `swarm.callbacks.dead_letter_retention_days` | int\|null | `null` | `SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS` | Positive days allow age-based dead-letter pruning. With `null`, dead letters remain until their terminal run history expires; non-delivering callback rows are then pruned with that run. |
 
 Callbacks are delivered at least once. Keep them idempotent and schedule the
 relay whenever this feature is enabled.

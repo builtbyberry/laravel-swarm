@@ -512,6 +512,22 @@ class SwarmHealthCommand extends Command
     {
         $base = ['component' => 'Callback delivery', 'driver' => 'database', 'store' => 'n/a'];
         $enabled = (bool) $config->get('swarm.callbacks.enabled', false);
+        $queueConnection = $config->get('swarm.callbacks.queue.connection');
+
+        // Mirrors QueueManager::getConfig(): `null` is Laravel's built-in null driver,
+        // and any other name resolves through the dotted queue.connections path.
+        if (is_string($queueConnection)
+            && trim($queueConnection) !== ''
+            && trim($queueConnection) !== 'null'
+            && $config->get('queue.connections.'.trim($queueConnection)) === null) {
+            $value = trim($queueConnection);
+
+            return $base + [
+                'status' => $enabled ? 'failed' : 'note',
+                'details' => "swarm.callbacks.queue.connection is [{$value}], but [{$value}] is not defined under queue.connections"
+                    .($enabled ? '' : '; terminal workflow callbacks are disabled'),
+            ];
+        }
 
         try {
             $summary = $app->make(ReadableCallbackDeliveryOutbox::class)->healthSummary();
@@ -556,11 +572,11 @@ class SwarmHealthCommand extends Command
         if ($deadLetter > 0 || $stalePending > 0 || $staleDelivering > 0 || $agedEligible > 0) {
             return $base + [
                 'status' => 'warning',
-                'details' => "{$counts}; {$stalePending} stale pending, {$staleDelivering} stale delivering, {$agedEligible} aged eligible — inspect relay scheduling, callback duration, and dead letters",
+                'details' => "{$counts}; {$stalePending} stale pending, {$staleDelivering} stale delivering, {$agedEligible} aged eligible — is swarm:relay scheduled? Inspect callback duration and dead letters; a worker must consume the callback queue/connection",
             ];
         }
 
-        return $base + ['status' => 'ok', 'details' => "{$counts} — is swarm:relay scheduled?"];
+        return $base + ['status' => 'ok', 'details' => $counts];
     }
 
     /**

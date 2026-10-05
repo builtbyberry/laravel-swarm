@@ -350,10 +350,13 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
 - **Schedule the relay.** Delivery only happens through `swarm:relay` — a plain `queue()`
   app that had no reason to schedule the relay before **must schedule it now** once callbacks
   are enabled, or callbacks never fire (and their rows are eventually pruned as orphans once
-  the run's history expires). `swarm:health` warns with "is swarm:relay scheduled?" as a nudge.
+  the run's history expires). When eligible work ages, `swarm:health` asks "is
+  swarm:relay scheduled?"; a clean row reports counts without that warning.
 - **Deliver:** `swarm:relay --type=callback` (or a bare `swarm:relay`, which drains every lane).
 - **Queue routing.** `swarm.callbacks.queue.connection` and `swarm.callbacks.queue.name` route
-  `DeliverSwarmCallback` jobs; null values use the application's defaults. The reservation window
+  `DeliverSwarmCallback` jobs; null values use the application's defaults. A worker must consume
+  that connection/queue. `swarm:health` fails when an enabled callback connection is absent from
+  `queue.connections` (and reports a note while callbacks are disabled). The reservation window
   must account for the selected queue's delay as well as callback execution.
 - **Kill switch.** Setting `swarm.callbacks.enabled=false` stops new registration and deliveries
   that have not yet started: the relay lane goes inert, and already-dispatched jobs no-op when they
@@ -361,15 +364,21 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   not interrupt an executing closure. Terminal runs still atomically settle rows registered before
   the switch, so re-enabling resumes those pending rows instead of stranding them. A flag-off,
   callback-free database terminal write performs one indexed existence check outside a transaction,
-  plus one callback-table existence probe on the first such write in a process; later writes reuse
-  that table result. It then retains that writer's pre-feature transaction behavior. The indexed
+  plus one callback-table existence probe on the first such write after the table exists; later writes
+  reuse that positive result. An installation without the callback table re-probes once per terminal
+  write so a migration becomes visible without a worker restart. It then retains that writer's
+  pre-feature transaction behavior, except `recordPreflightFailure()` always uses one transaction
+  to make its write-once check atomic. The indexed
   check cannot be removed safely: another process may have registered the row before the switch was
   turned off. This database-driver write-once terminal-history guarantee does not apply to the cache
   history driver.
 - **Reservation window.** A claimed-but-undelivered row is re-claimed after
   `swarm.callbacks.reservation_timeout_seconds` (falling back to the durable relay timeout). If a
-  claim expires it receives a new token, so jobs from the previous claim are rejected. Concurrent
-  callback execution can overlap only when a lease expires while its original worker is still
+  pending reservation expires, its token is retained and another job is dispatched with that token,
+  so an earlier job delayed in the same queue backlog can still acquire the row; the compare-and-set
+  permits only one of those jobs to acquire it. A stale `delivering` lease receives a new token, so
+  the earlier executing lease can never acknowledge or mutate its replacement. Concurrent callback
+  execution can overlap only when a delivering lease expires while its original worker is still
   running. Size this timeout **longer than the longest callback execution**, including queue delay,
   and keep callbacks idempotent.
 - **Inspect:** `swarm:health` reports registered, pending, delivering, and dead-letter counts even
@@ -383,7 +392,8 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   If guaranteed delivery matters, listen to `SwarmCompleted` / `SwarmFailed` instead — those
   are the reliable path. A dead-letter caused by an **`APP_KEY` rotation** (which invalidates every
   in-flight callback's signature) is expected: rotate with no pending callbacks, or accept their loss.
-  The dead-letter log line carries the reason. The ones tied to signing and sealing:
+  The dead-letter log context carries the specific fixed package reason category, never an exception
+  message. The categories tied to signing and sealing include:
   `callback signature verification failed` — the delivering key is not the one that signed the row
   (a rotation, or a row stored unsigned), or the row was tampered with;
   `no APP_KEY signing key is configured` — the delivering process has no `APP_KEY`;
@@ -408,15 +418,17 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
 - **Callbacks run without ambient request/tenant state.** A delivered callback runs later, in the
   relay/worker process, with no HTTP request and no ambient tenant context. Capture everything the
   closure needs (ids, not `tenant()` globals) at registration.
-- **Prune:** `swarm:prune` removes non-delivering records for terminal, expired runs, and
-  dead-lettered rows older than `swarm.callbacks.dead_letter_retention_days` (null keeps them
-  indefinitely). It never orphan-prunes a `delivering` row: a live lease may still be executing,
-  and an expired lease remains reclaimable by the relay. It honors `swarm.retention.prevent_prune`.
+- **Prune:** `swarm:prune` removes non-delivering records for terminal, expired runs. A positive
+  `swarm.callbacks.dead_letter_retention_days` may remove dead letters sooner; null disables only
+  that age-based policy, so a dead letter is still removed when its run history expires. It never
+  orphan-prunes a `delivering` row: a live lease may still be executing, and an expired lease remains
+  reclaimable by the relay. It honors `swarm.retention.prevent_prune`.
 - **Rollback / drain:** undelivered rows are lost on the down-migration, and draining only moves
   rows into delivery jobs. To revert safely: stop dispatching new runs, run
   `swarm:relay --type=callback --drain-until-empty`, **wait for the callback queue workers to
   finish** the dispatched `DeliverSwarmCallback` jobs, confirm health has no pending, delivering,
-  or dead-letter rows, then revert the migration. If rollback is urgent, disable registration at
+  or dead-letter rows, then stop or restart every long-lived worker before running the down migration
+  so no process retains positive table readiness. If rollback is urgent, disable registration at
   the application boundary first; the kill switch also stops the drain you are trying to finish.
 
 ## Queue Retry vs Durable Retry

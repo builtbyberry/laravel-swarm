@@ -155,6 +155,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             ->update([
                 'status' => 'pending',
                 'context' => $this->cipher->seal($this->encodeContext($context)),
+                'available_at' => $now,
                 'updated_at' => $now,
             ]);
     }
@@ -174,7 +175,13 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             return false;
         }
 
-        return $this->table()->where('run_id', $runId)->exists();
+        try {
+            return $this->table()->where('run_id', $runId)->exists();
+        } catch (Throwable $exception) {
+            $this->settlementAvailability = null;
+
+            throw $exception;
+        }
     }
 
     public function drain(int $limit = 100): CallbackDrainResult
@@ -242,7 +249,11 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
                     continue;
                 }
 
-                $token = bin2hex(random_bytes(32));
+                $token = $entry->status === 'pending'
+                    && is_string($entry->claim_token)
+                    && $entry->claim_token !== ''
+                        ? $entry->claim_token
+                        : bin2hex(random_bytes(32));
                 $this->table()->where('id', $entry->id)->update([
                     'status' => 'pending',
                     'claim_token' => $token,
@@ -362,12 +373,13 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             // A closure that cannot be unsealed or whose signature does not verify can
             // never be invoked (tamper, or an APP_KEY rotation that invalidated the
             // signature). Dead-letter it permanently rather than reclaiming forever.
+            $reason = $this->unreadableReason($row);
             $this->markDeadLetter(
                 $id,
                 $claimToken,
                 (int) $row->attempts,
-                $this->unreadableReason($row),
-                'callback payload rejected',
+                $reason,
+                $reason,
             );
 
             return;
@@ -623,7 +635,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             'run_id' => (string) $row->run_id,
             'slot' => (string) $row->slot,
             'attempts' => (int) $row->attempts,
-            'reason' => mb_substr($reason, 0, 100),
+            'reason' => $reason,
             'exception_class' => $exceptionClass,
         ]);
     }
@@ -635,7 +647,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
     protected function retryBackoffSeconds(): int
     {
-        return max(0, min(86400, (int) $this->config->get('swarm.callbacks.retry_backoff_seconds', 60)));
+        return max(1, min(86400, (int) $this->config->get('swarm.callbacks.retry_backoff_seconds', 60)));
     }
 
     protected function queueSetting(string $key): ?string
@@ -661,23 +673,29 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
      */
     protected function isSettlementAvailable(): bool
     {
-        if ($this->settlementAvailability !== null) {
-            return $this->settlementAvailability;
+        if ($this->settlementAvailability === true) {
+            return true;
         }
 
         if ($this->config->get('swarm.persistence.driver') !== 'database') {
-            return $this->settlementAvailability = false;
+            return false;
         }
 
-        return $this->settlementAvailability = $this->connection
+        $available = $this->connection
             ->getSchemaBuilder()
             ->hasTable($this->tableName());
+
+        if ($available) {
+            $this->settlementAvailability = true;
+        }
+
+        return $available;
     }
 
     public function isAvailable(): bool
     {
-        if ($this->readiness !== null) {
-            return $this->readiness;
+        if ($this->readiness === true) {
+            return true;
         }
 
         $table = $this->tableName();
@@ -687,7 +705,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
                 .'swarm.persistence.driver to "database" and run the package migrations, or listen '
                 .'to the SwarmCompleted / SwarmFailed events instead of then()/catch().';
 
-            return $this->readiness = false;
+            return false;
         }
 
         try {
@@ -696,20 +714,22 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             if (! $schema->hasTable($table)) {
                 $this->readinessFailure = "Callback delivery outbox requires the [{$table}] table. Run the package migrations and restart callback workers.";
 
-                return $this->readiness = false;
+                return false;
             }
 
             if (! $schema->hasColumns($table, ['claim_token', 'available_at'])) {
                 $this->readinessFailure = "Callback delivery outbox requires [{$table}.claim_token] and [{$table}.available_at]. Bring the unreleased callback migration schema up to date and restart callback workers.";
 
-                return $this->readiness = false;
+                return false;
             }
+
+            $this->readinessFailure = null;
 
             return $this->readiness = true;
         } catch (Throwable $exception) {
             $this->readinessFailure = "Callback delivery outbox readiness failed for [{$table}]: {$exception->getMessage()}";
 
-            return $this->readiness = false;
+            return false;
         }
     }
 

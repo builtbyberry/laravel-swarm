@@ -445,7 +445,7 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
             ]);
 
             $this->settleCallbacks($runId, CallbackSlot::Catch, $exception, $callbacksAvailable);
-        });
+        }, alwaysTransactional: true);
     }
 
     /**

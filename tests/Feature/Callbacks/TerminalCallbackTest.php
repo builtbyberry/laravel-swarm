@@ -35,6 +35,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Database\Events\TransactionCommitted;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Builder as SchemaBuilder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -164,6 +165,85 @@ it('caches callback readiness schema probes per outbox instance', function (): v
     expect($outbox->isAvailable())->toBeTrue();
     $outbox->assertReady();
     expect($outbox->isAvailable())->toBeTrue();
+});
+
+it('rechecks callback readiness after a missing table is migrated without restarting the process', function (): void {
+    $originalTable = config('swarm.tables.callback_deliveries');
+    $table = 'test_callback_readiness_recovery';
+    config()->set('swarm.tables.callback_deliveries', $table);
+    Schema::dropIfExists($table);
+
+    $outbox = new DatabaseCallbackDeliveryOutbox(
+        DB::connection(),
+        config(),
+        app(SwarmPersistenceCipher::class),
+        app(BusDispatcher::class),
+        app(SwarmAuditDispatcher::class),
+    );
+
+    try {
+        expect($outbox->isAvailable())->toBeFalse();
+
+        $migration = require dirname(__DIR__, 3).'/database/migrations/2026_09_26_000001_create_swarm_callback_deliveries_table.php';
+        $migration->up();
+
+        expect($outbox->isAvailable())->toBeTrue();
+    } finally {
+        Schema::dropIfExists($table);
+        config()->set('swarm.tables.callback_deliveries', $originalTable);
+    }
+});
+
+it('rechecks settlement availability after a missing table is migrated without restarting the process', function (): void {
+    $originalTable = config('swarm.tables.callback_deliveries');
+    $table = 'test_callback_settlement_recovery';
+    config()->set('swarm.tables.callback_deliveries', $table);
+    Schema::dropIfExists($table);
+
+    $outbox = new DatabaseCallbackDeliveryOutbox(
+        DB::connection(),
+        config(),
+        app(SwarmPersistenceCipher::class),
+        app(BusDispatcher::class),
+        app(SwarmAuditDispatcher::class),
+    );
+
+    try {
+        expect($outbox->hasFor('run-late-migration'))->toBeFalse();
+
+        $migration = require dirname(__DIR__, 3).'/database/migrations/2026_09_26_000001_create_swarm_callback_deliveries_table.php';
+        $migration->up();
+        $outbox->register('run-late-migration', CallbackSlot::Then, fn () => null);
+
+        expect($outbox->hasFor('run-late-migration'))->toBeTrue();
+    } finally {
+        Schema::dropIfExists($table);
+        config()->set('swarm.tables.callback_deliveries', $originalTable);
+    }
+});
+
+it('rechecks callback readiness after a transient schema error without restarting the process', function (): void {
+    $schema = Mockery::mock(SchemaBuilder::class);
+    $schema->shouldReceive('hasTable')->once()->ordered()->with('swarm_callback_deliveries')
+        ->andThrow(new RuntimeException('transient schema outage'));
+    $schema->shouldReceive('hasTable')->once()->ordered()->with('swarm_callback_deliveries')->andReturnTrue();
+    $schema->shouldReceive('hasColumns')->once()->ordered()
+        ->with('swarm_callback_deliveries', ['claim_token', 'available_at'])
+        ->andReturnTrue();
+
+    $connection = Mockery::mock(Connection::class);
+    $connection->shouldReceive('getSchemaBuilder')->twice()->andReturn($schema);
+
+    $outbox = new DatabaseCallbackDeliveryOutbox(
+        $connection,
+        config(),
+        app(SwarmPersistenceCipher::class),
+        app(BusDispatcher::class),
+        app(SwarmAuditDispatcher::class),
+    );
+
+    expect($outbox->isAvailable())->toBeFalse()
+        ->and($outbox->isAvailable())->toBeTrue();
 });
 
 it('computes callback health with one aggregate query regardless of backlog size', function (): void {
@@ -405,6 +485,103 @@ it('uses a claim token compare and set so duplicate delivery jobs execute once',
         ->and(callbackTable()->where('run_id', 'run-claim-cas')->exists())->toBeFalse();
 });
 
+it('keeps the pending claim token across repeated backlog reclaims so the first queued job can deliver once', function (): void {
+    Bus::fake();
+    config()->set('swarm.callbacks.reservation_timeout_seconds', 60);
+    cache()->forever('cb:pending-backlog', 0);
+    Carbon::setTestNow(Carbon::parse('2026-10-05 12:00:00', 'UTC'));
+
+    try {
+        $outbox = callbackOutbox();
+        $outbox->register('run-pending-backlog', CallbackSlot::Then, function (): void {
+            cache()->increment('cb:pending-backlog');
+        });
+        $outbox->settle('run-pending-backlog', new SwarmTerminalContext('run-pending-backlog', CallbackSlot::Then, 'App\\Swarms\\S'));
+
+        $outbox->drain();
+        Carbon::setTestNow(Carbon::now('UTC')->addSeconds(61));
+        $outbox->drain();
+        Carbon::setTestNow(Carbon::now('UTC')->addSeconds(61));
+        $outbox->drain();
+
+        $jobs = Bus::dispatched(DeliverSwarmCallback::class)->values();
+        expect($jobs)->toHaveCount(3)
+            ->and($jobs->pluck('claimToken')->unique())->toHaveCount(1);
+
+        foreach ($jobs as $job) {
+            $job->handle($outbox);
+        }
+
+        expect((int) cache()->get('cb:pending-backlog'))->toBe(1)
+            ->and(callbackTable()->where('run_id', 'run-pending-backlog')->exists())->toBeFalse();
+    } finally {
+        Carbon::setTestNow();
+    }
+});
+
+it('rotates the token when reclaiming stale delivering work so the earlier lease job cannot act', function (): void {
+    Bus::fake();
+    config()->set('swarm.callbacks.reservation_timeout_seconds', 60);
+    cache()->forever('cb:stale-delivering-token', 0);
+    Carbon::setTestNow(Carbon::parse('2026-10-05 12:00:00', 'UTC'));
+
+    try {
+        $outbox = callbackOutbox();
+        $outbox->register('run-stale-delivering-token', CallbackSlot::Then, function (): void {
+            cache()->increment('cb:stale-delivering-token');
+        });
+        $outbox->settle('run-stale-delivering-token', new SwarmTerminalContext('run-stale-delivering-token', CallbackSlot::Then, 'App\\Swarms\\S'));
+        $outbox->drain();
+
+        $firstJob = Bus::dispatched(DeliverSwarmCallback::class)->first();
+        callbackTable()->where('id', $firstJob->id)->update([
+            'status' => 'delivering',
+            'attempts' => 1,
+        ]);
+
+        Carbon::setTestNow(Carbon::now('UTC')->addSeconds(61));
+        $outbox->drain();
+        $secondJob = Bus::dispatched(DeliverSwarmCallback::class)->last();
+
+        expect($secondJob->claimToken)->not->toBe($firstJob->claimToken);
+
+        $firstJob->handle($outbox);
+        expect((int) cache()->get('cb:stale-delivering-token'))->toBe(0)
+            ->and(callbackTable()->where('id', $firstJob->id)->value('status'))->toBe('pending');
+
+        $secondJob->handle($outbox);
+        expect((int) cache()->get('cb:stale-delivering-token'))->toBe(1)
+            ->and(callbackTable()->where('id', $firstJob->id)->exists())->toBeFalse();
+    } finally {
+        Carbon::setTestNow();
+    }
+});
+
+it('ages callback health from settlement rather than registration', function (): void {
+    config()->set('swarm.callbacks.stale_warning_threshold_seconds', 60);
+    Carbon::setTestNow(Carbon::parse('2026-10-05 12:00:00', 'UTC'));
+
+    try {
+        $outbox = callbackOutbox();
+        $outbox->register('run-settlement-age', CallbackSlot::Then, fn () => null);
+
+        Carbon::setTestNow(Carbon::now('UTC')->addMinutes(5));
+        $outbox->settle('run-settlement-age', new SwarmTerminalContext('run-settlement-age', CallbackSlot::Then, 'App\\Swarms\\S'));
+
+        $settledAt = Carbon::now('UTC');
+        $fresh = app(ReadableCallbackDeliveryOutbox::class)->healthSummary();
+        expect(callbackTable()->where('run_id', 'run-settlement-age')->value('available_at'))->not->toBeNull()
+            ->and(Carbon::parse((string) callbackTable()->where('run_id', 'run-settlement-age')->value('available_at'))->equalTo($settledAt))->toBeTrue()
+            ->and($fresh['aged_eligible'])->toBe(0);
+
+        Carbon::setTestNow(Carbon::now('UTC')->addSeconds(61));
+        $aged = app(ReadableCallbackDeliveryOutbox::class)->healthSummary();
+        expect($aged['aged_eligible'])->toBe(1);
+    } finally {
+        Carbon::setTestNow();
+    }
+});
+
 it('does not count reservations or dispatch failures as delivery attempts', function (): void {
     config()->set('swarm.callbacks.retry_backoff_seconds', 1);
     $throwingBus = Mockery::mock(BusDispatcher::class);
@@ -531,6 +708,48 @@ it('keeps callback exception secrets out of dead letter logs', function (): void
     expect($row->status)->toBe('dead_letter')
         ->and(app(SwarmPersistenceCipher::class)->open($row->last_error))->toContain($secret);
 });
+
+it('logs the fixed unreadable payload category without exception messages', function (string $case, string $expectedReason): void {
+    Exceptions::fake();
+    $logger = Mockery::mock(LoggerInterface::class);
+    $logger->shouldReceive('error')->once()->with(
+        'Swarm terminal callback reached dead_letter status.',
+        Mockery::on(fn (array $context): bool => ($context['reason'] ?? null) === $expectedReason
+            && ! array_key_exists('exception_message', $context)
+            && array_keys($context) === ['id', 'run_id', 'slot', 'attempts', 'reason', 'exception_class']),
+    );
+    $outbox = new DatabaseCallbackDeliveryOutbox(
+        DB::connection(),
+        config(),
+        app(SwarmPersistenceCipher::class),
+        app(BusDispatcher::class),
+        app(SwarmAuditDispatcher::class),
+        $logger,
+    );
+    $runId = 'run-unreadable-log-'.$case;
+    $outbox->register($runId, CallbackSlot::Then, fn () => null);
+    $outbox->settle($runId, new SwarmTerminalContext($runId, CallbackSlot::Then, 'App\\Swarms\\S'));
+    $id = (int) callbackTable()->where('run_id', $runId)->value('id');
+
+    if ($case === 'missing-key') {
+        SerializableClosure::setSecretKey(null);
+    } else {
+        SerializableClosure::setSecretKey('different-callback-test-signing-key');
+    }
+
+    deliverClaimedCallback($outbox, $id);
+
+    expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+})->with([
+    'missing signing key' => [
+        'missing-key',
+        'callback is unsigned or cannot be verified: no APP_KEY signing key is configured (terminal callbacks require APP_KEY)',
+    ],
+    'bad signature' => [
+        'bad-signature',
+        'callback signature verification failed (payload tampering or APP_KEY rotation)',
+    ],
+]);
 
 it('reports the original callback exception through the application exception handler', function (): void {
     Exceptions::fake();
@@ -1157,6 +1376,31 @@ it('settles failure callbacks while disabled and resumes delivery after re-enabl
     expect(cache()->get('disabled-failure'))->toBe('catch');
 });
 
+it('reprobes settlement availability after a warm worker observes the callback table being dropped', function (): void {
+    callbacksUseDatabase(enabled: false);
+    $history = app(RunHistoryStore::class);
+    $outbox = callbackOutbox();
+    $history->start('run-dropped-callback-table-first', 'App\\Swarms\\SeamSwarm', 'sequential', RunContext::fromTask('in'), [], 3600);
+    $history->start('run-dropped-callback-table-second', 'App\\Swarms\\SeamSwarm', 'sequential', RunContext::fromTask('in'), [], 3600);
+
+    // Warm the singleton's positive settlement-availability cache before the down migration.
+    expect($outbox->hasFor('run-dropped-callback-table-first'))->toBeFalse();
+    Schema::drop('swarm_callback_deliveries');
+
+    try {
+        expect(fn () => $history->complete('run-dropped-callback-table-first', new SwarmResponse('out'), 3600))
+            ->toThrow(QueryException::class);
+
+        $history->complete('run-dropped-callback-table-second', new SwarmResponse('out'), 3600);
+
+        expect(DB::table('swarm_run_histories')->where('run_id', 'run-dropped-callback-table-first')->value('status'))->toBe('running')
+            ->and(DB::table('swarm_run_histories')->where('run_id', 'run-dropped-callback-table-second')->value('status'))->toBe('completed');
+    } finally {
+        $migration = require dirname(__DIR__, 3).'/database/migrations/2026_09_26_000001_create_swarm_callback_deliveries_table.php';
+        $migration->up();
+    }
+});
+
 it('discards cancellation callbacks while disabled', function (): void {
     $history = app(RunHistoryStore::class);
     $history->start('run-disabled-cancel', 'App\\Swarms\\SeamSwarm', 'sequential', RunContext::fromTask('in'), [], 3600);
@@ -1239,7 +1483,7 @@ it('keeps flag-off callback-free terminal writers on their pre-feature transacti
     'complete' => ['complete', 2, 0],
     'fail' => ['fail', 2, 0],
     'failWithMetadata' => ['failWithMetadata', 3, 1],
-    'recordPreflightFailure' => ['recordPreflightFailure', 4, 0],
+    'recordPreflightFailure' => ['recordPreflightFailure', 4, 1],
     'cancelled syncDurableState' => ['cancelled', 2, 0],
 ]);
 
@@ -1462,7 +1706,8 @@ it('reports callback delivery health as ok when enabled with no failures and war
     // ok: enabled, no rows.
     Artisan::call('swarm:health', ['--json' => true]);
     $ok = collect(json_decode(Artisan::output(), true)['checks'] ?? [])->firstWhere('component', 'Callback delivery');
-    expect($ok['status'])->toBe('ok');
+    expect($ok['status'])->toBe('ok')
+        ->and($ok['details'])->not->toContain('is swarm:relay scheduled?');
 
     // warning: a dead-lettered row present.
     callbackTable()->insert([

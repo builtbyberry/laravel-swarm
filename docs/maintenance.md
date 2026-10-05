@@ -358,7 +358,10 @@ When terminal workflow callbacks are enabled, the same scheduled
 `swarm:relay --type=callback` for focused recovery. Route delivery jobs with
 `swarm.callbacks.queue.connection` / `.name`. A failed dispatch or callback is
 eligible again after `swarm.callbacks.retry_backoff_seconds`; only a delivery
-job that acquires the current claim token consumes an attempt. Set
+job that acquires the current claim token consumes an attempt. A worker must
+consume the configured callback queue/connection; `swarm:health` reports an
+undefined configured connection as a failure when callbacks are enabled and a
+note when disabled. Set
 `swarm.callbacks.reservation_timeout_seconds` above queue delay plus the longest
 callback execution, because an expired lease can overlap a still-running
 callback.
@@ -368,10 +371,13 @@ started. Existing rows still settle with their terminal run, remain as a paused
 backlog, and resume after re-enablement. `swarm:health` reports counts while
 disabled and warns on aged eligible work, stale pending reservations, stale
 deliveries, and dead letters. `swarm:prune` removes eligible callback rows before
-their expired run history and never removes a `delivering` row; dead-letter
-retention is opt-in through `swarm.callbacks.dead_letter_retention_days`.
-Restart long-lived workers after callback migrations or configuration changes,
-because outbox readiness is cached per process. See
+their expired run history and never removes a `delivering` row. A positive
+`swarm.callbacks.dead_letter_retention_days` can remove dead letters sooner;
+null disables age-based pruning but does not preserve a row after its run history
+expires. Positive outbox readiness is cached per process; absent or transiently
+unreadable schema is re-probed. Restart long-lived workers after callback schema
+or table-name changes, and stop or restart them before running the callback down
+migration. See
 [Terminal workflow callbacks](error-handling.md#terminal-workflow-callbacks) for
 the complete operating and rollback contract.
 
