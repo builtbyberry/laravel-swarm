@@ -116,35 +116,52 @@ Native feature access through Laravel Swarm workflows.
 
 ### Changed
 
-- Hosted Pest 5 coverage and mutation workflows now use Xdebug after repeated
-  PCOV exit-139 crashes on the expanded v0.28 suite. The four PHP/dependency
-  matrix jobs retain the complete coverage command and 80% floor; the
-  moving-development nightly loads no coverage driver because it does not
-  collect coverage. The informational mutation job now has a four-hour timeout
-  so its slower Xdebug baseline can complete rather than being cancelled at the
-  former two-hour ceiling. A subsequent exact P8 run reproduced exit 139 under
-  both Xdebug and the coverage-disabled nightly, showing that the crash was not
-  coverage-driver-specific and implicating the monolithic Pest 5 process.
-  Hosted Pest 5 now runs the same configured Unit, Feature, and Installer suites
-  across four concurrent ParaTest workers. A later coverage-disabled nightly
-  still exited 139 in `ProviderToolPreservationTest`, showing that concurrency
-  was bounded but each persistent worker's lifetime was not. A 32-file recycle
-  bound passed on its corrective branch, but the larger P8 suite changed worker
-  history and reproduced the same coverage-disabled crash with identical PHP,
-  Laravel AI, Pest, and ParaTest versions. Hosted Pest 5 now starts a fresh
-  worker for every parallel test file while retaining four-way concurrency.
-  Fresh P8 runs then isolated exit 139 to the database-heavy
-  `ProviderToolPreservationTest` inside ParaTest across all four Xdebug rows and
-  the coverage-disabled moving-development row, without establishing a PHP,
-  framework, database, or coverage-driver root cause. That one named
-  `ci-serial` group now runs in a fresh non-parallel Pest process after the
-  parallel pass with a bounded 512 MB PHP memory limit. Coverage from the
-  remaining parallel tests is measured against
-  the complete source filter before the unchanged 80% aggregate floor is
-  enforced; the serial behavior-verification process contributes no coverage
-  data, and both processes must pass. The ordinary local `composer test` path
-  remains sequential. Generator tests now remove only the files they own, so
-  parallel workers cannot delete a sibling worker's generated artifact.
+- **BREAKING (authored parallel/hierarchical swarms):** An authored parallel
+  swarm class must now be container-resolvable, and every declared slot must
+  reconstruct to a Laravel AI agent, even when every v0.28 feature flag is off.
+  Authored hierarchical parallel workers likewise reconstruct the declared
+  swarm before falling back to resolving the worker class. Ad-hoc concurrent
+  builders require explicit configuration for every reconstructed slot/node
+  when native per-run settings admission is enabled, and fail before dispatch
+  instead of silently discarding live instance state.
+- **BREAKING (queued swarms require APP_KEY):** Queued and broadcast swarm jobs
+  (`queue()`, `broadcastOnQueue()`, and their native-input and native-settings
+  variants) now implement Laravel's `ShouldBeEncrypted`, so the run payload they
+  carry inline — the prompt, structured data, metadata, and artifacts — is stored
+  in the queue backend and in `failed_jobs` encrypted with `APP_KEY` instead of as
+  plaintext. Queuing a swarm now requires an application key and fails early with
+  `NonQueueableSwarmException` when the key is missing or invalid. Jobs already
+  queued before the upgrade still run. Undecryptable package jobs log a warning
+  and emit a degraded `job.failed`. See
+  [UPGRADING](UPGRADING.md#encrypted-queued-swarm-payloads).
+- **BREAKING (database persistence: migrate before serving):** Native step
+  results add schema through migration `2026_09_25_000001`. With database
+  persistence, every execution mode — including inline `prompt()`, `run()`, and
+  `stream()` calls in web processes — fails closed with `SwarmException` until
+  that migration has run. Cache-driver applications are unaffected. Native
+  results keep final usage and citations on their existing Swarm surfaces,
+  preserve unknown/mixed historical usage semantics, never serialize raw native
+  responses or unrestricted provider payloads, and do not fabricate absent
+  native identifiers. Code rollback is unsafe after writes while affected
+  identities can resume or retry: stop intake, drain work, deploy and restart all
+  old workers before resuming, then handle schema removal only after evidence
+  retention is satisfied.
+- Hosted Pest 5 runs the configured Unit, Feature, and Installer suites across
+  four fresh-per-file ParaTest workers with Xdebug in the four coverage matrix
+  jobs. `ProviderToolPreservationTest` runs separately in the `ci-serial` group
+  with a 512 MB limit; both processes must pass, and the parallel coverage pass
+  retains the complete source filter and 80% floor. The moving-development
+  nightly remains coverage-free, the informational mutation job has a four-hour
+  timeout, and local `composer test` remains sequential. This isolates the
+  repeatable long-lived-worker exit-139 failure without weakening the hosted
+  behavior or coverage gates; generator tests also remove only their own files.
+- Execution-verb and assertion task parameter unions on `Runnable` and
+  `SwarmFake`, plus inline pending-run execution verbs and
+  `RunContext::from()` / `RunContext::fromTask()`, now accept native
+  `AgentInput|UserMessage`.
+  `SwarmRelayCommand::handle()` also gains a `CallbackDeliveryOutbox` parameter.
+  Only subclasses that override these methods need matching signature changes;
+  see [UPGRADING](UPGRADING.md#widened-method-signatures).
 - Installation, generator, starter, example, testing, README, and upgrade
   guidance now present native Laravel AI agents as the normal model-agent path.
   `make:swarm:agent` and deprecated `make:swarm --single` remain deterministic
@@ -156,24 +173,7 @@ Native feature access through Laravel Swarm workflows.
   does not itself add an execution mode. Top-level parallel streaming separately adds default-off,
   process-backed top-level parallel live multiplexing. Approval `Decisions`
   remain outside fresh-run input and fail with continuation guidance.
-- Authored parallel and hierarchical workers now reconstruct the declared swarm and stable slot/node inside concurrency workers, preserving configuration expressed by `agents()`. When native per-run settings admission is enabled, ad-hoc concurrent builders require explicit configuration for every reconstructed slot/node and fail before dispatch instead of silently discarding live instance state.
 - Native settings admission now validates known agent compatibility before queue or concurrency dispatch, applies attachment authorization and byte limits to request-local and recovered one-shot messages, bounds the complete recoverable envelope before persistence, resolves conversation policies per invocation, and rejects recoverable message attachment profiles that Laravel AI cannot reconstruct faithfully.
-- Native step results keep final usage and citations on their existing Swarm
-  surfaces, preserve unknown/mixed historical usage semantics, never serialize
-  raw native responses or unrestricted provider payloads, and do not fabricate
-  absent native identifiers. Deploy the additive schema before writers. Code
-  rollback is unsafe after writes while affected identities can resume or retry:
-  stop intake, drain work, deploy and restart all old workers before resuming,
-  then handle schema removal only after evidence retention is satisfied.
-- Queued and broadcast swarm jobs (`queue()`, `broadcastOnQueue()`, and their
-  native-input and native-settings variants) now implement Laravel's
-  `ShouldBeEncrypted`, so the run payload they carry inline — the prompt,
-  structured data, metadata, and artifacts — is stored in the queue backend and in
-  `failed_jobs` encrypted with `APP_KEY` instead of as plaintext. Queuing a swarm now
-  requires an application key and fails early with `NonQueueableSwarmException`
-  when the key is missing or invalid. Jobs already queued before the upgrade still run.
-  Undecryptable package jobs log a warning and emit a degraded `job.failed`.
-  See [UPGRADING](UPGRADING.md#encrypted-queued-swarm-payloads).
 - The Laravel 13.16 compatibility lane ignores advisory `PKSA-d5tc-s1qs-h781`
   (CVE-2026-102279, fixed upstream only in Laravel 13.30.0) in its temporary lane
   manifest, so it can keep installing the exact 13.16.0 release that proves the
