@@ -390,7 +390,9 @@ test('callback health warns about aged and stale work and reports paused counts'
 
     expect($enabled['status'])->toBe('warning')
         ->and($enabled['details'])->toContain('1 registered', '2 pending', '1 delivering', '1 dead-lettered')
-        ->and($enabled['details'])->toContain('1 stale pending', '1 stale delivering', '1 aged eligible');
+        ->and($enabled['details'])->toContain('1 stale pending', '1 stale delivering', '1 aged eligible')
+        ->and($enabled['details'])->toContain('is swarm:relay scheduled?')
+        ->and($enabled['details'])->toContain('a worker must consume the callback queue/connection');
 
     config()->set('swarm.callbacks.enabled', false);
     Artisan::call('swarm:health', ['--json' => true]);
@@ -400,6 +402,28 @@ test('callback health warns about aged and stale work and reports paused counts'
     expect($disabled['details'])->toContain('delivery paused by kill switch')
         ->and($disabled['details'])->toContain('1 registered', '2 pending', '1 delivering', '1 dead-lettered');
 });
+
+test('callback health reports an undefined configured queue connection', function (bool $enabled, string $expectedStatus): void {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.callbacks.enabled', $enabled);
+    config()->set('swarm.callbacks.queue.connection', 'missing-callback-connection');
+    config()->set('queue.connections', [
+        'sync' => ['driver' => 'sync'],
+    ]);
+    app()->forgetInstance(CallbackDeliveryOutbox::class);
+    app()->forgetInstance(ReadableCallbackDeliveryOutbox::class);
+
+    expect(Artisan::call('swarm:health', ['--json' => true]))->toBe($enabled ? 1 : 0);
+    $callback = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks'])
+        ->firstWhere('component', 'Callback delivery');
+
+    expect($callback['status'])->toBe($expectedStatus)
+        ->and($callback['details'])->toContain('swarm.callbacks.queue.connection')
+        ->and($callback['details'])->toContain('missing-callback-connection');
+})->with([
+    'enabled' => [true, 'failed'],
+    'disabled' => [false, 'note'],
+]);
 
 test('callback health treats unreadable schema as informational only while callbacks are disabled', function (string $schemaState): void {
     $originalTable = config('swarm.tables.callback_deliveries');

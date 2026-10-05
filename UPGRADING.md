@@ -175,7 +175,7 @@ This fix adds four callback delivery settings:
   delivery jobs to a queue; null routing uses the application's defaults.
 - `swarm.callbacks.retry_backoff_seconds` /
   `SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS` (default `60`) delays a retry after a
-  callback or queue-dispatch failure.
+  callback or queue-dispatch failure and is clamped to at least one second.
 - `swarm.callbacks.stale_warning_threshold_seconds` /
   `SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS` (default `0`) controls when
   eligible work warns in `swarm:health`; zero means twice the effective
@@ -185,7 +185,10 @@ Size `swarm.callbacks.reservation_timeout_seconds` /
 `SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS` above the longest expected
 callback execution, including queue delay. Delivery is at-least-once, and an
 expired lease can overlap a still-running callback, so callbacks must be
-idempotent. The `swarm.callbacks.enabled` kill switch stops registration and
+idempotent. A worker must consume the configured callback queue/connection;
+`swarm:health` fails when an enabled configured connection is absent from
+`queue.connections` and reports a note while callbacks are disabled. The
+`swarm.callbacks.enabled` kill switch stops registration and
 deliveries that have not started; rows registered earlier still settle with
 their run and resume after re-enablement. A delivery already executing is not
 interrupted.
@@ -196,10 +199,12 @@ sealed; the package's dead-letter log line includes identifiers, attempts, a
 static reason, and the exception class, but never the exception message.
 `swarm:health` warns on aged eligible work, stale reservations/deliveries, and
 dead letters. `swarm:prune` removes eligible callback rows before their expired
-run history, never prunes a `delivering` row, and retains dead letters unless
-`swarm.callbacks.dead_letter_retention_days` is a positive integer. Restart
-long-lived workers after callback migrations or configuration changes because
-callback readiness is cached per process.
+run history and never prunes a `delivering` row. A positive
+`swarm.callbacks.dead_letter_retention_days` may remove dead letters sooner;
+null disables age-based dead-letter pruning but does not preserve a row after its
+run history expires. Only positive callback readiness is cached per process;
+missing or transiently unreadable schema is re-probed so workers can recover
+after the migration appears.
 
 Before rolling back the callback migration, stop new callback registration and
 run:
@@ -208,8 +213,9 @@ run:
 php artisan swarm:relay --type=callback --drain-until-empty
 ```
 
-Wait for the dispatched callback deliveries to finish before running the down
-migration, which drops any rows still present. See
+Wait for the dispatched callback deliveries to finish, then stop or restart all
+long-lived workers before running the down migration, which drops any rows still
+present. See
 [Terminal workflow callbacks](docs/error-handling.md#terminal-workflow-callbacks)
 for the runtime contract and operating guidance.
 
@@ -224,8 +230,9 @@ and its metadata untouched. The cache history store is unchanged.
 This protects stored history only. A failure event can still follow a completed
 run when an exception occurs after completion, unchanged from v0.27 and tracked
 for a later release. Even with callbacks disabled, each finished database run
-performs one indexed callback-existence check; callback-free terminal writes add
-no transaction.
+performs one indexed callback-existence check. Callback-free terminal writes add
+no transaction except `recordPreflightFailure()`, which now always opens one
+transaction so its write-once check and `updateOrInsert()` are atomic.
 
 ### Native chat protocol adapters
 
@@ -321,6 +328,10 @@ enabling the writer. Order only within one `(branch_id, attempt_id)` by
 `branch_sequence`; arrival order across branches is not a causal order. Native
 IDs remain unchanged and can repeat across branches.
 
+Text and function-tool stream events also add an optional `payload_status` wire
+key by default, without a feature flag; text events include `message_id` when the
+native event supplies one. Older replay rows can omit these additive keys.
+
 The live path requires the `process` driver. `sync`, `fork`, and custom drivers
 fail before agent invocation because their public result is buffered. Use
 `prompt()` where process streaming is unavailable. There is no automatic
@@ -363,6 +374,8 @@ The `Runnable`, inline pending-run, and `SwarmFake` execution verbs now accept
 The `Runnable` static assertion helpers and `SwarmFake` instance assertions
 also widen the task parameters on `assertPrompted()`, `assertRan()`,
 `assertQueued()`, `assertDispatchedDurably()`, and `assertStreamed()`.
+Subclasses of `SwarmFake` must also widen overrides of the protected
+`resolveResponse()`, `matchesStructuredTask()`, and `actorFromTask()` helpers.
 `RunContext::from()` and
 `RunContext::fromTask()` accept the native input types as well.
 
@@ -439,6 +452,10 @@ larger bounded histories are required; configured values are capped at 1,000
 messages and 16 MiB. For durable runs, keep every per-recipient provider timeout
 below `SWARM_DURABLE_STEP_TIMEOUT` (300 seconds by default) so the step lease
 cannot expire mid-call.
+
+Recovery re-applies the current seeded-message limits to stored envelopes. Drain
+in-flight runs before lowering either limit, or a run admitted under the earlier
+higher value can fail when a worker reconstructs it.
 
 Before removing native-input v2 readers, `swarm:health` must report zero active,
 zero total v2, and zero expired-unpruned envelopes. If `swarm:prune` retains an

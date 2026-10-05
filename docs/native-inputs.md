@@ -151,7 +151,9 @@ data by default, configurable through
 `swarm.native_agent_settings.max_message_bytes`. The hard ceilings are 1,000
 messages and 16 MiB. Swarm applies both limits to request-local and recoverable
 admission and rejects an over-limit run before any provider request. Applications
-that leave native agent settings disabled are unaffected.
+that leave native agent settings disabled are unaffected. Recovery re-applies the
+current limits to the stored envelope, so drain in-flight runs before lowering
+either value or an envelope admitted under the earlier limit can fail reconstruction.
 
 Settings work across sequential, real process-parallel, queued, durable,
 generated/static routed-worker, retry and recovered execution within the existing

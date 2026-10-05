@@ -97,6 +97,17 @@ registration throw without a signing key, plus CI-only
 fresh-install proof was **not** re-run against those changes; they are covered by
 this package's own test suite.
 
+The readiness fixes merged afterwards are also outside this proof:
+[PR #558](https://github.com/builtbyberry/laravel-swarm/pull/558) changes
+`swarm:health` and `swarm:prune` output and bounds seeded native messages;
+[PR #559](https://github.com/builtbyberry/laravel-swarm/pull/559) makes callback
+delivery lease-based, makes database run history terminal status write-once, and
+adds the `callback.delivered` audit category; and
+[PR #561](https://github.com/builtbyberry/laravel-swarm/pull/561) follows up on
+callback delivery and health. These change run-history finalization and command
+output that companion packages read. The combined proof must be re-pinned to the
+final release head and re-run before core and the companions are tagged.
+
 ## Per-companion compatibility (core 0.28 lanes green)
 
 Each companion sibling's pinned core-0.28 CI lanes install the frozen core candidate

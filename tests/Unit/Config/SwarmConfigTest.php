@@ -122,7 +122,7 @@ test('terminal callback delivery settings use their exact environment variables 
         ->and($defaults['callbacks']['queue'])->toBe(['connection' => null, 'name' => null])
         ->and($defaults['callbacks']['retry_backoff_seconds'])->toBe(60)
         ->and($defaults['callbacks']['stale_warning_threshold_seconds'])->toBe(0)
-        ->and($bounded['callbacks']['retry_backoff_seconds'])->toBe(0)
+        ->and($bounded['callbacks']['retry_backoff_seconds'])->toBe(1)
         ->and($bounded['callbacks']['stale_warning_threshold_seconds'])->toBe(0);
 });
 
