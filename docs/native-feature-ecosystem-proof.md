@@ -174,13 +174,12 @@ duplicating it:
 
 Each of these is documented in place with a reopen trigger; none is a silent drop.
 
-- **CI compatibility lane blocked upstream (release readiness `CI-COMPAT-ADVISORY`).**
-  The `PHP 8.4/8.5 - Laravel 13.16 compatibility (Pest 4)` lanes fail at dependency
-  install because Composer's advisory policy refuses `laravel/framework 13.16.0`
-  (advisory PKSA-d5tc-s1qs-h781). This is release-wide CI configuration, not any
-  component's code; PRs merged into `release/v0.28.0` with it red. Its fix (bump the
-  pinned compat version to a non-advisory 13.x, or ignore the advisory in policy) is a
-  release-wide CI chore, tracked on the release, not folded into any component.
+- **CI compatibility advisory (release readiness `CI-COMPAT-ADVISORY`).**
+  The `PHP 8.4/8.5 - Laravel 13.16 compatibility (Pest 4)` lane passes with a
+  lane-scoped ignore of only advisory `PKSA-d5tc-s1qs-h781` (PR #555); any other
+  advisory still fails that exact-floor lane. Reopen when the declared Laravel
+  floor moves to a fixed release or the advisory status changes, then remove the
+  ignore and rerun the floor proof.
 - **Companion `^0.28` support (release readiness `P12-ECO1`).** The shipped companions
   capped core at `^0.27`; this component's four sanctioned siblings add `^0.28`. Until
   those siblings are merged, tagged, and published, a default-Packagist five-package
@@ -200,9 +199,10 @@ Each of these is documented in place with a reopen trigger; none is a silent dro
 Consumer migration, deploy order, drain conditions, and the revert-unsafe boundary for
 newly persisted native state (native results, sealed operational envelopes, and the
 `swarm_callback_deliveries` callback-delivery table) are documented in
-[UPGRADING.md](../UPGRADING.md): migrate first, deploy readers with flags off, enable
-after every worker is on v0.28, and treat code rollback as unsafe after new native
-persisted state has been written while an affected flag was on — drain before rollback.
+[UPGRADING.md](../UPGRADING.md), including the callback-specific
+[migration, deploy, relay, and rollback order](../UPGRADING.md#terminal-workflow-callbacks):
+migrate first, deploy readers with flags off, enable after every worker is on v0.28,
+and drain before rollback when newly persisted state has been written.
 This component adds no migration and no new persisted state of its own.
 
 ## Completed work and new-work handoff

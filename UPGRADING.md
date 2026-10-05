@@ -6,6 +6,59 @@ There is no `0.27-to-0.28` upgrade-assistant recipe, and none is needed. The exi
 assistant reports a core-0.28 application as an unsupported source and infers no
 actions; follow the Composer and migration rollout steps in this block instead.
 
+### Required for every upgrade
+
+- **Migrate before the code swap on database persistence.** Make the v0.28
+  migrations available, then run `php artisan migrate` before any v0.28 process
+  serves traffic; execution fails closed until the
+  [native step-result migration](#native-step-result-readers-and-storage) is
+  present. Applications with published migrations, or with
+  `LaravelSwarm::$runsMigrations = false`, must copy the new package migrations
+  into the application first.
+- **Restart long-lived HTTP and queue workers** after the
+  [migration and deploy](#native-step-result-readers-and-storage).
+- **Configure a valid `APP_KEY` before queueing a swarm.** See
+  [Encrypted queued swarm payloads](#encrypted-queued-swarm-payloads).
+- **Clear and rebuild the configuration cache** so the new defaults and
+  environment values are loaded. See
+  [Native chat protocol adapters](#native-chat-protocol-adapters).
+
+After the first v0.28 native step result is written, a code rollback requires
+the [drain procedure](#native-step-result-readers-and-storage) before old code is
+deployed.
+
+### Authored parallel and hierarchical swarms
+
+Authored parallel swarm classes must now be container-resolvable, and every
+declared agent slot must reconstruct to a Laravel AI agent. This requirement is
+active even while every v0.28 feature flag is off. Authored hierarchical
+parallel groups also reconstruct the declared swarm inside workers so
+configuration expressed by `agents()` is retained; their worker classes must
+remain independently container-resolvable as the fallback.
+
+The authored-parallel preflight exceptions are:
+
+- `{$swarmClass}: authored parallel swarms must be container-resolvable so worker slots can be reconstructed.`
+- `{$swarmClass}: authored parallel agent slot [{$index}] must reconstruct to a Laravel AI agent.`
+
+Keep authored swarm constructors container-resolvable and constructor-inject
+only dependencies the container can build. Carry request- or run-specific state
+in `RunContext`, not mutable swarm or agent instances.
+
+### Laravel security advisory
+
+Laravel 13.16 through 13.29 are affected by advisory
+`PKSA-d5tc-s1qs-h781` / CVE-2026-102279, fixed in Laravel 13.30.0. Laravel
+Swarm's declared floor remains `^13.16`; applications should run Laravel 13.30
+or later.
+
+### Companion packages
+
+`laravel-swarm-pulse`, `laravel-swarm-filament`, `laravel-swarm-mcp`, and
+`laravel-swarm-memory-vector` add `^0.28` core compatibility in their own
+releases. If an application uses a companion, upgrade core only after the
+companion release that permits `^0.28` is available.
+
 ### Native ownership, limits, and legacy retirement
 
 No action is required. This release records the native-first ownership contract in
@@ -79,6 +132,40 @@ or `failed_jobs`.
 - **Post-upgrade smoke check:** queue one swarm and confirm `job.completed` and
   `run.completed`; a key mismatch should fail with `DecryptException`.
 
+### Terminal workflow callbacks
+
+Terminal workflow callbacks are default-off behind
+`swarm.callbacks.enabled` / `SWARM_CALLBACKS_ENABLED`. Registration requires the
+database persistence driver, and every process that registers or delivers a
+callback must have the same valid `APP_KEY`.
+
+Package migration `2026_09_26_000001` creates
+`swarm_callback_deliveries` for every consumer that runs the package
+migrations. Roll out callbacks in this order:
+
+1. Run `php artisan migrate`.
+2. Deploy v0.28 to every application and worker process.
+3. Schedule `swarm:relay`.
+4. Enable `SWARM_CALLBACKS_ENABLED=true`.
+
+A plain `queue()` application that did not previously use durable execution or
+the audit outbox must newly schedule the relay before enabling callbacks. A bare
+`swarm:relay` drains the durable, audit, and callback lanes;
+`swarm:relay --type=callback` selects only callback deliveries. Code that
+matches `RelayLane` exhaustively must handle the new `RelayLane::Callback` case.
+
+Before rolling back the callback migration, stop new callback registration and
+run:
+
+```bash
+php artisan swarm:relay --type=callback --drain-until-empty
+```
+
+Wait for the dispatched callback deliveries to finish before running the down
+migration, which drops any rows still present. See
+[Terminal workflow callbacks](docs/error-handling.md#terminal-workflow-callbacks)
+for the runtime contract and operating guidance.
+
 ### Native chat protocol adapters
 
 Vercel and AG-UI projection is default-off. Applications with a published
@@ -130,6 +217,8 @@ No migration, feature flag, config key, persistence, pruning, transaction,
 recovery, or operational command change is introduced by this authoring update.
 Rollback is a code revert; consumer files remain untouched.
 
+### Native messages and attachments
+
 Native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input is
 additive and default-off. An `AgentInput` carrying approval decisions is rejected
 before its message is read; approval continuation remains a separate workflow. Run
@@ -139,6 +228,14 @@ application-layer sealing, and a private `SWARM_NATIVE_INPUTS_DISK`; bind
 `AuthorizesNativeInputAttachment` before admitting application-owned stored or
 provider-file references. See [Native messages and attachments](docs/native-inputs.md)
 for the complete deployment and drain-before-rollback procedure.
+
+Recoverable native input must be admitted outside an open database transaction.
+The staged sealed envelope is the failure-recovery locator for promoted files;
+an outer rollback after a filesystem write would destroy that invariant.
+
+Before rotating `APP_KEY`, drain or re-encrypt active `swarm_native_inputs.payload`
+values along with the existing sealed operational inventory. These envelopes use
+strict decryption and cannot be reconstructed with the wrong key.
 
 ### Top-level parallel live streaming
 
@@ -198,20 +295,22 @@ server/load balancer and queue worker as the rollback stop condition. Retaining
 replay rows with the optional identity keys is schema-safe, but older consumers
 may discard the optional keys and cannot reconstruct cross-branch provenance.
 
-The `Runnable` and inline pending-run execution verbs now accept `AgentInput|UserMessage` in
-addition to string, array, and `RunContext`. Applications that override
-`prompt()`, `run()`, `queue()`, `stream()`, broadcast helpers, or
-`dispatchDurable()` with the old narrower parameter union must add both types
-to remain PHP-signature-compatible. `SwarmPruneCommand::handle()` retains its
-existing public signature so command subclasses are not forced to change.
+### Widened method signatures
 
-Recoverable native input must be admitted outside an open database transaction.
-The staged sealed envelope is the failure-recovery locator for promoted files;
-an outer rollback after a filesystem write would destroy that invariant.
+The `Runnable`, inline pending-run, and `SwarmFake` execution verbs now accept
+`AgentInput|UserMessage` in addition to string, array, and `RunContext`.
+The `Runnable` static assertion helpers and `SwarmFake` instance assertions
+also widen the task parameters on `assertPrompted()`, `assertRan()`,
+`assertQueued()`, `assertDispatchedDurably()`, and `assertStreamed()`.
+`RunContext::from()` and
+`RunContext::fromTask()` accept the native input types as well.
 
-Before rotating `APP_KEY`, drain or re-encrypt active `swarm_native_inputs.payload`
-values along with the existing sealed operational inventory. These envelopes use
-strict decryption and cannot be reconstructed with the wrong key.
+Applications that override these methods with the old narrower parameter union
+must add both types to remain PHP-signature-compatible. Subclasses overriding
+`SwarmRelayCommand::handle()` must also add its new
+`CallbackDeliveryOutbox $callbackOutbox` parameter. Only subclasses that
+override one of these methods need to change; `SwarmPruneCommand::handle()`
+retains its existing public signature.
 
 ### Native per-run agent settings
 
@@ -278,11 +377,13 @@ on parent state.
 ### Native step result readers and storage
 
 Completed `SwarmStep` values now expose a bounded, versioned
-`NativeStepResult`. Run the v0.28 package migration before upgraded queue or
-durable workers write steps. It adds nullable native-result status/payload
-columns to history steps, durable branches, durable node outputs, and stream
-step checkpoints. Restart long-lived workers after the migration. Existing rows
-read as `unavailable` / `legacy`; custom stores that do not adopt the optional
+`NativeStepResult`. On database persistence, every run in every process —
+including inline `prompt()`, `run()`, and `stream()` calls — fails closed with
+`SwarmException` until migration `2026_09_25_000001` has run. Cache persistence
+is unaffected. The migration adds nullable native-result status/payload columns
+to history steps, durable branches, durable node outputs, and stream step
+checkpoints. Restart long-lived workers after the migration. Existing rows read
+as `unavailable` / `legacy`; custom stores that do not adopt the optional
 native-result capabilities also degrade explicitly rather than fabricating data.
 
 Live result access does not override capture. Full output capture stores the

@@ -69,6 +69,10 @@ decisions remain outside this input surface. See
 
 PHP **^8.4** is supported alongside PHP 8.5. As of **v0.27.0**, the official `laravel/ai` requirement is **^1.0**. Upgrade the dependency and Swarm together; see [UPGRADING.md](UPGRADING.md#upgrading-to-v0270).
 
+Before upgrading to v0.28, follow the required migration, worker-restart,
+`APP_KEY`, and config-cache steps in
+[UPGRADING.md](UPGRADING.md#upgrading-to-v0280).
+
 **No special stability configuration is required.** Laravel AI 1.0 is a stable release, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
 
 Earlier versions of this document asked you to set `"minimum-stability": "dev"` in your application's `composer.json`. That is no longer necessary, and as of **v0.23.0** it is no longer recommended — it loosens the resolution floor for your *entire* dependency tree, not just for Swarm. If you added those keys solely to install this package, you can remove them.
@@ -539,7 +543,11 @@ class ContentPipeline implements Swarm
 
 Agents run concurrently and each receives the original task.
 
-Parallel agents must be stateless and container-resolvable by class because Laravel concurrency resolves them inside worker processes.
+Authored parallel swarm classes must be container-resolvable, and every declared
+slot must reconstruct to a Laravel AI agent because Laravel concurrency resolves
+the swarm and its agents inside worker processes. The same reconstruction rule
+applies to authored hierarchical parallel groups. Keep runtime state in
+`RunContext`, not mutable swarm or agent instances.
 
 ```php
 #[Topology(TopologyEnum::Parallel)]
@@ -670,7 +678,14 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
 - Use database persistence for durable execution, long-lived history, active-run pruning protection, or operational dashboards.
 - Set `SWARM_CAPTURE_ACTIVE_CONTEXT=true` for queued and durable swarms.
 - Size queue worker timeouts and queue `retry_after` above the longest expected provider call.
-- Schedule `swarm:relay` every minute for durable execution AND for the v0.5 audit outbox. The relay drains the durable outbox after each checkpoint and replays failed audit records through the bound sink — a single schedule covers both lanes. Without it, durable runs stall after the first step and queued audit failures accumulate without retry. Use `swarm:relay --type=audit` to drain only the audit lane during focused recovery. See [Durable Execution](docs/durable-execution.md) and [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full relay reference.
+- Schedule `swarm:relay` every minute for durable execution, the audit outbox,
+  and terminal workflow callbacks. One schedule covers all three lanes. Without
+  it, durable runs stall after the first step, queued audit failures accumulate
+  without retry, and enabled terminal callbacks remain pending. Use
+  `swarm:relay --type=audit` or `swarm:relay --type=callback` to drain one lane
+  during focused recovery. See [Durable Execution](docs/durable-execution.md),
+  [Audit Evidence Contract](docs/audit-evidence-contract.md), and
+  [Terminal workflow callbacks](docs/error-handling.md#terminal-workflow-callbacks).
 - Run `php artisan migrate` on database persistence to create `swarm_audit_outbox` — required for the v0.5 default `SWARM_AUDIT_FAILURE_POLICY=queue` (sink failures persist for retry instead of being silently dropped). Cache persistence detects the missing outbox and falls back to log-and-swallow automatically.
 - Schedule `swarm:recover` every five minutes for durable execution and coordinated multi-worker hierarchical queueing. Recovery redispatches runs whose workers died between checkpoint and dispatch. See [Maintenance](docs/maintenance.md).
 - Schedule `swarm:prune` daily for database retention cleanup, or set `SWARM_PREVENT_PRUNE=true` when retention is managed outside the package.

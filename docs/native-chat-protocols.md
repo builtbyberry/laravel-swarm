@@ -46,9 +46,11 @@ Route::post('/chat/vercel', function () {
 });
 ```
 
-Workflow progress is emitted as Vercel `data-swarm` data parts. Applications
-can render them with the AI SDK's custom data-part support. Standard Vercel
-frames remain Laravel AI's contract.
+Workflow progress is emitted as Vercel `data-swarm` data parts. The default
+`Workflow` projection emits text only inside those custom data parts: it emits
+no standard text or tool parts. A stock AI SDK chat UI therefore shows an empty
+assistant message unless the application provides a custom data-part renderer.
+Standard Vercel frames remain Laravel AI's contract.
 
 ## AG-UI example
 
@@ -80,8 +82,8 @@ Workflow progress is emitted as AG-UI `CUSTOM` events named
 
 | Projection | Live topologies | Output contract | Important omissions |
 | --- | --- | --- | --- |
-| `Workflow` (default) | Sequential, enabled process-parallel, generated hierarchical, static hierarchical | Complete whitelisted workflow progress in `data-swarm` / `CUSTOM`; a real workflow completion is then followed by one native protocol terminal | Does not turn interleaved branch output into a linear chat message; reasoning content is withheld |
-| `FinalAgent` | Sequential only | Buffers final-step content until the matching step and workflow both complete; emits available text, tools, provider activity, and citations through standard native frames | No live partial answer; buffered content is discarded if a later step begins, the final step is unmatched, or the workflow fails |
+| `Workflow` (default) | Sequential, enabled process-parallel, generated hierarchical, static hierarchical | Complete whitelisted workflow progress in `data-swarm` / `CUSTOM`; text remains inside custom data parts, with no standard text/tool parts; a real workflow completion is then followed by one native protocol terminal | A custom data-part renderer is required; a stock AI SDK chat UI shows an empty assistant message; reasoning content is withheld |
+| `FinalAgent` | Sequential only | Standard chat-bubble projection: buffers final-step content until the matching step and workflow both complete, then emits available text, tools, provider activity, and citations through standard native frames | No live partial answer; buffered content is discarded if a later step begins, the final step is unmatched, or the workflow fails |
 
 `FinalAgent` rejects a non-sequential response before iteration. This prevents a
 failed projection choice from abandoning or terminalizing a live run. While the

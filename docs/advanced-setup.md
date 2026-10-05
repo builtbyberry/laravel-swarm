@@ -203,9 +203,10 @@ app-level audit listeners can record deletions before they happen. Use
 into the wider compliance evidence chain.
 
 `swarm:relay` is required — durable runs stall permanently if the relay is
-not running. It also drains the v0.5 audit outbox, so a single schedule
-covers both the durable and audit lanes. Use `swarm:relay --type=audit` or
-`--type=step` to drain a single lane during focused recovery.
+not running. It also drains the audit outbox and terminal callback deliveries,
+so a single schedule covers all three lanes. Use
+`swarm:relay --type=audit`, `--type=callback`, or `--type=step` to drain a
+single lane during focused recovery.
 
 ### 2. Set the durable queue name
 

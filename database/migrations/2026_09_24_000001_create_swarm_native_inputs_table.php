@@ -16,6 +16,7 @@ return new class extends Migration
         if (! Schema::hasTable($nativeInputs)) {
             Schema::create($nativeInputs, function (Blueprint $table): void {
                 $table->string('id')->primary();
+                // Admission can precede run history, so run_id is indexed without an FK and swarm:prune owns orphan cleanup.
                 $table->string('run_id')->index();
                 $table->unsignedSmallInteger('format_version');
                 $table->string('state');
