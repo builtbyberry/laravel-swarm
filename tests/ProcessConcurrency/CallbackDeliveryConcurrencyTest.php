@@ -72,11 +72,9 @@ function callbackConcurrencyWorker(?int $perWorker = null): Closure
 function callbackDuplicateDeliveryWorker(int $id, string $claimToken): Closure
 {
     return static function () use ($id, $claimToken): bool {
-        config()->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
         config()->set('swarm.persistence.driver', 'database');
         config()->set('swarm.persistence.encrypt_at_rest', false);
         config()->set('swarm.callbacks.enabled', true);
-        SerializableClosure::setSecretKey('callback-concurrency-signing-key');
 
         if (! app()->providerIsLoaded(SwarmServiceProvider::class)) {
             app()->register(SwarmServiceProvider::class);
@@ -86,6 +84,19 @@ function callbackDuplicateDeliveryWorker(int $id, string $claimToken): Closure
         app(CallbackDeliveryOutbox::class)->deliver($id, $claimToken);
 
         return true;
+    };
+}
+
+/**
+ * Build the persisted callback outside Pest's generated test-case scope so a
+ * fresh child process can deserialize it without loading Pest's runtime class.
+ */
+function callbackDuplicateDeliveryCounter(): Closure
+{
+    return static function (): void {
+        DB::table('swarm_callback_concurrency_counters')
+            ->where('name', 'duplicate')
+            ->increment('value');
     };
 }
 
@@ -177,32 +188,74 @@ test('duplicate delivery jobs with one claim token execute the callback once', f
     /** @var ConcurrencyManager $concurrency */
     $concurrency = $this->app->make(ConcurrencyManager::class);
 
-    SerializableClosure::setSecretKey('callback-concurrency-signing-key');
-    DB::table('swarm_callback_concurrency_counters')->insert(['name' => 'duplicate', 'value' => 0]);
+    $appKey = (string) config('app.key');
+    $signingKey = str_starts_with($appKey, 'base64:')
+        ? base64_decode(substr($appKey, strlen('base64:')), true)
+        : $appKey;
+    $environment = [
+        'APP_KEY' => $appKey,
+        'TESTBENCH_WORKING_PATH' => dirname(__DIR__, 2),
+    ];
+    $previousEnvironment = [];
+    $previousClosureSigner = Signed::$signer;
 
-    $outbox = app(CallbackDeliveryOutbox::class);
-    $outbox->register('r-cb-duplicate-delivery', CallbackSlot::Then, static function (): void {
-        DB::table('swarm_callback_concurrency_counters')
-            ->where('name', 'duplicate')
-            ->increment('value');
-    });
-    $outbox->settle(
-        'r-cb-duplicate-delivery',
-        new SwarmTerminalContext('r-cb-duplicate-delivery', CallbackSlot::Then, 'App\\Ai\\Swarms\\ConcurrentSwarm'),
-    );
+    foreach ($environment as $name => $value) {
+        $previousEnvironment[$name] = [
+            'process' => getenv($name),
+            'env_exists' => array_key_exists($name, $_ENV),
+            'env' => $_ENV[$name] ?? null,
+            'server_exists' => array_key_exists($name, $_SERVER),
+            'server' => $_SERVER[$name] ?? null,
+        ];
+    }
 
-    $id = (int) DB::table('swarm_callback_deliveries')
-        ->where('run_id', 'r-cb-duplicate-delivery')
-        ->value('id');
-    $claimToken = bin2hex(random_bytes(32));
-    DB::table('swarm_callback_deliveries')->where('id', $id)->update([
-        'claim_token' => $claimToken,
-        'reserved_at' => Carbon::now('UTC'),
-    ]);
+    try {
+        foreach ($environment as $name => $value) {
+            putenv($name.'='.$value);
+            $_ENV[$name] = $_SERVER[$name] = $value;
+        }
 
-    $worker = callbackDuplicateDeliveryWorker($id, $claimToken);
-    $concurrency->driver('process')->run([$worker, $worker]);
+        SerializableClosure::setSecretKey($signingKey);
+        DB::table('swarm_callback_concurrency_counters')->insert(['name' => 'duplicate', 'value' => 0]);
 
-    expect(DB::table('swarm_callback_concurrency_counters')->where('name', 'duplicate')->value('value'))->toBe(1);
-    expect(DB::table('swarm_callback_deliveries')->where('id', $id)->exists())->toBeFalse();
+        $outbox = app(CallbackDeliveryOutbox::class);
+        $outbox->register('r-cb-duplicate-delivery', CallbackSlot::Then, callbackDuplicateDeliveryCounter());
+        $outbox->settle(
+            'r-cb-duplicate-delivery',
+            new SwarmTerminalContext('r-cb-duplicate-delivery', CallbackSlot::Then, 'App\\Ai\\Swarms\\ConcurrentSwarm'),
+        );
+
+        $id = (int) DB::table('swarm_callback_deliveries')
+            ->where('run_id', 'r-cb-duplicate-delivery')
+            ->value('id');
+        $claimToken = bin2hex(random_bytes(32));
+        DB::table('swarm_callback_deliveries')->where('id', $id)->update([
+            'claim_token' => $claimToken,
+            'reserved_at' => Carbon::now('UTC'),
+        ]);
+
+        $worker = callbackDuplicateDeliveryWorker($id, $claimToken);
+        $concurrency->driver('process')->run([$worker, $worker]);
+
+        expect(DB::table('swarm_callback_concurrency_counters')->where('name', 'duplicate')->value('value'))->toBe(1);
+        expect(DB::table('swarm_callback_deliveries')->where('id', $id)->exists())->toBeFalse();
+    } finally {
+        Signed::$signer = $previousClosureSigner;
+
+        foreach ($previousEnvironment as $name => $previous) {
+            putenv($previous['process'] === false ? $name : $name.'='.$previous['process']);
+
+            if ($previous['env_exists']) {
+                $_ENV[$name] = $previous['env'];
+            } else {
+                unset($_ENV[$name]);
+            }
+
+            if ($previous['server_exists']) {
+                $_SERVER[$name] = $previous['server'];
+            } else {
+                unset($_SERVER[$name]);
+            }
+        }
+    }
 });
