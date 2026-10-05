@@ -17,20 +17,13 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Support\PersistedRunContextMatcher;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
-use Closure;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
-use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Support\Carbon;
 use Throwable;
 
 /**
- * Terminal status transitions use an atomic cache lock when the selected store
- * implements {@see LockProvider}. Without a lock provider the cache driver's
- * monotonic terminal check remains best-effort read-then-put; it does not claim
- * parity with the database driver's conditional writes.
- *
  * @internal
  */
 class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSteps, RecordsContextualRunFailure, RunHistoryStore
@@ -90,64 +83,43 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSt
 
     public function complete(string $runId, SwarmResponse $response, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
-        $this->withTerminalTransitionLock($runId, function () use ($runId, $response, $ttlSeconds): void {
-            $history = $this->findRaw($runId) ?? [];
+        $history = $this->findRaw($runId) ?? [];
+        $history['status'] = 'completed';
+        $history = array_replace($history, $this->capture->citationEvidence($response->citationEvidence, $response->context)->toArray());
+        $history['output'] = $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $response->output;
+        $history['usage'] = $response->usage;
+        $history['context'] = $response->context !== null
+            ? $this->capture->omitSkippedHistoryContextKeys($response->context->toArray(), $response->context)
+            : null;
+        $history['artifacts'] = collect($response->artifacts)->map(static fn ($artifact): array => $artifact->toArray())->all();
+        $history['metadata'] = $response->metadata;
+        $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
+        $history['updated_at'] = $history['finished_at'];
 
-            if ($this->isTerminalHistory($history)) {
-                return;
-            }
-
-            $history['status'] = 'completed';
-            $history = array_replace($history, $this->capture->citationEvidence($response->citationEvidence, $response->context)->toArray());
-            $history['output'] = $this->capture->outputsDecision($response->context) === CaptureDecision::Skip ? null : $response->output;
-            $history['usage'] = $response->usage;
-            $history['context'] = $response->context !== null
-                ? $this->capture->omitSkippedHistoryContextKeys($response->context->toArray(), $response->context)
-                : null;
-            $history['artifacts'] = collect($response->artifacts)->map(static fn ($artifact): array => $artifact->toArray())->all();
-            $history['metadata'] = $response->metadata;
-            $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
-            $history['updated_at'] = $history['finished_at'];
-
-            $this->store()->put($this->key($runId), $history, $ttlSeconds);
-        });
+        $this->store()->put($this->key($runId), $history, $ttlSeconds);
     }
 
     public function fail(string $runId, Throwable $exception, int $ttlSeconds, ?string $executionToken = null, ?int $leaseSeconds = null): void
     {
-        $this->withTerminalTransitionLock($runId, function () use ($runId, $exception, $ttlSeconds): void {
-            $history = $this->findRaw($runId) ?? [];
+        $history = $this->findRaw($runId) ?? [];
+        $history['status'] = 'failed';
+        $history['error'] = $this->failurePayload($exception);
+        $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
+        $history['updated_at'] = $history['finished_at'];
 
-            if ($this->isTerminalHistory($history)) {
-                return;
-            }
-
-            $history['status'] = 'failed';
-            $history['error'] = $this->failurePayload($exception);
-            $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
-            $history['updated_at'] = $history['finished_at'];
-
-            $this->store()->put($this->key($runId), $history, $ttlSeconds);
-        });
+        $this->store()->put($this->key($runId), $history, $ttlSeconds);
     }
 
     public function failWithMetadata(string $runId, Throwable $exception, array $metadata, int $ttlSeconds): void
     {
-        $this->withTerminalTransitionLock($runId, function () use ($runId, $exception, $metadata, $ttlSeconds): void {
-            $history = $this->findRaw($runId) ?? [];
+        $history = $this->findRaw($runId) ?? [];
+        $history['status'] = 'failed';
+        $history['error'] = $this->failurePayload($exception);
+        $history['metadata'] = array_replace(is_array($history['metadata'] ?? null) ? $history['metadata'] : [], $metadata);
+        $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
+        $history['updated_at'] = $history['finished_at'];
 
-            if ($this->isTerminalHistory($history)) {
-                return;
-            }
-
-            $history['status'] = 'failed';
-            $history['error'] = $this->failurePayload($exception);
-            $history['metadata'] = array_replace(is_array($history['metadata'] ?? null) ? $history['metadata'] : [], $metadata);
-            $history['finished_at'] = Carbon::now('UTC')->toIso8601String();
-            $history['updated_at'] = $history['finished_at'];
-
-            $this->store()->put($this->key($runId), $history, $ttlSeconds);
-        });
+        $this->store()->put($this->key($runId), $history, $ttlSeconds);
     }
 
     /**
@@ -155,57 +127,27 @@ class CacheRunHistoryStore implements ReadableRunHistoryStore, RecordsCitationSt
      */
     public function recordPreflightFailure(string $runId, string $swarmClass, string $topology, RunContext $context, array $metadata, Throwable $exception, int $ttlSeconds): void
     {
-        $this->withTerminalTransitionLock($runId, function () use ($runId, $swarmClass, $topology, $context, $metadata, $exception, $ttlSeconds): void {
-            if ($this->isTerminalHistory($this->findRaw($runId) ?? [])) {
-                return;
-            }
+        $timestamp = Carbon::now('UTC')->toIso8601String();
 
-            $timestamp = Carbon::now('UTC')->toIso8601String();
+        $this->store()->put($this->key($runId), [
+            'run_id' => $runId,
+            'swarm_class' => $swarmClass,
+            'topology' => $topology,
+            'status' => 'failed',
+            'context' => $this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context),
+            'metadata' => $metadata,
+            'steps' => [],
+            'output' => null,
+            'usage' => [],
+            'error' => $this->failurePayload($exception),
+            'artifacts' => [],
+            'started_at' => $timestamp,
+            'finished_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ], $ttlSeconds);
 
-            $this->store()->put($this->key($runId), [
-                'run_id' => $runId,
-                'swarm_class' => $swarmClass,
-                'topology' => $topology,
-                'status' => 'failed',
-                'context' => $this->capture->omitSkippedHistoryContextKeys($context->toArray(), $context),
-                'metadata' => $metadata,
-                'steps' => [],
-                'output' => null,
-                'usage' => [],
-                'error' => $this->failurePayload($exception),
-                'artifacts' => [],
-                'started_at' => $timestamp,
-                'finished_at' => $timestamp,
-                'updated_at' => $timestamp,
-            ], $ttlSeconds);
-
-            $this->appendToIndex($this->swarmIndexKey($swarmClass), $runId, $ttlSeconds);
-            $this->appendToIndex($this->latestIndexKey(), $runId, $ttlSeconds);
-        });
-    }
-
-    protected function withTerminalTransitionLock(string $runId, Closure $transition): void
-    {
-        $store = $this->store()->getStore();
-
-        if (! $store instanceof LockProvider) {
-            $transition();
-
-            return;
-        }
-
-        $store->lock($this->terminalLockKey($runId), 10)->block(5, $transition);
-    }
-
-    protected function terminalLockKey(string $runId): string
-    {
-        return 'swarm:history:terminal-lock:'.$runId;
-    }
-
-    /** @param array<string, mixed> $history */
-    protected function isTerminalHistory(array $history): bool
-    {
-        return in_array($history['status'] ?? null, ['completed', 'failed', 'cancelled'], true);
+        $this->appendToIndex($this->swarmIndexKey($swarmClass), $runId, $ttlSeconds);
+        $this->appendToIndex($this->latestIndexKey(), $runId, $ttlSeconds);
     }
 
     /**

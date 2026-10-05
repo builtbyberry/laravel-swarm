@@ -325,8 +325,7 @@ class DatabaseRunHistoryStore implements ChecksCitationStorage, ChecksNativeStep
 
     protected function callbacksAvailable(): bool
     {
-        return $this->callbacks !== null
-            && $this->callbacks->isAvailable();
+        return $this->callbacks !== null;
     }
 
     protected function callbacksEnabled(): bool

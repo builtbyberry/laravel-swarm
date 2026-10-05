@@ -11,6 +11,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Laravel\SerializableClosure\SerializableClosure;
+use Laravel\SerializableClosure\Serializers\Signed;
 
 /**
  * Process-concurrency coverage for DatabaseCallbackDeliveryOutbox::drain() under
@@ -108,6 +109,8 @@ function seedPendingCallback(string $runId, ?Carbon $reservedAt = null): void
 }
 
 beforeEach(function (): void {
+    $this->previousClosureSigner = Signed::$signer;
+
     if (! callbackConcurrencyDriverSupported()) {
         $this->markTestSkipped(
             'Callback outbox SKIP LOCKED concurrency test requires a shared database engine that '
@@ -129,6 +132,8 @@ beforeEach(function (): void {
 });
 
 afterEach(function (): void {
+    Signed::$signer = $this->previousClosureSigner;
+
     if (callbackConcurrencyDriverSupported()) {
         Schema::dropIfExists('swarm_callback_concurrency_counters');
     }

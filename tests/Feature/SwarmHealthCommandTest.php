@@ -30,6 +30,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
@@ -399,6 +400,58 @@ test('callback health warns about aged and stale work and reports paused counts'
     expect($disabled['details'])->toContain('delivery paused by kill switch')
         ->and($disabled['details'])->toContain('1 registered', '2 pending', '1 delivering', '1 dead-lettered');
 });
+
+test('callback health treats unreadable schema as informational only while callbacks are disabled', function (string $schemaState): void {
+    $originalTable = config('swarm.tables.callback_deliveries');
+    $table = 'callback_health_'.$schemaState;
+
+    if ($schemaState === 'old') {
+        Schema::create($table, function ($blueprint): void {
+            $blueprint->id();
+            $blueprint->string('run_id')->index();
+            $blueprint->string('slot');
+            $blueprint->text('callback');
+            $blueprint->text('context')->nullable();
+            $blueprint->unsignedInteger('attempts')->default(0);
+            $blueprint->string('status');
+            $blueprint->text('last_error')->nullable();
+            $blueprint->timestamp('last_attempted_at')->nullable();
+            $blueprint->timestamp('reserved_at')->nullable();
+            $blueprint->timestamps();
+        });
+    }
+
+    try {
+        config()->set('swarm.persistence.driver', 'database');
+        config()->set('swarm.tables.callback_deliveries', $table);
+        config()->set('swarm.callbacks.enabled', false);
+        app()->forgetInstance(CallbackDeliveryOutbox::class);
+        app()->forgetInstance(ReadableCallbackDeliveryOutbox::class);
+
+        expect(Artisan::call('swarm:health', ['--json' => true]))->toBe(0);
+        $disabled = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks'])
+            ->firstWhere('component', 'Callback delivery');
+
+        expect($disabled['status'])->toBe('note')
+            ->and($disabled['details'])->toContain('terminal workflow callbacks disabled')
+            ->and($disabled['details'])->toContain('schema not ready for callbacks');
+
+        config()->set('swarm.callbacks.enabled', true);
+        app()->forgetInstance(CallbackDeliveryOutbox::class);
+        app()->forgetInstance(ReadableCallbackDeliveryOutbox::class);
+
+        expect(Artisan::call('swarm:health', ['--json' => true]))->toBe(1);
+        $enabled = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks'])
+            ->firstWhere('component', 'Callback delivery');
+
+        expect($enabled['status'])->toBe('failed');
+    } finally {
+        config()->set('swarm.tables.callback_deliveries', $originalTable);
+        Schema::dropIfExists($table);
+        app()->forgetInstance(CallbackDeliveryOutbox::class);
+        app()->forgetInstance(ReadableCallbackDeliveryOutbox::class);
+    }
+})->with(['missing', 'old']);
 
 // ---------------------------------------------------------------------------
 // swarm:health --durable active context capture check (issue #11)

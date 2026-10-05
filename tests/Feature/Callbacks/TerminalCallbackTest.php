@@ -12,7 +12,6 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Exceptions\UnsupportedNativeApprovalException;
 use BuiltByBerry\LaravelSwarm\Jobs\DeliverSwarmCallback;
-use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
@@ -31,10 +30,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Support\DeserializationProbe;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
-use Illuminate\Cache\ArrayStore;
-use Illuminate\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
-use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Events\TransactionBeginning;
@@ -45,7 +41,9 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Schema;
+use Laravel\SerializableClosure\Exceptions\InvalidSignatureException;
 use Laravel\SerializableClosure\SerializableClosure;
 use Laravel\SerializableClosure\Serializers\Native;
 use Laravel\SerializableClosure\Serializers\Signed;
@@ -166,6 +164,47 @@ it('caches callback readiness schema probes per outbox instance', function (): v
     expect($outbox->isAvailable())->toBeTrue();
     $outbox->assertReady();
     expect($outbox->isAvailable())->toBeTrue();
+});
+
+it('computes callback health with one aggregate query regardless of backlog size', function (): void {
+    $now = Carbon::now('UTC');
+    $rows = [];
+
+    for ($index = 0; $index < 120; $index++) {
+        $rows[] = [
+            'run_id' => 'run-health-aggregate-'.$index,
+            'slot' => 'then',
+            'callback' => 'x',
+            'context' => null,
+            'attempts' => 0,
+            'status' => 'pending',
+            'last_error' => null,
+            'last_attempted_at' => null,
+            'reserved_at' => null,
+            'claim_token' => null,
+            'available_at' => null,
+            'created_at' => $now->copy()->subMinutes(10),
+            'updated_at' => $now->copy()->subMinutes(10),
+        ];
+    }
+
+    foreach (array_chunk($rows, 40) as $chunk) {
+        callbackTable()->insert($chunk);
+    }
+
+    $outbox = callbackOutbox();
+    $outbox->assertReady();
+    $queries = [];
+    DB::listen(function (QueryExecuted $query) use (&$queries): void {
+        $queries[] = $query->sql;
+    });
+
+    $summary = app(ReadableCallbackDeliveryOutbox::class)->healthSummary();
+
+    expect($queries)->toHaveCount(1)
+        ->and($summary['pending'])->toBe(120)
+        ->and($summary['aged_eligible'])->toBe(120)
+        ->and($summary['oldest_eligible_at'])->not->toBeNull();
 });
 
 it('fails readiness and health clearly when the callback table has the old shape', function (): void {
@@ -493,6 +532,21 @@ it('keeps callback exception secrets out of dead letter logs', function (): void
         ->and(app(SwarmPersistenceCipher::class)->open($row->last_error))->toContain($secret);
 });
 
+it('reports the original callback exception through the application exception handler', function (): void {
+    Exceptions::fake();
+    config()->set('swarm.callbacks.max_attempts', 1);
+
+    $outbox = callbackOutbox();
+    $outbox->register('run-reported-callback', CallbackSlot::Then, function (): void {
+        throw new RuntimeException('application-visible callback failure');
+    });
+    $outbox->settle('run-reported-callback', new SwarmTerminalContext('run-reported-callback', CallbackSlot::Then, 'App\\Swarms\\S'));
+
+    deliverClaimedCallback($outbox, (int) callbackTable()->where('run_id', 'run-reported-callback')->value('id'));
+
+    Exceptions::assertReported(fn (RuntimeException $exception): bool => $exception->getMessage() === 'application-visible callback failure');
+});
+
 it('does not emit callback delivered audit evidence for stale-token or lost-race deliveries', function (): void {
     $sink = new RecordingSwarmAuditSink;
     app()->instance(SwarmAuditSink::class, $sink);
@@ -598,6 +652,38 @@ it('dead-letters a stale in-flight callback after its last execution attempt', f
     Bus::assertNotDispatched(DeliverSwarmCallback::class);
 });
 
+it('dead-letters eligible pending work already at a newly lowered attempt cap', function (): void {
+    Bus::fake();
+    config()->set('swarm.callbacks.max_attempts', 2);
+
+    callbackTable()->insert([
+        'run_id' => 'run-lowered-cap',
+        'slot' => 'then',
+        'callback' => 'x',
+        'context' => null,
+        'attempts' => 3,
+        'status' => 'pending',
+        'last_error' => null,
+        'last_attempted_at' => Carbon::now('UTC')->subMinutes(10),
+        'reserved_at' => null,
+        'claim_token' => null,
+        'available_at' => Carbon::now('UTC')->subMinute(),
+        'created_at' => Carbon::now('UTC')->subHour(),
+        'updated_at' => Carbon::now('UTC')->subMinute(),
+    ]);
+
+    $result = callbackOutbox()->drain();
+    $row = callbackTable()->where('run_id', 'run-lowered-cap')->first();
+
+    expect($result->deadLettered)->toBe(1)
+        ->and($result->dispatched)->toBe(0)
+        ->and($result->reclaimed)->toBe(0)
+        ->and($row->status)->toBe('dead_letter')
+        ->and((int) $row->attempts)->toBe(3)
+        ->and(app(SwarmPersistenceCipher::class)->open($row->last_error))->toContain('configured attempt cap of 2 was reached');
+    Bus::assertNotDispatched(DeliverSwarmCallback::class);
+});
+
 it('dead-letters and never invokes a callback whose stored payload is not a valid signed closure', function (): void {
     $outbox = callbackOutbox();
     $outbox->register('run-tamper', CallbackSlot::Then, fn () => cache()->forever('cb:run-tamper', 'invoked'));
@@ -677,6 +763,7 @@ it('never constructs a stored object that is not a closure, and dead-letters the
 });
 
 it('never constructs an object smuggled inside the closure envelope', function (): void {
+    Exceptions::fake();
     DeserializationProbe::reset();
     $id = pendingCallbackRowWithPayload('run-inject-nested', closureEnvelopeAround(DeserializationProbe::wire()));
 
@@ -685,6 +772,7 @@ it('never constructs an object smuggled inside the closure envelope', function (
     expect(DeserializationProbe::$woken)->toBe(0);
     expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
     expect(callbackDeadLetterReason($id))->toBe('callback signature verification failed (payload tampering or APP_KEY rotation)');
+    Exceptions::assertReported(InvalidSignatureException::class);
 });
 
 it('never runs an unsigned closure body smuggled past the signature', function (): void {
@@ -1084,54 +1172,69 @@ it('discards cancellation callbacks while disabled', function (): void {
 
 it('keeps flag-off callback-free terminal writers on their pre-feature transaction paths', function (string $writer, int $expectedQueries, int $expectedTransactions): void {
     callbacksUseDatabase(enabled: false);
-    $outbox = callbackOutbox();
-    expect($outbox->isAvailable())->toBeTrue(); // warm the schema readiness probe
-
-    $runId = 'run-flag-off-cost-'.$writer;
     $history = app(RunHistoryStore::class);
-    if ($writer !== 'recordPreflightFailure') {
-        $history->start($runId, 'App\\Swarms\\SeamSwarm', 'sequential', RunContext::fromTask('in'), ['before' => true], 3600);
+    $runIds = [
+        'cold' => 'run-flag-off-cost-cold-'.$writer,
+        'warm' => 'run-flag-off-cost-warm-'.$writer,
+    ];
+
+    foreach ($runIds as $runId) {
+        if ($writer !== 'recordPreflightFailure') {
+            $history->start($runId, 'App\\Swarms\\SeamSwarm', 'sequential', RunContext::fromTask('in'), ['before' => true], 3600);
+        }
     }
 
-    $queries = [];
-    $began = 0;
-    $committed = 0;
-    DB::listen(function (QueryExecuted $query) use (&$queries): void {
-        $queries[] = $query->sql;
+    $phase = 'cold';
+    $queries = ['cold' => [], 'warm' => []];
+    $began = ['cold' => 0, 'warm' => 0];
+    $committed = ['cold' => 0, 'warm' => 0];
+    DB::listen(function (QueryExecuted $query) use (&$phase, &$queries): void {
+        $queries[$phase][] = $query->sql;
     });
-    Event::listen(TransactionBeginning::class, function () use (&$began): void {
-        $began++;
+    Event::listen(TransactionBeginning::class, function () use (&$phase, &$began): void {
+        $began[$phase]++;
     });
-    Event::listen(TransactionCommitted::class, function () use (&$committed): void {
-        $committed++;
+    Event::listen(TransactionCommitted::class, function () use (&$phase, &$committed): void {
+        $committed[$phase]++;
     });
 
-    match ($writer) {
-        'complete' => $history->complete($runId, new SwarmResponse('out'), 3600),
-        'fail' => $history->fail($runId, new RuntimeException('failed'), 3600),
-        'failWithMetadata' => $history->failWithMetadata($runId, new RuntimeException('failed'), ['after' => true], 3600),
-        'recordPreflightFailure' => $history->recordPreflightFailure(
-            $runId,
-            'App\\Swarms\\SeamSwarm',
-            'sequential',
-            RunContext::fromTask('in'),
-            [],
-            new RuntimeException('failed'),
-            3600,
-        ),
-        'cancelled' => $history->syncDurableState($runId, 'cancelled', RunContext::fromTask('in'), [], 3600, true),
+    $write = static function (string $runId) use ($history, $writer): void {
+        match ($writer) {
+            'complete' => $history->complete($runId, new SwarmResponse('out'), 3600),
+            'fail' => $history->fail($runId, new RuntimeException('failed'), 3600),
+            'failWithMetadata' => $history->failWithMetadata($runId, new RuntimeException('failed'), ['after' => true], 3600),
+            'recordPreflightFailure' => $history->recordPreflightFailure(
+                $runId,
+                'App\\Swarms\\SeamSwarm',
+                'sequential',
+                RunContext::fromTask('in'),
+                [],
+                new RuntimeException('failed'),
+                3600,
+            ),
+            'cancelled' => $history->syncDurableState($runId, 'cancelled', RunContext::fromTask('in'), [], 3600, true),
+        };
     };
 
-    $callbackQueries = array_values(array_filter(
-        $queries,
-        static fn (string $sql): bool => str_contains($sql, 'swarm_callback_deliveries'),
-    ));
+    $write($runIds['cold']);
+    $phase = 'warm';
+    $write($runIds['warm']);
 
-    expect($queries)->toHaveCount($expectedQueries)
-        ->and($callbackQueries)->toHaveCount(1)
-        ->and(strtolower($callbackQueries[0]))->toContain('exists')
-        ->and($began)->toBe($expectedTransactions)
-        ->and($committed)->toBe($expectedTransactions);
+    $callbackQueries = collect($queries)->map(
+        static fn (array $phaseQueries): array => array_values(array_filter(
+            $phaseQueries,
+            static fn (string $sql): bool => str_contains($sql, 'swarm_callback_deliveries'),
+        )),
+    );
+
+    expect($queries['cold'])->toHaveCount($expectedQueries + 1)
+        ->and($queries['warm'])->toHaveCount($expectedQueries)
+        ->and($callbackQueries['cold'])->toHaveCount(2)
+        ->and(strtolower($callbackQueries['cold'][1]))->toContain('exists')
+        ->and($callbackQueries['warm'])->toHaveCount(1)
+        ->and(strtolower($callbackQueries['warm'][0]))->toContain('exists')
+        ->and($began)->toBe(['cold' => $expectedTransactions, 'warm' => $expectedTransactions])
+        ->and($committed)->toBe(['cold' => $expectedTransactions, 'warm' => $expectedTransactions]);
 })->with([
     'complete' => ['complete', 2, 0],
     'fail' => ['fail', 2, 0],
@@ -1224,44 +1327,6 @@ it('keeps every database terminal outcome monotonic across late history writers'
     'failWithMetadata on completed' => ['completed', 'failWithMetadata'],
     'recordPreflightFailure on completed' => ['completed', 'recordPreflightFailure'],
 ]);
-
-it('keeps cache terminal history monotonic after completion', function (): void {
-    $history = app(CacheRunHistoryStore::class);
-    $history->start('run-monotonic-cache', 'App\\Swarms\\SeamSwarm', 'sequential', RunContext::fromTask('in'), [], 3600);
-    $history->complete('run-monotonic-cache', new SwarmResponse('completed-output'), 3600);
-    $history->fail('run-monotonic-cache', new RuntimeException('late failure'), 3600);
-
-    expect($history->find('run-monotonic-cache')['status'])->toBe('completed')
-        ->and($history->find('run-monotonic-cache')['output'])->toBe('completed-output');
-});
-
-it('uses an atomic cache lock for terminal transitions when the array store supports locks', function (): void {
-    $arrayStore = new class extends ArrayStore
-    {
-        /** @var list<string> */
-        public array $acquiredLockNames = [];
-
-        public function lock($name, $seconds = 0, $owner = null)
-        {
-            $this->acquiredLockNames[] = $name;
-
-            return parent::lock($name, $seconds, $owner);
-        }
-    };
-    $repository = new CacheRepository($arrayStore);
-    $factory = Mockery::mock(CacheFactory::class);
-    $factory->shouldReceive('store')->andReturn($repository);
-    $history = new CacheRunHistoryStore($factory, config(), app(SwarmCapture::class));
-
-    $history->start('run-array-lock', 'App\\Swarms\\SeamSwarm', 'sequential', RunContext::fromTask('in'), [], 3600);
-    $history->complete('run-array-lock', new SwarmResponse('completed-output'), 3600);
-    $history->fail('run-array-lock', new RuntimeException('late failure'), 3600);
-
-    expect($arrayStore->acquiredLockNames)->toBe([
-        'swarm:history:terminal-lock:run-array-lock',
-        'swarm:history:terminal-lock:run-array-lock',
-    ])->and($history->find('run-array-lock')['status'])->toBe('completed');
-});
 
 it('discards both callbacks through the history store cancellation seam', function (): void {
     $history = app(RunHistoryStore::class);
@@ -1367,6 +1432,30 @@ it('releases a dispatch failure with retry backoff without counting an attempt',
     expect($row->available_at)->not->toBeNull();
     expect((int) $row->attempts)->toBe(0);
     expect($row->status)->toBe('pending');
+});
+
+it('uses callback-specific retry advice for relay dispatch failures', function (): void {
+    Exceptions::fake();
+    $throwingBus = Mockery::mock(BusDispatcher::class);
+    $throwingBus->shouldReceive('dispatch')->once()->andThrow(new RuntimeException('callback queue unavailable'));
+    $outbox = new DatabaseCallbackDeliveryOutbox(
+        DB::connection(),
+        config(),
+        app(SwarmPersistenceCipher::class),
+        $throwingBus,
+        app(SwarmAuditDispatcher::class),
+    );
+    $outbox->register('run-relay-callback-failure', CallbackSlot::Then, fn () => null);
+    $outbox->settle('run-relay-callback-failure', new SwarmTerminalContext('run-relay-callback-failure', CallbackSlot::Then, 'App\\Swarms\\S'));
+    app()->instance(CallbackDeliveryOutbox::class, $outbox);
+
+    $exit = Artisan::call('swarm:relay', ['--type' => ['callback']]);
+    $output = Artisan::output();
+
+    expect($exit)->toBe(1)
+        ->and($output)->toContain('callback delivery could not be dispatched due to a transient error')
+        ->and($output)->toContain('callback retry delay or delivery lease timeout')
+        ->and($output)->not->toContain('will be re-claimed after the reservation timeout');
 });
 
 it('reports callback delivery health as ok when enabled with no failures and warning on dead-letters', function (): void {

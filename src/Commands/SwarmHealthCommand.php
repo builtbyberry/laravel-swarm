@@ -511,20 +511,29 @@ class SwarmHealthCommand extends Command
     protected function runCallbackOutboxCheck(Application $app, ConfigRepository $config): array
     {
         $base = ['component' => 'Callback delivery', 'driver' => 'database', 'store' => 'n/a'];
+        $enabled = (bool) $config->get('swarm.callbacks.enabled', false);
 
         try {
             $summary = $app->make(ReadableCallbackDeliveryOutbox::class)->healthSummary();
         } catch (Throwable $exception) {
+            if (! $enabled) {
+                return $base + [
+                    'status' => 'note',
+                    'details' => 'terminal workflow callbacks disabled; schema not ready for callbacks: '.$exception->getMessage(),
+                ];
+            }
+
             return $base + ['status' => 'failed', 'details' => 'callback outbox health read failed: '.$exception->getMessage()];
         }
 
         if (($summary['available'] ?? false) !== true) {
-            if ((bool) $config->get('swarm.callbacks.enabled', false) !== true
-                && $config->get('swarm.persistence.driver') !== 'database') {
+            if (! $enabled) {
                 return $base + [
                     'driver' => (string) $config->get('swarm.persistence.driver', 'n/a'),
                     'status' => 'note',
-                    'details' => 'terminal workflow callbacks disabled; database persistence is required before enabling them',
+                    'details' => $config->get('swarm.persistence.driver') !== 'database'
+                        ? 'terminal workflow callbacks disabled; database persistence is required before enabling them'
+                        : 'terminal workflow callbacks disabled; schema not ready for callbacks',
                 ];
             }
 
@@ -540,8 +549,8 @@ class SwarmHealthCommand extends Command
         $agedEligible = (int) ($summary['aged_eligible'] ?? 0);
         $counts = "{$registered} registered, {$pending} pending, {$delivering} delivering, {$deadLetter} dead-lettered";
 
-        if ((bool) $config->get('swarm.callbacks.enabled', false) !== true) {
-            return $base + ['status' => 'note', 'details' => "delivery paused by kill switch; {$counts}"];
+        if (! $enabled) {
+            return $base + ['status' => 'note', 'details' => "terminal workflow callbacks disabled; delivery paused by kill switch; {$counts}"];
         }
 
         if ($deadLetter > 0 || $stalePending > 0 || $staleDelivering > 0 || $agedEligible > 0) {

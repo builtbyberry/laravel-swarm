@@ -728,8 +728,9 @@ return [
          * callbacks that have not passed the delivery-time flag check.
          * A delivery already past the kill-switch check may complete.
          * Terminal writes perform one indexed existence check
-         * while disabled so rows registered before shutdown still settle atomically; callback-free
-         * writes otherwise retain their pre-feature transaction behavior. Enabling requires database-backed persistence
+         * while disabled so rows registered before shutdown still settle atomically; the first
+         * such write in a process also probes callback-table existence once. Callback-free writes
+         * otherwise retain their pre-feature transaction behavior. Enabling requires database-backed persistence
          * (swarm.persistence.driver=database); under any other driver, registering a
          * callback fails closed rather than silently dropping it.
          * Callbacks are signed with APP_KEY, so every process that registers or delivers

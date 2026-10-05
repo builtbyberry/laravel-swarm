@@ -39,8 +39,8 @@ use Throwable;
  * Delivery is at-least-once, never exactly-once: a crash after the closure runs but
  * before its row delete re-delivers after the lease expires. Each claim has an opaque
  * token; only that token can acquire pending → delivering and count an attempt. Failed
- * dispatches/executions release with backoff. A stale final delivering attempt or a
- * final allowed callback failure moves the row to 'dead_letter'.
+ * dispatches/executions release with backoff. Eligible work already at the current
+ * attempt cap, or a final allowed callback failure, moves to 'dead_letter'.
  *
  * @internal
  */
@@ -51,6 +51,8 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
     protected ?bool $readiness = null;
 
     protected ?string $readinessFailure = null;
+
+    protected ?bool $settlementAvailability = null;
 
     /**
      * The only classes a stored callback may deserialize into: the closure wrapper
@@ -127,7 +129,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
     public function settle(string $runId, SwarmTerminalContext $context): void
     {
-        if (! $this->isAvailable()) {
+        if (! $this->isSettlementAvailable()) {
             return;
         }
 
@@ -159,7 +161,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
     public function discard(string $runId): void
     {
-        if (! $this->isAvailable()) {
+        if (! $this->isSettlementAvailable()) {
             return;
         }
 
@@ -168,7 +170,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
     public function hasFor(string $runId): bool
     {
-        if (! $this->isAvailable()) {
+        if (! $this->isSettlementAvailable()) {
             return false;
         }
 
@@ -224,9 +226,10 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             foreach ($entries as $entry) {
                 $reclaimed = $entry->reserved_at !== null;
 
-                if ($entry->status === 'delivering' && (int) $entry->attempts >= $maxAttempts) {
-                    $error = 'delivery lease expired after attempt '.(int) $entry->attempts.' before acknowledgement';
-                    $this->table()->where('id', $entry->id)->where('status', 'delivering')->update([
+                if ((int) $entry->attempts >= $maxAttempts) {
+                    $attempts = (int) $entry->attempts;
+                    $error = "configured attempt cap of {$maxAttempts} was reached after {$attempts} attempt(s)";
+                    $this->table()->where('id', $entry->id)->where('status', $entry->status)->update([
                         'status' => 'dead_letter',
                         'last_error' => $this->cipher->seal($error),
                         'reserved_at' => null,
@@ -234,7 +237,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
                         'available_at' => null,
                         'updated_at' => $now,
                     ]);
-                    $deadLetters[] = ['row' => $entry, 'error' => $error];
+                    $deadLetters[] = ['row' => $entry, 'error' => $error, 'reclaimed' => $reclaimed];
 
                     continue;
                 }
@@ -257,7 +260,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         $deadLetters = $result['dead_letters'];
 
         foreach ($deadLetters as $deadLetter) {
-            $this->logDeadLetter($deadLetter['row'], 'delivery lease expired');
+            $this->logDeadLetter($deadLetter['row'], 'configured attempt cap reached');
         }
 
         if ($claims === [] && $deadLetters === []) {
@@ -265,7 +268,8 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         }
 
         $claimed = count($claims) + count($deadLetters);
-        $reclaimed = count(array_filter($claims, static fn (array $claim): bool => $claim['reclaimed'])) + count($deadLetters);
+        $reclaimed = count(array_filter($claims, static fn (array $claim): bool => $claim['reclaimed']))
+            + count(array_filter($deadLetters, static fn (array $deadLetter): bool => $deadLetter['reclaimed']));
 
         $dispatched = 0;
         $deadLettered = count($deadLetters);
@@ -650,6 +654,26 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
             : min(604800, $this->reservationTimeoutSeconds() * 2);
     }
 
+    /**
+     * Terminal settlement uses only columns from the original callback table.
+     * Cache only the table-existence probe so the common callback-free terminal
+     * write pays one cold schema query and one indexed run_id existence query.
+     */
+    protected function isSettlementAvailable(): bool
+    {
+        if ($this->settlementAvailability !== null) {
+            return $this->settlementAvailability;
+        }
+
+        if ($this->config->get('swarm.persistence.driver') !== 'database') {
+            return $this->settlementAvailability = false;
+        }
+
+        return $this->settlementAvailability = $this->connection
+            ->getSchemaBuilder()
+            ->hasTable($this->tableName());
+    }
+
     public function isAvailable(): bool
     {
         if ($this->readiness !== null) {
@@ -751,54 +775,38 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
         $freshThreshold = $now->copy()->subSeconds($this->reservationTimeoutSeconds());
         $agedThreshold = $now->copy()->subSeconds($this->staleWarningThresholdSeconds());
 
-        $registered = (int) $this->table()->where('status', 'registered')->count();
-        $pending = (int) $this->table()->where('status', 'pending')->count();
-        $delivering = (int) $this->table()->where('status', 'delivering')->count();
-        $deadLetter = (int) $this->table()->where('status', 'dead_letter')->count();
-        $freshReservations = (int) $this->table()
-            ->whereIn('status', ['pending', 'delivering'])
-            ->whereNotNull('reserved_at')
-            ->where('reserved_at', '>=', $freshThreshold)
-            ->count();
-        $stalePendingReservations = (int) $this->table()
-            ->where('status', 'pending')
-            ->whereNotNull('reserved_at')
-            ->where('reserved_at', '<', $freshThreshold)
-            ->count();
-        $staleDeliveries = (int) $this->table()
-            ->where('status', 'delivering')
-            ->whereNotNull('reserved_at')
-            ->where('reserved_at', '<', $freshThreshold)
-            ->count();
-        $eligible = $this->table()
-            ->where('status', 'pending')
-            ->whereNull('reserved_at')
-            ->where(function ($query) use ($now): void {
-                $query->whereNull('available_at')->orWhere('available_at', '<=', $now);
-            });
-        $agedEligible = (clone $eligible)
-            ->where(function ($query) use ($agedThreshold): void {
-                $query->where('available_at', '<=', $agedThreshold)
-                    ->orWhere(function ($created) use ($agedThreshold): void {
-                        $created->whereNull('available_at')->where('created_at', '<=', $agedThreshold);
-                    });
-            })
-            ->count();
-        $oldestEligibleAt = $eligible->get(['available_at', 'created_at'])
-            ->map(static fn (object $row): string => (string) ($row->available_at ?? $row->created_at))
-            ->sort()
-            ->first();
+        $summary = $this->table()->selectRaw(<<<'SQL'
+            COALESCE(SUM(CASE WHEN status = 'registered' THEN 1 ELSE 0 END), 0) AS registered,
+            COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+            COALESCE(SUM(CASE WHEN status = 'delivering' THEN 1 ELSE 0 END), 0) AS delivering,
+            COALESCE(SUM(CASE WHEN status = 'dead_letter' THEN 1 ELSE 0 END), 0) AS dead_letter,
+            COALESCE(SUM(CASE WHEN status IN ('pending', 'delivering') AND reserved_at IS NOT NULL AND reserved_at >= ? THEN 1 ELSE 0 END), 0) AS fresh_reservations,
+            COALESCE(SUM(CASE WHEN status = 'pending' AND reserved_at IS NOT NULL AND reserved_at < ? THEN 1 ELSE 0 END), 0) AS stale_pending_reservations,
+            COALESCE(SUM(CASE WHEN status = 'delivering' AND reserved_at IS NOT NULL AND reserved_at < ? THEN 1 ELSE 0 END), 0) AS stale_deliveries,
+            COALESCE(SUM(CASE WHEN status = 'pending' AND reserved_at IS NULL AND (available_at IS NULL OR available_at <= ?) AND ((available_at IS NOT NULL AND available_at <= ?) OR (available_at IS NULL AND created_at <= ?)) THEN 1 ELSE 0 END), 0) AS aged_eligible,
+            MIN(CASE WHEN status = 'pending' AND reserved_at IS NULL AND (available_at IS NULL OR available_at <= ?) THEN COALESCE(available_at, created_at) ELSE NULL END) AS oldest_eligible_at
+            SQL, [
+            $freshThreshold,
+            $freshThreshold,
+            $freshThreshold,
+            $now,
+            $agedThreshold,
+            $agedThreshold,
+            $now,
+        ])->first();
+
+        $oldestEligibleAt = $summary->oldest_eligible_at;
 
         return [
             'available' => true,
-            'registered' => $registered,
-            'pending' => $pending,
-            'delivering' => $delivering,
-            'dead_letter' => $deadLetter,
-            'fresh_reservations' => $freshReservations,
-            'stale_pending_reservations' => $stalePendingReservations,
-            'stale_deliveries' => $staleDeliveries,
-            'aged_eligible' => (int) $agedEligible,
+            'registered' => (int) ($summary->registered ?? 0),
+            'pending' => (int) ($summary->pending ?? 0),
+            'delivering' => (int) ($summary->delivering ?? 0),
+            'dead_letter' => (int) ($summary->dead_letter ?? 0),
+            'fresh_reservations' => (int) ($summary->fresh_reservations ?? 0),
+            'stale_pending_reservations' => (int) ($summary->stale_pending_reservations ?? 0),
+            'stale_deliveries' => (int) ($summary->stale_deliveries ?? 0),
+            'aged_eligible' => (int) ($summary->aged_eligible ?? 0),
             'oldest_eligible_at' => is_string($oldestEligibleAt) ? $oldestEligibleAt : null,
         ];
     }

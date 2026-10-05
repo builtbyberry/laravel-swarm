@@ -361,8 +361,11 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   not interrupt an executing closure. Terminal runs still atomically settle rows registered before
   the switch, so re-enabling resumes those pending rows instead of stranding them. A flag-off,
   callback-free database terminal write performs one indexed existence check outside a transaction,
-  then retains that writer's pre-feature transaction behavior. The check cannot be removed safely:
-  another process may have registered the row before the switch was turned off.
+  plus one callback-table existence probe on the first such write in a process; later writes reuse
+  that table result. It then retains that writer's pre-feature transaction behavior. The indexed
+  check cannot be removed safely: another process may have registered the row before the switch was
+  turned off. This database-driver write-once terminal-history guarantee does not apply to the cache
+  history driver.
 - **Reservation window.** A claimed-but-undelivered row is re-claimed after
   `swarm.callbacks.reservation_timeout_seconds` (falling back to the durable relay timeout). If a
   claim expires it receives a new token, so jobs from the previous claim are rejected. Concurrent
@@ -375,7 +378,9 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   `swarm.callbacks.stale_warning_threshold_seconds` (zero means twice the reservation timeout).
 - **Dead-letters are not auto-recovered.** A callback that exhausts `swarm.callbacks.max_attempts`
   moves to `dead_letter` and stops being delivered; there is no requeue command (unlike the audit
-  lane). If guaranteed delivery matters, listen to `SwarmCompleted` / `SwarmFailed` instead — those
+  lane). Lowering that cap also dead-letters any eligible pending or stale-delivering row whose
+  recorded delivery acquisitions already meet the new cap; it does not grant one extra attempt.
+  If guaranteed delivery matters, listen to `SwarmCompleted` / `SwarmFailed` instead — those
   are the reliable path. A dead-letter caused by an **`APP_KEY` rotation** (which invalidates every
   in-flight callback's signature) is expected: rotate with no pending callbacks, or accept their loss.
   The dead-letter log line carries the reason. The ones tied to signing and sealing:
@@ -388,13 +393,18 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   or invoked. A process with no `APP_KEY` cannot register a callback at all — registration throws,
   with at-rest encryption on or off. With at-rest
   encryption on (the default), a delivering process with no `APP_KEY` cannot seal a dead-letter
-  reason either: the delivery attempt errors and leaves the row pending until the key is restored.
+  reason either: the delivery attempt errors and leaves the row `delivering` until its lease expires
+  and a key-bearing worker recovers it.
 - **Audit evidence.** Each successful delivery emits one `callback.delivered` record, signed when
   audit signing is configured, with `delivery_id`, `run_id`, `slot`, and `attempts`; it never
   includes the closure, terminal context, or callback result. Dead letters are recorded in the
   application log with the delivery id, run id, slot, attempts, a static reason category, and the
-  exception class when one exists. The detailed exception message remains only in sealed
-  `last_error` storage.
+  exception class when one exists; that package-owned log line never includes the exception message.
+  The delivery row stores the message only in sealed `last_error`. Separately, callback exceptions
+  and closure decryption/signature exceptions are reported as their original `Throwable` through
+  Laravel's application exception handler before retry or dead-letter handling, matching other
+  failing jobs and outbox lanes. The application handler can therefore send the original message to
+  its configured logs or error tracker.
 - **Callbacks run without ambient request/tenant state.** A delivered callback runs later, in the
   relay/worker process, with no HTTP request and no ambient tenant context. Capture everything the
   closure needs (ids, not `tenant()` globals) at registration.

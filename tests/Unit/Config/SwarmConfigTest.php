@@ -128,6 +128,9 @@ test('terminal callback delivery settings use their exact environment variables 
 
 test('terminal callback documentation states the bounded delivery and shutdown guarantees', function () {
     $docs = preg_replace('/\s+/', ' ', (string) file_get_contents(__DIR__.'/../../../docs/error-handling.md'));
+    $publicSurface = preg_replace('/\s+/', ' ', (string) file_get_contents(__DIR__.'/../../../docs/public-surface.md'));
+    $executionModes = preg_replace('/\s+/', ' ', (string) file_get_contents(__DIR__.'/../../../docs/execution-modes.md'));
+    $registrationTrait = preg_replace('/\s+/', ' ', (string) file_get_contents(__DIR__.'/../../../src/Responses/Concerns/RegistersTerminalCallbacks.php'));
     $config = preg_replace('/\s+/', ' ', (string) file_get_contents(__DIR__.'/../../../config/swarm.php'));
 
     expect($docs)->toContain('armed once for a settled completion')
@@ -136,6 +139,13 @@ test('terminal callback documentation states the bounded delivery and shutdown g
         ->and($docs)->toContain('signed when audit signing is configured')
         ->and($docs)->toContain('foreign payload objects and unsigned closure bodies are never constructed or invoked')
         ->and($docs)->toContain('one indexed existence check')
+        ->and($docs)->toContain('leaves the row `delivering` until its lease expires')
+        ->and($docs)->toContain("reported as their original `Throwable` through Laravel's application exception handler")
+        ->and($publicSurface)->toContain('counted when a delivery job acquires the callback')
+        ->and($executionModes)->toContain('`then` is armed once on a settled completion')
+        ->and($executionModes)->toContain('delivered at least once')
+        ->and($registrationTrait)->toContain('A `then` callback is armed once')
+        ->and($registrationTrait)->toContain('Either is delivered at least once')
         ->and($config)->toContain('one indexed existence check')
         ->and($config)->toContain('A delivery already past the kill-switch check may complete');
 });
