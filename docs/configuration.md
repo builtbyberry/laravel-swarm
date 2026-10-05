@@ -139,6 +139,19 @@ variable aliases for these keys.
 
 ---
 
+## Citations
+
+Bounds the provider citation evidence kept for each agent invocation. Whole
+sources are retained until either limit is reached; evidence cut by a limit is
+reported as partial with the reason `limit`. These keys have no environment
+variables; set them in a published `config/swarm.php`. See
+[Citations](citations.md).
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.citations.max_count` | int | `256` | — | Maximum citation records kept per invocation. |
+| `swarm.citations.max_bytes` | int | `262144` | — | Maximum encoded bytes of citation evidence kept per invocation. |
+
 ## Native step results
 
 Completed steps expose a bounded native Laravel AI response projection. These
@@ -413,6 +426,17 @@ Controls the telemetry sink that exports structured correlation payloads. Bind `
 ```
 
 ---
+
+## Pulse
+
+Pulse recorders and dashboard cards ship in the
+[`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse)
+companion package; core does not read this key. See [Pulse](pulse.md) and
+[Memory](memory.md).
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.pulse.memory.sample_rate` | float | `1.0` | `SWARM_PULSE_MEMORY_SAMPLE_RATE` | Share of memory events the companion's memory metrics recorder samples, clamped to `0.0`–`1.0`. `0.0` disables sampling. |
 
 ## Audit
 
