@@ -725,29 +725,51 @@ return [
          * Off by default, and the operator kill switch. When false, then()/catch() on a
          * QueuedSwarmResponse or DurableSwarmResponse throw BadMethodCallException exactly
          * as before this feature existed, and the relay stops delivering already-registered
-         * callbacks. Enabling requires database-backed persistence
+         * callbacks that have not passed the delivery-time flag check.
+         * A delivery already past the kill-switch check may complete.
+         * Terminal writes perform one indexed existence check
+         * while disabled so rows registered before shutdown still settle atomically; callback-free
+         * writes otherwise retain their pre-feature transaction behavior. Enabling requires database-backed persistence
          * (swarm.persistence.driver=database); under any other driver, registering a
          * callback fails closed rather than silently dropping it.
          * Callbacks are signed with APP_KEY, so every process that registers or delivers
          * one needs it: a process without it never runs a callback.
          */
-        'enabled' => (bool) env('SWARM_CALLBACKS_ENABLED', false),
+        'enabled' => filter_var(env('SWARM_CALLBACKS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+        /*
+         * Optional queue routing for callback delivery jobs. Null uses the
+         * application's default connection and queue.
+         */
+        'queue' => [
+            'connection' => env('SWARM_CALLBACKS_QUEUE_CONNECTION'),
+            'name' => env('SWARM_CALLBACKS_QUEUE'),
+        ],
         /*
          * Maximum delivery attempts before a callback row moves to 'dead_letter' and
-         * stops being re-claimed. Attempts are counted at claim time, so a delivery that
-         * dies mid-flight still advances toward this cap. Delivery is at-least-once; a
-         * callback must be idempotent.
+         * stops being re-claimed. Attempts count delivery jobs that acquire the row and
+         * begin processing it, not relay reservations or queue-dispatch attempts.
+         * Delivery is at-least-once; a callback must be idempotent.
          */
         'max_attempts' => (int) env('SWARM_CALLBACKS_MAX_ATTEMPTS', 5),
         /*
-         * How long a claimed-but-undelivered callback row stays reserved before another
-         * relay run may re-claim it. Null falls back to swarm.durable.relay.reservation_timeout_seconds
-         * (default 60). Set a callback-specific value when callbacks can run longer than
-         * the durable relay's window, to avoid re-dispatching a still-in-flight delivery.
+         * How long a callback lease remains current before another relay may reclaim it.
+         * Null falls back to swarm.durable.relay.reservation_timeout_seconds (default
+         * 60). Set this longer than the longest expected callback execution; an expired
+         * lease may overlap a still-running callback under the at-least-once contract.
          */
         'reservation_timeout_seconds' => env('SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS') !== null
             ? (int) env('SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS')
             : null,
+        /*
+         * Delay before a queue-dispatch or callback failure becomes eligible for
+         * another relay claim. Clamped to a non-negative number of seconds.
+         */
+        'retry_backoff_seconds' => max(0, (int) env('SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS', 60)),
+        /*
+         * Age at which eligible unclaimed callback work warns in swarm:health. Zero
+         * means twice the effective callback reservation timeout.
+         */
+        'stale_warning_threshold_seconds' => max(0, (int) env('SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS', 0)),
         /*
          * Retention window for dead-lettered callback rows, in days. Default null keeps
          * them indefinitely (operators inspect failures via `swarm:health`, which reports

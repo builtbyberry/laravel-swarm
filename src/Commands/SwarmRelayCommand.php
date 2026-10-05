@@ -315,7 +315,7 @@ class SwarmRelayCommand extends Command
             $this->components->warn(
                 $stuck.' outbox entr'.($stuck === 1 ? 'y' : 'ies').' could not be dispatched due to a transient error'
                 .($maxAttempts !== null ? ' after '.$attempts.' attempt'.($attempts === 1 ? '' : 's') : '')
-                .'. The '.($stuck === 1 ? 'entry' : 'entries').' will be re-claimed after the reservation timeout.'
+                .'. The '.($stuck === 1 ? 'entry' : 'entries').' remain eligible according to their lane retry delay or reservation timeout.'
                 .' Check your error tracker and queue driver.'
             );
 

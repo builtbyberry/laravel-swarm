@@ -49,7 +49,7 @@ class NoOpCallbackDeliveryOutbox implements CallbackDeliveryOutbox, ReadableCall
         return new CallbackDrainResult(0, 0, 0, 0, 0);
     }
 
-    public function deliver(int $id): void {}
+    public function deliver(int $id, string $claimToken): void {}
 
     public function isAvailable(): bool
     {
@@ -80,9 +80,13 @@ class NoOpCallbackDeliveryOutbox implements CallbackDeliveryOutbox, ReadableCall
             'available' => false,
             'registered' => 0,
             'pending' => 0,
+            'delivering' => 0,
             'dead_letter' => 0,
-            'reserved' => 0,
-            'oldest_pending_at' => null,
+            'fresh_reservations' => 0,
+            'stale_pending_reservations' => 0,
+            'stale_deliveries' => 0,
+            'aged_eligible' => 0,
+            'oldest_eligible_at' => null,
         ];
     }
 }

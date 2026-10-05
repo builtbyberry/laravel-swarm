@@ -56,6 +56,7 @@ class SwarmPruneCommand extends Command
 
         $tables = [
             'durable' => (string) $config->get('swarm.tables.durable', 'swarm_durable_runs'),
+            'callback_deliveries' => (string) $config->get('swarm.tables.callback_deliveries', 'swarm_callback_deliveries'),
             'history' => (string) $config->get('swarm.tables.history', 'swarm_run_histories'),
             'history_steps' => (string) $config->get('swarm.tables.history_steps', 'swarm_run_steps'),
             'stream_events' => (string) $config->get('swarm.tables.stream_events', 'swarm_stream_events'),
@@ -74,7 +75,6 @@ class SwarmPruneCommand extends Command
             'durable_webhook_idempotency' => (string) $config->get('swarm.tables.durable_webhook_idempotency', 'swarm_durable_webhook_idempotency'),
             'durable_outbox' => (string) $config->get('swarm.tables.durable_outbox', 'swarm_durable_outbox'),
             'audit_outbox' => (string) $config->get('swarm.tables.audit_outbox', 'swarm_audit_outbox'),
-            'callback_deliveries' => (string) $config->get('swarm.tables.callback_deliveries', 'swarm_callback_deliveries'),
             'native_inputs' => (string) $config->get('swarm.tables.native_inputs', 'swarm_native_inputs'),
         ];
 
@@ -250,20 +250,24 @@ class SwarmPruneCommand extends Command
         } elseif ($role === 'callback_deliveries') {
             // Two prune targets, neither of which can drop an undelivered callback for a
             // still-live run:
-            //   1. Orphans — any row (registered/pending/dead_letter) whose run has
-            //      reached a terminal, EXPIRED history row. Delivery had the full run TTL
-            //      window; a lingering row after that is abandoned (mirrors durable_outbox).
+            //   1. Orphans — any non-delivering row whose run has reached a terminal,
+            //      EXPIRED history row. A delivering row is never pruned here: a fresh
+            //      lease may still be executing, while an expired lease remains owned by
+            //      the relay's reclaim/dead-letter path.
             //   2. Dead-letter rows past the opt-in retention window
             //      (swarm.callbacks.dead_letter_retention_days); null keeps them
             //      indefinitely for inspection, matching the audit outbox default.
             $retentionDays = $config->get('swarm.callbacks.dead_letter_retention_days');
 
             $query->where(function ($query) use ($historyTable, $retentionDays): void {
-                $query->whereIn('run_id', function ($subquery) use ($historyTable): void {
-                    $subquery->from($historyTable)
-                        ->select('run_id')
-                        ->where('expires_at', '<', now())
-                        ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                $query->where(function ($orphan) use ($historyTable): void {
+                    $orphan->where('status', '!=', 'delivering')
+                        ->whereIn('run_id', function ($subquery) use ($historyTable): void {
+                            $subquery->from($historyTable)
+                                ->select('run_id')
+                                ->where('expires_at', '<', now())
+                                ->whereIn('status', ['completed', 'failed', 'cancelled']);
+                        });
                 });
 
                 if (is_int($retentionDays) && $retentionDays >= 1) {

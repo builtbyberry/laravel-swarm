@@ -308,15 +308,19 @@ callbacks when you want to attach behavior to *this* run at the call site.
 
 ### Semantics
 
-- **`then` fires once, only on a settled completion. `catch` fires once, only on a settled
-  failure.** Neither fires on cancellation, an intermediate agent success, or a recoverable
-  error. The permanent `UnsupportedNativeApprovalException` boundary is a terminal failure:
-  `catch` runs once, `then` never.
+- **`then` is armed once for a settled completion. `catch` is armed once for a settled failure.**
+  Neither is armed on cancellation, an intermediate agent success, or a recoverable
+  error. Delivery remains at-least-once, so an armed callback may execute again after a crash or
+  expired lease. The permanent `UnsupportedNativeApprovalException` boundary is a terminal
+  failure: `catch` is armed, `then` never.
 - **Queue and durable callbacks are delivered asynchronously, at-least-once**, by
   `swarm:relay --type=callback` after the run settles — in a separate process from the run.
   Never exactly-once: a crash after the callback runs but before its delivery row is removed
   re-delivers it. **Make your callbacks idempotent.** Schedule `swarm:relay` for them to fire
-  at all. The stream `catch()` runs in-process, synchronously, on the failing iteration.
+  at all. Relay reservations and queue-dispatch failures do not consume delivery attempts;
+  an attempt begins only when a delivery job atomically acquires its current claim token and
+  starts processing the callback. Duplicate or stale jobs with an obsolete token are no-ops.
+  The stream `catch()` runs in-process, synchronously, on the failing iteration.
 - **A queue/durable callback receives a `SwarmTerminalContext`**, not the full `SwarmResponse`:
   a lightweight, always-available summary (run id, swarm class, topology, and, for `catch`, the
   settled exception class/message) built from the terminal record. Capture is off by default and
@@ -326,16 +330,18 @@ callbacks when you want to attach behavior to *this* run at the call site.
   another process); capturing a non-serializable binding (a database handle, an open resource)
   throws at registration. Payload authorization is the closure signature — a tampered delivery
   row is never invoked, it is dead-lettered. Signing uses `APP_KEY`: a delivery row that is not a
-  signed closure is never constructed or run. In a process with no `APP_KEY`, `then()` / `catch()`
-  throw `SwarmException` at registration, and a delivering process with no `APP_KEY` never runs a
-  callback.
+  signed closure is rejected: the signed wrapper may be restored for verification, but foreign
+  payload objects and unsigned closure bodies are never constructed or invoked. In a process with
+  no `APP_KEY`, `then()` / `catch()` throw `SwarmException` at registration, and a delivering
+  process with no `APP_KEY` never runs a callback.
   A registration failure rejects only that callback: the queued or durable run already exists and
   is still dispatched if the caller catches the exception, with no callback attached.
 - **A callback's own failure is isolated.** It runs after the workflow has already settled, in a
   separate process, so it can neither replay completed model or tool effects nor change the
   recorded result. A failing queue/durable callback is retried up to `swarm.callbacks.max_attempts`
-  and then dead-lettered; a throwing stream `catch()` is reported and swallowed so it cannot mask
-  the workflow's own error.
+  and then dead-lettered. A failure releases the claim and becomes eligible again after
+  `swarm.callbacks.retry_backoff_seconds`; a throwing stream `catch()` is reported and swallowed
+  so it cannot mask the workflow's own error.
 
 ### Operating the delivery outbox
 
@@ -346,16 +352,27 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   are enabled, or callbacks never fire (and their rows are eventually pruned as orphans once
   the run's history expires). `swarm:health` warns with "is swarm:relay scheduled?" as a nudge.
 - **Deliver:** `swarm:relay --type=callback` (or a bare `swarm:relay`, which drains every lane).
-- **Kill switch.** Setting `swarm.callbacks.enabled=false` stops both registration and delivery:
-  the relay lane goes inert and in-flight `DeliverSwarmCallback` jobs no-op, so it is a safe way
-  to halt callback execution during an incident. Re-enabling resumes the pending rows.
+- **Queue routing.** `swarm.callbacks.queue.connection` and `swarm.callbacks.queue.name` route
+  `DeliverSwarmCallback` jobs; null values use the application's defaults. The reservation window
+  must account for the selected queue's delay as well as callback execution.
+- **Kill switch.** Setting `swarm.callbacks.enabled=false` stops new registration and deliveries
+  that have not yet started: the relay lane goes inert, and already-dispatched jobs no-op when they
+  reach the delivery-time flag check. A delivery already past that check continues; the switch does
+  not interrupt an executing closure. Terminal runs still atomically settle rows registered before
+  the switch, so re-enabling resumes those pending rows instead of stranding them. A flag-off,
+  callback-free database terminal write performs one indexed existence check outside a transaction,
+  then retains that writer's pre-feature transaction behavior. The check cannot be removed safely:
+  another process may have registered the row before the switch was turned off.
 - **Reservation window.** A claimed-but-undelivered row is re-claimed after
   `swarm.callbacks.reservation_timeout_seconds` (falling back to the durable relay timeout). If a
-  delivery job sits in a backed-up queue longer than that window it is re-dispatched, so a callback
-  can run more than once — delivery is at-least-once, **make callbacks idempotent**. Size this
-  timeout above your worst-case callback latency to reduce duplicate deliveries.
-- **Inspect:** `swarm:health` reports registered, pending, and dead-lettered callback counts when
-  the feature is enabled, and warns while any row is dead-lettered.
+  claim expires it receives a new token, so jobs from the previous claim are rejected. Concurrent
+  callback execution can overlap only when a lease expires while its original worker is still
+  running. Size this timeout **longer than the longest callback execution**, including queue delay,
+  and keep callbacks idempotent.
+- **Inspect:** `swarm:health` reports registered, pending, delivering, and dead-letter counts even
+  while delivery is disabled. It warns on dead letters, expired pending reservations, stale
+  in-flight deliveries, and eligible work older than
+  `swarm.callbacks.stale_warning_threshold_seconds` (zero means twice the reservation timeout).
 - **Dead-letters are not auto-recovered.** A callback that exhausts `swarm.callbacks.max_attempts`
   moves to `dead_letter` and stops being delivered; there is no requeue command (unlike the audit
   lane). If guaranteed delivery matters, listen to `SwarmCompleted` / `SwarmFailed` instead — those
@@ -367,20 +384,30 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   `no APP_KEY signing key is configured` — the delivering process has no `APP_KEY`;
   `callback payload could not be decrypted` — at-rest encryption could not open the row, usually a
   rotation; `callback payload is not a serialized closure` — the row held something else entirely.
-  None of these rows is ever constructed or run. A process with no `APP_KEY` cannot register a
-  callback at all — registration throws, with at-rest encryption on or off. With at-rest
+  In those rejected rows, foreign payload objects and unsigned closure bodies are never constructed
+  or invoked. A process with no `APP_KEY` cannot register a callback at all — registration throws,
+  with at-rest encryption on or off. With at-rest
   encryption on (the default), a delivering process with no `APP_KEY` cannot seal a dead-letter
   reason either: the delivery attempt errors and leaves the row pending until the key is restored.
+- **Audit evidence.** Each successful delivery emits one `callback.delivered` record, signed when
+  audit signing is configured, with `delivery_id`, `run_id`, `slot`, and `attempts`; it never
+  includes the closure, terminal context, or callback result. Dead letters are recorded in the
+  application log with the delivery id, run id, slot, attempts, a static reason category, and the
+  exception class when one exists. The detailed exception message remains only in sealed
+  `last_error` storage.
 - **Callbacks run without ambient request/tenant state.** A delivered callback runs later, in the
   relay/worker process, with no HTTP request and no ambient tenant context. Capture everything the
   closure needs (ids, not `tenant()` globals) at registration.
-- **Prune:** `swarm:prune` removes delivery records for terminal, expired runs, and dead-lettered
-  rows older than `swarm.callbacks.dead_letter_retention_days` (null keeps them indefinitely). It
-  honors `swarm.retention.prevent_prune`.
+- **Prune:** `swarm:prune` removes non-delivering records for terminal, expired runs, and
+  dead-lettered rows older than `swarm.callbacks.dead_letter_retention_days` (null keeps them
+  indefinitely). It never orphan-prunes a `delivering` row: a live lease may still be executing,
+  and an expired lease remains reclaimable by the relay. It honors `swarm.retention.prevent_prune`.
 - **Rollback / drain:** undelivered rows are lost on the down-migration, and draining only moves
   rows into delivery jobs. To revert safely: stop dispatching new runs, run
   `swarm:relay --type=callback --drain-until-empty`, **wait for the callback queue workers to
-  finish** the dispatched `DeliverSwarmCallback` jobs, then revert the migration.
+  finish** the dispatched `DeliverSwarmCallback` jobs, confirm health has no pending, delivering,
+  or dead-letter rows, then revert the migration. If rollback is urgent, disable registration at
+  the application boundary first; the kill switch also stops the drain you are trying to finish.
 
 ## Queue Retry vs Durable Retry
 

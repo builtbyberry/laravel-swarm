@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\CallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
@@ -23,7 +25,10 @@ use Illuminate\Broadcasting\Channel;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Broadcast;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Laravel\SerializableClosure\SerializableClosure;
+use Laravel\SerializableClosure\Serializers\Signed;
 
 final class FailingSwarmBroadcastTransport extends AnonymousEvent
 {
@@ -331,4 +336,38 @@ test('terminal queued broadcast transport failures fail the job but preserve com
     expect($history['status'])->toBe('completed');
     expect($history['output'])->toBe('editor-out');
     expect($transport->events)->toContain('swarm_stream_end');
+});
+
+test('post-completion queued broadcast failure preserves completed history and then callback', function () {
+    $previousSigner = Signed::$signer;
+    SerializableClosure::setSecretKey('broadcast-callback-test-key');
+    config()->set('swarm.callbacks.enabled', true);
+    app()->forgetInstance(CallbackDeliveryOutbox::class);
+    $runId = 'queued-broadcast-callback-terminal-failure';
+    Event::listen(SwarmCompleted::class, function (): void {
+        throw new RuntimeException('Injected failure after history completion.');
+    });
+
+    try {
+        $queued = FakeSequentialSwarm::make()
+            ->broadcastOnQueue(
+                RunContext::from('queued-broadcast-callback-terminal-failure-task', $runId),
+                new Channel('swarm.run'),
+            )
+            ->then(fn () => null)
+            ->catch(fn () => null);
+
+        $job = $queued->getJob();
+        preventQueuedBroadcastSwarmRedispatch($queued);
+
+        expect(fn () => $job->handle(app(SwarmRunner::class), app(SwarmAttributeResolver::class)))
+            ->toThrow(RuntimeException::class, 'Injected failure after history completion.');
+
+        $history = app(SwarmHistory::class)->find($runId);
+        expect($history['status'])->toBe('completed')
+            ->and(DB::table('swarm_callback_deliveries')->where('run_id', $runId)->where('slot', 'then')->value('status'))->toBe('pending')
+            ->and(DB::table('swarm_callback_deliveries')->where('run_id', $runId)->where('slot', 'catch')->exists())->toBeFalse();
+    } finally {
+        Signed::$signer = $previousSigner;
+    }
 });

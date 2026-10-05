@@ -5,9 +5,11 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
 use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\CallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\ReadableCallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
@@ -348,6 +350,54 @@ test('swarm health identifies failing cache component', function (): void {
         ->toContain('Context')
         ->toContain('swarm-health-failing')
         ->toContain('failed to write readiness probe');
+});
+
+test('callback health warns about aged and stale work and reports paused counts', function (): void {
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.callbacks.enabled', true);
+    config()->set('swarm.callbacks.reservation_timeout_seconds', 60);
+    config()->set('swarm.callbacks.stale_warning_threshold_seconds', 120);
+    app()->forgetInstance(CallbackDeliveryOutbox::class);
+    app()->forgetInstance(ReadableCallbackDeliveryOutbox::class);
+
+    $now = Carbon::now('UTC');
+    $rows = [
+        ['run_id' => 'health-registered', 'status' => 'registered', 'reserved_at' => null, 'available_at' => null],
+        ['run_id' => 'health-aged', 'status' => 'pending', 'reserved_at' => null, 'available_at' => $now->copy()->subMinutes(5)],
+        ['run_id' => 'health-stale-pending', 'status' => 'pending', 'reserved_at' => $now->copy()->subMinutes(5), 'available_at' => null],
+        ['run_id' => 'health-stale-delivering', 'status' => 'delivering', 'reserved_at' => $now->copy()->subMinutes(5), 'available_at' => null],
+        ['run_id' => 'health-dead', 'status' => 'dead_letter', 'reserved_at' => null, 'available_at' => null],
+    ];
+
+    foreach ($rows as $row) {
+        DB::table('swarm_callback_deliveries')->insert($row + [
+            'slot' => 'then',
+            'callback' => 'x',
+            'context' => null,
+            'attempts' => 1,
+            'last_error' => null,
+            'last_attempted_at' => null,
+            'claim_token' => str_contains($row['run_id'], 'stale') ? 'stale-token' : null,
+            'created_at' => $now->copy()->subMinutes(5),
+            'updated_at' => $now->copy()->subMinutes(5),
+        ]);
+    }
+
+    Artisan::call('swarm:health', ['--json' => true]);
+    $enabled = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks'])
+        ->firstWhere('component', 'Callback delivery');
+
+    expect($enabled['status'])->toBe('warning')
+        ->and($enabled['details'])->toContain('1 registered', '2 pending', '1 delivering', '1 dead-lettered')
+        ->and($enabled['details'])->toContain('1 stale pending', '1 stale delivering', '1 aged eligible');
+
+    config()->set('swarm.callbacks.enabled', false);
+    Artisan::call('swarm:health', ['--json' => true]);
+    $disabled = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks'])
+        ->firstWhere('component', 'Callback delivery');
+
+    expect($disabled['details'])->toContain('delivery paused by kill switch')
+        ->and($disabled['details'])->toContain('1 registered', '2 pending', '1 delivering', '1 dead-lettered');
 });
 
 // ---------------------------------------------------------------------------
