@@ -440,6 +440,25 @@ it('names the missing signing key when a signed callback reaches a process witho
     expect(cache()->has('cb:run-keyless-worker'))->toBeFalse();
 });
 
+it('treats a falsy non-null signer as a missing signing key during delivery', function (): void {
+    $outbox = callbackOutbox();
+    $outbox->register('run-falsy-signer', CallbackSlot::Then, fn () => cache()->forever('cb:run-falsy-signer', 'invoked'));
+    $outbox->settle('run-falsy-signer', new SwarmTerminalContext('run-falsy-signer', CallbackSlot::Then, 'App\\Swarms\\S'));
+    $id = (int) callbackTable()->where('run_id', 'run-falsy-signer')->value('id');
+
+    $signer = Signed::$signer;
+    Signed::$signer = false;
+    try {
+        $outbox->deliver($id);
+    } finally {
+        Signed::$signer = $signer;
+    }
+
+    expect(callbackTable()->where('id', $id)->value('status'))->toBe('dead_letter');
+    expect(callbackDeadLetterReason($id))->toContain('no APP_KEY signing key is configured');
+    expect(cache()->has('cb:run-falsy-signer'))->toBeFalse();
+});
+
 it('deserializes nothing at all in a process without a signing key', function (): void {
     DeserializationProbe::reset();
     $id = pendingCallbackRowWithPayload('run-keyless-inject', DeserializationProbe::wire());

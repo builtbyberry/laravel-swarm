@@ -301,7 +301,7 @@ SWARM_CAPTURE_ACTIVE_CONTEXT=true
 
 You may still leave input, output, and artifact capture disabled for redacted history.
 
-`queue()` defaults to a single workflow job. Generated hierarchical swarms may opt into database-backed [multi-worker coordination](docs/hierarchical-routing.md#queue); static hierarchy retains its in-process queued path. Queued whole-workflow `then()` / `catch()` callbacks are unavailable; use `SwarmCompleted` / `SwarmFailed` lifecycle listeners. Stream `each()` / `then()` callbacks remain supported.
+`queue()` defaults to a single workflow job. Generated hierarchical swarms may opt into database-backed [multi-worker coordination](docs/hierarchical-routing.md#queue); static hierarchy retains its in-process queued path. Queued whole-workflow `then()` / `catch()` are [opt-in terminal callbacks](docs/error-handling.md#terminal-workflow-callbacks), default off and enabled with `swarm.callbacks.enabled` when using the database persistence driver. `SwarmCompleted` / `SwarmFailed` lifecycle listeners remain the always-on, guaranteed path. Stream `each()` / `then()` callbacks remain supported.
 
 ## Streaming a Swarm
 

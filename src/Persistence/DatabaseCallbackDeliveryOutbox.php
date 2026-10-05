@@ -315,7 +315,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
             // With no signing key in this process nothing can be verified, so refuse
             // before deserializing rather than rely on the library to reject it.
-            if (Signed::$signer === null) {
+            if (! Signed::$signer) {
                 return null;
             }
 
@@ -359,7 +359,7 @@ class DatabaseCallbackDeliveryOutbox implements CallbackDeliveryOutbox, Readable
 
         // resolveClosure() refuses to deserialize without a signing key; name that
         // cause, and do not deserialize here either.
-        if (Signed::$signer === null) {
+        if (! Signed::$signer) {
             return self::NO_SIGNING_KEY_REASON;
         }
 

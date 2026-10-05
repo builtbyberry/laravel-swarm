@@ -12,7 +12,10 @@ This example teaches:
 - completion and failure are handled with lifecycle events;
 - polling persisted status is the reliable fallback even if you also broadcast
   real-time updates;
-- callbacks are compatibility-only, not the recommended queued pattern.
+- [terminal callbacks](../../docs/error-handling.md#terminal-workflow-callbacks)
+  are opt-in, default off, and require `swarm.callbacks.enabled` with the database
+  persistence driver;
+  lifecycle events remain the always-on, guaranteed path.
 
 ## Prerequisites
 
@@ -106,8 +109,11 @@ Event::listen(SwarmFailed::class, function (SwarmFailed $event): void {
 });
 ```
 
-Prefer events for real queued execution. Callback chaining is compatibility
-only because queued closures can capture unexpected application state.
+Prefer events for real queued execution because they are the always-on, guaranteed
+path. Queued whole-workflow `then()` / `catch()` are
+[opt-in terminal callbacks](../../docs/error-handling.md#terminal-workflow-callbacks),
+default off and enabled with `swarm.callbacks.enabled` when using the database
+persistence driver.
 
 Events are not a replacement for persisted status. Use events for notifications
 and live updates, and keep a run inspector endpoint as the fallback source of

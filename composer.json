@@ -92,6 +92,7 @@
         "hooks:install": "ln -sfv ../../tools/git-hooks/commit-msg .git/hooks/commit-msg"
     },
     "config": {
+        "process-timeout": 900,
         "sort-packages": true,
         "allow-plugins": {
             "pestphp/pest-plugin": true

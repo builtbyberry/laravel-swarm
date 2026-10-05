@@ -126,9 +126,11 @@ protected $listen = [
 ];
 ```
 
-You can also listen to `SwarmFailed` to handle the failure path. Do not use
-`then()` or `catch()` on durable responses — those callbacks are not supported
-for durable runs.
+You can also listen to `SwarmFailed` to handle the failure path. Durable response
+`then()` / `catch()` methods are
+[opt-in terminal callbacks](error-handling.md#terminal-workflow-callbacks), default
+off and enabled with `swarm.callbacks.enabled` when using the database persistence
+driver. Lifecycle events remain the always-on, guaranteed path.
 
 That is the full happy path. The rest of this document covers the mechanics,
 operational surface, and production requirements in depth.
@@ -220,9 +222,10 @@ class ResearchSwarm implements Swarm
 }
 ```
 
-Durable responses do not support `then()` or `catch()`. Durable runs are
-event-driven. Listen to `SwarmCompleted` and `SwarmFailed` instead of
-serializing callbacks into the queue payload.
+Durable response `then()` / `catch()` methods are
+[opt-in terminal callbacks](error-handling.md#terminal-workflow-callbacks), default
+off and enabled with `swarm.callbacks.enabled` when using the database persistence
+driver. `SwarmCompleted` and `SwarmFailed` remain the always-on, guaranteed path.
 
 `dispatchDurable()` still follows Laravel's pending-dispatch lifecycle. In
 Tinker or other manual testing, holding onto the response keeps the first job

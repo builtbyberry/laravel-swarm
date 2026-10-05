@@ -105,14 +105,16 @@ stream, so it cannot be streamed. This limit is upstream, not a Swarm choice.
 
 ### Other recorded limits
 
-These are documented in place and unchanged by this release: no post-result native
-same-turn continuation and no completion-receipt reconciliation (see
+The retained limits documented here are unchanged by this release: no post-result
+native same-turn continuation and no completion-receipt reconciliation (see
 [Native Approval Recovery Proof](native-approval-recovery-proof.md) and
-[Native outcome boundary](native-outcome-boundary.md)); no whole-workflow queued
-`then()` / `catch()` (use lifecycle events; stream `each()` / `then()` remain — see
-[Error Handling](error-handling.md#terminal-workflow-callbacks)); and the retry and
-effect-safety limits in
+[Native outcome boundary](native-outcome-boundary.md)); and the retry and effect-safety
+limits in
 [Retry and operator limits](ai-0112-release-evidence.md#retry-and-operator-limits).
+Whole-workflow queued `then()` / `catch()` are
+[opt-in terminal callbacks](error-handling.md#terminal-workflow-callbacks), default off
+and enabled with `swarm.callbacks.enabled` under the database persistence driver;
+lifecycle events remain the always-on, guaranteed path.
 
 ## Native conversation storage is configured separately
 
