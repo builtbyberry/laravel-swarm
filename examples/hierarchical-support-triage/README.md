@@ -92,7 +92,8 @@ Rules:
 - worker.agent must be one of the allowed worker agent classes.
 - parallel.branches may only reference worker nodes.
 - parallel.next is required.
-- branch workers must not define next.
+- branch workers must omit next, set it to null, or name the parallel join;
+  any other target is rejected.
 - with_outputs may only reference nodes that have already completed.
 - finish nodes must define exactly one of output or output_from.
 INSTRUCTIONS;

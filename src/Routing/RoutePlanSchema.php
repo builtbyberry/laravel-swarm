@@ -41,7 +41,8 @@ use Illuminate\JsonSchema\Types\Type;
 final class RoutePlanSchema
 {
     /**
-     * A worker node: run one agent with a prompt, then continue to `next`.
+     * A worker node: run one agent with a prompt, then continue to nullable
+     * `next`. A null successor marks a parallel branch or terminal worker.
      */
     public static function worker(JsonSchema $schema): Type
     {
@@ -58,7 +59,8 @@ final class RoutePlanSchema
                 ->description("Ids of earlier nodes whose outputs are injected into this worker's prompt, each labelled by its node id; empty when none.")
                 ->required(),
             'next' => $schema->string()
-                ->description('Id of the node to run after this worker completes.')
+                ->nullable()
+                ->description('Id of the node to run after this worker; null when the worker has no successor — it runs as a parallel branch (the parallel node owns the join) or is the last node of the run.')
                 ->required(),
         ]);
     }

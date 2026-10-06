@@ -18,6 +18,11 @@ stored nothing.
   still accepts a worker node that omits it, so scripted coordinators and
   PHP-authored plans need no change; alias maps validate as before, and static
   plans may also use the list form.
+- Helper-typed parallel fan-outs and terminal workers now validate:
+  `RoutePlanSchema::worker()` declares `next` as required but nullable, and the
+  planner treats a branch `next` that names its group's join as redundant. The
+  worker schema's `next` type changes from string to string-or-null for callers
+  snapshot-testing it; PHP-authored plans are unaffected.
 
 ## v0.28.0 - 2026-10-06
 

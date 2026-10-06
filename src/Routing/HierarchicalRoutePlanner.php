@@ -119,6 +119,8 @@ class HierarchicalRoutePlanner
             throw new SwarmException("Hierarchical route plan [start_at] references unknown node [{$startAt}].");
         }
 
+        $nodes = $this->normalizeParallelBranchSuccessors($startAt, $nodes);
+
         $plan = new HierarchicalRoutePlan($startAt, $nodes);
 
         $this->validateReferences($plan);
@@ -129,6 +131,89 @@ class HierarchicalRoutePlanner
         $this->validateDataDependencies($plan);
 
         return $plan;
+    }
+
+    /**
+     * Drop a redundant branch-to-join edge emitted by a helper-conformant
+     * coordinator. The worker helper requires `next`, so a model may name the
+     * join already owned by the parallel node; normalizing it to null preserves
+     * the branch shape consumed by validation, runners, and persistence.
+     *
+     * @param  array<string, HierarchicalRouteNode>  $nodes
+     * @return array<string, HierarchicalRouteNode>
+     */
+    protected function normalizeParallelBranchSuccessors(string $startAt, array $nodes): array
+    {
+        /** @var array<string, array<int, HierarchicalParallelNode>> $owners */
+        $owners = [];
+
+        foreach ($nodes as $node) {
+            if (! $node instanceof HierarchicalParallelNode) {
+                continue;
+            }
+
+            foreach ($node->branches as $branchNodeId) {
+                $owners[$branchNodeId][] = $node;
+            }
+        }
+
+        foreach ($owners as $branchNodeId => $branchOwners) {
+            $branch = $nodes[$branchNodeId] ?? null;
+
+            if ($branch === null || get_class($branch) !== HierarchicalWorkerNode::class || $branch->next === null || $branch->hasLoop()) {
+                continue;
+            }
+
+            if ($branchNodeId === $startAt) {
+                continue;
+            }
+
+            $allOwnersJoinAtBranchNext = array_all(
+                $branchOwners,
+                static fn (HierarchicalParallelNode $owner): bool => $owner->next === $branch->next,
+            );
+
+            if (! $allOwnersJoinAtBranchNext) {
+                continue;
+            }
+
+            $hasOrdinaryIncomingPath = false;
+
+            foreach ($nodes as $node) {
+                if (
+                    ($node instanceof HierarchicalWorkerNode || $node instanceof HierarchicalParallelNode)
+                    && $node->next === $branchNodeId
+                ) {
+                    $hasOrdinaryIncomingPath = true;
+
+                    break;
+                }
+
+                if ($node instanceof HierarchicalWorkerNode && $node->loopTo === $branchNodeId) {
+                    $hasOrdinaryIncomingPath = true;
+
+                    break;
+                }
+            }
+
+            if ($hasOrdinaryIncomingPath) {
+                continue;
+            }
+
+            $nodes[$branchNodeId] = new HierarchicalWorkerNode(
+                id: $branch->id,
+                agentClass: $branch->agentClass,
+                prompt: $branch->prompt,
+                withOutputs: $branch->withOutputs,
+                metadata: $branch->metadata,
+                next: null,
+                loopTo: $branch->loopTo,
+                loopMaxIterations: $branch->loopMaxIterations,
+                type: $branch->type,
+            );
+        }
+
+        return $nodes;
     }
 
     /**
