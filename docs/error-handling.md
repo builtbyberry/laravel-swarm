@@ -434,8 +434,18 @@ Callback deliveries are persisted in `swarm_callback_deliveries`.
   `swarm:relay --type=callback --drain-until-empty`, **wait for the callback queue workers to
   finish** the dispatched `DeliverSwarmCallback` jobs, confirm health has no pending, delivering,
   or dead-letter rows, then stop or restart every long-lived worker before running the down migration
-  so no process retains positive table readiness. If rollback is urgent, disable registration at
-  the application boundary first; the kill switch also stops the drain you are trying to finish.
+  so no process retains positive table readiness. `swarm:health` exposes aggregate counts and the
+  warning only; there is no callback list or requeue command. Inspect dead letters with database
+  tooling in `config('swarm.tables.callback_deliveries')` (default
+  `swarm_callback_deliveries`), filtering `status = 'dead_letter'` and reviewing the id, run id,
+  slot, attempts, and timestamps. `last_error` is sealed. Reconcile the intended side effect by
+  hand before removal. A patient rollback can let `swarm:prune` collect the row after a positive
+  `swarm.callbacks.dead_letter_retention_days` window measured from `last_attempted_at`, or when
+  its terminal run history expires. If rollback cannot wait, delete only the reconciled rows
+  directly from that configured table; this irreversibly discards the sealed failure reason, so
+  preserve the identifiers and required incident evidence first. If rollback is urgent, disable
+  registration at the application boundary first; the kill switch also stops the drain you are
+  trying to finish.
 
 ## Queue Retry vs Durable Retry
 

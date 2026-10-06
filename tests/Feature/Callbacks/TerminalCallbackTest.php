@@ -1698,6 +1698,7 @@ it('uses callback-specific retry advice for relay dispatch failures', function (
 
     expect($exit)->toBe(1)
         ->and($output)->toContain('callback delivery could not be dispatched due to a transient error')
+        ->and($output)->toContain('The delivery remains eligible')
         ->and($output)->toContain('callback retry delay or delivery lease timeout')
         ->and($output)->not->toContain('will be re-claimed after the reservation timeout');
 });

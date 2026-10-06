@@ -129,7 +129,8 @@ final class UpgradeAssistant
         }
         $verificationOnly = $this->recipe->verificationOnly($core);
         if ($verificationOnly) {
-            $add('already-target', 'manual', 'Swarm is already on the target 0.27.x line. Verify dependencies, native schema and application behavior manually; this recipe will not rewrite or downgrade the manifest.');
+            $targetMinor = $this->minor($this->recipe->target);
+            $add('already-target', 'manual', "Swarm is already on the target {$targetMinor}.x line. Verify dependencies, schema and application behavior manually; this recipe will not rewrite or downgrade the manifest.");
         }
         foreach ($this->recipe->packages as $package => $minimum) {
             $requirement = $requirements[$package] ?? null;
@@ -155,7 +156,7 @@ final class UpgradeAssistant
                 $version = $lockedPackage['version'];
                 if (! is_string($version) || ! preg_match('/\Av?\d+\.\d+\.\d+\z/', $version)) {
                     $add('unstable:'.$package, 'blocker', "{$package} is not locked to an ordinary stable release; inspect its provenance manually.");
-                } elseif ($this->recipe->id === UpgradeRecipe::NATIVE_ONE
+                } elseif ($this->recipe->id !== UpgradeRecipe::DEFAULT
                     && str_starts_with($package, 'builtbyberry/laravel-swarm-')
                     && ! $this->recipe->acceptsConstraint($package, ltrim($version, 'v'))) {
                     $add('source-line:'.$package, 'blocker', "{$package} is locked outside this recipe's supported version lines; review its source version manually.");
@@ -355,6 +356,16 @@ final class UpgradeAssistant
     /** @return array<string, string> */
     private function manualSteps(): array
     {
+        if ($this->recipe->id === UpgradeRecipe::NATIVE_FEATURES) {
+            return [
+                'composer-resolution' => 'Previewed edits do not resolve dependencies or verify publication. Review a Composer dry-run, then verify the resulting lock, installed provenance, and platform requirements.',
+                'v028-breaking-checklist' => 'Before swapping code on database persistence, run the v0.28 migrations; configure APP_KEY before queueing; make authored parallel swarm classes container-resolvable with stable reconstructed slots; treat database run-history terminal status as write-once. See https://github.com/builtbyberry/laravel-swarm/blob/main/UPGRADING.md#upgrading-to-v0280.',
+                'v028-callbacks-experimental' => 'Terminal workflow callbacks are experimental and default-off; leave them disabled unless you adopt their relay, key, retry, and rollback contract.',
+                'v028-companion-publication' => 'Pulse 0.2.0, Filament 0.4.0, MCP 0.3.0, and memory-vector 0.3.0 add ^0.28 support and ship with core v0.28.0. Until published, these companion targets cannot be installed; this offline assistant does not verify availability.',
+                'application-verification' => 'Runtime readiness remains unverified. Test the application after Composer resolution and the documented migration sequence.',
+            ];
+        }
+
         $steps = [
             'composer-resolution' => 'Previewed manifest edits do not resolve dependencies. Review composer update --with-all-dependencies --dry-run, then perform the intended Composer update and verify lock/installed provenance and platform requirements. Composer may execute application plugins/scripts.',
             'upstream-api' => 'Review native AI connection/stream exceptions, event and Request constructor overrides, queued fake behavior and provider model defaults: https://github.com/laravel/ai/blob/v0.11.2/UPGRADE.md. No application source has been scanned or rewritten.',

@@ -78,9 +78,10 @@ repositories deliberately trigger the existing custom-repository refusal; an
 installed candidate is not a reason to bypass that protection. Separate deterministic
 metadata fixtures prove supported old/new recipe selection, present direct and
 transitive companions, absent optional packages, exact/caret constraints, selected
-apply and restore, and unchanged-file refusal. The old recipe/default remains
-0.25-to-0.26; the new recipe is explicitly 0.26-to-0.27. Both retain
-`runtime_verified=false`.
+apply and restore, and unchanged-file refusal. For this v0.27 proof, the old
+recipe/default remained 0.25-to-0.26 and the then-new recipe was explicitly
+0.26-to-0.27. Both retain `runtime_verified=false`; the later
+`0.27-to-0.28` recipe is documented in the [current assistant guide](upgrade-assistant.md#swarm-v028-recipe).
 
 ## Later publication verification
 

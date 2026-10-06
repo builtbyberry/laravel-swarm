@@ -1,7 +1,7 @@
 ![](https://banners.beyondco.de/Laravel%20Swarm.png?theme=light&packageManager=composer+require&packageName=builtbyberry%2Flaravel-swarm&pattern=aztec&style=style_1&description=Lightweight+orchestration+package+for+coordinating+AI+agents%2C+workflows%2C+and+distributed+task+execution+within+Laravel+applications+built+on+Laravel+AI&md=1&showWatermark=1&fontSize=100px&images=cog) 
 
 Native provider activity is preserved on supported streaming paths; see
-[provider-tool events](docs/provider-tool-events.md) for capture, replay and durable-attempt semantics.
+[provider-tool events](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/provider-tool-events.md) for capture, replay and durable-attempt semantics.
 
 # Laravel Swarm
 
@@ -23,8 +23,8 @@ Define a swarm once, return the Laravel AI agents that participate in it, and ru
 - **Packagist:** `builtbyberry/laravel-swarm`
 - **Namespace:** `BuiltByBerry\LaravelSwarm`
 - **Repository:** https://github.com/builtbyberry/laravel-swarm
-- **In-repo docs:** [docs/README.md](docs/README.md)
-- **Examples:** [examples/README.md](examples/README.md)
+- **In-repo docs:** [docs/README.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/README.md)
+- **Examples:** [examples/README.md](https://github.com/builtbyberry/laravel-swarm/blob/main/examples/README.md)
 - **Upgrading:** [UPGRADING.md](UPGRADING.md)
 - **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
 
@@ -59,7 +59,7 @@ v0.28 rollout controls. A layered v2 flag enables reconstructible per-run native
 tools, one-shot message history and conversations across worker reconstruction;
 provider, model and timeout remain part of the base recipient envelope. Approval
 decisions remain outside this input surface. See
-[Native messages and attachments](docs/native-inputs.md).
+[Native messages and attachments](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-inputs.md).
 
 ## Requirements
 
@@ -71,7 +71,8 @@ PHP **^8.4** is supported alongside PHP 8.5. As of **v0.27.0**, the official `la
 
 Before upgrading to v0.28, follow the required migration, worker-restart,
 `APP_KEY`, and config-cache steps in
-[UPGRADING.md](UPGRADING.md#upgrading-to-v0280).
+[UPGRADING.md](UPGRADING.md#upgrading-to-v0280), and preview the explicit
+`0.27-to-0.28` [upgrade recipe](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/upgrade-assistant.md#swarm-v028-recipe).
 
 **No special stability configuration is required.** Laravel AI 1.0 is a stable release, so this package declares `"minimum-stability": "stable"` and installs cleanly into an application that does the same.
 
@@ -84,10 +85,10 @@ and patch updates as integration-test events; a successful Composer resolution
 alone does not verify an application's workflow behavior. See the
 [Laravel AI 1.0 upgrade guidance](UPGRADING.md#upgrading-to-v0270).
 
-For the Laravel AI 1.0 transition, follow the [native conversation upgrade](docs/native-conversation-upgrade.md)
-and explicitly select the [new upgrade recipe](docs/upgrade-assistant.md#laravel-ai-10-recipe).
+For the Laravel AI 1.0 transition, follow the [native conversation upgrade](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-conversation-upgrade.md)
+and explicitly select the [new upgrade recipe](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/upgrade-assistant.md#laravel-ai-10-recipe).
 
-See [Native Ownership and Limits](docs/native-ownership-and-limits.md) for what Swarm
+See [Native Ownership and Limits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-ownership-and-limits.md) for what Swarm
 delegates to native Laravel AI, the limits it keeps on purpose (with evidence and
 reevaluation triggers), and the deprecation and legacy-retirement schedule.
 
@@ -104,12 +105,12 @@ Tagged releases are available on [Packagist](https://packagist.org/packages/buil
 
 `swarm:install` walks you through the full setup in one shot — it publishes `config/swarm.php`, seeds the canonical Swarm `.env` keys with safe defaults, runs the package migrations (or scaffolds `LaravelSwarm::ignoreMigrations()` for a cache-only deployment), warns when `QUEUE_CONNECTION=sync`, and offers to dispatch the targeted sub-installers in the same pass:
 
-- [`swarm:install:durable`](docs/durable-execution.md) — scheduler entries (`swarm:relay`, `swarm:recover`, `swarm:prune`), persistence/queue checks, copy-paste worker snippets.
-- [`swarm:install:audit`](docs/audit-evidence-contract.md) — bind a `SwarmAuditSink` (and optional `SwarmAuditSigner` / `ActorResolver` / `CapturePolicy`) inside `AppServiceProvider`.
-- [`swarm:install:memory`](docs/memory.md) — verify the memory tables (offering to run migrations if they are missing), then print the effective persistence driver and replay mode for the Swarm Memory subsystem.
-- [`swarm:install:examples`](docs/examples.md) — copy the runnable starter example pack into `app/Ai/`.
+- [`swarm:install:durable`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md) — scheduler entries (`swarm:relay`, `swarm:recover`, `swarm:prune`), persistence/queue checks, copy-paste worker snippets.
+- [`swarm:install:audit`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md) — bind a `SwarmAuditSink` (and optional `SwarmAuditSigner` / `ActorResolver` / `CapturePolicy`) inside `AppServiceProvider`.
+- [`swarm:install:memory`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/memory.md) — verify the memory tables (offering to run migrations if they are missing), then print the effective persistence driver and replay mode for the Swarm Memory subsystem.
+- [`swarm:install:examples`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/examples.md) — copy the runnable starter example pack into `app/Ai/`.
 
-Pulse observability (recorders + dashboard cards) lives in a separate companion package as of v0.17.1 — see [Pulse](docs/pulse.md) for the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) install steps.
+Pulse observability (recorders + dashboard cards) lives in a separate companion package as of v0.17.1 — see [Pulse](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/pulse.md) for the [`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse) install steps.
 
 For CI and scripted setups, every prompt has a flag override:
 
@@ -131,11 +132,11 @@ php artisan swarm:health --durable
 
 `--durable` also verifies the database tables required by `dispatchDurable()` and coordinated multi-worker hierarchical queueing.
 
-Read [Getting Started](docs/getting-started.md) for the full new-user walkthrough — installer flow, post-install verification, and running your first starter swarm in under five minutes.
+Read [Getting Started](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/getting-started.md) for the full new-user walkthrough — installer flow, post-install verification, and running your first starter swarm in under five minutes.
 
 ### Advanced setup (manual)
 
-Prefer to wire things by hand? Every step `swarm:install` performs has a stable manual equivalent. See [Advanced Setup](docs/advanced-setup.md) for the full manual flow — config publish, migrations vs. `ignoreMigrations()`, scheduler entries, audit sink binding, and copying the starter examples by hand.
+Prefer to wire things by hand? Every step `swarm:install` performs has a stable manual equivalent. See [Advanced Setup](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/advanced-setup.md) for the full manual flow — config publish, migrations vs. `ignoreMigrations()`, scheduler entries, audit sink binding, and copying the starter examples by hand.
 
 ## Your First Swarm
 
@@ -154,7 +155,7 @@ Or scaffold a **complete, runnable** swarm from a curated blueprint — the swar
 php artisan make:swarm:blueprint SupportTriage --template=triage
 ```
 
-See [Native Agent Onboarding](docs/native-agent-onboarding.md) for a no-paid-provider tools-and-streaming tutorial and [Generators](docs/generators.md) for the full generator surface. `make:swarm:agent` remains available as the deterministic offline compatibility scaffold.
+See [Native Agent Onboarding](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-agent-onboarding.md) for a no-paid-provider tools-and-streaming tutorial and [Generators](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/generators.md) for the full generator surface. `make:swarm:agent` remains available as the deterministic offline compatibility scaffold.
 
 Swarms live in `App\Ai\Swarms`, implement `BuiltByBerry\LaravelSwarm\Contracts\Swarm`, use the `Runnable` trait, and return their participating Laravel AI agents from `agents()`:
 
@@ -191,7 +192,7 @@ In a sequential swarm, the first agent receives the original task. Each later ag
 
 ## Running a Swarm
 
-> **No class required.** For one agent — or a quick multi-agent composition — you don't need to author a `Swarm` class at all. `Swarm::agent($agent)->prompt($task)` runs a single agent through the **same** governed pipeline (audit, guardrails, capture, telemetry, encrypt-at-rest), and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical()` do the same for inline multi-agent swarms — across the in-process modes (for queued or durable execution, author a `Swarm` class). See the [Cookbook](docs/cookbook.md) and [Execution Modes: Single Agent](docs/execution-modes.md#single-agent-swarmagent). Reach for a `Swarm` class when the topology is reused, named, or carries class-level attributes.
+> **No class required.** For one agent — or a quick multi-agent composition — you don't need to author a `Swarm` class at all. `Swarm::agent($agent)->prompt($task)` runs a single agent through the **same** governed pipeline (audit, guardrails, capture, telemetry, encrypt-at-rest), and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical()` do the same for inline multi-agent swarms — across the in-process modes (for queued or durable execution, author a `Swarm` class). See the [Cookbook](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/cookbook.md) and [Execution Modes: Single Agent](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/execution-modes.md#single-agent-swarmagent). Reach for a `Swarm` class when the topology is reused, named, or carries class-level attributes.
 
 Use `prompt()` when the caller can wait for the full workflow result:
 
@@ -239,7 +240,7 @@ return response()->json($response);
 | `broadcastOnQueue()` | `QueuedSwarmResponse` | A worker should stream and broadcast typed events. |
 | `dispatchDurable()` | `DurableSwarmResponse` | The workflow needs checkpointing, recovery, operator controls, or branch jobs. |
 
-**Guardrails** (input, per-step, final output policy checks) run across these modes at fixed orchestration boundaries; see [docs/guardrails.md](docs/guardrails.md).
+**Guardrails** (input, per-step, final output policy checks) run across these modes at fixed orchestration boundaries; see [docs/guardrails.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/guardrails.md).
 
 `queue()` and `dispatchDurable()` return dispatch handles with a `runId`. Listen for lifecycle events or inspect persisted history for eventual results.
 
@@ -252,14 +253,14 @@ $typed = $native?->structured;
 
 It preserves structured data and native identities without serializing raw
 provider responses, and persistence still follows capture controls. See
-[Native Step Results](docs/native-step-results.md).
+[Native Step Results](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-step-results.md).
 
 `stream()` and the broadcast helpers support sequential, generated hierarchical,
 and static hierarchical swarms. Top-level parallel live multiplexing is also
 available behind the default-off `SWARM_PARALLEL_STREAMING_ENABLED` flag when
 Laravel's `process` concurrency driver is active. Parallel events carry explicit
 branch/attempt/sequence identity; their arrival order is deliberately not a
-global workflow order. See [streaming topology](docs/streaming.md#topology-sequential-parallel-static-hierarchical-and-hierarchical).
+global workflow order. See [streaming topology](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md#topology-sequential-parallel-static-hierarchical-and-hierarchical).
 For workflow operations feeds across all modes, use lifecycle events and
 application-owned broadcasts.
 
@@ -305,7 +306,7 @@ SWARM_CAPTURE_ACTIVE_CONTEXT=true
 
 You may still leave input, output, and artifact capture disabled for redacted history.
 
-`queue()` defaults to a single workflow job. Generated hierarchical swarms may opt into database-backed [multi-worker coordination](docs/hierarchical-routing.md#queue); static hierarchy retains its in-process queued path. Queued whole-workflow `then()` / `catch()` are [opt-in, experimental terminal callbacks](docs/error-handling.md#terminal-workflow-callbacks), default off and enabled with `swarm.callbacks.enabled` when using the database persistence driver. `SwarmCompleted` / `SwarmFailed` lifecycle listeners remain the always-on, guaranteed path. Stream `each()` / `then()` callbacks remain supported.
+`queue()` defaults to a single workflow job. Generated hierarchical swarms may opt into database-backed [multi-worker coordination](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/hierarchical-routing.md#queue); static hierarchy retains its in-process queued path. Queued whole-workflow `then()` / `catch()` are [opt-in, experimental terminal callbacks](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#terminal-workflow-callbacks), default off and enabled with `swarm.callbacks.enabled` when using the database persistence driver. `SwarmCompleted` / `SwarmFailed` lifecycle listeners remain the always-on, guaranteed path. Stream `each()` / `then()` callbacks remain supported.
 
 ## Streaming a Swarm
 
@@ -361,13 +362,13 @@ $stream = ContentPipeline::make()
     ->storeForReplay();
 ```
 
-Replay later with `SwarmHistory::replay($runId)`. See [Streaming](docs/streaming.md) for event schemas, replay behavior, capture, limits, and failure handling.
+Replay later with `SwarmHistory::replay($runId)`. See [Streaming](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md) for event schemas, replay behavior, capture, limits, and failure handling.
 
 Vercel AI SDK and AG-UI clients can reuse Laravel AI's native encoders through
 the default-off Swarm adapter. The workflow projection supports every live
 topology, including enabled process-parallel multiplexing, without inventing a
 global branch order. The final-agent projection is sequential-only and buffers
-until workflow success. See [Vercel and AG-UI protocol projection](docs/native-chat-protocols.md)
+until workflow success. See [Vercel and AG-UI protocol projection](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-chat-protocols.md)
 for examples, identity rules, capture behavior, replay authorization, and exact
 approval/error limits.
 
@@ -384,19 +385,19 @@ ArticlePipeline::make()->stream(RunContext::from($task, $runId)); // abandoned m
 return ArticlePipeline::make()->stream(RunContext::from($task, $runId));
 ```
 
-On sequential resume, a completed non-final step is skipped **only when its checkpoint was successfully persisted and remains readable**. Checkpoint writes are best-effort; missing/unreadable checkpoints, unfinished steps and the final streamed step permit provider/tool re-execution. FrozenView stabilizes selected memory reads, not provider output bytes or arbitrary external effects. Governed by the memory replay mode (`frozen_view` default; `fresh_execution` opts out) and database persistence. See [Streaming — Crash-Replay Durability](docs/streaming.md#crash-replay-durability).
+On sequential resume, a completed non-final step is skipped **only when its checkpoint was successfully persisted and remains readable**. Checkpoint writes are best-effort; missing/unreadable checkpoints, unfinished steps and the final streamed step permit provider/tool re-execution. FrozenView stabilizes selected memory reads, not provider output bytes or arbitrary external effects. Governed by the memory replay mode (`frozen_view` default; `fresh_execution` opts out) and database persistence. See [Streaming — Crash-Replay Durability](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md#crash-replay-durability).
 
 ### Tool calls (including MCP tools) (v0.13.0)
 
-Swarm carries `laravel/ai` `ToolCall` / `ToolResult` objects through the stream and the durable snapshot as **opaque passthrough**, so the **MCP client/server tools** added in `laravel/ai` 0.8 flow through with no MCP-specific configuration — including structured (non-scalar) MCP results, preserved intact. A tool value JSON cannot represent degrades to a typed placeholder at the tool boundary rather than crashing the run. See [Streaming — Tool calls (including MCP tools)](docs/streaming.md#tool-calls-including-mcp-tools).
+Swarm carries `laravel/ai` `ToolCall` / `ToolResult` objects through the stream and the durable snapshot as **opaque passthrough**, so the **MCP client/server tools** added in `laravel/ai` 0.8 flow through with no MCP-specific configuration — including structured (non-scalar) MCP results, preserved intact. A tool value JSON cannot represent degrades to a typed placeholder at the tool boundary rather than crashing the run. See [Streaming — Tool calls (including MCP tools)](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md#tool-calls-including-mcp-tools).
 
 ### Streaming dynamic swarms & the causal-log substrate (v0.15.0)
 
 `stream()` now streams **dynamic `Hierarchical` swarms** — the coordinator runs synchronously, then its workers stream as the plan is walked. Underneath, the streamed event log is an **append-only causal log**: nothing is mutated or deleted in place, course-corrections are typed *void-edges*, and any shape a reader wants (clean vs. forensic, causal vs. presentation order) is a read-time **fold** via `CausalLogView`. A background compactor graduates sealed history to a cold tier so the hot log stays bounded, and authors can bound their own context with `'type' => 'rollup'` plan nodes and a declarative `#[ContextGrowthPolicy]`.
 
-- **Authors:** [Streaming Substrate Author Guide](docs/streaming-substrate-author-guide.md) — dynamic streaming, the causal-log fold, rollup nodes, the context-growth policy.
-- **Operators:** [Streaming Substrate Operator Runbook](docs/operator-runbook-streaming-substrate.md) — hot/cold tiering, scheduling `swarm:compact`, retention, recovery and quarantine.
-- **Driver authors (v0.17.1):** `CausalLogStore` and `ColdArchiveDriver` are now public contracts for a custom persistence backend's read/query seam. See the [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for exactly what's pluggable today (hot/cold read stitching, causal-log resolution) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming).
+- **Authors:** [Streaming Substrate Author Guide](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming-substrate-author-guide.md) — dynamic streaming, the causal-log fold, rollup nodes, the context-growth policy.
+- **Operators:** [Streaming Substrate Operator Runbook](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/operator-runbook-streaming-substrate.md) — hot/cold tiering, scheduling `swarm:compact`, retention, recovery and quarantine.
+- **Driver authors (v0.17.1):** `CausalLogStore` and `ColdArchiveDriver` are now public contracts for a custom persistence backend's read/query seam. See the [Streaming Substrate Driver Guide](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming-substrate-driver-guide.md) for exactly what's pluggable today (hot/cold read stitching, causal-log resolution) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming).
 
 ## Durable Execution
 
@@ -441,9 +442,9 @@ your worst-case command duration. File-cache locks cover one host only; multi-ho
 deployments require a shared atomic default cache store, or must set
 `SWARM_COMMAND_OVERLAP_STORE` when the default is unsuitable. Override the
 duration with `SWARM_COMMAND_OVERLAP_LEASE_SECONDS`. See
-[Command overlap leases](docs/maintenance.md#command-overlap-leases).
+[Command overlap leases](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#command-overlap-leases).
 
-Start with [Durable Execution](docs/durable-execution.md), then use the topic guides for [waits and signals](docs/durable-waits-and-signals.md), [retries and progress](docs/durable-retries-and-progress.md), [child swarms](docs/durable-child-swarms.md), and [webhooks](docs/durable-webhooks.md).
+Start with [Durable Execution](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md), then use the topic guides for [waits and signals](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-waits-and-signals.md), [retries and progress](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-retries-and-progress.md), [child swarms](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-child-swarms.md), and [webhooks](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-webhooks.md).
 
 ### Durable per-node streaming (v0.15.0)
 
@@ -463,7 +464,7 @@ final class ClaimsReview implements Swarm
 }
 ```
 
-It streams on **every durable topology** — sequential, hierarchical, static_hierarchical, and parallel (including fan-out branches) — with each node's attempt voided-and-retried cleanly on crash-resume (the same append-only causal-log fold the live substrate uses). The hierarchical coordinator streams structural events; token-streaming the coordinator is a follow-up. Declaring the attribute on a topology not yet wired for streaming fails loud at dispatch. An operator kill-switch (`SWARM_DURABLE_STREAMING_ENABLED=false`) pauses emission fleet-wide without a redeploy, safely mid-run. See [Durable Execution — per-node streaming](docs/durable-execution.md#durable-per-node-streaming).
+It streams on **every durable topology** — sequential, hierarchical, static_hierarchical, and parallel (including fan-out branches) — with each node's attempt voided-and-retried cleanly on crash-resume (the same append-only causal-log fold the live substrate uses). The hierarchical coordinator streams structural events; token-streaming the coordinator is a follow-up. Declaring the attribute on a topology not yet wired for streaming fails loud at dispatch. An operator kill-switch (`SWARM_DURABLE_STREAMING_ENABLED=false`) pauses emission fleet-wide without a redeploy, safely mid-run. See [Durable Execution — per-node streaming](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#durable-per-node-streaming).
 
 ### Operator control contract (v0.16.0)
 
@@ -479,7 +480,7 @@ $result->status;         // DurableLifecycleStatus::Paused | ::PauseScheduled
 $result->isImmediate();  // false when a mid-step run pauses at its next checkpoint
 ```
 
-The control verbs return rich result objects (`DurablePauseResult` / `DurableResumeResult` / `DurableCancelResult`, backed by the `DurableLifecycleStatus` enum) that report the **effective** transition — whether the run paused/cancelled immediately or is scheduled to at its next step boundary. The contract is **control-only** (operational reads stay on `SwarmHistory` / `RunHistoryStore`), **authorization-agnostic** (gate the call in your own app), and **fails loud** on an unknown run. The `$response->pause()` / `resume()` / `cancel()` handle methods shown above delegate to it. See [Durable Execution — operator control contract](docs/durable-execution.md#operator-control-contract).
+The control verbs return rich result objects (`DurablePauseResult` / `DurableResumeResult` / `DurableCancelResult`, backed by the `DurableLifecycleStatus` enum) that report the **effective** transition — whether the run paused/cancelled immediately or is scheduled to at its next step boundary. The contract is **control-only** (operational reads stay on `SwarmHistory` / `RunHistoryStore`), **authorization-agnostic** (gate the call in your own app), and **fails loud** on an unknown run. The `$response->pause()` / `resume()` / `cancel()` handle methods shown above delegate to it. See [Durable Execution — operator control contract](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#operator-control-contract).
 
 ### Read-only inspection contracts (v0.19.0)
 
@@ -491,7 +492,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\InspectsDurableRuns;
 app(InspectsDurableRuns::class)->inspect($runId); // display-decrypted DurableRunDetail
 ```
 
-Three seams ship: **`InspectsDurableRuns`** (durable run, branches, child runs, hierarchical node outputs), **`ReadableRunHistoryStore`** (run + step detail and the runs list), and **`ReadableAuditOutbox`** (non-mutating outbox-health reads). Every sealed field is **display-decrypted per row** — it honors `swarm.persistence.decrypt_failure_policy` and degrades an undecryptable field to `null` with an `*_available: false` flag rather than throwing or leaking ciphertext, so one bad row never 500s a page. The operational reads (`RunHistoryStore::find`, `AuditOutbox::drain`, durable resume) are untouched and still fail loud. See [Public Surface — read-only inspection contracts](docs/public-surface.md#read-only-inspection-contracts-v0190).
+Three seams ship: **`InspectsDurableRuns`** (durable run, branches, child runs, hierarchical node outputs), **`ReadableRunHistoryStore`** (run + step detail and the runs list), and **`ReadableAuditOutbox`** (non-mutating outbox-health reads). Every sealed field is **display-decrypted per row** — it honors `swarm.persistence.decrypt_failure_policy` and degrades an undecryptable field to `null` with an `*_available: false` flag rather than throwing or leaking ciphertext, so one bad row never 500s a page. The operational reads (`RunHistoryStore::find`, `AuditOutbox::drain`, durable resume) are untouched and still fail loud. See [Public Surface — read-only inspection contracts](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/public-surface.md#read-only-inspection-contracts-v0190).
 
 ## Memory (v0.9.0+)
 
@@ -514,9 +515,9 @@ $approved = $memory->get(MemoryScope::Run, $runId, 'draft_approved');
 - **`MemoryCapturePolicy`** redacts or drops entries at the write boundary, so PII never reaches a snapshot (default: a no-op).
 - **Operator CLI** — `swarm:memory:inspect` (view a run's frozen snapshots), `swarm:memory:dump` (export the full memory + snapshot trail for an audit packet / DSAR), and `swarm:memory:purge` (enforce per-scope retention windows).
 
-See [Swarm Memory](docs/memory.md) for the full reference: scope hierarchy, store drivers, lifecycle events, propagation and capture policies, snapshot inspection, replay semantics (`frozen_view` vs `fresh_execution`), and the `#[MemoryReplay]` / `#[PropagationPolicy]` attributes; and [Compliance & Audit](docs/compliance-audit.md) for the regulated-workload runbook (redaction, retention, audit-packet export). Vector-backed recall ships as the [laravel-swarm-memory-vector](https://github.com/builtbyberry/laravel-swarm-memory-vector) companion package.
+See [Swarm Memory](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/memory.md) for the full reference: scope hierarchy, store drivers, lifecycle events, propagation and capture policies, snapshot inspection, replay semantics (`frozen_view` vs `fresh_execution`), and the `#[MemoryReplay]` / `#[PropagationPolicy]` attributes; and [Compliance & Audit](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/compliance-audit.md) for the regulated-workload runbook (redaction, retention, audit-packet export). Vector-backed recall ships as the [laravel-swarm-memory-vector](https://github.com/builtbyberry/laravel-swarm-memory-vector) companion package.
 
-**Agent memory tools (v0.11.0+).** Agents can now read and write memory *mid-prompt* as ordinary `laravel/ai` tools — drop the shipped `Recall` and `Remember` tools into any agent's `tools()` array (or expose them via the `HasSwarmMemoryTools` trait). Scope ids resolve from the active run, never the model; reads honour the propagation policy and writes honour the capture policy, so the tools can never surface or persist anything the policies forbid. They are **disabled by default** (`swarm.memory.tools.enabled`) — granting an LLM access to shared memory is an explicit decision. Scaffold custom variants with `php artisan make:memory-tool`. See the [memory recipes](docs/memory-recipes.md) for worked patterns: per-user and tenant-scoped recall, policy-enforced custom tools, recall + redact, and sub-agent memory continuity.
+**Agent memory tools (v0.11.0+).** Agents can now read and write memory *mid-prompt* as ordinary `laravel/ai` tools — drop the shipped `Recall` and `Remember` tools into any agent's `tools()` array (or expose them via the `HasSwarmMemoryTools` trait). Scope ids resolve from the active run, never the model; reads honour the propagation policy and writes honour the capture policy, so the tools can never surface or persist anything the policies forbid. They are **disabled by default** (`swarm.memory.tools.enabled`) — granting an LLM access to shared memory is an explicit decision. Scaffold custom variants with `php artisan make:memory-tool`. See the [memory recipes](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/memory-recipes.md) for worked patterns: per-user and tenant-scoped recall, policy-enforced custom tools, recall + redact, and sub-agent memory continuity.
 
 ## Topologies
 
@@ -543,11 +544,13 @@ class ContentPipeline implements Swarm
 
 Agents run concurrently and each receives the original task.
 
-Authored parallel swarm classes must be container-resolvable, and every declared
-slot must reconstruct to a Laravel AI agent because Laravel concurrency resolves
-the swarm and its agents inside worker processes. The same reconstruction rule
-applies to authored hierarchical parallel groups. Keep runtime state in
-`RunContext`, not mutable swarm or agent instances.
+Parallel agent classes must be container-resolvable; this was already required
+in v0.27, so agents cannot depend on unbound runtime constructor arguments. v0.28
+also requires an authored parallel swarm class to be container-resolvable and
+each selected slot to be present as a Laravel AI agent in a freshly resolved
+swarm's `agents()` result. The same reconstruction rule applies to authored
+hierarchical parallel groups. Keep per-run state in `RunContext`, not mutable
+swarm or agent instances.
 
 ```php
 #[Topology(TopologyEnum::Parallel)]
@@ -583,7 +586,7 @@ class SupportRoutingSwarm implements Swarm
 }
 ```
 
-Read [Hierarchical Routing](docs/hierarchical-routing.md) for the route plan schema, validation rules, queue behavior, and durable branch coordination.
+Read [Hierarchical Routing](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/hierarchical-routing.md) for the route plan schema, validation rules, queue behavior, and durable branch coordination.
 
 ### Static Hierarchical
 
@@ -612,7 +615,7 @@ class ContentSwarm implements HasRoutePlan, Swarm
 }
 ```
 
-Read [Static Hierarchical Topology](docs/static-hierarchical-topology.md) for the plan schema, streaming modes, step budgets, and execution mode support.
+Read [Static Hierarchical Topology](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/static-hierarchical-topology.md) for the plan schema, streaming modes, step budgets, and execution mode support.
 
 ## Testing
 
@@ -653,7 +656,7 @@ ContentPipeline::make()->run('Draft an intro');
 ContentPipeline::assertEventFired(SwarmCompleted::class);
 ```
 
-See [Testing](docs/testing.md) and [Testing Swarms](examples/testing-swarms/README.md).
+See [Testing](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/testing.md) and [Testing Swarms](https://github.com/builtbyberry/laravel-swarm/blob/main/examples/testing-swarms/README.md).
 
 ## Configuration
 
@@ -670,7 +673,7 @@ Settings are grouped by concern:
 
 Capture defaults are conservative. Prompts, outputs, automatic step artifacts, and rich active-context snapshots are not persisted unless you opt in. When the global persistence driver or a per-store override uses `database`, `swarm.persistence.encrypt_at_rest` defaults to true and seals designated sensitive string columns with Laravel's encrypter.
 
-Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](docs/maintenance.md), [Observability: Logging And Tracing](docs/observability-logging-tracing.md), and [Audit Evidence Contract](docs/audit-evidence-contract.md) before enabling production capture, audit, or retention policies.
+Use [Persistence And History](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/persistence-and-history.md), [Maintenance](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md), [Observability: Logging And Tracing](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/observability-logging-tracing.md), and [Audit Evidence Contract](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md) before enabling production capture, audit, or retention policies.
 
 ## Production Checklist
 
@@ -683,21 +686,21 @@ Use [Persistence And History](docs/persistence-and-history.md), [Maintenance](do
   it, durable runs stall after the first step, queued audit failures accumulate
   without retry, and enabled terminal callbacks remain pending. Use
   `swarm:relay --type=audit` or `swarm:relay --type=callback` to drain one lane
-  during focused recovery. See [Durable Execution](docs/durable-execution.md),
-  [Audit Evidence Contract](docs/audit-evidence-contract.md), and
-  [Terminal workflow callbacks](docs/error-handling.md#terminal-workflow-callbacks).
+  during focused recovery. See [Durable Execution](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md),
+  [Audit Evidence Contract](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md), and
+  [Terminal workflow callbacks](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#terminal-workflow-callbacks).
 - Run `php artisan migrate` on database persistence to create `swarm_audit_outbox` — required for the v0.5 default `SWARM_AUDIT_FAILURE_POLICY=queue` (sink failures persist for retry instead of being silently dropped). Cache persistence detects the missing outbox and falls back to log-and-swallow automatically.
-- Schedule `swarm:recover` every five minutes for durable execution and coordinated multi-worker hierarchical queueing. Recovery redispatches runs whose workers died between checkpoint and dispatch. See [Maintenance](docs/maintenance.md).
+- Schedule `swarm:recover` every five minutes for durable execution and coordinated multi-worker hierarchical queueing. Recovery redispatches runs whose workers died between checkpoint and dispatch. See [Maintenance](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md).
 - Schedule `swarm:prune` daily for database retention cleanup, or set `SWARM_PREVENT_PRUNE=true` when retention is managed outside the package.
-- **Streaming crash-replay (v0.12.0):** `php artisan migrate` creates `swarm_stream_step_checkpoints`, which stores completed non-final sequential step output + usage on a best-effort basis. A successfully persisted, readable checkpoint skips that step's invocation on resume; missing checkpoints and final/unfinished work may repeat effects. It is operational resume state, encrypted at rest by default under the database driver (`swarm.persistence.encrypt_at_rest`), and pruned with the run — early-pruned alongside snapshots by `swarm:memory:purge` (`--keep-snapshots` retains both) and cascade-deleted via the `swarm_run_histories` foreign key as the `swarm:prune` backstop. See [Streaming — Crash-Replay Durability](docs/streaming.md#crash-replay-durability).
+- **Streaming crash-replay (v0.12.0):** `php artisan migrate` creates `swarm_stream_step_checkpoints`, which stores completed non-final sequential step output + usage on a best-effort basis. A successfully persisted, readable checkpoint skips that step's invocation on resume; missing checkpoints and final/unfinished work may repeat effects. It is operational resume state, encrypted at rest by default under the database driver (`swarm.persistence.encrypt_at_rest`), and pruned with the run — early-pruned alongside snapshots by `swarm:memory:purge` (`--keep-snapshots` retains both) and cascade-deleted via the `swarm_run_histories` foreign key as the `swarm:prune` backstop. See [Streaming — Crash-Replay Durability](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md#crash-replay-durability).
 - **Rotate `APP_KEY` carefully (v0.12.1):** when `encrypt_at_rest` is on, durable operational resume state is sealed with the active `APP_KEY`. Rotating the key without re-keying the stored rows now makes durable resume **fail loud** with a clear `SwarmException` ("…verify APP_KEY…") instead of silently resuming from a wrong/empty prompt — re-point `APP_KEY` to the key that sealed the rows and re-dispatch the affected runs. See [Upgrading to v0.12.1](UPGRADING.md#upgrading-to-v0121).
 - Treat operational swarm tables as TTL-based runtime storage, not immutable compliance archives.
 - Bind `SwarmAuditSink` for regulated evidence export.
 - Bind `SwarmTelemetrySink` for logs, metrics, or tracing correlation.
 - Avoid secrets in metadata. Capture redaction does not sanitize arbitrary developer-supplied metadata. Set `SWARM_MAX_METADATA_BYTES` to enforce a hard size cap.
 - Build run inspection around `run_id`, lifecycle events, `SwarmHistory`, and durable runtime state.
-- Bookmark the [Operator Runbook: Audit Outbox Triage](docs/operator-runbook-audit-outbox.md) before going live. It is the 3 a.m. decision tree for dead-letter rows, stale pending rows, and sink outages — and it assumes the reader has not just re-read the reference docs.
-- Use `php artisan swarm:trace <run_id>` (v0.7+) to reconstruct a single run's audit chain across run history, the audit outbox, and the bound sink. Read-only, on-demand, with `--json` for monitoring and `--include-payloads` for full envelopes. See [Audit Evidence Contract](docs/audit-evidence-contract.md#reading-the-audit-chain), including the **Security and retention** subsection covering how the command unseals encrypted-at-rest data on output.
+- Bookmark the [Operator Runbook: Audit Outbox Triage](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/operator-runbook-audit-outbox.md) before going live. It is the 3 a.m. decision tree for dead-letter rows, stale pending rows, and sink outages — and it assumes the reader has not just re-read the reference docs.
+- Use `php artisan swarm:trace <run_id>` (v0.7+) to reconstruct a single run's audit chain across run history, the audit outbox, and the bound sink. Read-only, on-demand, with `--json` for monitoring and `--include-payloads` for full envelopes. See [Audit Evidence Contract](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md#reading-the-audit-chain), including the **Security and retention** subsection covering how the command unseals encrypted-at-rest data on output.
 
 ### Audit Extension Points
 
@@ -721,24 +724,24 @@ The full `SWARM_AUDIT_FAILURE_POLICY` matrix (since v0.5): `swallow` (drop silen
 
 Audit-path exception **messages** are redacted to `[redacted]` by default since v0.14.0 (`SWARM_AUDIT_REDACT_EXCEPTION_MESSAGES=true`) unless capture already permits failure free-text; the exception **class/type is always logged**, so failures stay diagnosable.
 
-See [Audit Evidence Contract](docs/audit-evidence-contract.md) for the full reference. When responding to an audit-outbox page, see the [Operator Runbook: Audit Outbox Triage](docs/operator-runbook-audit-outbox.md).
+See [Audit Evidence Contract](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md) for the full reference. When responding to an audit-outbox page, see the [Operator Runbook: Audit Outbox Triage](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/operator-runbook-audit-outbox.md).
 
 ## Documentation
 
-For the v0.27.0 adoption, start with the [release evidence and wrap handoff](docs/ai-1-release-evidence.md), then see the [54-row preservation ledger](docs/ai-1-preservation-evidence.md), [persisted-state upgrade evidence](docs/ai-1-upgrade-evidence.md), and [upgrade instructions](UPGRADING.md#upgrading-to-v0270). The [four reviewed companion candidates](docs/ai-1-companion-evidence.md) are merged to their release branches; the [fresh application procedure](docs/ai-1-ecosystem-evidence.md) verifies the combined candidate set, while published-install proof remains a separate phase. The [v0.26.0 evidence index](docs/ai-0112-release-evidence.md) remains a historical record.
+For the v0.27.0 adoption, start with the [release evidence and wrap handoff](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-release-evidence.md), then see the [54-row preservation ledger](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-preservation-evidence.md), [persisted-state upgrade evidence](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-upgrade-evidence.md), and [upgrade instructions](UPGRADING.md#upgrading-to-v0270). The [four reviewed companion candidates](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-companion-evidence.md) are merged to their release branches; the [fresh application procedure](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-ecosystem-evidence.md) verifies the combined candidate set, while published-install proof remains a separate phase. The [v0.26.0 evidence index](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-0112-release-evidence.md) remains a historical record.
 
 The full documentation site is at **[swarm.builtbyberry.com](https://swarm.builtbyberry.com)** — searchable, versioned, and the recommended starting point.
 
-The same content is mirrored in this repository; the [in-repo documentation index](docs/README.md) is the complete, categorized map when working offline. A few common entry points:
+The same content is mirrored in this repository; the [in-repo documentation index](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/README.md) is the complete, categorized map when working offline. A few common entry points:
 
-- [Choosing an Execution Mode](docs/execution-modes.md) — prompt, queue, stream, or durable
-- [Durable Execution](docs/durable-execution.md) — checkpointing, recovery, and operator controls
-- [Swarm Memory](docs/memory.md) — scoped, snapshot-replayable memory
-- [Configuration](docs/configuration.md) — every config key
-- [Public Surface](docs/public-surface.md) — the supported API, events, and read seams
-- [Audit Evidence Contract](docs/audit-evidence-contract.md) — compliance and auditability
+- [Choosing an Execution Mode](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/execution-modes.md) — prompt, queue, stream, or durable
+- [Durable Execution](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md) — checkpointing, recovery, and operator controls
+- [Swarm Memory](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/memory.md) — scoped, snapshot-replayable memory
+- [Configuration](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/configuration.md) — every config key
+- [Public Surface](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/public-surface.md) — the supported API, events, and read seams
+- [Audit Evidence Contract](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md) — compliance and auditability
 
-For the full set — topologies, guardrails, the durable subsystems, observability, operator runbooks, and examples — see the [documentation index](docs/README.md).
+For the full set — topologies, guardrails, the durable subsystems, observability, operator runbooks, and examples — see the [documentation index](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/README.md).
 
 ## AI Coding Assistants (Laravel Boost)
 
@@ -751,14 +754,14 @@ Laravel Swarm ships first-party [Laravel Boost](https://laravel.com/docs/boost) 
 
 Laravel Swarm is a small core with a growing family of companion packages —
 additive, MIT, and installed only when you need them. Each reads and extends the
-core through its public [contracts and events](docs/public-surface.md), never by
+core through its public [contracts and events](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/public-surface.md), never by
 patching internals. The full ecosystem map, with setup for each, lives on
 [swarm.builtbyberry.com](https://swarm.builtbyberry.com).
 
 - **[`laravel-swarm-filament`](https://github.com/builtbyberry/laravel-swarm-filament)** — a read-only Filament panel that turns every run into a topology-aware flow graph, with click-through to per-step inputs, outputs, tokens, timing, and memory.
 - **[`laravel-swarm-mcp`](https://github.com/builtbyberry/laravel-swarm-mcp)** — a read-only [Model Context Protocol](https://modelcontextprotocol.io) server that exposes run history, durable-run state, and audit-outbox health as MCP resources, so any MCP client (Claude, Cursor, …) can observe your swarms.
-- **[`laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse)** — [Laravel Pulse](https://laravel.com/docs/pulse) recorders and dashboard cards for swarm runs, steps, memory, and audit-outbox health (see [Pulse](docs/pulse.md)).
-- **[`laravel-swarm-memory-vector`](https://github.com/builtbyberry/laravel-swarm-memory-vector)** — vector-backed semantic memory recall on top of core [Swarm Memory](docs/memory.md).
+- **[`laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse)** — [Laravel Pulse](https://laravel.com/docs/pulse) recorders and dashboard cards for swarm runs, steps, memory, and audit-outbox health (see [Pulse](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/pulse.md)).
+- **[`laravel-swarm-memory-vector`](https://github.com/builtbyberry/laravel-swarm-memory-vector)** — vector-backed semantic memory recall on top of core [Swarm Memory](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/memory.md).
 
 The Filament panel and the MCP server are two read-only *renderings* of the same
 public display seams — a panel for your team, an MCP surface for an AI client —
@@ -789,4 +792,4 @@ MIT
 
 ### Citation evidence
 
-Completed responses and individual steps preserve provider-supplied citations separately. Sources follow output capture in history, replay, and broadcast; legacy, withheld, and unavailable evidence remain distinguishable. See [citation evidence](docs/citations.md) for provenance, ranges, limits, and migration guidance.
+Completed responses and individual steps preserve provider-supplied citations separately. Sources follow output capture in history, replay, and broadcast; legacy, withheld, and unavailable evidence remain distinguishable. See [citation evidence](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/citations.md) for provenance, ranges, limits, and migration guidance.

@@ -70,9 +70,9 @@ its own map), so this run and the ai-1 run share one harness.
   three native pins), that each installed companion manifest is byte-identical to its
   frozen candidate source, package discovery and migrations (core and Pulse), nine
   command registrations, the four companion installers' `--help`, the native-upgrade
-  assistant's verification-only behavior (standalone/Artisan parity,
+  assistant's then-current `0.26-to-0.27` behavior (standalone/Artisan parity,
   `runtime_verified=false`, the core-0.28 app recognized as an unsupported source beyond
-  the recipe's 0.27 target with no actions inferred, and a refused custom-repository
+  that recipe's 0.27 target with no actions inferred, and a refused custom-repository
   apply that changed no metadata), and a workflow smoke that produced its expected answer.
 - **Discriminating fault checks.** `fault_probes.py` ran four provenance corruptions
   (wrong source ref, wrong version, missing companion, lock/installed disagreement)

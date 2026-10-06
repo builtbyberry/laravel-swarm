@@ -252,3 +252,126 @@ test('resolved native map leaves the default recipe target policy unchanged', fu
         ->and($default->acceptsConstraint('builtbyberry/laravel-swarm-mcp', '0.2.0'))->toBeFalse()
         ->and($default->acceptsConstraint('builtbyberry/laravel-swarm-memory-vector', '0.2.0'))->toBeFalse();
 });
+
+test('v028 recipe declares exact core companion and Laravel AI policy', function (): void {
+    $recipe = new UpgradeRecipe(UpgradeRecipe::NATIVE_FEATURES);
+
+    expect($recipe->target)->toBe('0.28.0')
+        ->and($recipe->packages)->toBe([
+            'builtbyberry/laravel-swarm' => '0.28.0',
+            'laravel/ai' => '1.0.0',
+            'builtbyberry/laravel-swarm-pulse' => '0.2.0',
+            'builtbyberry/laravel-swarm-filament' => '0.4.0',
+            'builtbyberry/laravel-swarm-mcp' => '0.3.0',
+            'builtbyberry/laravel-swarm-memory-vector' => '0.3.0',
+        ])
+        ->and($recipe->acceptsSource('v0.27.0'))->toBeTrue()
+        ->and($recipe->acceptsSource('0.27.99'))->toBeTrue()
+        ->and($recipe->acceptsSource('v0.28.0'))->toBeTrue()
+        ->and($recipe->acceptsSource('0.26.9'))->toBeFalse()
+        ->and($recipe->acceptsSource('0.29.0'))->toBeFalse()
+        ->and($recipe->verificationOnly('v0.28.4'))->toBeTrue()
+        ->and($recipe->verificationOnly('v0.27.4'))->toBeFalse()
+        ->and($recipe->acceptsConstraint('laravel/ai', '1.0.0'))->toBeTrue()
+        ->and($recipe->acceptsConstraint('laravel/ai', '1.17.2'))->toBeTrue()
+        ->and($recipe->acceptsConstraint('laravel/ai', '0.11.2'))->toBeFalse();
+});
+
+dataset('v028 companion versions', [
+    'Pulse' => ['builtbyberry/laravel-swarm-pulse', '0.1.9', '0.2.0'],
+    'Filament' => ['builtbyberry/laravel-swarm-filament', '0.3.7', '0.4.0'],
+    'MCP' => ['builtbyberry/laravel-swarm-mcp', '0.2.5', '0.3.0'],
+    'vector' => ['builtbyberry/laravel-swarm-memory-vector', '0.2.8', '0.3.0'],
+]);
+
+test('v028 recipe accepts only previous and target companion minors', function (string $package, string $source, string $target): void {
+    $recipe = new UpgradeRecipe(UpgradeRecipe::NATIVE_FEATURES);
+
+    expect($recipe->acceptsConstraint($package, $source))->toBeTrue()
+        ->and($recipe->acceptsConstraint($package, $target))->toBeTrue()
+        ->and($recipe->acceptsConstraint($package, '0.0.1'))->toBeFalse();
+})->with('v028 companion versions');
+
+test('v028 recipe previews and selectively applies exact dependency edits with short migration guidance', function (): void {
+    $manifest = [
+        'require' => [
+            'builtbyberry/laravel-swarm' => '^0.27.0',
+            'laravel/ai' => '^1.0.0',
+            'builtbyberry/laravel-swarm-pulse' => '^0.1.9',
+            'builtbyberry/laravel-swarm-mcp' => '^0.2.5',
+        ],
+        'require-dev' => [
+            'builtbyberry/laravel-swarm-filament' => '^0.3.7',
+            'builtbyberry/laravel-swarm-memory-vector' => '^0.2.8',
+        ],
+    ];
+    $packages = [
+        ['name' => 'builtbyberry/laravel-swarm', 'version' => 'v0.27.0'],
+        ['name' => 'laravel/ai', 'version' => 'v1.1.0'],
+        ['name' => 'builtbyberry/laravel-swarm-pulse', 'version' => 'v0.1.9'],
+        ['name' => 'builtbyberry/laravel-swarm-filament', 'version' => 'v0.3.7'],
+        ['name' => 'builtbyberry/laravel-swarm-mcp', 'version' => 'v0.2.5'],
+        ['name' => 'builtbyberry/laravel-swarm-memory-vector', 'version' => 'v0.2.8'],
+    ];
+    $before = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n";
+    file_put_contents($this->nativeUpgradeRoot.'/composer.json', $before);
+    file_put_contents($this->nativeUpgradeRoot.'/composer.lock', json_encode(['packages' => $packages], JSON_THROW_ON_ERROR));
+    file_put_contents($this->nativeUpgradeRoot.'/vendor/composer/installed.json', json_encode(['packages' => $packages], JSON_THROW_ON_ERROR));
+    $assistant = new UpgradeAssistant(new UpgradeRecipe(UpgradeRecipe::NATIVE_FEATURES));
+    $report = $assistant->inspect($this->nativeUpgradeRoot);
+    $findingIds = array_column($report['findings'], 'id');
+
+    expect($report)->toMatchArray(['recipe' => '0.27-to-0.28', 'target' => '0.28.0', 'can_apply' => true, 'runtime_verified' => false])
+        ->and(array_column($report['actions'], 'package'))->toBe([
+            'builtbyberry/laravel-swarm',
+            'builtbyberry/laravel-swarm-pulse',
+            'builtbyberry/laravel-swarm-filament',
+            'builtbyberry/laravel-swarm-mcp',
+            'builtbyberry/laravel-swarm-memory-vector',
+        ])
+        ->and(array_column($report['actions'], 'package'))->not->toContain('laravel/ai')
+        ->and($findingIds)->toContain('v028-breaking-checklist', 'v028-callbacks-experimental', 'v028-companion-publication');
+
+    $applied = $assistant->apply($this->nativeUpgradeRoot, ['dependency:builtbyberry/laravel-swarm'], $report['preview_digest']);
+    expect(file_get_contents($this->nativeUpgradeRoot.'/composer.json'))->toBe(str_replace('^0.27.0', '^0.28.0', $before))
+        ->and($applied)->toMatchArray(['recipe' => '0.27-to-0.28', 'target' => '0.28.0', 'status' => 'applied']);
+    $restored = $assistant->restore($this->nativeUpgradeRoot, $applied['backup_id']);
+    expect(file_get_contents($this->nativeUpgradeRoot.'/composer.json'))->toBe($before)
+        ->and($restored)->toMatchArray(['recipe' => '0.27-to-0.28', 'target' => '0.28.0', 'status' => 'restored']);
+});
+
+test('v028 target applications are verification only and unsupported selectors list every recipe', function (): void {
+    $manifest = json_decode($this->nativeManifest, true, flags: JSON_THROW_ON_ERROR);
+    $manifest['require']['builtbyberry/laravel-swarm'] = '^0.28.0';
+    $manifest['require']['laravel/ai'] = '^1.1.0';
+    file_put_contents($this->nativeUpgradeRoot.'/composer.json', json_encode($manifest, JSON_THROW_ON_ERROR));
+    $this->nativePackages[0]['version'] = 'v0.28.0';
+    $this->nativePackages[1]['version'] = 'v1.1.0';
+    ($this->writeNativeMetadata)();
+    $assistant = new UpgradeAssistant(new UpgradeRecipe(UpgradeRecipe::NATIVE_FEATURES));
+    $report = $assistant->inspect($this->nativeUpgradeRoot);
+
+    expect($report['actions'])->toBe([])
+        ->and($report['can_apply'])->toBeFalse()
+        ->and(array_column($report['findings'], 'id'))->toContain('already-target')->not->toContain('unsupported-source');
+    expect(fn () => new UpgradeRecipe('unknown'))->toThrow(RuntimeException::class, 'Select 0.25-to-0.26, 0.26-to-0.27, or 0.27-to-0.28.');
+});
+
+test('v028 recipe refuses unsupported core sources without changing files', function (string $version): void {
+    $manifest = json_decode($this->nativeManifest, true, flags: JSON_THROW_ON_ERROR);
+    $manifest['require']['builtbyberry/laravel-swarm'] = '^'.ltrim($version, 'v');
+    $manifest['require']['laravel/ai'] = '^1.0.0';
+    file_put_contents($this->nativeUpgradeRoot.'/composer.json', json_encode($manifest, JSON_THROW_ON_ERROR));
+    $this->nativePackages[0]['version'] = $version;
+    $this->nativePackages[1]['version'] = 'v1.0.0';
+    ($this->writeNativeMetadata)();
+    $before = ($this->nativeFiles)();
+    $assistant = new UpgradeAssistant(new UpgradeRecipe(UpgradeRecipe::NATIVE_FEATURES));
+    $report = $assistant->inspect($this->nativeUpgradeRoot);
+
+    expect($report['can_apply'])->toBeFalse()
+        ->and(array_column($report['findings'], 'id'))->toContain('unsupported-source');
+    expect(fn () => $assistant->apply($this->nativeUpgradeRoot, ['dependency:builtbyberry/laravel-swarm'], $report['preview_digest']))
+        ->toThrow(RuntimeException::class, 'does not permit')
+        ->and(($this->nativeFiles)())->toBe($before);
+})->with(['v0.26.9', 'v0.29.0']);

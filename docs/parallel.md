@@ -62,11 +62,18 @@ and selects the same stable agent slot. If the parent selected a different agent
 class for that slot, that class is resolved directly from the container. Ad-hoc
 parallel builders always resolve each agent class directly. This means:
 
-1. Each agent **must be resolvable by class name** from the service container in the worker process.
-2. Runtime state must be declared by the authored swarm or through
-   `RunContext::withAgentConfiguration()`. Ad-hoc instance mutations are not a
-   transport and are rejected while native-settings admission is enabled.
-3. Constructor dependencies **must be bindable through the container** (interfaces need normal `AppServiceProvider` bindings; concrete classes work by default).
+1. Each agent class **must be container-resolvable** in the worker process. This
+   was already enforced in v0.27; an agent with an unbound runtime constructor
+   argument already failed before dispatch.
+2. In v0.28, an authored swarm class **must also be container-resolvable**, and
+   the same slot in a freshly resolved swarm's `agents()` result must be a
+   Laravel AI agent. This is the new compatibility boundary.
+3. Runtime state belongs in task input, `RunContext`, or
+   `RunContext::withAgentConfiguration()`. Mutable swarm/agent instances and
+   `agents()` lists derived from instance state are not worker transport.
+4. Constructor dependencies **must be bindable through the container**
+   (interfaces need normal `AppServiceProvider` bindings; concrete classes work
+   by default).
 
 **What does not work:**
 
@@ -118,7 +125,11 @@ public function agents(): array
 }
 ```
 
-Laravel Swarm validates container-resolvability before dispatching. If an agent cannot be resolved, the swarm throws a `SwarmException` with the agent class name and the reason, before any work begins.
+Laravel Swarm validates reconstruction before dispatching. A v0.28 authored
+swarm with runtime constructor state or an instance-dependent `agents()` layout
+fails before work begins. Remove the per-run constructor state, bind ordinary
+service dependencies in the container, keep a stable slot layout, and pass the
+per-run values through task input or `RunContext`.
 
 **Passing per-run data to agents:** Use structured task input (`prompt(['key' => 'value'])`) or `RunContext`. Agents receive the original task via their `prompt()` call inside the worker. Do not try to carry runtime identifiers through agent constructor arguments.
 
