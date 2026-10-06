@@ -168,13 +168,34 @@ test('helper-conformant terminal worker with explicit null next validates', func
 });
 
 test('redundant branch join successors persist like omitted PHP-authored successors', function () {
+    // The branches carry their own with_outputs and metadata so a normalised
+    // copy that dropped either would no longer match the PHP-authored plan.
+    $withBranchDetail = function (?string $branchNext): array {
+        $plan = helperConformantParallelPlan($branchNext);
+        $plan['start_at'] = 'intro';
+        $plan['nodes'] = [
+            'intro' => [
+                'type' => 'worker',
+                'agent' => FakeResearcher::class,
+                'prompt' => 'Frame the topic.',
+                'next' => 'fan',
+            ],
+            ...$plan['nodes'],
+        ];
+        $plan['nodes']['research']['with_outputs'] = ['intro'];
+        $plan['nodes']['research']['metadata'] = ['stage' => 'research'];
+        $plan['nodes']['draft']['with_outputs'] = ['brief' => 'intro'];
+
+        return $plan;
+    };
+
     $coordinatorPlan = (new HierarchicalRoutePlanner)->fromCoordinatorOutput(
         new ParallelBranchesRoutePlanCoordinator,
         parallelBranchesWorkers(),
-        json_encode(helperConformantParallelPlan('join'), JSON_THROW_ON_ERROR),
+        json_encode($withBranchDetail('join'), JSON_THROW_ON_ERROR),
         'Tests\\ParallelBranchesSwarm',
     );
-    $phpPlan = helperConformantParallelPlan(null);
+    $phpPlan = $withBranchDetail(null);
     unset($phpPlan['nodes']['research']['next'], $phpPlan['nodes']['draft']['next']);
 
     $staticPlan = (new HierarchicalRoutePlanner)->fromStaticPlan(
@@ -184,6 +205,9 @@ test('redundant branch join successors persist like omitted PHP-authored success
     );
 
     expect($coordinatorPlan->toArray())->toBe($staticPlan->toArray())
+        ->and($coordinatorPlan->node('research')->withOutputs)->toBe(['intro' => 'intro'])
+        ->and($coordinatorPlan->node('research')->metadata)->toBe(['stage' => 'research'])
+        ->and($coordinatorPlan->node('draft')->withOutputs)->toBe(['brief' => 'intro'])
         ->and(HierarchicalRoutePlan::fromArray($coordinatorPlan->toArray())->toArray())
         ->toBe($coordinatorPlan->toArray());
 });
@@ -293,9 +317,18 @@ test('dual-role parallel branch carrying next remains rejected', function (strin
 })->with(['start_at', 'incoming_next']);
 
 test('looped parallel branch carrying next remains rejected', function () {
+    // The loop targets an earlier node rather than the branch itself, so the
+    // branch has no ordinary incoming path and only its own loop keeps it out
+    // of redundant-edge normalization.
     $payload = [
-        'start_at' => 'fan',
+        'start_at' => 'intro',
         'nodes' => [
+            'intro' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'Intro.',
+                'next' => 'fan',
+            ],
             'fan' => [
                 'type' => 'parallel',
                 'branches' => ['branch'],
@@ -306,7 +339,7 @@ test('looped parallel branch carrying next remains rejected', function () {
                 'agent' => FakeWriter::class,
                 'prompt' => 'Branch.',
                 'next' => 'join',
-                'loop' => ['to' => 'branch', 'max_iterations' => 2],
+                'loop' => ['to' => 'intro', 'max_iterations' => 2],
             ],
             'join' => [
                 'type' => 'worker',
