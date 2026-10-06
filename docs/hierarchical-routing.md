@@ -63,6 +63,7 @@ The normalized payload contract is:
 Node definitions use a `type` discriminator:
 
 - `worker`
+- `rollup`
 - `parallel`
 - `finish`
 
@@ -96,6 +97,12 @@ public function schema(JsonSchema $schema): array
 exactly-one-of `output` / `output_from` union), and `node()` (the full
 discriminated union of all four). Each returns a first-class `Type`, so you can
 compose them anywhere a schema property is expected.
+
+The `worker()` and `rollup()` helpers declare `with_outputs` as a list of node
+ids; each injected output is labelled by that same node id. `worker()` requires
+the field but permits `[]` when there are no prior outputs, while `rollup()`
+requires at least one id. A list is necessary because `laravel/ai` closes every
+object at dispatch, so a free-form alias map in the schema cannot carry keys.
 
 Two boundaries to keep in mind:
 
@@ -135,10 +142,22 @@ Fields:
 
 - `agent`: a worker agent class returned from `agents()`
 - `prompt`: the literal base prompt for that worker
-- `with_outputs`: optional alias-to-node-id map
+- `with_outputs`: optional alias-to-node-id map, or a list of node ids where each
+  alias equals its node id
 - `metadata`: optional step metadata
 - `next`: optional next node id
 - `loop`: optional bounded loop back-edge (see [Bounded Loops](#bounded-loops))
+
+The list form is concise when the node id is also the desired label:
+
+```json
+{
+  "with_outputs": ["classify_node"]
+}
+```
+
+PHP-authored plans may keep using the alias-map form shown in the full worker
+example above.
 
 ### Parallel Nodes
 

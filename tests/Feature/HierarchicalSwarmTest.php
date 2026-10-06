@@ -841,6 +841,64 @@ writer-out
 PROMPT);
 });
 
+test('hierarchical worker nodes resolve list-form upstream outputs using node ids as aliases', function () {
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'editor_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-task',
+                'with_outputs' => ['writer_node'],
+            ],
+        ]),
+    ]);
+
+    FakeHierarchicalMultiRouteSwarm::make()->run('hierarchical-task');
+
+    FakeEditor::assertPrompted(<<<'PROMPT'
+editor-task
+
+Named outputs:
+[writer_node]
+writer-out
+PROMPT);
+});
+
+test('hierarchical rollup nodes resolve list-form upstream outputs using node ids as aliases', function () {
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'rollup_node',
+            ],
+            'rollup_node' => [
+                'type' => 'rollup',
+                'agent' => FakeEditor::class,
+                'prompt' => 'rollup-task',
+                'with_outputs' => ['writer_node'],
+            ],
+        ]),
+    ]);
+
+    FakeHierarchicalMultiRouteSwarm::make()->run('hierarchical-task');
+
+    FakeEditor::assertPrompted(<<<'PROMPT'
+rollup-task
+
+Named outputs:
+[writer_node]
+writer-out
+PROMPT);
+});
+
 test('hierarchical finish nodes can resolve their output from a prior node', function () {
     FakeHierarchicalCoordinator::fake([
         HierarchicalTestPlan::make('writer_node', [

@@ -18,6 +18,10 @@ use Illuminate\JsonSchema\Types\Type;
  * type, and combine them with `anyOf` so the model self-constrains to a valid
  * node shape up front.
  *
+ * The worker and rollup helpers encode `with_outputs` as a list of node ids.
+ * See [hierarchical routing](../../docs/hierarchical-routing.md#constraining-node-shape-with-anyof)
+ * for the coordinator wire-shape contract.
+ *
  * `laravel/ai` ^0.9 preserves `anyOf` end-to-end (its `SchemaNormalizer` keeps
  * the composition instead of collapsing it), so these unions reach the provider
  * intact.
@@ -49,6 +53,10 @@ final class RoutePlanSchema
             'prompt' => $schema->string()
                 ->description('The prompt handed to the worker agent.')
                 ->required(),
+            'with_outputs' => $schema->array()
+                ->items($schema->string())
+                ->description("Ids of earlier nodes whose outputs are injected into this worker's prompt, each labelled by its node id; empty when none.")
+                ->required(),
             'next' => $schema->string()
                 ->description('Id of the node to run after this worker completes.')
                 ->required(),
@@ -56,7 +64,7 @@ final class RoutePlanSchema
     }
 
     /**
-     * A rollup node: a worker that digests the generation(s) named by
+     * A rollup node: a worker that digests the generation(s) named by node id in
      * `with_outputs`. Like a worker but it must name what it digests and cannot
      * carry a loop of its own.
      */
@@ -73,7 +81,7 @@ final class RoutePlanSchema
             'with_outputs' => $schema->array()
                 ->items($schema->string())
                 ->min(1)
-                ->description('Ids of the node generations this rollup digests.')
+                ->description('Ids of earlier nodes whose generations this rollup digests, each labelled by its node id.')
                 ->required(),
             'next' => $schema->string()
                 ->description('Id of the node to run after this rollup completes.')

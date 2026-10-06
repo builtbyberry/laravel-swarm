@@ -9,7 +9,12 @@ stored nothing.
 
 ### Fixed
 
-_To be filled in during release wrap-up._
+- Route plans following `RoutePlanSchema::rollup()` / `node()` now validate:
+  the planner accepts `with_outputs` as a list of node ids (alias = node id)
+  alongside the existing alias map, and `RoutePlanSchema::worker()` now declares
+  `with_outputs` as required (but it may be empty) (#568). Coordinators using a
+  `worker()` / `node()` schema must emit `with_outputs` on worker nodes (`[]` when
+  none); PHP-authored plans are unaffected.
 
 ## v0.28.0 - 2026-10-06
 
