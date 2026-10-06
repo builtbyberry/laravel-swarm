@@ -135,8 +135,9 @@ class HierarchicalRoutePlanner
 
     /**
      * Normalize redundant parallel-branch successors in coordinator-generated
-     * and static plans alike. {@see RoutePlanSchema::worker()} explains why
-     * `next` may be present. This applies only to a plain worker (a rollup keeps
+     * and static plans alike: a coordinator constrained by
+     * {@see RoutePlanSchema::worker()} may name the join its parallel group
+     * already owns. This applies only to a plain worker (a rollup keeps
      * its rollup semantics), with no loop of its own (`next` is the loop exit),
      * whose every owning group joins at that `next` (otherwise it is not
      * redundant), and that is not `start_at`, another node's `next`, or a loop
@@ -469,7 +470,7 @@ class HierarchicalRoutePlanner
                 }
 
                 if ($branch->next !== null) {
-                    throw new SwarmException("Hierarchical worker node [{$branch->id}] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.");
+                    throw new SwarmException("Hierarchical worker node [{$branch->id}] cannot define [next] when used as a parallel branch. Set [next] to null; a plain, non-looping worker with no other role in the plan may instead name the join of every parallel group that owns it.");
                 }
             }
         }

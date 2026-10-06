@@ -252,7 +252,7 @@ test('parallel branch next naming a node other than its join remains rejected', 
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        "Hierarchical worker node [research] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
+        'Hierarchical worker node [research] cannot define [next] when used as a parallel branch. Set [next] to null; a plain, non-looping worker with no other role in the plan may instead name the join of every parallel group that owns it.',
     );
 });
 
@@ -300,7 +300,7 @@ test('parallel branch owned by groups with different joins remains rejected', fu
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        "Hierarchical worker node [shared] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
+        'Hierarchical worker node [shared] cannot define [next] when used as a parallel branch. Set [next] to null; a plain, non-looping worker with no other role in the plan may instead name the join of every parallel group that owns it.',
     );
 });
 
@@ -364,7 +364,7 @@ test('dual-role parallel branch carrying next remains rejected', function (strin
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        "Hierarchical worker node [branch] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
+        'Hierarchical worker node [branch] cannot define [next] when used as a parallel branch. Set [next] to null; a plain, non-looping worker with no other role in the plan may instead name the join of every parallel group that owns it.',
     );
 })->with(['start_at', 'incoming_next', 'parallel_incoming_next', 'loop_target']);
 
@@ -407,7 +407,7 @@ test('looped parallel branch carrying next remains rejected', function () {
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        "Hierarchical worker node [branch] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
+        'Hierarchical worker node [branch] cannot define [next] when used as a parallel branch. Set [next] to null; a plain, non-looping worker with no other role in the plan may instead name the join of every parallel group that owns it.',
     );
 });
 
@@ -447,7 +447,7 @@ test('rollup parallel branch carrying next remains rejected', function () {
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        "Hierarchical worker node [branch] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
+        'Hierarchical worker node [branch] cannot define [next] when used as a parallel branch. Set [next] to null; a plain, non-looping worker with no other role in the plan may instead name the join of every parallel group that owns it.',
     );
 });
 
@@ -472,7 +472,7 @@ test('PHP-authored parallel branches accept omitted and redundant join successor
 
     expect($build)->toThrow(
         SwarmException::class,
-        "Hierarchical worker node [research] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
+        'Hierarchical worker node [research] cannot define [next] when used as a parallel branch. Set [next] to null; a plain, non-looping worker with no other role in the plan may instead name the join of every parallel group that owns it.',
     );
 })->with([
     'omitted successor' => [null, true],
