@@ -529,6 +529,9 @@ class HierarchicalRoutePlanner
     }
 
     /**
+     * Accept an alias-to-node-id map or a list of node ids. Lists derive each
+     * alias from the node id; both shapes normalize to one alias-to-node-id map.
+     *
      * @return array<string, string>
      */
     protected function normalizeWithOutputs(string $nodeId, mixed $withOutputs): array
@@ -537,8 +540,22 @@ class HierarchicalRoutePlanner
             return [];
         }
 
-        if (! is_array($withOutputs) || array_is_list($withOutputs)) {
-            throw new SwarmException("Hierarchical worker node [{$nodeId}] must define [with_outputs] as an object keyed by alias.");
+        if (! is_array($withOutputs)) {
+            throw new SwarmException("Hierarchical worker node [{$nodeId}] must define [with_outputs] as an object keyed by alias or a list of node ids.");
+        }
+
+        if (array_is_list($withOutputs)) {
+            $normalized = [];
+
+            foreach ($withOutputs as $sourceNodeId) {
+                if (! is_string($sourceNodeId) || $sourceNodeId === '') {
+                    throw new SwarmException("Hierarchical worker node [{$nodeId}] must define [with_outputs] list entries as non-empty node ids.");
+                }
+
+                $normalized[$sourceNodeId] = $sourceNodeId;
+            }
+
+            return $normalized;
         }
 
         $normalized = [];
