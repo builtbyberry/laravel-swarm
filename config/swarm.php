@@ -714,6 +714,9 @@ return [
     ],
 
     /*
+     * EXPERIMENTAL in v0.28: this feature and its keys may change or be removed in a
+     * later 0.x release without a deprecation cycle.
+     *
      * Terminal workflow callbacks: the queue/durable then() / catch() and stream
      * catch() conveniences. Stream catch() runs in-process and needs nothing here.
      * The queue/durable callbacks are persisted (as signed, sealed SerializableClosures)

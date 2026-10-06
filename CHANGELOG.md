@@ -20,7 +20,9 @@ Native feature access through Laravel Swarm workflows.
   workflow payload; a nested capability's typed result and usage are consumed at the
   tool layer, never folded into the outer agent's step or text-token total. Proof
   only — tests, docs, and stubs; no runtime change.
-- Default-off terminal workflow callbacks: `then()` / `catch()` on queued
+- **Experimental:** default-off terminal workflow callbacks, which may change or be
+  removed in a later `0.x` release without a deprecation cycle
+  ([UPGRADING](UPGRADING.md#experimental-surfaces)): `then()` / `catch()` on queued
   ([QueuedSwarmResponse](src/Responses/QueuedSwarmResponse.php)) and durable
   ([DurableSwarmResponse](src/Responses/DurableSwarmResponse.php)) responses, and `catch()` on the
   streaming response ([StreamableSwarmResponse](src/Responses/StreamableSwarmResponse.php)). `then`

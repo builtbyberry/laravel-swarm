@@ -304,6 +304,15 @@ background-compacted hot/cold durability and author-owned context bounding.
 | `ContextBudgetExceededException` | Thrown by the `Refuse` rung and by the operator hard-cap breach. Extends `SwarmException`; re-dispatchable on durable runs. (v0.15.0+) | [Streaming Substrate Author Guide](streaming-substrate-author-guide.md#context-growth-policy) |
 | Route-plan `'type' => 'rollup'` node | A worker-shaped plan node (`agent`, `prompt`, `with_outputs`, `next`) that digests the generation named by `with_outputs` and bounds what flows downstream — usable in both static-hierarchical and hierarchical (coordinator-generated) plans. Plan materialization rejects any later node that references a digested node, failing loud before the walk runs. (v0.15.0+) | [Streaming Substrate Author Guide](streaming-substrate-author-guide.md#rollup-nodes) |
 
+## Experimental Surfaces
+
+Terminal workflow callbacks are **experimental** in v0.28 and are not covered by the
+deprecation policy: queued and durable `then()` / `catch()`, `swarm.callbacks.*`,
+`swarm:relay --type=callback`, `CallbackDeliveryOutbox`,
+`ReadableCallbackDeliveryOutbox`, `CallbackDrainResult`, `SwarmTerminalContext`, and
+the `callback.delivered` audit category may change or be removed in a later `0.x`
+release. See [UPGRADING](../UPGRADING.md#experimental-surfaces).
+
 ## Configuration Keys
 
 Notable configuration keys that affect observable behavior or operational decisions. See [Configuration](configuration.md) for the full reference.
