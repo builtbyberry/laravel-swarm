@@ -148,6 +148,12 @@ MCP or memory-vector companion. It does not add optional packages or add a root
 requirement for a transitive dependency. Recognized exact pins remain pins;
 recognized caret constraints remain carets. A caret that already permits the
 recommended version needs Composer resolution rather than a manifest edit.
+Accepted syntax is deliberately limited to `^X.Y`, `^X.Y.Z`, and exact
+`X.Y.Z`. The assistant treats a two-component caret as `X.Y.0` for recipe-line
+and minimum-version checks, while any required rewrite still uses the recipe's
+three-component target (for example, `^0.27` becomes `^0.28.0`). Bare `X.Y`,
+tilde/comparison/range expressions, wildcards, development constraints, aliases,
+and stability flags remain blocking constraints for manual review.
 Other constraints, custom repositories, aliases, replacements and unsupported
 version lines require manual review.
 

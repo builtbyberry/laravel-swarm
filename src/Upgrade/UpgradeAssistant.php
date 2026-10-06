@@ -130,7 +130,8 @@ final class UpgradeAssistant
         $verificationOnly = $this->recipe->verificationOnly($core);
         if ($verificationOnly) {
             $targetMinor = $this->minor($this->recipe->target);
-            $add('already-target', 'manual', "Swarm is already on the target {$targetMinor}.x line. Verify dependencies, schema and application behavior manually; this recipe will not rewrite or downgrade the manifest.");
+            $schema = $this->recipe->id === UpgradeRecipe::NATIVE_ONE ? 'native schema' : 'schema';
+            $add('already-target', 'manual', "Swarm is already on the target {$targetMinor}.x line. Verify dependencies, {$schema} and application behavior manually; this recipe will not rewrite or downgrade the manifest.");
         }
         foreach ($this->recipe->packages as $package => $minimum) {
             $requirement = $requirements[$package] ?? null;
@@ -178,12 +179,13 @@ final class UpgradeAssistant
                 $add('unlocked:'.$package, 'blocker', "{$package} is declared but absent from the lock; resolve this mismatch manually.");
             }
             $constraint = $requirement['constraint'];
-            if (! preg_match('/\A(\^?)(\d+\.\d+\.\d+)\z/', $constraint, $parts)) {
+            if (! preg_match('/\A(\^?)(\d+\.\d+(?:\.\d+)?)\z/', $constraint, $parts)
+                || ($parts[1] === '' && substr_count($parts[2], '.') !== 2)) {
                 $add('constraint:'.$package, 'blocker', "{$package} uses an unsupported constraint. Keep its intent and review the required version manually.");
 
                 continue;
             }
-            $version = $parts[2];
+            $version = substr_count($parts[2], '.') === 1 ? $parts[2].'.0' : $parts[2];
             if (! $this->recipe->acceptsConstraint($package, $version)) {
                 $add('constraint-line:'.$package, 'blocker', "{$package} constraint is outside this recipe's supported version lines; no change is inferred.");
 
