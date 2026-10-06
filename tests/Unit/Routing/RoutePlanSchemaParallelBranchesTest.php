@@ -306,6 +306,14 @@ test('dual-role parallel branch carrying next remains rejected', function (strin
         ];
     }
 
+    if ($role === 'loop_target') {
+        // The join loops back into the branch, so the branch is also entered
+        // outside its parallel group.
+        $payload['nodes']['join']['next'] = 'done';
+        $payload['nodes']['join']['loop'] = ['to' => 'branch', 'max_iterations' => 2];
+        $payload['nodes']['done'] = ['type' => 'finish', 'output_from' => 'join'];
+    }
+
     expect(fn () => (new HierarchicalRoutePlanner)->fromStaticPlan(
         parallelBranchesWorkers(),
         $payload,
@@ -314,7 +322,7 @@ test('dual-role parallel branch carrying next remains rejected', function (strin
         SwarmException::class,
         'Hierarchical worker node [branch] cannot define [next] when used as a parallel branch.',
     );
-})->with(['start_at', 'incoming_next']);
+})->with(['start_at', 'incoming_next', 'loop_target']);
 
 test('looped parallel branch carrying next remains rejected', function () {
     // The loop targets an earlier node rather than the branch itself, so the
