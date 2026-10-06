@@ -167,7 +167,7 @@ class DurableStepAdvancer
 
         if ($isComplete) {
             try {
-                $this->terminal->completeRun($run, $token, $context, $stepLeaseSeconds, $step ?? null, $hierarchicalResult);
+                $this->terminal->completeRun($run, $token, $context, $stepLeaseSeconds, $step ?? null, $hierarchicalResult, nativeSettingsAttempt: $state->nativeSettingsAttempt);
             } catch (LostDurableLeaseException|LostSwarmLeaseException) {
                 return;
             }
@@ -186,6 +186,7 @@ class DurableStepAdvancer
                 $hierarchicalResult,
                 $step ?? null,
                 $enterDurableBoundary,
+                $state->nativeSettingsAttempt,
             );
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
             return;

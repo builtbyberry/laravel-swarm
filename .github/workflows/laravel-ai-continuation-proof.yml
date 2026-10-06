@@ -1,0 +1,61 @@
+name: Laravel AI saved-result continuation proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/laravel-ai-continuation-proof.yml'
+      - 'tests/Fixtures/Upstream/LaravelAiSavedResultContinuation/**'
+      - 'tests/Unit/LaravelAiSavedResultContinuationFixtureTest.php'
+      - 'docs/native-approval-recovery-proof.md'
+      - 'docs/native-saved-result-continuation-prototype.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-proof:
+    name: Exact upstream candidate (PHP ${{ matrix.php }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+
+    steps:
+      - name: Checkout Laravel Swarm
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer:v2
+          coverage: none
+          ini-values: memory_limit=1G
+
+      - name: Run exact upstream proof and regression suite
+        run: bash tests/Fixtures/Upstream/LaravelAiSavedResultContinuation/run.sh
+
+  mutation-proof:
+    name: Ownership mutation is detected
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Laravel Swarm
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          coverage: none
+          ini-values: memory_limit=1G
+
+      - name: Prove the ownership test fails under mutation
+        env:
+          P5B_MUTATION: disable-ownership-check
+        run: bash tests/Fixtures/Upstream/LaravelAiSavedResultContinuation/run.sh

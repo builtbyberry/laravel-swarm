@@ -1,0 +1,2736 @@
+diff --git a/prototype/compete.php b/prototype/compete.php
+new file mode 100644
+index 0000000..bccb6a7
+--- /dev/null
++++ b/prototype/compete.php
+@@ -0,0 +1,30 @@
++<?php
++
++use Illuminate\Support\Facades\DB;
++use Laravel\Ai\Ai;
++use Laravel\Ai\Continuations\Continuation;
++use Laravel\Ai\Contracts\ConversationStore;
++use Laravel\Ai\Prompts\AgentPrompt;
++
++define('PROBE_BOOT_ONLY', true);
++require __DIR__.'/reproduce.php';
++$store = resolve(ConversationStore::class);
++$row = DB::table('agent_conversation_messages')->where('role', 'assistant')->first();
++$state = json_decode($row->meta, true)['continuation'];
++$token = new Continuation($row->conversation_id, $row->id, $state['revision']);
++$agent = (new ProbeAgent)->continue($row->conversation_id, (object) ['id' => 1]);
++$provider = Ai::textProviderFor($agent, 'anthropic');
++$prompt = new AgentPrompt($agent, '', [], $provider, $provider->defaultTextModel(), continuation: $token);
++echo "ready\n";
++flush();
++$until = microtime(true) + 10;
++while (! file_exists($argv[1]) && microtime(true) < $until) {
++    usleep(1000);
++    clearstatcache();
++}
++try {
++    $claim = $store->claimTurn($prompt);
++    echo json_encode(['claimed' => true, 'owner' => $claim['owner'], 'pid' => getmypid()])."\n";
++} catch (Throwable $e) {
++    echo json_encode(['claimed' => false, 'error' => $e::class, 'pid' => getmypid()])."\n";
++}
+diff --git a/prototype/reproduce.php b/prototype/reproduce.php
+new file mode 100644
+index 0000000..651aabd
+--- /dev/null
++++ b/prototype/reproduce.php
+@@ -0,0 +1,136 @@
++<?php
++
++require __DIR__.'/../vendor/autoload.php';
++
++use Illuminate\Http\Client\Factory;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Http;
++use Illuminate\Support\Facades\Schema;
++use Laravel\Ai\Approvals\Decisions;
++use Laravel\Ai\Continuations\Continuation;
++use Laravel\Ai\Contracts\ConversationStore;
++use Laravel\Ai\Tools\Request;
++use Tests\Fixtures\Agents\RememberingApprovableAgent;
++use Tests\Fixtures\Tools\ApprovableNumberGenerator;
++use Tests\TestCase;
++
++final class ProbeApplication extends TestCase
++{
++    public function boot(): void
++    {
++        $this->setUp();
++    }
++
++    protected function defineDatabaseMigrations(): void {}
++
++    protected function defineEnvironment($app): void
++    {
++        $app['config']->set('database.default', 'sqlite');
++        $app['config']->set('database.connections.sqlite.database', getenv('PROBE_DATABASE'));
++        $app['config']->set('ai.conversations.generate_title', false);
++        $app['config']->set('ai.providers.anthropic.key', 'local-http-fake');
++    }
++}
++final class DurableCounter extends ApprovableNumberGenerator
++{
++    public function handle(Request $request): string
++    {
++        DB::table('probe_effects')->insert(['operation' => 'approved-number']);
++
++        return '72019';
++    }
++}
++final class ProbeAgent extends RememberingApprovableAgent
++{
++    public function maxSteps(): int
++    {
++        return 5;
++    }
++
++    public function tools(): iterable
++    {
++        return [new DurableCounter];
++    }
++}
++$app = new ProbeApplication('prototype');
++$app->boot();
++Http::preventStrayRequests();
++if (defined('PROBE_BOOT_ONLY')) {
++    return;
++}
++$phase = $argv[1] ?? 'inspect';
++$success = ['id' => 'msg_final', 'type' => 'message', 'role' => 'assistant', 'model' => 'claude-sonnet-4-6', 'content' => [['type' => 'text', 'text' => 'The number is 72019.']], 'stop_reason' => 'end_turn', 'usage' => ['input_tokens' => 10, 'output_tokens' => 5]];
++$user = (object) ['id' => 1];
++$error = null;
++if ($phase === 'seed' || $phase === 'pause') {
++    foreach (glob(__DIR__.'/../database/migrations/*.php') as $file) {
++        (require $file)->up();
++    }
++    Schema::create('probe_effects', fn ($table) => $table->string('operation'));
++    Http::fake(['api.anthropic.com/*' => Http::sequence()->push(['id' => 'msg_tool', 'type' => 'message', 'role' => 'assistant', 'model' => 'claude-sonnet-4-6', 'content' => [['type' => 'tool_use', 'id' => 'toolu_1', 'name' => 'DurableCounter', 'input' => (object) []]], 'stop_reason' => 'tool_use', 'usage' => ['input_tokens' => 10, 'output_tokens' => 5]])->push(status: 500)]);
++    $paused = (new ProbeAgent)->forUser($user)->prompt('Generate a number', provider: 'anthropic');
++    if ($phase === 'seed') {
++        try {
++            (new ProbeAgent)->continue($paused->conversationId, $user)->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic');
++        } catch (Throwable $e) {
++            $error = $e::class;
++        }
++    }
++} else {
++    Http::fake(['api.anthropic.com/*' => Http::response($success)]);
++    $conversation = DB::table('agent_conversations')->value('id');
++    if ($phase === 'prepare') {
++        $store = resolve(ConversationStore::class);
++        $id = DB::table('agent_conversation_messages')->where('role', 'assistant')->value('id');
++        $token = new Continuation($conversation, $id, 0);
++        $state = $store->continuationState($token, $user);
++        $store->reconcileTurn(new Continuation($conversation, $id, $state['revision']), $user, $state['owner'], 'Controlled fixture: previous process exited and effects reconciled.');
++    }
++    if ($phase === 'receipt') {
++        $store = resolve(ConversationStore::class);
++        $row = DB::table('agent_conversation_messages')->where('role', 'assistant')->first();
++        $native = json_decode($row->meta, true)['continuation'];
++        $receipt = $store->continuationReceipt(new Continuation($conversation, $row->id, $native['receipt_revision']), $user);
++    }
++    if ($phase === 'kill-resume') {
++        $barrier = getenv('PROBE_BARRIER');
++        Http::swap(new Factory);
++        Http::preventStrayRequests();
++        Http::fake(['api.anthropic.com/*' => function () use ($barrier) {
++            touch($barrier);
++            echo "provider-barrier\n";
++            flush();
++
++            while (true) {
++                usleep(100_000);
++            }
++        }]);
++        (new ProbeAgent)->continue($conversation, $user)->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic');
++    }
++    if ($phase === 'retry-decisions' || $phase === 'blank' || $phase === 'continuation' || $phase === 'recover') {
++        try {
++            $input = match ($phase) {
++                'retry-decisions' => Decisions::from(['toolu_1' => true]),
++                'blank' => '',
++                'continuation', 'recover' => new Continuation($conversation, DB::table('agent_conversation_messages')->where('role', 'assistant')->value('id'), 1),
++            };
++            if ($phase === 'continuation' || $phase === 'recover') {
++                $store = resolve(ConversationStore::class);
++                $state = $store->continuationState($input, $user);
++                if (DB::table('probe_effects')->count() !== 1) {
++                    throw new RuntimeException('Fixture reconciliation failed');
++                }
++                $input = $store->reconcileTurn(new Continuation($conversation, $input->turnId, $state['revision']), $user, $state['owner'], 'Controlled fixture: old process exited; only approved local DB effect exists; subsequent HTTP 500 had no later tools or hooks.');
++            }
++            $result = (new ProbeAgent)->continue($conversation, $user)->prompt($input, provider: 'anthropic');
++        } catch (Throwable $e) {
++            $error = $e::class.': '.$e->getMessage();
++        }
++    }
++}
++$rows = DB::table('agent_conversation_messages')->orderBy('id')->get();
++$report = ['phase' => $phase, 'pid' => getmypid(), 'error' => $error, 'result' => $result->text ?? null, 'receipt' => $receipt ?? null, 'effects' => DB::table('probe_effects')->count(), 'users' => $rows->where('role', 'user')->count(), 'rows' => $rows->map(fn ($r) => ['id' => $r->id, 'role' => $r->role, 'content' => $r->content, 'steps' => json_decode($r->steps, true), 'meta' => json_decode($r->meta, true), 'status' => $r->status])->all(), 'http_requests' => Http::recorded()->count()];
++echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES).PHP_EOL;
++if (($phase === 'continuation' || $phase === 'recover') && ($report['result'] !== 'The number is 72019.' || $report['effects'] !== 1 || $report['users'] !== 1)) {
++    exit(1);
++}
+diff --git a/src/Continuations/Continuation.php b/src/Continuations/Continuation.php
+new file mode 100644
+index 0000000..b3220ee
+--- /dev/null
++++ b/src/Continuations/Continuation.php
+@@ -0,0 +1,12 @@
++<?php
++
++namespace Laravel\Ai\Continuations;
++
++final readonly class Continuation
++{
++    public function __construct(
++        public string $conversationId,
++        public string $turnId,
++        public int $revision,
++    ) {}
++}
+diff --git a/src/Contracts/ContinuesConversations.php b/src/Contracts/ContinuesConversations.php
+new file mode 100644
+index 0000000..5c57a92
+--- /dev/null
++++ b/src/Contracts/ContinuesConversations.php
+@@ -0,0 +1,94 @@
++<?php
++
++namespace Laravel\Ai\Contracts;
++
++use Closure;
++use Laravel\Ai\Continuations\Continuation;
++use Laravel\Ai\Messages\UserMessage;
++use Laravel\Ai\Prompts\AgentPrompt;
++use Laravel\Ai\Responses\AgentResponse;
++use Throwable;
++
++/**
++ * @phpstan-type ContinuationClaim array{
++ *     conversation: string,
++ *     turn: string,
++ *     owner: string,
++ *     request_revision: int,
++ *     ordinary: bool,
++ *     stop: bool,
++ *     prior_status: string,
++ *     offset: int
++ * }
++ * @phpstan-type ContinuationReceipt array{
++ *     invocation_id: string,
++ *     text: string,
++ *     structured: array<string, mixed>|null,
++ *     usage: array<string, mixed>,
++ *     meta: array<string, mixed>,
++ *     reasoning: list<mixed>,
++ *     tool_calls: list<mixed>,
++ *     tool_results: list<mixed>,
++ *     steps: list<mixed>,
++ *     conversation_id: string|null,
++ *     assistant_message_id: string|null
++ * }
++ * @phpstan-type ContinuationState array{
++ *     version: int,
++ *     revision: int,
++ *     status: string,
++ *     owner: string|null,
++ *     provider: string,
++ *     provider_class: class-string,
++ *     model: string,
++ *     agent: class-string,
++ *     generation_attempts: int,
++ *     requested_stop?: bool,
++ *     ordinary?: bool,
++ *     prior_status?: string,
++ *     head_at_claim?: string|int|null,
++ *     receipt_revision?: int,
++ *     receipt?: array<string, mixed>,
++ *     reconciliation?: string
++ * }
++ */
++interface ContinuesConversations extends ConversationStore
++{
++    public function storeContinuationUserMessage(string $conversationId, ?string $participantType, string|int|null $participantId, string $agent, UserMessage $message, ?string $continuationOwner): string;
++
++    public function storeContinuationAssistantMessage(string $conversationId, ?string $participantType, string|int|null $participantId, AgentPrompt $prompt, AgentResponse $response, ?Throwable $exception, ?string $continuationOwner): ?string;
++
++    public function storeContinuationApprovalResults(string $conversationId, array $toolResults, ?string $continuationOwner): void;
++
++    /** @return ContinuationClaim|null */
++    public function claimTurn(AgentPrompt $prompt): ?array;
++
++    /**
++     * Persist the response and its native receipt atomically, without remote I/O.
++     *
++     * @param  ContinuationClaim  $claim
++     */
++    public function finishTurn(array $claim, AgentResponse $response, Closure $persist): void;
++
++    /** @param ContinuationClaim $claim */
++    public function interruptTurn(array $claim): void;
++
++    /** @param ContinuationClaim $claim */
++    public function assertTurnOwner(array $claim): void;
++
++    /** @param ContinuationClaim $claim */
++    public function advanceTurn(array $claim): void;
++
++    /** @return ContinuationState */
++    public function continuationState(Continuation $turn, ?object $participant): array;
++
++    /** Caller attests recovery safety after reconciling all effects and fencing the previous owner. */
++    public function reconcileTurn(Continuation $turn, ?object $participant, string $previousOwner, string $evidence): Continuation;
++
++    /**
++     * Read a native completion receipt without executing the agent or application callbacks.
++     *
++     * @return ContinuationReceipt
++     */
++    public function continuationReceipt(Continuation $turn, ?object $participant): array;
++}
+diff --git a/src/Exceptions/ContinuationConflictException.php b/src/Exceptions/ContinuationConflictException.php
+new file mode 100644
+index 0000000..1021345
+--- /dev/null
++++ b/src/Exceptions/ContinuationConflictException.php
+@@ -0,0 +1,5 @@
++<?php
++
++namespace Laravel\Ai\Exceptions;
++
++class ContinuationConflictException extends ExecutionInterruptedException {}
+diff --git a/src/Exceptions/ExecutionInterruptedException.php b/src/Exceptions/ExecutionInterruptedException.php
+new file mode 100644
+index 0000000..57266d5
+--- /dev/null
++++ b/src/Exceptions/ExecutionInterruptedException.php
+@@ -0,0 +1,8 @@
++<?php
++
++namespace Laravel\Ai\Exceptions;
++
++use RuntimeException;
++
++/** A deliberate stop whose uncertain effects must be reconciled by the caller. */
++class ExecutionInterruptedException extends RuntimeException {}
+diff --git a/src/Gateway/RunContext.php b/src/Gateway/RunContext.php
+index d2e2b30..62cf4f9 100644
+--- a/src/Gateway/RunContext.php
++++ b/src/Gateway/RunContext.php
+@@ -31,6 +31,9 @@ public function __construct(
+         public readonly TextProvider $provider,
+         public readonly string $model,
+         protected readonly Dispatcher $events,
++        public readonly int $stepOffset = 0,
++        public readonly ?\Closure $beforeStep = null,
++        public readonly ?\Closure $beforeTool = null,
+     ) {}
+ 
+     /**
+@@ -118,6 +121,9 @@ public function stepFailed(?StepContext $step, Throwable $exception, float $time
+      */
+     public function invokingTool(Tool $tool, array $arguments, string $toolInvocationId): void
+     {
++        if ($this->beforeTool !== null) {
++            ($this->beforeTool)();
++        }
+         $this->events->dispatch(new InvokingTool(
+             $this->invocationId, $toolInvocationId, $this->agent, $tool, $arguments,
+         ));
+diff --git a/src/Gateway/TextGenerationLoop.php b/src/Gateway/TextGenerationLoop.php
+index b63bbfc..8f57b50 100644
+--- a/src/Gateway/TextGenerationLoop.php
++++ b/src/Gateway/TextGenerationLoop.php
+@@ -18,6 +18,7 @@
+ use Laravel\Ai\Contracts\Providers\TextProvider;
+ use Laravel\Ai\Contracts\Tool;
+ use Laravel\Ai\Exceptions\ApprovalMismatchException;
++use Laravel\Ai\Exceptions\ExecutionInterruptedException;
+ use Laravel\Ai\Exceptions\NoSuchToolException;
+ use Laravel\Ai\Exceptions\StreamErrorException;
+ use Laravel\Ai\Gateway\Concerns\HandlesToolApprovals;
+@@ -121,7 +122,13 @@ public function generate(
+             $newMessages = [];
+         }
+ 
+-        for ($step = 0; $step < $maxSteps; $step++) {
++        if (($context?->stepOffset ?? 0) >= $maxSteps) {
++            throw new ExecutionInterruptedException('The saved turn has exhausted its generation step budget.');
++        }
++        for ($step = $context?->stepOffset ?? 0; $step < $maxSteps; $step++) {
++            if ($context?->beforeStep !== null) {
++                ($context->beforeStep)();
++            }
+             $pending = new PendingStep(
+                 number: $step,
+                 isFinalStep: $step + 1 >= $maxSteps,
+@@ -267,7 +274,14 @@ public function stream(
+             $allMessages = $this->settleAbandonedToolCalls($messages);
+         }
+ 
+-        for ($step = 0; $step < $maxSteps; $step++) {
++        if (($context?->stepOffset ?? 0) >= $maxSteps) {
++            throw new ExecutionInterruptedException('The saved turn has exhausted its generation step budget.');
++        }
++
++        for ($step = $context?->stepOffset ?? 0; $step < $maxSteps; $step++) {
++            if ($context?->beforeStep !== null) {
++                ($context->beforeStep)();
++            }
+             $pending = new PendingStep(
+                 number: $step,
+                 isFinalStep: $step + 1 >= $maxSteps,
+@@ -902,6 +916,8 @@ protected function resolveApprovalResults(array $approval, array $messages, arra
+ 
+             try {
+                 $result = $this->executeTool($tool, $arguments, $toolCall->id, $context);
++            } catch (ExecutionInterruptedException $exception) {
++                throw $exception;
+             } catch (Throwable $exception) {
+                 $failed = true;
+                 $result = 'The tool call failed: '.$exception->getMessage();
+diff --git a/src/Middleware/RememberConversation.php b/src/Middleware/RememberConversation.php
+index 6eb9e6c..7556d6d 100644
+--- a/src/Middleware/RememberConversation.php
++++ b/src/Middleware/RememberConversation.php
+@@ -6,6 +6,7 @@
+ use Illuminate\Support\Str;
+ use Laravel\Ai\Concerns\RemembersConversations as RemembersConversationsTrait;
+ use Laravel\Ai\Contracts\Agent;
++use Laravel\Ai\Contracts\ContinuesConversations;
+ use Laravel\Ai\Contracts\ConversationStore;
+ use Laravel\Ai\Contracts\Providers\TextProvider;
+ use Laravel\Ai\Contracts\RemembersConversations;
+@@ -47,19 +48,41 @@ public function handle(AgentPrompt $prompt, Closure $next)
+             ? (string) Str::uuid7()
+             : null;
+ 
++        $claim = $this->store instanceof ContinuesConversations
++            ? $this->store->claimTurn($prompt)
++            : null;
++
++        $prompt->continuationOwner = $claim['owner'] ?? null;
++        $prompt->continuationClaim = $claim;
++
+         try {
+             $response = $next($prompt);
+         } catch (Throwable $exception) {
+             $this->rememberFailedTurn($prompt, $exception, $pendingConversationId);
+ 
++            if ($claim !== null && $this->store instanceof ContinuesConversations) {
++                $this->store->interruptTurn($claim);
++            }
++
+             throw $exception;
+         }
+ 
+         // A stream fails while it is being consumed, long after this pipeline returned, so it reports back here...
+         if ($response instanceof StreamableAgentResponse) {
+-            $response->catch(fn (Throwable $exception) => $this->rememberFailedTurn(
+-                $prompt, $exception, $pendingConversationId, retryable: ! $response->hasYielded(),
+-            ));
++            if ($claim !== null && $this->store instanceof ContinuesConversations) {
++                $response->protectContinuation(
++                    fn () => $this->store->assertTurnOwner($claim),
++                    fn () => $this->store->interruptTurn($claim),
++                );
++            }
++
++            $response->catch(function (Throwable $exception) use ($prompt, $pendingConversationId, $response, $claim): void {
++                $this->rememberFailedTurn($prompt, $exception, $pendingConversationId, retryable: ! $response->hasYielded());
++
++                if ($claim !== null && $this->store instanceof ContinuesConversations) {
++                    $this->store->interruptTurn($claim);
++                }
++            });
+         }
+ 
+         // Surface the ID to stream protocols without treating it as an existing conversation...
+@@ -67,35 +90,43 @@ public function handle(AgentPrompt $prompt, Closure $next)
+             $response->withinConversation($pendingConversationId, $agent->conversationParticipant());
+         }
+ 
+-        return $response->then(function (AgentResponse $completedResponse) use ($prompt, $agent, $pendingConversationId): void {
+-            if (! $this->shouldRemember($agent, $prompt, $completedResponse)) {
+-                if ($pendingConversationId !== null) {
+-                    $completedResponse->conversationId = null;
+-                    $completedResponse->conversationUser = null;
++        return $response->then(function (AgentResponse $completedResponse) use ($prompt, $agent, $pendingConversationId, $claim): void {
++            $persist = function () use ($prompt, $agent, $pendingConversationId, $completedResponse): void {
++                if (! $this->shouldRemember($agent, $prompt, $completedResponse)) {
++                    if ($pendingConversationId !== null) {
++                        $completedResponse->conversationId = null;
++                        $completedResponse->conversationUser = null;
++                    }
++
++                    return;
+                 }
+ 
+-                return;
++                $participant = $agent->conversationParticipant();
++                $participantType = $participant === null ? null : Conversation::participantType($participant);
++                $participantId = $participant === null ? null : Conversation::participantKey($participant);
++
++                $userMessageId = $this->openTurn($agent, $prompt, $pendingConversationId);
++
++                // Record assistant message...
++                $assistantMessageId = $this->store instanceof ContinuesConversations
++                    ? $this->store->storeContinuationAssistantMessage($agent->currentConversation(), $participantType, $participantId, $prompt, $completedResponse, null, $prompt->continuationOwner)
++                    : $this->store->storeAssistantMessage($agent->currentConversation(), $participantType, $participantId, $prompt, $completedResponse);
++
++                $completedResponse->withinConversation(
++                    $agent->currentConversation(),
++                    $participant,
++                )->withStoredMessages($userMessageId, $assistantMessageId);
++            };
++            if ($claim !== null && $this->store instanceof ContinuesConversations) {
++                try {
++                    $this->store->finishTurn($claim, $completedResponse, $persist);
++                } catch (Throwable $exception) {
++                    $this->store->interruptTurn($claim);
++                    throw $exception;
++                }
++            } else {
++                $persist();
+             }
+-
+-            $participant = $agent->conversationParticipant();
+-
+-            $userMessageId = $this->openTurn($agent, $prompt, $pendingConversationId);
+-
+-            [$participantType, $participantId] = $this->participantKeys($participant);
+-
+-            // Record assistant message...
+-            $assistantMessageId = $this->store->storeAssistantMessage(
+-                $agent->currentConversation(),
+-                $participantType,
+-                $participantId,
+-                $prompt,
+-                $completedResponse,
+-            );
+-
+-            $completedResponse->withinConversation(
+-                $agent->currentConversation(),
+-                $participant,
+-            )->withStoredMessages($userMessageId, $assistantMessageId);
+         });
+     }
+ 
+@@ -131,6 +162,20 @@ protected function rememberFailedTurn(AgentPrompt $prompt, Throwable $exception,
+ 
+         [$participantType, $participantId] = $this->participantKeys($agent->conversationParticipant());
+ 
++        if ($this->store instanceof ContinuesConversations) {
++            $this->store->storeContinuationAssistantMessage(
++                $agent->currentConversation(),
++                $participantType,
++                $participantId,
++                $prompt,
++                $response,
++                $exception,
++                $prompt->continuationOwner,
++            );
++
++            return;
++        }
++
+         $this->store->storeAssistantMessage(
+             $agent->currentConversation(),
+             $participantType,
+@@ -161,14 +206,16 @@ protected function openTurn(Agent $agent, AgentPrompt $prompt, ?string $pendingC
+             ), $participant);
+         }
+ 
+-        // A resume continues the turn its decisions answer, so it adds no message of its own...
+-        return $prompt->hasApprovalDecisions() ? null : $this->store->storeUserMessage(
+-            $agent->currentConversation(),
+-            $participantType,
+-            $participantId,
+-            $agent::class,
+-            new UserMessage($prompt->prompt, $prompt->attachments),
+-        );
++        // A resume or explicit continuation continues its existing turn, so it adds no message of its own...
++        if ($prompt->hasApprovalDecisions() || $prompt->continuation !== null) {
++            return null;
++        }
++
++        $message = new UserMessage($prompt->prompt, $prompt->attachments);
++
++        return $this->store instanceof ContinuesConversations
++            ? $this->store->storeContinuationUserMessage($agent->currentConversation(), $participantType, $participantId, $agent::class, $message, $prompt->continuationOwner)
++            : $this->store->storeUserMessage($agent->currentConversation(), $participantType, $participantId, $agent::class, $message);
+     }
+ 
+     /**
+@@ -203,7 +250,8 @@ protected function shouldRememberTurn(Agent $agent, AgentPrompt $prompt): bool
+     {
+         return $agent->hasConversationParticipant()
+             || $agent->currentConversation() !== null
+-            || $prompt->hasApprovalDecisions();
++            || $prompt->hasApprovalDecisions()
++            || $prompt->continuation !== null;
+     }
+ 
+     /**
+diff --git a/src/Promptable.php b/src/Promptable.php
+index 40e514d..9ccada9 100644
+--- a/src/Promptable.php
++++ b/src/Promptable.php
+@@ -17,6 +17,7 @@
+ use Laravel\Ai\Attributes\UseCheapestModel;
+ use Laravel\Ai\Attributes\UseSmartestModel;
+ use Laravel\Ai\Attributes\WithoutBroadcasting;
++use Laravel\Ai\Continuations\Continuation;
+ use Laravel\Ai\Contracts\Agent;
+ use Laravel\Ai\Contracts\AgentInput;
+ use Laravel\Ai\Contracts\Conversational;
+@@ -25,6 +26,7 @@
+ use Laravel\Ai\Contracts\Tool;
+ use Laravel\Ai\Enums\Lab;
+ use Laravel\Ai\Events\AgentFailedOver;
++use Laravel\Ai\Exceptions\ContinuationConflictException;
+ use Laravel\Ai\Exceptions\FailoverableException;
+ use Laravel\Ai\Gateway\FakeTextGateway;
+ use Laravel\Ai\Gateway\ParentInvocation;
+@@ -79,28 +81,31 @@ public static function make(...$arguments): static
+      * Invoke the agent with a given prompt, or resume a paused run with tool approval decisions.
+      */
+     public function prompt(
+-        AgentInput|UserMessage|Decisions|string $prompt,
++        Continuation|AgentInput|UserMessage|Decisions|string $prompt,
+         array $attachments = [],
+         Lab|array|string|null $provider = null,
+         ?string $model = null,
+         ?int $timeout = null): AgentResponse
+     {
+-        [$text, $approvalDecisions, $attachments] = $this->extractPromptInput($prompt, $attachments);
++        [$text, $approvalDecisions, $attachments, $continuation] = $this->extractPromptInput($prompt, $attachments);
+ 
+         $messages = $this->flushAdHocMessages();
++        if ($continuation !== null && ($messages !== null || $this->runtimeTools !== null || $attachments !== [])) {
++            throw new ContinuationConflictException('Continuation cannot replace history, tools or attachments.');
++        }
+ 
+         $tools = $this->resolveAgentTools();
+ 
+         $invocationId = (string) Str::uuid7();
+ 
+-        $providers = $approvalDecisions !== null
++        $providers = $approvalDecisions !== null || $continuation !== null
+             ? $this->providersForApprovalContinuation($provider, $model)
+             : $this->getProvidersAndModelsForFailover($provider, $model);
+ 
+         [$parentInvocationId, $parentToolInvocationId] = ParentInvocation::current();
+ 
+         $run = function (TextProvider $provider, string $model, bool $isFinalAttempt = true) use (
+-            $text, $attachments, $timeout, $invocationId, $approvalDecisions,
++            $text, $attachments, $timeout, $invocationId, $approvalDecisions, $continuation,
+             $parentInvocationId, $parentToolInvocationId, $messages, $tools
+         ): AgentResponse {
+             return $provider->prompt(
+@@ -108,6 +113,7 @@ public function prompt(
+                     $this, $text, $attachments, $provider, $model, $this->getTimeout($timeout),
+                     invocationId: $invocationId,
+                     approvalDecisions: $approvalDecisions,
++                    continuation: $continuation,
+                     parentInvocationId: $parentInvocationId,
+                     parentToolInvocationId: $parentToolInvocationId,
+                     isFinalAttempt: $isFinalAttempt,
+@@ -117,7 +123,7 @@ public function prompt(
+             );
+         };
+ 
+-        if ($approvalDecisions !== null) {
++        if ($approvalDecisions !== null || $continuation !== null) {
+             [$provider, $model] = $this->iterateProvidersWithFailover($providers)->current();
+ 
+             return $run($provider, $model);
+@@ -130,15 +136,15 @@ public function prompt(
+      * Invoke the agent with a given prompt and return a streamable response.
+      */
+     public function stream(
+-        AgentInput|UserMessage|Decisions|string $prompt,
++        Continuation|AgentInput|UserMessage|Decisions|string $prompt,
+         array $attachments = [],
+         Lab|array|string|null $provider = null,
+         ?string $model = null,
+         ?int $timeout = null): StreamableAgentResponse
+     {
+-        [$text, $approvalDecisions, $attachments] = $this->extractPromptInput($prompt, $attachments);
++        [$text, $approvalDecisions, $attachments, $continuation] = $this->extractPromptInput($prompt, $attachments);
+ 
+-        return $this->streamPrompt($text, $approvalDecisions, $attachments, $provider, $model, $timeout);
++        return $this->streamPrompt($text, $approvalDecisions, $attachments, $provider, $model, $timeout, $continuation);
+     }
+ 
+     /**
+@@ -150,14 +156,18 @@ private function streamPrompt(
+         array $attachments,
+         Lab|array|string|null $provider,
+         ?string $model,
+-        ?int $timeout): StreamableAgentResponse
++        ?int $timeout,
++        ?Continuation $continuation = null): StreamableAgentResponse
+     {
+-        $providers = $approvalDecisions !== null
++        $providers = $approvalDecisions !== null || $continuation !== null
+             ? $this->providersForApprovalContinuation($provider, $model)
+             : $this->getProvidersAndModelsForFailover($provider, $model);
+         $resolvedTimeout = $this->getTimeout($timeout);
+ 
+         $messages = $this->flushAdHocMessages();
++        if ($continuation !== null && ($messages !== null || $this->runtimeTools !== null || $attachments !== [])) {
++            throw new ContinuationConflictException('Continuation cannot replace history, tools or attachments.');
++        }
+ 
+         $tools = $this->resolveAgentTools();
+ 
+@@ -173,6 +183,7 @@ private function streamPrompt(
+                     $this, $prompt, $attachments, $resolved, $resolvedModel, $resolvedTimeout,
+                     invocationId: $invocationId,
+                     approvalDecisions: $approvalDecisions,
++                    continuation: $continuation,
+                     parentInvocationId: $parentInvocationId,
+                     parentToolInvocationId: $parentToolInvocationId,
+                     messages: $messages,
+@@ -186,7 +197,7 @@ private function streamPrompt(
+ 
+         $outer = new StreamableAgentResponse(
+             $invocationId,
+-            function () use ($providers, $prompt, $approvalDecisions, $attachments, $resolvedTimeout, $invocationId, $parentInvocationId, $parentToolInvocationId, $messages, $tools, &$outer) {
++            function () use ($providers, $prompt, $approvalDecisions, $continuation, $attachments, $resolvedTimeout, $invocationId, $parentInvocationId, $parentToolInvocationId, $messages, $tools, &$outer) {
+                 $lastException = null;
+ 
+                 foreach ($this->iterateProvidersWithFailover($providers) as [$provider, $model, $isFinalAttempt]) {
+@@ -198,6 +209,7 @@ function () use ($providers, $prompt, $approvalDecisions, $attachments, $resolve
+                                 $this, $prompt, $attachments, $provider, $model, $resolvedTimeout,
+                                 invocationId: $invocationId,
+                                 approvalDecisions: $approvalDecisions,
++                                continuation: $continuation,
+                                 parentInvocationId: $parentInvocationId,
+                                 parentToolInvocationId: $parentToolInvocationId,
+                                 isFinalAttempt: $isFinalAttempt,
+@@ -261,7 +273,7 @@ public function queue(AgentInput|UserMessage|Decisions|string $prompt, array $at
+      */
+     private function queueablePrompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments): array
+     {
+-        [$text, $approvalDecisions, $attachments] = $this->extractPromptInput($prompt, $attachments);
++        [$text, $approvalDecisions, $attachments, $continuation] = $this->extractPromptInput($prompt, $attachments);
+ 
+         return [$approvalDecisions ?? $text, $attachments];
+     }
+@@ -269,9 +281,9 @@ private function queueablePrompt(AgentInput|UserMessage|Decisions|string $prompt
+     /**
+      * Split a prompt input into its text, tool approval decisions, and attachments.
+      *
+-     * @return array{string, ?Decisions, list<mixed>}
++     * @return array{string, ?Decisions, list<mixed>, ?Continuation}
+      */
+-    private function extractPromptInput(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = []): array
++    private function extractPromptInput(Continuation|AgentInput|UserMessage|Decisions|string $prompt, array $attachments = []): array
+     {
+         if ($prompt instanceof AgentInput) {
+             $prompt = $prompt->decisions()
+@@ -280,9 +292,10 @@ private function extractPromptInput(AgentInput|UserMessage|Decisions|string $pro
+         }
+ 
+         return match (true) {
+-            $prompt instanceof UserMessage => [$prompt->content ?? '', null, [...$prompt->attachments->all(), ...$attachments]],
+-            $prompt instanceof Decisions => ['', $prompt, $attachments],
+-            default => [$prompt, null, $attachments],
++            $prompt instanceof Continuation => ['', null, $attachments, $prompt],
++            $prompt instanceof UserMessage => [$prompt->content ?? '', null, [...$prompt->attachments->all(), ...$attachments], null],
++            $prompt instanceof Decisions => ['', $prompt, $attachments, null],
++            default => [$prompt, null, $attachments, null],
+         };
+     }
+ 
+diff --git a/src/Prompts/AgentPrompt.php b/src/Prompts/AgentPrompt.php
+index 705ff21..b74dd8d 100644
+--- a/src/Prompts/AgentPrompt.php
++++ b/src/Prompts/AgentPrompt.php
+@@ -5,6 +5,7 @@
+ use Illuminate\Support\Collection;
+ use Illuminate\Support\Str;
+ use Laravel\Ai\Approvals\Decisions;
++use Laravel\Ai\Continuations\Continuation;
+ use Laravel\Ai\Contracts\Agent;
+ use Laravel\Ai\Contracts\Providers\TextProvider;
+ use Laravel\Ai\Contracts\Tool;
+@@ -16,6 +17,11 @@
+ 
+ class AgentPrompt extends Prompt
+ {
++    /** Owner token scoped to this prompt, never process-global. */
++    public ?string $continuationOwner = null;
++
++    public ?array $continuationClaim = null;
++
+     public readonly Agent $agent;
+ 
+     public readonly Collection $attachments;
+@@ -63,6 +69,7 @@ public function __construct(
+         bool $isFinalAttempt = true,
+         ?array $messages = null,
+         ?array $tools = null,
++        public readonly ?Continuation $continuation = null,
+     ) {
+         parent::__construct($prompt, $provider, $model, $approvalDecisions);
+ 
+@@ -106,7 +113,7 @@ public function append(string $prompt): AgentPrompt
+      */
+     public function revise(string $prompt, Collection|array|null $attachments = null): AgentPrompt
+     {
+-        if ($this->hasApprovalDecisions()) {
++        if ($this->hasApprovalDecisions() || $this->continuation !== null) {
+             return $this;
+         }
+ 
+@@ -138,7 +145,7 @@ public function revise(string $prompt, Collection|array|null $attachments = null
+      */
+     public function withTools(iterable $tools): AgentPrompt
+     {
+-        if ($this->hasApprovalDecisions()) {
++        if ($this->hasApprovalDecisions() || $this->continuation !== null) {
+             return $this;
+         }
+ 
+diff --git a/src/Providers/Concerns/GeneratesText.php b/src/Providers/Concerns/GeneratesText.php
+index 32efee1..ece7d15 100644
+--- a/src/Providers/Concerns/GeneratesText.php
++++ b/src/Providers/Concerns/GeneratesText.php
+@@ -7,6 +7,7 @@
+ use Illuminate\Support\Str;
+ use Laravel\Ai\Ai;
+ use Laravel\Ai\Contracts\Agent;
++use Laravel\Ai\Contracts\ContinuesConversations;
+ use Laravel\Ai\Contracts\Conversational;
+ use Laravel\Ai\Contracts\ConversationStore;
+ use Laravel\Ai\Contracts\HasStructuredOutput;
+@@ -18,6 +19,7 @@
+ use Laravel\Ai\Events\ToolApprovalRequested;
+ use Laravel\Ai\Events\ToolApprovalResolved;
+ use Laravel\Ai\Exceptions\ApprovalNotResumableException;
++use Laravel\Ai\Exceptions\ContinuationConflictException;
+ use Laravel\Ai\Gateway\RunContext;
+ use Laravel\Ai\Gateway\TextGenerationOptions;
+ use Laravel\Ai\Messages\UserMessage;
+@@ -48,6 +50,12 @@ public function prompt(AgentPrompt $prompt): AgentResponse
+ 
+         $resolvedApprovalResults = null;
+ 
++        if ($prompt->continuation !== null && (! RememberConversation::appliesTo($prompt->agent)
++            || ! resolve(ConversationStore::class) instanceof ContinuesConversations
++            || Ai::hasFakeGatewayFor($prompt->agent::class))) {
++            throw new ContinuationConflictException('Durable continuation requires a supported conversation store and real native execution.');
++        }
++
+         try {
+             $response = pipeline()
+                 ->send($prompt)
+@@ -62,7 +70,7 @@ public function prompt(AgentPrompt $prompt): AgentResponse
+                         ...($agent instanceof Conversational ? $agent->messages() : []),
+                     ]);
+ 
+-                    if (! $prompt->hasApprovalDecisions()) {
++                    if (! $prompt->hasApprovalDecisions() && $prompt->continuation === null) {
+                         $messages[] = new UserMessage($prompt->prompt, $prompt->attachments->all());
+                     }
+ 
+@@ -191,8 +199,20 @@ protected function resolveTool(mixed $tool): mixed
+      */
+     protected function runContextFor(string $invocationId, AgentPrompt $prompt): RunContext
+     {
++        $claim = $prompt->continuationClaim;
++        $store = resolve(ConversationStore::class);
++
+         return tap(
+-            new RunContext($invocationId, $prompt->agent, $this, $prompt->model, $this->events),
++            new RunContext(
++                $invocationId,
++                $prompt->agent,
++                $this,
++                $prompt->model,
++                $this->events,
++                stepOffset: $claim['offset'] ?? 0,
++                beforeStep: $claim !== null && $store instanceof ContinuesConversations ? fn () => $store->advanceTurn($claim) : null,
++                beforeTool: $claim !== null && $store instanceof ContinuesConversations ? fn () => $store->assertTurnOwner($claim) : null,
++            ),
+             fn (RunContext $context) => $prompt->setRunContext($context),
+         );
+     }
+diff --git a/src/Providers/Concerns/ResumesToolApprovals.php b/src/Providers/Concerns/ResumesToolApprovals.php
+index 1c6e8da..20d9822 100644
+--- a/src/Providers/Concerns/ResumesToolApprovals.php
++++ b/src/Providers/Concerns/ResumesToolApprovals.php
+@@ -6,12 +6,13 @@
+ use Illuminate\Support\Collection;
+ use Laravel\Ai\Ai;
+ use Laravel\Ai\Approvals\Decision;
+-use Laravel\Ai\Concerns\RemembersConversations;
+ use Laravel\Ai\Contracts\Agent;
++use Laravel\Ai\Contracts\ContinuesConversations;
+ use Laravel\Ai\Contracts\ConversationStore;
+ use Laravel\Ai\Contracts\RemembersConversations as RemembersConversationsContract;
+ use Laravel\Ai\Messages\AssistantMessage;
+ use Laravel\Ai\Messages\Message;
++use Laravel\Ai\Middleware\RememberConversation as RememberConversationMiddleware;
+ use Laravel\Ai\Prompts\AgentPrompt;
+ 
+ trait ResumesToolApprovals
+@@ -81,7 +82,7 @@ protected function storeApprovalResultRecorderFor(AgentPrompt $prompt): ?Closure
+     {
+         $agent = $prompt->agent;
+ 
+-        if (! in_array(RemembersConversations::class, class_uses_recursive($agent), true)) {
++        if (! $agent instanceof RemembersConversationsContract && ! RememberConversationMiddleware::appliesTo($agent)) {
+             return null;
+         }
+ 
+@@ -94,6 +95,8 @@ protected function storeApprovalResultRecorderFor(AgentPrompt $prompt): ?Closure
+ 
+         $store = app(ConversationStore::class);
+ 
+-        return fn (array $toolResults) => $store->storeApprovalResults($conversationId, $toolResults);
++        return $store instanceof ContinuesConversations
++            ? fn (array $toolResults) => $store->storeContinuationApprovalResults($conversationId, $toolResults, $prompt->continuationOwner)
++            : fn (array $toolResults) => $store->storeApprovalResults($conversationId, $toolResults);
+     }
+ }
+diff --git a/src/Providers/Concerns/StreamsText.php b/src/Providers/Concerns/StreamsText.php
+index ce6f4a9..9d6c7d0 100644
+--- a/src/Providers/Concerns/StreamsText.php
++++ b/src/Providers/Concerns/StreamsText.php
+@@ -4,14 +4,18 @@
+ 
+ use Illuminate\Support\Str;
+ use InvalidArgumentException;
++use Laravel\Ai\Ai;
+ use Laravel\Ai\Contracts\Agent;
++use Laravel\Ai\Contracts\ContinuesConversations;
+ use Laravel\Ai\Contracts\Conversational;
++use Laravel\Ai\Contracts\ConversationStore;
+ use Laravel\Ai\Contracts\HasStructuredOutput;
+ use Laravel\Ai\Contracts\RemembersConversations as RemembersConversationsContract;
+ use Laravel\Ai\Events\AgentStreamed;
+ use Laravel\Ai\Events\StreamingAgent;
+ use Laravel\Ai\Events\ToolApprovalRequested;
+ use Laravel\Ai\Events\ToolApprovalResolved;
++use Laravel\Ai\Exceptions\ContinuationConflictException;
+ use Laravel\Ai\Gateway\TextGenerationOptions;
+ use Laravel\Ai\Messages\UserMessage;
+ use Laravel\Ai\Middleware\RememberConversation;
+@@ -37,6 +41,12 @@ public function stream(AgentPrompt $prompt): StreamableAgentResponse
+ 
+         $resolvedApprovalResults = null;
+ 
++        if ($prompt->continuation !== null && (! RememberConversation::appliesTo($prompt->agent)
++            || ! resolve(ConversationStore::class) instanceof ContinuesConversations
++            || Ai::hasFakeGatewayFor($prompt->agent::class))) {
++            throw new ContinuationConflictException('Durable continuation requires a supported conversation store and real native execution.');
++        }
++
+         try {
+             $response = pipeline()
+                 ->send($prompt)
+@@ -55,7 +65,7 @@ public function stream(AgentPrompt $prompt): StreamableAgentResponse
+                         ...($agent instanceof Conversational ? $agent->messages() : []),
+                     ]);
+ 
+-                    if (! $prompt->hasApprovalDecisions()) {
++                    if (! $prompt->hasApprovalDecisions() && $prompt->continuation === null) {
+                         $messages[] = new UserMessage($prompt->prompt, $prompt->attachments->all());
+                     }
+ 
+diff --git a/src/Responses/StreamableAgentResponse.php b/src/Responses/StreamableAgentResponse.php
+index cf76dcb..507bd1f 100644
+--- a/src/Responses/StreamableAgentResponse.php
++++ b/src/Responses/StreamableAgentResponse.php
+@@ -7,6 +7,7 @@
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Collection;
+ use IteratorAggregate;
++use Laravel\Ai\Exceptions\ExecutionInterruptedException;
+ use Laravel\Ai\Responses\Data\Citation as CitationData;
+ use Laravel\Ai\Responses\Data\Meta;
+ use Laravel\Ai\Responses\Data\TextUsage;
+@@ -55,6 +56,23 @@ class StreamableAgentResponse implements IteratorAggregate, Responsable
+ 
+     protected bool $hasYielded = false;
+ 
++    protected ?Closure $continuationGuard = null;
++
++    protected ?Closure $continuationInterrupted = null;
++
++    protected bool $continuationStarted = false;
++
++    protected bool $continuationFinished = false;
++
++    /** Bind a single execution attempt to a durable native owner. Completed event replay remains available. */
++    public function protectContinuation(Closure $guard, Closure $interrupted): self
++    {
++        $this->continuationGuard = $guard;
++        $this->continuationInterrupted = $interrupted;
++
++        return $this;
++    }
++
+     /**
+      * Create a new streamable agent response instance.
+      */
+@@ -198,76 +216,91 @@ public function toResponse($request): Response
+      */
+     public function getIterator(): Traversable
+     {
+-        // Use existing events if we've already streamed them once...
+-        if (count($this->events) > 0) {
+-            foreach ($this->events as $event) {
+-                $this->hasYielded = true;
+-
+-                yield $event;
++        if ($this->continuationGuard !== null && ! $this->continuationFinished) {
++            if ($this->continuationStarted) {
++                throw new ExecutionInterruptedException('A partial native stream requires reconciliation and a new continuation attempt.');
+             }
+ 
+-            return;
++            ($this->continuationGuard)();
++            $this->continuationStarted = true;
+         }
+ 
+-        $events = [];
+-
+-        // Resolve the stream of the prompt and yield the events...
+         try {
+-            foreach (call_user_func($this->generator) as $event) {
+-                $events[] = $event;
++            // Use existing events if we've already streamed them once...
++            if (count($this->events) > 0) {
++                foreach ($this->events as $event) {
++                    $this->hasYielded = true;
+ 
+-                $this->hasYielded = true;
++                    yield $event;
++                }
+ 
+-                yield $event;
++                return;
+             }
+-        } catch (Throwable $exception) {
+-            // Taken before invoking so a re-iterated stream does not report the same failure twice...
+-            $callbacks = $this->catchCallbacks;
+ 
+-            $this->catchCallbacks = [];
++            $events = [];
+ 
+-            foreach ($callbacks as $callback) {
+-                $callback($exception);
+-            }
++            // Resolve the stream of the prompt and yield the events...
++            try {
++                foreach (call_user_func($this->generator) as $event) {
++                    $events[] = $event;
+ 
+-            throw $exception;
+-        }
++                    $this->hasYielded = true;
+ 
+-        $this->events = new Collection($events);
+-        $this->text = TextDelta::combine($events);
+-        $this->reasoning = ReasoningDelta::combine($events);
+-        $this->citations = Citation::combine($events);
+-        $this->usage = StreamEnd::combineUsage($events);
++                    yield $event;
++                }
++            } catch (Throwable $exception) {
++                // Taken before invoking so a re-iterated stream does not report the same failure twice...
++                $callbacks = $this->catchCallbacks;
+ 
+-        $start = $this->events->last(fn (StreamEvent $event): bool => $event instanceof StreamStart);
++                $this->catchCallbacks = [];
+ 
+-        if ($start instanceof StreamStart && $this->meta instanceof Meta) {
+-            $this->meta->model = $start->model;
+-        }
++                foreach ($callbacks as $callback) {
++                    $callback($exception);
++                }
+ 
+-        $this->streamedResponse = new StreamedAgentResponse(
+-            $this->invocationId,
+-            $this->events,
+-            $this->meta,
+-        );
++                throw $exception;
++            }
++
++            $this->events = new Collection($events);
++            $this->text = TextDelta::combine($events);
++            $this->reasoning = ReasoningDelta::combine($events);
++            $this->citations = Citation::combine($events);
++            $this->usage = StreamEnd::combineUsage($events);
++
++            $start = $this->events->last(fn (StreamEvent $event): bool => $event instanceof StreamStart);
++            if ($start instanceof StreamStart && $this->meta instanceof Meta) {
++                $this->meta->model = $start->model;
++            }
+ 
+-        if ($this->conversationId !== null) {
+-            $this->streamedResponse->withinConversation(
+-                $this->conversationId,
+-                $this->conversationUser
++            $this->streamedResponse = new StreamedAgentResponse(
++                $this->invocationId,
++                $this->events,
++                $this->meta,
+             );
+-        }
+ 
+-        $this->streamedResponse->withStoredMessages(
+-            $this->userMessageId,
+-            $this->assistantMessageId,
+-        );
++            if ($this->conversationId !== null) {
++                $this->streamedResponse->withinConversation(
++                    $this->conversationId,
++                    $this->conversationUser
++                );
++            }
+ 
+-        foreach ($this->thenCallbacks as $callback) {
+-            call_user_func($callback, $this->streamedResponse);
+-        }
++            $this->streamedResponse->withStoredMessages(
++                $this->userMessageId,
++                $this->assistantMessageId,
++            );
++
++            foreach ($this->thenCallbacks as $callback) {
++                call_user_func($callback, $this->streamedResponse);
++            }
+ 
+-        $this->syncConversationFromStreamedResponse();
++            $this->syncConversationFromStreamedResponse();
++            $this->continuationFinished = true;
++        } finally {
++            if ($this->continuationInterrupted !== null && ! $this->continuationFinished) {
++                ($this->continuationInterrupted)();
++            }
++        }
+     }
+ 
+     /**
+diff --git a/src/Storage/DatabaseConversationStore.php b/src/Storage/DatabaseConversationStore.php
+index 2de4f25..86f543c 100644
+--- a/src/Storage/DatabaseConversationStore.php
++++ b/src/Storage/DatabaseConversationStore.php
+@@ -12,6 +12,7 @@
+ use InvalidArgumentException;
+ use Laravel\Ai\Approvals\PendingApproval;
+ use Laravel\Ai\Contracts\Agent;
++use Laravel\Ai\Contracts\ContinuesConversations;
+ use Laravel\Ai\Contracts\ConversationStore;
+ use Laravel\Ai\Contracts\PaginatesConversations;
+ use Laravel\Ai\Contracts\ResolvesPendingApprovals;
+@@ -32,8 +33,10 @@
+ use Laravel\Ai\Responses\Data\ToolResult;
+ use Throwable;
+ 
+-class DatabaseConversationStore implements ConversationStore, PaginatesConversations, ResolvesPendingApprovals, VerifiesConversationOwnership
++class DatabaseConversationStore implements ContinuesConversations, ConversationStore, PaginatesConversations, ResolvesPendingApprovals, VerifiesConversationOwnership
+ {
++    use ManagesContinuations;
++
+     /**
+      * Create a new conversation store instance.
+      */
+@@ -97,24 +100,32 @@ public function storeConversation(?string $participantType, string|int|null $par
+      */
+     public function storeUserMessage(string $conversationId, ?string $participantType, string|int|null $participantId, string $agent, UserMessage $message): string
+     {
+-        $messageId = (string) Str::uuid7();
++        return $this->storeContinuationUserMessage($conversationId, $participantType, $participantId, $agent, $message, null);
++    }
+ 
+-        $now = now();
++    public function storeContinuationUserMessage(string $conversationId, ?string $participantType, string|int|null $participantId, string $agent, UserMessage $message, ?string $continuationOwner): string
++    {
++        return DB::connection($this->connection)->transaction(function () use ($conversationId, $participantType, $participantId, $agent, $message, $continuationOwner) {
++            $this->assertWriteAllowed($conversationId, $continuationOwner);
++            $messageId = (string) Str::uuid7();
+ 
+-        $this->table($this->messagesTable())->insert($this->messageAttributes($messageId, $conversationId, $participantType, $participantId, $now, [
+-            'agent' => $agent,
+-            'role' => 'user',
+-            'content' => $message->content,
+-            'attachments' => $message->attachments->toJson(),
+-            'steps' => '[]',
+-            'usage' => '[]',
+-            'meta' => '[]',
+-            'status' => MessageStatus::Completed,
+-        ]));
++            $now = now();
+ 
+-        $this->touchConversation($conversationId, $now);
++            $this->table($this->messagesTable())->insert($this->messageAttributes($messageId, $conversationId, $participantType, $participantId, $now, [
++                'agent' => $agent,
++                'role' => 'user',
++                'content' => $message->content,
++                'attachments' => $message->attachments->toJson(),
++                'steps' => '[]',
++                'usage' => '[]',
++                'meta' => '[]',
++                'status' => MessageStatus::Completed,
++            ]));
+ 
+-        return $messageId;
++            $this->touchConversation($conversationId, $now);
++
++            return $messageId;
++        });
+     }
+ 
+     /**
+@@ -122,38 +133,53 @@ public function storeUserMessage(string $conversationId, ?string $participantTyp
+      */
+     public function storeAssistantMessage(string $conversationId, ?string $participantType, string|int|null $participantId, AgentPrompt $prompt, AgentResponse $response, ?Throwable $exception = null): ?string
+     {
+-        if ($prompt->hasApprovalDecisions() && ($paused = $this->pausedRowFor($conversationId, $prompt)) !== null) {
+-            return $this->resumePausedRow($conversationId, $paused, $prompt, $response, $exception);
+-        }
++        return $this->storeContinuationAssistantMessage($conversationId, $participantType, $participantId, $prompt, $response, $exception, null);
++    }
+ 
+-        $messageId = (string) Str::uuid7();
++    public function storeContinuationAssistantMessage(string $conversationId, ?string $participantType, string|int|null $participantId, AgentPrompt $prompt, AgentResponse $response, ?Throwable $exception, ?string $continuationOwner): ?string
++    {
++        return DB::connection($this->connection)->transaction(function () use ($conversationId, $participantType, $participantId, $prompt, $response, $exception, $continuationOwner) {
++            $this->assertWriteAllowed($conversationId, $continuationOwner);
+ 
+-        $now = now();
++            $paused = $prompt->continuation !== null
++                ? $this->assistantRows($conversationId)->where('id', $prompt->continuation->turnId)->first()
++                : ($prompt->hasApprovalDecisions() ? $this->pausedRowFor($conversationId, $prompt) : null);
+ 
+-        $steps = $this->stepsFor($prompt, $response);
++            if ($paused !== null) {
++                return $this->resumePausedRow($conversationId, $paused, $prompt, $response, $exception);
++            }
+ 
+-        if ($prompt->hasApprovalDecisions() && blank($response->text) && $steps->every(fn (array $step) => $step['tool_calls'] === [])) {
+-            return null;
+-        }
++            $messageId = (string) Str::uuid7();
+ 
+-        $this->table($this->messagesTable())->insert($this->messageAttributes($messageId, $conversationId, $participantType, $participantId, $now, [
+-            'agent' => $prompt->agent::class,
+-            'role' => 'assistant',
+-            'content' => $response->text,
+-            'attachments' => '[]',
+-            'steps' => $steps->toJson(),
+-            'usage' => json_encode($response->usage),
+-            'meta' => json_encode($this->metaFor($response, $exception)),
+-            'status' => $this->statusFor($response, $exception),
+-        ]));
++            $now = now();
+ 
+-        if (! $response->hasPendingApprovals()) {
+-            $this->forgetReplayBlocks($conversationId);
+-        }
++            $steps = $this->stepsFor($prompt, $response);
+ 
+-        $this->touchConversation($conversationId, $now);
++            if (($prompt->hasApprovalDecisions() || $prompt->continuation !== null)
++                && blank($response->text)
++                && $steps->every(fn (array $step) => $step['tool_calls'] === [])) {
++                return null;
++            }
++
++            $this->table($this->messagesTable())->insert($this->messageAttributes($messageId, $conversationId, $participantType, $participantId, $now, [
++                'agent' => $prompt->agent::class,
++                'role' => 'assistant',
++                'content' => $response->text,
++                'attachments' => '[]',
++                'steps' => $steps->toJson(),
++                'usage' => json_encode($response->usage),
++                'meta' => json_encode($this->metaFor($response, $exception, $prompt)),
++                'status' => $this->statusFor($response, $exception),
++            ]));
++
++            if ($exception === null && ! $response->hasPendingApprovals()) {
++                $this->forgetReplayBlocks($conversationId);
++            }
++
++            $this->touchConversation($conversationId, $now);
+ 
+-        return $messageId;
++            return $messageId;
++        });
+     }
+ 
+     /**
+@@ -173,11 +199,27 @@ protected function statusFor(AgentResponse $response, ?Throwable $exception): Me
+      *
+      * @return array<string, mixed>
+      */
+-    protected function metaFor(AgentResponse $response, ?Throwable $exception): array
++    protected function metaFor(AgentResponse $response, ?Throwable $exception, ?AgentPrompt $prompt = null): array
+     {
+-        return $exception === null
++        $meta = $exception === null
+             ? $response->meta->toArray()
+             : [...$response->meta->toArray(), 'error' => $exception->getMessage()];
++
++        if ($prompt !== null && $response->hasPendingApprovals()) {
++            $meta['continuation'] = [
++                'version' => 1,
++                'revision' => 0,
++                'status' => 'awaiting',
++                'owner' => null,
++                'provider' => $response->meta->provider,
++                'provider_class' => $prompt->provider()::class,
++                'model' => $prompt->model,
++                'agent' => $prompt->agent::class,
++                'generation_attempts' => $response->steps->count(),
++            ];
++        }
++
++        return $meta;
+     }
+ 
+     /**
+@@ -216,7 +258,7 @@ protected function resumePausedRow(string $conversationId, object $paused, Agent
+             $steps = $steps->concat($this->stepsFor($prompt, $response));
+         }
+ 
+-        if (! $response->hasPendingApprovals()) {
++        if ($exception === null && ! $response->hasPendingApprovals()) {
+             $steps = $this->withoutReplayBlocks($steps);
+         }
+ 
+@@ -231,7 +273,7 @@ protected function resumePausedRow(string $conversationId, object $paused, Agent
+             'updated_at' => $now,
+         ]);
+ 
+-        if (! $response->hasPendingApprovals()) {
++        if ($exception === null && ! $response->hasPendingApprovals()) {
+             $this->forgetReplayBlocks($conversationId);
+         }
+ 
+@@ -247,9 +289,12 @@ protected function resumePausedRow(string $conversationId, object $paused, Agent
+      */
+     protected function mergedMeta(object $paused, AgentResponse $response, ?Throwable $exception = null): array
+     {
++        $stored = $this->decoded($paused->meta);
++
+         return [
+             ...$this->metaFor($response, $exception),
+-            'citations' => [...$this->decoded($paused->meta)['citations'] ?? [], ...$response->meta->citations->all()],
++            ...isset($stored['continuation']) ? ['continuation' => $stored['continuation']] : [],
++            'citations' => [...$stored['citations'] ?? [], ...$response->meta->citations->all()],
+         ];
+     }
+ 
+@@ -608,6 +653,11 @@ protected function rehydrateAttachments(string $attachments): Collection
+      * @throws ApprovalMismatchException when no paused row matches the resolved results
+      */
+     public function storeApprovalResults(string $conversationId, array $toolResults): void
++    {
++        $this->storeContinuationApprovalResults($conversationId, $toolResults, null);
++    }
++
++    public function storeContinuationApprovalResults(string $conversationId, array $toolResults, ?string $continuationOwner): void
+     {
+         if ($toolResults === []) {
+             return;
+@@ -615,7 +665,9 @@ public function storeApprovalResults(string $conversationId, array $toolResults)
+ 
+         $resultIds = array_map(fn (ToolResult $result) => $result->id, $toolResults);
+ 
+-        DB::connection($this->connection)->transaction(function () use ($conversationId, $toolResults, $resultIds) {
++        DB::connection($this->connection)->transaction(function () use ($conversationId, $toolResults, $resultIds, $continuationOwner) {
++            $this->assertWriteAllowed($conversationId, $continuationOwner);
++
+             $paused = $this->assistantRows($conversationId)
+                 ->where('status', MessageStatus::Paused)
+                 ->lockForUpdate()
+diff --git a/src/Storage/ManagesContinuations.php b/src/Storage/ManagesContinuations.php
+new file mode 100644
+index 0000000..954fde0
+--- /dev/null
++++ b/src/Storage/ManagesContinuations.php
+@@ -0,0 +1,421 @@
++<?php
++
++namespace Laravel\Ai\Storage;
++
++use Closure;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Str;
++use Laravel\Ai\Continuations\Continuation;
++use Laravel\Ai\Contracts\RemembersConversations;
++use Laravel\Ai\Exceptions\ApprovalMismatchException;
++use Laravel\Ai\Exceptions\ContinuationConflictException;
++use Laravel\Ai\Middleware\RememberConversation;
++use Laravel\Ai\Models\Conversation;
++use Laravel\Ai\Prompts\AgentPrompt;
++use Laravel\Ai\Responses\AgentResponse;
++use Laravel\Ai\Responses\StructuredAgentResponse;
++
++/**
++ * Uses the stored assistant row as a versioned turn record. Remote provider and
++ * tool I/O always runs outside the short compare-and-swap transactions here.
++ */
++trait ManagesContinuations
++{
++    public function claimTurn(AgentPrompt $prompt): ?array
++    {
++        $agent = $prompt->agent;
++
++        if (! $agent instanceof RemembersConversations && ! RememberConversation::appliesTo($agent)) {
++            throw new ContinuationConflictException('Agent must implement the conversation contract.');
++        }
++
++        $conversationId = $this->currentConversationFor($agent);
++        $target = $prompt->continuation;
++
++        if ($target !== null && $target->conversationId !== $conversationId) {
++            throw new ContinuationConflictException('Continuation conversation does not match the agent.');
++        }
++
++        if ($conversationId === null) {
++            return null;
++        }
++
++        return DB::connection($this->connection)->transaction(function () use ($prompt, $agent, $conversationId, $target): ?array {
++            $rows = $this->assistantRows($conversationId)->lockForUpdate()->get();
++            $row = $target === null
++                ? $rows->first(fn (object $candidate): bool => isset($this->decoded($candidate->meta)['continuation']))
++                : $rows->firstWhere('id', $target->turnId);
++
++            if ($row === null) {
++                if ($target !== null) {
++                    throw new ContinuationConflictException('The requested continuation turn does not exist.');
++                }
++
++                return null;
++            }
++
++            $meta = $this->decoded($row->meta);
++            $native = $meta['continuation'] ?? null;
++
++            if (($native['version'] ?? null) !== 1) {
++                if ($target !== null) {
++                    throw new ContinuationConflictException('This legacy turn has no continuation state; drain or reconcile it explicitly.');
++                }
++
++                return null;
++            }
++
++            // Keep Laravel AI's existing approval-resume behavior compatible: ordinary
++            // Decisions may be supplied without the participant that opened the
++            // conversation. Explicit durable Continuations, however, are bearer-like
++            // replay requests and must always prove conversation ownership.
++            if ($target !== null) {
++                $this->assertContinuationOwner($conversationId, $this->conversationParticipantFor($agent));
++            }
++
++            if (($native['status'] ?? null) === 'running') {
++                throw new ContinuationConflictException('The conversation has an active native owner.');
++            }
++
++            $ordinary = ! $prompt->hasApprovalDecisions() && $target === null;
++            $pending = $this->pausedCallIds($row);
++
++            if (! $ordinary && $target === null && $pending !== [] && ($native['status'] ?? null) !== 'awaiting') {
++                throw new ContinuationConflictException('An interrupted approval requires effect reconciliation; decisions cannot be replayed.');
++            }
++
++            $head = $this->table($this->messagesTable())->where('conversation_id', $conversationId)->max('id');
++
++            if (! $ordinary) {
++                if ($target !== null && ($row->agent !== $agent::class
++                    || ($native['agent'] ?? null) !== $agent::class
++                    || ($native['provider'] ?? null) !== $prompt->provider()->name()
++                    || ($native['provider_class'] ?? null) !== $prompt->provider()::class
++                    || ($native['model'] ?? null) !== $prompt->model)) {
++                    throw new ContinuationConflictException('Agent, provider or model does not match the saved turn.');
++                }
++
++                if ($this->table($this->messagesTable())->where('conversation_id', $conversationId)->where('id', '>', $row->id)->exists()) {
++                    if ($target !== null) {
++                        throw new ContinuationConflictException('A newer conversation turn exists.');
++                    }
++
++                    return null;
++                }
++            }
++
++            if ($target !== null) {
++                if ($target->revision !== ($native['revision'] ?? null)
++                    || ($native['status'] ?? null) !== 'ready'
++                    || $pending !== []) {
++                    throw new ContinuationConflictException('The turn is not ready at the requested revision.');
++                }
++
++                if (! $this->hasReplayBlocks($row)) {
++                    throw new ContinuationConflictException('Required per-step provider replay data is missing.');
++                }
++            } elseif (! $ordinary && ($pending === [] || ($native['status'] ?? null) !== 'awaiting')) {
++                return null;
++            }
++
++            $stop = false;
++
++            if ($prompt->hasApprovalDecisions()) {
++                $decisions = $prompt->approvalDecisions->all();
++
++                if (array_diff(array_keys($decisions), ['*'], $pending) !== []
++                    || (! array_key_exists('*', $decisions) && array_diff($pending, array_keys($decisions)) !== [])) {
++                    throw new ApprovalMismatchException(
++                        'Approval decisions do not match the pending tool calls.',
++                        $this->pendingApprovalsIn($row),
++                    );
++                }
++
++                foreach ($pending as $id) {
++                    $decision = $decisions[$id] ?? $decisions['*'] ?? null;
++                    $stop = $stop || $decision === null || ($decision->isRejected() && $decision->result === null);
++                }
++            }
++
++            $claim = [
++                'conversation' => $conversationId,
++                'turn' => $row->id,
++                'owner' => (string) Str::uuid7(),
++                'request_revision' => $native['revision'],
++                'ordinary' => $ordinary,
++                'stop' => $stop,
++                'prior_status' => $native['status'],
++                'offset' => $target !== null ? ($native['generation_attempts'] ?? 0) : 0,
++            ];
++
++            $meta['continuation'] = array_replace($native, [
++                'status' => 'running',
++                'owner' => $claim['owner'],
++                'revision' => $native['revision'] + 1,
++                'requested_stop' => $ordinary ? ($native['requested_stop'] ?? false) : $stop,
++                'ordinary' => $ordinary,
++                'prior_status' => $native['status'],
++                'head_at_claim' => $head,
++            ]);
++
++            $this->compareAndSwapTurn($row, $meta);
++
++            return $claim;
++        });
++    }
++
++    public function finishTurn(array $claim, AgentResponse $response, Closure $persist): void
++    {
++        DB::connection($this->connection)->transaction(function () use ($claim, $response, $persist): void {
++            $this->ownedTurn($claim);
++            $persist();
++
++            [$row, $meta] = $this->ownedTurn($claim);
++            $native = $meta['continuation'];
++            $native['status'] = $claim['ordinary']
++                ? (in_array($claim['prior_status'], ['completed', 'stopped'], true) ? $claim['prior_status'] : 'superseded')
++                : ($response->hasPendingApprovals() ? 'awaiting' : ($claim['stop'] ? 'stopped' : 'completed'));
++            $native['revision']++;
++
++            if ($native['status'] === 'awaiting') {
++                $native['owner'] = null;
++                $native['requested_stop'] = false;
++                $native['prior_status'] = 'awaiting';
++            }
++
++            if ($native['status'] === 'completed' && ! $claim['ordinary']) {
++                $native['receipt_revision'] = $claim['request_revision'];
++                $native['receipt'] = json_decode(json_encode([
++                    'invocation_id' => $response->invocationId,
++                    'text' => $response->text,
++                    'structured' => $response instanceof StructuredAgentResponse ? $response->toArray() : null,
++                    'usage' => $response->usage,
++                    'meta' => $response->meta,
++                    'reasoning' => $response->reasoning,
++                    'tool_calls' => $response->toolCalls,
++                    'tool_results' => $response->toolResults,
++                    'steps' => $response->steps,
++                    'conversation_id' => $response->conversationId,
++                    'assistant_message_id' => $response->assistantMessageId,
++                ], JSON_THROW_ON_ERROR), true, flags: JSON_THROW_ON_ERROR);
++            }
++
++            $meta['continuation'] = $native;
++            $this->compareAndSwapTurn($row, $meta);
++        });
++    }
++
++    public function interruptTurn(array $claim): void
++    {
++        DB::connection($this->connection)->transaction(function () use ($claim): void {
++            $row = $this->table($this->messagesTable())->where('id', $claim['turn'])->first();
++
++            if ($row === null) {
++                return;
++            }
++
++            $meta = $this->decoded($row->meta);
++            $native = $meta['continuation'] ?? [];
++
++            if (($native['owner'] ?? null) !== $claim['owner'] || ($native['status'] ?? null) !== 'running') {
++                return;
++            }
++
++            $native['status'] = $claim['ordinary'] ? $claim['prior_status'] : 'interrupted';
++            $native['revision']++;
++            $meta['continuation'] = $native;
++            $this->compareAndSwapTurn($row, $meta);
++        });
++    }
++
++    public function reconcileTurn(Continuation $turn, ?object $participant, string $previousOwner, string $evidence): Continuation
++    {
++        if (trim($evidence) === '') {
++            throw new ContinuationConflictException('Recovery requires caller-owned reconciliation evidence.');
++        }
++
++        return DB::connection($this->connection)->transaction(function () use ($turn, $participant, $previousOwner, $evidence): Continuation {
++            [$row, $meta] = $this->readContinuation($turn, $participant);
++            $native = $meta['continuation'];
++
++            if ($native['revision'] !== $turn->revision
++                || ! in_array($native['status'], ['running', 'interrupted'], true)
++                || $native['owner'] !== $previousOwner
++                || (! ($native['ordinary'] ?? false) && ($this->pausedCallIds($row) !== [] || ($native['requested_stop'] ?? false)))) {
++                throw new ContinuationConflictException('Recovery ownership, revision or saved-result disposition does not match.');
++            }
++
++            $boundary = ($native['ordinary'] ?? false) ? ($native['head_at_claim'] ?? $turn->turnId) : $turn->turnId;
++
++            if ($this->table($this->messagesTable())->where('conversation_id', $turn->conversationId)->where('id', '>', $boundary)->exists()) {
++                throw new ContinuationConflictException('A newer turn prevents recovery.');
++            }
++
++            $native['status'] = ($native['ordinary'] ?? false) ? $native['prior_status'] : 'ready';
++            $native['owner'] = null;
++            $native['revision']++;
++            $native['reconciliation'] = $evidence;
++            $meta['continuation'] = $native;
++            $this->compareAndSwapTurn($row, $meta);
++
++            return new Continuation($turn->conversationId, $turn->turnId, $native['revision']);
++        });
++    }
++
++    public function continuationReceipt(Continuation $turn, ?object $participant): array
++    {
++        [, $meta] = $this->readContinuation($turn, $participant);
++        $native = $meta['continuation'];
++
++        if (! isset($native['receipt']) || ($native['receipt_revision'] ?? null) !== $turn->revision) {
++            throw new ContinuationConflictException('No completed receipt exists for this execution revision.');
++        }
++
++        return $native['receipt'];
++    }
++
++    /** Inspect only after participant authorization; this does not authorize replay. */
++    public function continuationState(Continuation $turn, ?object $participant): array
++    {
++        return $this->readContinuation($turn, $participant)[1]['continuation'];
++    }
++
++    protected function readContinuation(Continuation $turn, ?object $participant): array
++    {
++        $this->assertContinuationOwner($turn->conversationId, $participant);
++
++        $row = $this->table($this->messagesTable())
++            ->where('conversation_id', $turn->conversationId)
++            ->where('id', $turn->turnId)
++            ->first();
++
++        if ($row === null) {
++            throw new ContinuationConflictException('The requested continuation turn does not exist.');
++        }
++
++        $meta = $this->decoded($row->meta);
++
++        if (($meta['continuation']['version'] ?? null) !== 1) {
++            throw new ContinuationConflictException('The turn does not support native continuation.');
++        }
++
++        return [$row, $meta];
++    }
++
++    protected function assertContinuationOwner(string $conversationId, ?object $participant): void
++    {
++        if (! $this->conversationBelongsTo(
++            $conversationId,
++            $participant === null ? null : Conversation::participantType($participant),
++            $participant === null ? null : Conversation::participantKey($participant),
++        )) {
++            throw new ContinuationConflictException('The participant does not own this conversation.');
++        }
++    }
++
++    /**
++     * Read conversation state through the public contract while retaining the
++     * pre-contract trait convention for existing agents.
++     */
++    protected function currentConversationFor(object $agent): ?string
++    {
++        $conversationId = $agent instanceof RemembersConversations
++            ? $agent->currentConversation()
++            : call_user_func([$agent, 'currentConversation']);
++
++        if ($conversationId !== null && ! is_string($conversationId)) {
++            throw new ContinuationConflictException('Agent returned an invalid conversation identifier.');
++        }
++
++        return $conversationId;
++    }
++
++    /**
++     * Read the participant through the public contract while retaining the
++     * pre-contract trait convention for existing agents.
++     */
++    protected function conversationParticipantFor(object $agent): ?object
++    {
++        $participant = $agent instanceof RemembersConversations
++            ? $agent->conversationParticipant()
++            : call_user_func([$agent, 'conversationParticipant']);
++
++        if ($participant !== null && ! is_object($participant)) {
++            throw new ContinuationConflictException('Agent returned an invalid conversation participant.');
++        }
++
++        return $participant;
++    }
++
++    public function advanceTurn(array $claim): void
++    {
++        DB::connection($this->connection)->transaction(function () use ($claim): void {
++            [$row, $meta] = $this->ownedTurn($claim);
++            $meta['continuation']['generation_attempts'] = ($meta['continuation']['generation_attempts'] ?? 0) + 1;
++            $this->compareAndSwapTurn($row, $meta);
++        });
++    }
++
++    public function assertTurnOwner(array $claim): void
++    {
++        $this->ownedTurn($claim);
++    }
++
++    protected function ownedTurn(array $claim): array
++    {
++        $row = $this->table($this->messagesTable())
++            ->where('conversation_id', $claim['conversation'])
++            ->where('id', $claim['turn'])
++            ->first();
++
++        if ($row === null) {
++            throw new ContinuationConflictException('The native execution turn no longer exists.');
++        }
++
++        $meta = $this->decoded($row->meta);
++
++        if (($meta['continuation']['owner'] ?? null) !== $claim['owner']
++            || ($meta['continuation']['status'] ?? null) !== 'running') {
++            throw new ContinuationConflictException('The native execution no longer owns this turn.');
++        }
++
++        return [$row, $meta];
++    }
++
++    /** All database-store writers check under the same short transaction as their write. */
++    protected function assertWriteAllowed(string $conversationId, ?string $owner): void
++    {
++        $rows = $this->assistantRows($conversationId)->lockForUpdate()->get();
++
++        if ($owner !== null && ! $rows->contains(function (object $row) use ($owner): bool {
++            $native = $this->decoded($row->meta)['continuation'] ?? null;
++
++            return ($native['status'] ?? null) === 'running' && ($native['owner'] ?? null) === $owner;
++        })) {
++            throw new ContinuationConflictException('The writer no longer owns a running turn.');
++        }
++
++        foreach ($rows as $row) {
++            $native = $this->decoded($row->meta)['continuation'] ?? null;
++
++            if (($native['status'] ?? null) === 'running' && ($native['owner'] ?? null) !== $owner) {
++                throw new ContinuationConflictException('A competing writer cannot persist over an active native turn.');
++            }
++        }
++    }
++
++    protected function hasReplayBlocks(object $row): bool
++    {
++        return $this->decodedSteps($row)->contains(fn (array $step): bool => filled($step['replay_blocks']));
++    }
++
++    protected function compareAndSwapTurn(object $row, array $meta): void
++    {
++        if ($this->table($this->messagesTable())
++            ->where('id', $row->id)
++            ->where('meta', $row->meta)
++            ->update(['meta' => json_encode($meta, JSON_THROW_ON_ERROR), 'updated_at' => now()]) !== 1) {
++            throw new ContinuationConflictException('The turn changed concurrently.');
++        }
++    }
++}
+diff --git a/tests/Feature/AgentUserInteractionProtocolStreamTest.php b/tests/Feature/AgentUserInteractionProtocolStreamTest.php
+index 95392bb..d24ac8b 100644
+--- a/tests/Feature/AgentUserInteractionProtocolStreamTest.php
++++ b/tests/Feature/AgentUserInteractionProtocolStreamTest.php
+@@ -495,6 +495,11 @@ public function storeApprovalResults(string $conversationId, array $toolResults)
+         {
+             throw new ApprovalMismatchException('The approval results do not match a paused conversation turn.', collect());
+         }
++
++        public function storeContinuationApprovalResults(string $conversationId, array $toolResults, ?string $continuationOwner): void
++        {
++            $this->storeApprovalResults($conversationId, $toolResults);
++        }
+     });
+ 
+     $events = agUiEvents((new RememberingApprovableAgent)
+diff --git a/tests/Feature/NativeContinuationTest.php b/tests/Feature/NativeContinuationTest.php
+new file mode 100644
+index 0000000..a806ca9
+--- /dev/null
++++ b/tests/Feature/NativeContinuationTest.php
+@@ -0,0 +1,885 @@
++<?php
++
++use Illuminate\Contracts\JsonSchema\JsonSchema;
++use Illuminate\Http\Client\Factory;
++use Illuminate\Http\Client\RequestException;
++use Illuminate\Support\Facades\DB;
++use Illuminate\Support\Facades\Event;
++use Illuminate\Support\Facades\Http;
++use Laravel\Ai\Ai;
++use Laravel\Ai\Approvals\Decisions;
++use Laravel\Ai\Continuations\Continuation;
++use Laravel\Ai\Contracts\Agent;
++use Laravel\Ai\Contracts\ConversationStore;
++use Laravel\Ai\Contracts\HasMiddleware;
++use Laravel\Ai\Contracts\HasStructuredOutput;
++use Laravel\Ai\Contracts\HasTools;
++use Laravel\Ai\Contracts\RemembersConversations;
++use Laravel\Ai\Events\AgentFailedOver;
++use Laravel\Ai\Events\AgentPrompted;
++use Laravel\Ai\Events\StartingStep;
++use Laravel\Ai\Events\StepCompleted;
++use Laravel\Ai\Events\ToolInvoked;
++use Laravel\Ai\Exceptions\ContinuationConflictException;
++use Laravel\Ai\Exceptions\ExecutionInterruptedException;
++use Laravel\Ai\Exceptions\RateLimitedException;
++use Laravel\Ai\Messages\UserMessage;
++use Laravel\Ai\Promptable;
++use Laravel\Ai\Prompts\AgentPrompt;
++use Laravel\Ai\Providers\Provider;
++use Laravel\Ai\Responses\AgentResponse;
++use Laravel\Ai\Responses\Data\Meta;
++use Laravel\Ai\Responses\Data\TextUsage;
++use Laravel\Ai\Responses\StructuredAgentResponse;
++use Laravel\Ai\Storage\DatabaseConversationStore;
++use Laravel\Ai\Tools\Request;
++use Symfony\Component\Process\Process;
++use Tests\Fixtures\Agents\RememberingApprovableAgent;
++use Tests\Fixtures\Tools\ApprovableNumberGenerator;
++use Tests\Fixtures\Tools\FixedNumberGenerator;
++
++class ContinuationTestAgent extends RememberingApprovableAgent
++{
++    public function maxSteps(): int
++    {
++        return 8;
++    }
++
++    public function toolChoice(): string
++    {
++        return 'required';
++    }
++}
++function continuationResponse(bool $tool = false): array
++{
++    return ['id' => 'msg_test', 'type' => 'message', 'role' => 'assistant', 'model' => 'claude-sonnet-4-6',
++        'content' => $tool ? [['type' => 'thinking', 'thinking' => 'approved reasoning', 'signature' => 'signed-block'], ['type' => 'tool_use', 'id' => 'toolu_1', 'name' => 'ApprovableNumberGenerator', 'input' => (object) []]] : [['type' => 'text', 'text' => 'Recovered.']],
++        'stop_reason' => $tool ? 'tool_use' : 'end_turn', 'usage' => ['input_tokens' => 10, 'output_tokens' => 5]];
++}
++function failedContinuationTurn(bool $reject = false): array
++{
++    config(['ai.conversations.generate_title' => false]);
++    Http::preventStrayRequests();
++    ApprovableNumberGenerator::$invocations = 0;
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::sequence()->push(continuationResponse(true))->push(status: 500)]);
++    $user = (object) ['id' => 1];
++    $paused = (new ContinuationTestAgent)->forUser($user)->prompt('Generate', provider: 'anthropic');
++    try {
++        (new ContinuationTestAgent)->continue($paused->conversationId, $user)->prompt(Decisions::from(['toolu_1' => ! $reject]), provider: 'anthropic');
++    } catch (RequestException) {
++    }
++    $id = DB::table('agent_conversation_messages')->where('role', 'assistant')->value('id');
++    $store = resolve(ConversationStore::class);
++    $token = new Continuation($paused->conversationId, $id, 0);
++    $state = $store->continuationState($token, $user);
++
++    return [$store, new Continuation($token->conversationId, $id, $state['revision']), $user, $state];
++}
++function readyContinuationTurn(): array
++{
++    [$store,$turn,$user,$state] = failedContinuationTurn();
++    $ready = $store->reconcileTurn($turn, $user, $state['owner'], 'Fixture verifies old execution ended and no later effects occurred.');
++
++    return [$store, $ready, $user];
++}
++function continuationPrompt(Continuation $turn, object $user): AgentPrompt
++{
++    $agent = (new ContinuationTestAgent)->continue($turn->conversationId, $user);
++    $provider = Ai::textProviderFor($agent, 'anthropic');
++
++    return new AgentPrompt($agent, '', [], $provider, $provider->defaultTextModel(), continuation: $turn);
++}
++
++class ContractOnlyContinuationAgent implements Agent, HasTools, RemembersConversations
++{
++    use Promptable;
++
++    protected ?string $conversationId = null;
++
++    protected ?object $participant = null;
++
++    public function instructions(): string
++    {
++        return 'Always use the available tool.';
++    }
++
++    public function tools(): iterable
++    {
++        return [new ApprovableNumberGenerator];
++    }
++
++    public function messages(): iterable
++    {
++        return $this->conversationId === null
++            ? []
++            : resolve(ConversationStore::class)->getLatestConversationMessages($this->conversationId, 100)->all();
++    }
++
++    public function forParticipant(object $participant): static
++    {
++        $this->conversationId = null;
++        $this->participant = $participant;
++
++        return $this;
++    }
++
++    public function forUser(object $user): static
++    {
++        return $this->forParticipant($user);
++    }
++
++    public function continue(string $conversationId, ?object $as = null): static
++    {
++        $this->conversationId = $conversationId;
++        $this->participant = $as;
++
++        return $this;
++    }
++
++    public function continueOrStart(?string $conversationId, object $as): static
++    {
++        return $conversationId === null ? $this->forParticipant($as) : $this->continue($conversationId, $as);
++    }
++
++    public function continueLastConversation(object $as): static
++    {
++        $this->participant = $as;
++        $this->conversationId = resolve(ConversationStore::class)->latestConversationId(
++            $as::class,
++            $as->id,
++            static::class,
++        );
++
++        return $this;
++    }
++
++    public function currentConversation(): ?string
++    {
++        return $this->conversationId;
++    }
++
++    public function hasConversationParticipant(): bool
++    {
++        return $this->participant !== null;
++    }
++
++    public function conversationParticipant(): ?object
++    {
++        return $this->participant;
++    }
++}
++
++class RecordingContinuationStore extends DatabaseConversationStore
++{
++    public bool $recordedThroughCapability = false;
++
++    public function storeContinuationApprovalResults(string $conversationId, array $toolResults, ?string $continuationOwner): void
++    {
++        $this->recordedThroughCapability = true;
++        parent::storeContinuationApprovalResults($conversationId, $toolResults, $continuationOwner);
++    }
++}
++
++test('a custom continuation store records results for a contract-only agent without the framework trait', function () {
++    config(['ai.conversations.generate_title' => false]);
++    $store = new RecordingContinuationStore;
++    app()->instance(ConversationStore::class, $store);
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::sequence()->push(continuationResponse(true))->push(status: 500)]);
++    ApprovableNumberGenerator::$invocations = 0;
++    $user = (object) ['id' => 1];
++
++    $paused = (new ContractOnlyContinuationAgent)->forUser($user)->prompt('Act', provider: 'anthropic');
++
++    expect(fn () => (new ContractOnlyContinuationAgent)
++        ->continue($paused->conversationId, $user)
++        ->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic'))
++        ->toThrow(RequestException::class);
++
++    $row = DB::table('agent_conversation_messages')->where('role', 'assistant')->first();
++    $step = json_decode($row->steps, true)[0];
++    $state = json_decode($row->meta, true)['continuation'];
++
++    expect($step['tool_calls'][0]['result'])->toBe('72019')
++        ->and($state['status'])->toBe('interrupted')
++        ->and($store->recordedThroughCapability)->toBeTrue()
++        ->and(ApprovableNumberGenerator::$invocations)->toBe(1);
++});
++
++test('native continuation preserves signed replay and does not renew forced tool choice', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::response(continuationResponse())]);
++    $response = (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic');
++    expect($response->text)->toBe('Recovered.')->and(ApprovableNumberGenerator::$invocations)->toBe(1)
++        ->and(DB::table('agent_conversation_messages')->where('role', 'user')->count())->toBe(1);
++    $request = Http::recorded()->last()[0]->data();
++    expect($request['messages'][1]['content'][0]['signature'])->toBe('signed-block')
++        ->and($request['messages'][2]['content'][0]['tool_use_id'])->toBe('toolu_1')
++        ->and($request['tool_choice'] ?? null)->not->toBe(['type' => 'any']);
++    expect($store->continuationReceipt($turn, $user)['invocation_id'])->toBe($response->invocationId);
++});
++
++test('native continuation emits only the fresh generation events and folds prior usage', function () {
++    Event::fake();
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::response(continuationResponse())]);
++
++    $response = (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic');
++    $stored = DB::table('agent_conversation_messages')->where('id', $turn->turnId)->first();
++
++    expect(Event::dispatched(StartingStep::class)->filter(fn (array $event): bool => $event[0]->invocationId === $response->invocationId))->toHaveCount(1)
++        ->and(Event::dispatched(StepCompleted::class)->filter(fn (array $event): bool => $event[0]->invocationId === $response->invocationId))->toHaveCount(1)
++        ->and(Event::dispatched(AgentPrompted::class)->filter(fn (array $event): bool => $event[0]->invocationId === $response->invocationId))->toHaveCount(1)
++        ->and(Event::dispatched(ToolInvoked::class)->filter(fn (array $event): bool => $event[0]->invocationId === $response->invocationId))->toHaveCount(0);
++
++    expect(json_decode($stored->usage, true))->toMatchArray([
++        'input_tokens' => 20,
++        'output_tokens' => 10,
++    ])->and($store->continuationReceipt($turn, $user)['usage']['input_tokens'])->toBe($response->usage->inputTokens);
++});
++
++class OnDemandContinuationAgent extends ContinuationTestAgent
++{
++    public function __construct(public string $key) {}
++
++    public function provider(): Provider
++    {
++        return Ai::build([
++            'driver' => 'anthropic',
++            'key' => $this->key,
++            'url' => 'https://tenant.example.test/v1',
++        ]);
++    }
++}
++
++test('on-demand provider configuration is part of the durable account identity', function () {
++    config(['ai.conversations.generate_title' => false]);
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['tenant.example.test/*' => Http::sequence()->push(continuationResponse(true))->push(status: 500)]);
++    $user = (object) ['id' => 1];
++
++    $paused = (new OnDemandContinuationAgent('tenant-key'))->forUser($user)->prompt('Act');
++    expect(fn () => (new OnDemandContinuationAgent('tenant-key'))
++        ->continue($paused->conversationId, $user)
++        ->prompt(Decisions::from(['toolu_1' => true])))
++        ->toThrow(RequestException::class);
++
++    $store = resolve(ConversationStore::class);
++    $row = DB::table('agent_conversation_messages')->where('role', 'assistant')->first();
++    $state = json_decode($row->meta, true)['continuation'];
++    $interrupted = new Continuation($paused->conversationId, $row->id, $state['revision']);
++    $turn = $store->reconcileTurn($interrupted, $user, $state['owner'], 'Controlled fixture attempt ended.');
++
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['tenant.example.test/*' => Http::response(continuationResponse())]);
++    expect((new OnDemandContinuationAgent('tenant-key'))->continue($paused->conversationId, $user)->prompt($turn)->text)
++        ->toBe('Recovered.');
++
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake();
++    expect(fn () => (new OnDemandContinuationAgent('different-tenant-key'))
++        ->continue($paused->conversationId, $user)
++        ->prompt($turn))
++        ->toThrow(ContinuationConflictException::class);
++    Http::assertNothingSent();
++});
++
++test('continuation does not cross provider failover because replay state is provider specific', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    config(['ai.providers.backup' => ['driver' => 'openai', 'key' => 'local-http-fake']]);
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::response([], 429), '*' => Http::response(continuationResponse())]);
++    Event::fake();
++
++    expect(fn () => (new ContinuationTestAgent)
++        ->continue($turn->conversationId, $user)
++        ->prompt($turn, provider: ['anthropic', 'backup']))
++        ->toThrow(RateLimitedException::class);
++
++    Event::assertNotDispatched(AgentFailedOver::class);
++    expect(Http::recorded())->toHaveCount(1)
++        ->and(Http::recorded()->first()[0]->url())->toStartWith('https://api.anthropic.com/')
++        ->and($store->continuationState($turn, $user)['status'])->toBe('interrupted');
++});
++
++test('completed receipts remain available after later ordinary success and failure', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::sequence()->push(continuationResponse())->push(continuationResponse())->push(status: 500)]);
++    (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic');
++    $receipt = $store->continuationReceipt($turn, $user);
++    (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt('New question', provider: 'anthropic');
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt('Another', provider: 'anthropic'))->toThrow(RequestException::class);
++    expect($store->continuationReceipt($turn, $user))->toBe($receipt);
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++});
++
++test('a failed ordinary prompt cannot revive a deliberately rejected turn', function () {
++    [$store,$turn,$user] = failedContinuationTurn(true);
++    expect($store->continuationState($turn, $user)['status'])->toBe('stopped');
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::response([], 500)]);
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt('Unrelated', provider: 'anthropic'))->toThrow(RequestException::class);
++    $state = $store->continuationState($turn, $user);
++    expect($state['status'])->toBe('stopped');
++    expect(fn () => $store->reconcileTurn(new Continuation($turn->conversationId, $turn->turnId, $state['revision']), $user, $state['owner'], 'No effects'))->toThrow(ContinuationConflictException::class);
++    expect(ApprovableNumberGenerator::$invocations)->toBe(0);
++});
++
++test('wrong participant provider revision and missing replay fail before provider I O', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake();
++    foreach ([[new Continuation($turn->conversationId, $turn->turnId, 99), $user, 'anthropic'], [$turn, (object) ['id' => 2], 'anthropic'], [$turn, $user, 'openai']] as [$input,$owner,$provider]) {
++        expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $owner)->prompt($input, provider: $provider))->toThrow(ContinuationConflictException::class);
++    }
++    $row = DB::table('agent_conversation_messages')->where('id', $turn->turnId)->first();
++    $steps = collect(json_decode($row->steps, true))->map(fn (array $step): array => [...$step, 'replay_blocks' => []]);
++    DB::table('agent_conversation_messages')->where('id', $turn->turnId)->update(['steps' => $steps->toJson()]);
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    DB::table('agent_conversation_messages')->where('id', $turn->turnId)->delete();
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    Http::assertNothingSent();
++});
++
++test('claims exclude competing continuation decisions ordinary and late database writers', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    $claim = $store->claimTurn(continuationPrompt($turn, $user));
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake();
++    expect(fn () => $store->claimTurn(continuationPrompt($turn, $user)))->toThrow(ContinuationConflictException::class);
++    foreach ([$turn, Decisions::from(['toolu_1' => false]), 'New question'] as $input) {
++        expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($input, provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    }
++    expect(fn () => $store->storeUserMessage($turn->conversationId, 'user', 1, ContinuationTestAgent::class, new UserMessage('Late writer')))->toThrow(ContinuationConflictException::class);
++    Http::assertNothingSent();
++    $state = $store->continuationState($turn, $user);
++    $replacement = $store->reconcileTurn(new Continuation($turn->conversationId, $turn->turnId, $state['revision']), $user, $claim['owner'], 'Fixture fencing: old owner has been stopped.');
++    expect(fn () => $store->assertTurnOwner($claim))->toThrow(ContinuationConflictException::class);
++    $newClaim = $store->claimTurn(continuationPrompt($replacement, $user));
++    expect($newClaim['owner'])->not->toBe($claim['owner']);
++});
++
++test('unknown later effects stay interrupted without reconciliation', function () {
++    [$store,$turn,$user,$state] = failedContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake();
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    expect(fn () => $store->reconcileTurn($turn, $user, $state['owner'], ''))->toThrow(ContinuationConflictException::class);
++    expect(fn () => $store->reconcileTurn($turn, $user, 'old-owner', 'Evidence'))->toThrow(ContinuationConflictException::class);
++    Http::assertNothingSent();
++});
++
++test('native completion survives caller callback failure', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::response(continuationResponse())]);
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic')->then(fn () => throw new RuntimeException('Caller failed')))->toThrow(RuntimeException::class, 'Caller failed');
++    expect($store->continuationReceipt($turn, $user)['text'])->toBe('Recovered.');
++    Http::assertSentCount(1);
++});
++
++test('legacy state and incompatible overrides are rejected explicitly', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake();
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->withTools([])->prompt($turn, provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, attachments: ['unexpected'], provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    $row = DB::table('agent_conversation_messages')->where('id', $turn->turnId)->first();
++    $meta = json_decode($row->meta, true);
++    unset($meta['continuation']);
++    DB::table('agent_conversation_messages')->where('id', $turn->turnId)->update(['meta' => json_encode($meta)]);
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    Http::assertNothingSent();
++});
++
++test('spent generation budget cannot be renewed by another continuation', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    $row = DB::table('agent_conversation_messages')->where('id', $turn->turnId)->first();
++    $meta = json_decode($row->meta, true);
++    $meta['continuation']['generation_attempts'] = 8;
++    DB::table('agent_conversation_messages')->where('id', $turn->turnId)->update(['meta' => json_encode($meta)]);
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake();
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic'))->toThrow(ExecutionInterruptedException::class);
++    Http::assertNothingSent();
++});
++
++test('N1 uses a persistent database and separate native PHP processes', function () {
++    $path = tempnam(sys_get_temp_dir(), 'ai-continuation-');
++    try {
++        $results = [];
++        foreach (['seed', 'continuation', 'receipt'] as $phase) {
++            $process = new Process([PHP_BINARY, __DIR__.'/../../prototype/reproduce.php', $phase], env: ['PROBE_DATABASE' => $path]);
++            $process->mustRun();
++            $results[] = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
++        }
++        expect(array_unique(array_column($results, 'pid')))->toHaveCount(3)
++            ->and(array_column($results, 'effects'))->toBe([1, 1, 1])->and(array_column($results, 'users'))->toBe([1, 1, 1])
++            ->and($results[1]['result'])->toBe('The number is 72019.')->and($results[2]['http_requests'])->toBe(0);
++    } finally {
++        unlink($path);
++    }
++});
++
++test('SIGKILL after a durable tool result resumes the same native turn in a fresh process', function () {
++    $path = tempnam(sys_get_temp_dir(), 'ai-kill-');
++    $barrier = $path.'.provider';
++
++    try {
++        (new Process([PHP_BINARY, __DIR__.'/../../prototype/reproduce.php', 'pause'], env: [
++            'PROBE_DATABASE' => $path,
++        ]))->mustRun();
++
++        $worker = new Process([PHP_BINARY, __DIR__.'/../../prototype/reproduce.php', 'kill-resume'], env: [
++            'PROBE_DATABASE' => $path,
++            'PROBE_BARRIER' => $barrier,
++        ]);
++        $worker->start();
++        $worker->waitUntil(fn (string $type, string $buffer): bool => str_contains($buffer, 'provider-barrier'));
++
++        $inspect = new Process([PHP_BINARY, __DIR__.'/../../prototype/reproduce.php', 'inspect'], env: [
++            'PROBE_DATABASE' => $path,
++        ]);
++        $inspect->mustRun();
++        $beforeKill = json_decode($inspect->getOutput(), true, flags: JSON_THROW_ON_ERROR);
++
++        expect($beforeKill['effects'])->toBe(1)
++            ->and($beforeKill['users'])->toBe(1)
++            ->and($beforeKill['rows'][1]['steps'][0]['tool_calls'][0]['result'])->toBe('72019')
++            ->and($beforeKill['rows'][1]['meta']['continuation']['status'])->toBe('running');
++
++        $worker->signal(SIGKILL);
++        $worker->wait();
++
++        expect($worker->getTermSignal())->toBe(SIGKILL);
++
++        $recovery = new Process([PHP_BINARY, __DIR__.'/../../prototype/reproduce.php', 'recover'], env: [
++            'PROBE_DATABASE' => $path,
++        ]);
++        $recovery->mustRun();
++        $result = json_decode($recovery->getOutput(), true, flags: JSON_THROW_ON_ERROR);
++
++        expect($result['result'])->toBe('The number is 72019.')
++            ->and($result['effects'])->toBe(1)
++            ->and($result['users'])->toBe(1)
++            ->and($result['http_requests'])->toBe(1)
++            ->and($result['rows'])->toHaveCount(2)
++            ->and($result['rows'][1]['meta']['continuation']['status'])->toBe('completed');
++    } finally {
++        if (isset($worker) && $worker->isRunning()) {
++            $worker->signal(SIGKILL);
++            $worker->wait();
++        }
++
++        if (file_exists($path)) {
++            unlink($path);
++        }
++
++        if (file_exists($barrier)) {
++            unlink($barrier);
++        }
++    }
++});
++
++function continuationStreamResponse(): mixed
++{
++    $events = [
++        ['type' => 'message_start', 'message' => ['id' => 'msg_stream', 'model' => 'claude-sonnet-4-6', 'role' => 'assistant', 'content' => [], 'usage' => ['input_tokens' => 10, 'output_tokens' => 0]]],
++        ['type' => 'content_block_start', 'index' => 0, 'content_block' => ['type' => 'text', 'text' => '']],
++        ['type' => 'content_block_delta', 'index' => 0, 'delta' => ['type' => 'text_delta', 'text' => 'Recovered.']],
++        ['type' => 'content_block_stop', 'index' => 0],
++        ['type' => 'message_delta', 'delta' => ['stop_reason' => 'end_turn'], 'usage' => ['output_tokens' => 5]],
++    ];
++
++    return Http::response(implode("\n\n", array_map(fn ($e) => 'data: '.json_encode($e), $events))."\n\n", 200, ['Content-Type' => 'text/event-stream']);
++}
++
++test('stream completion records a native receipt and replays the original event ids', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => continuationStreamResponse()]);
++    $response = (new ContinuationTestAgent)->continue($turn->conversationId, $user)->stream($turn, provider: 'anthropic');
++    $events = iterator_to_array($response);
++    $again = iterator_to_array($response);
++    expect(array_map(fn ($e) => $e->id, $again))->toBe(array_map(fn ($e) => $e->id, $events))
++        ->and($store->continuationReceipt($turn, $user)['text'])->toBe('Recovered.')
++        ->and(DB::table('agent_conversation_messages')->where('role', 'user')->count())->toBe(1);
++    Http::assertSentCount(1);
++});
++
++test('partial stream cannot acquire a receipt or silently restart its execution', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => continuationStreamResponse()]);
++    $response = (new ContinuationTestAgent)->continue($turn->conversationId, $user)->stream($turn, provider: 'anthropic');
++    $response->each(fn () => false);
++    expect($store->continuationState($turn, $user)['status'])->toBe('interrupted');
++    expect(fn () => $store->continuationReceipt($turn, $user))->toThrow(ContinuationConflictException::class);
++    expect(fn () => $response->each(fn () => true))->toThrow(ExecutionInterruptedException::class);
++    Http::assertSentCount(1);
++});
++
++test('stream provider failure stays interrupted and a caller failure preserves native completion', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::response([], 500)]);
++    $response = (new ContinuationTestAgent)->continue($turn->conversationId, $user)->stream($turn, provider: 'anthropic');
++    expect(fn () => $response->each(fn () => true))->toThrow(RequestException::class);
++    $state = $store->continuationState($turn, $user);
++    expect($state['status'])->toBe('interrupted');
++    $next = $store->reconcileTurn(new Continuation($turn->conversationId, $turn->turnId, $state['revision']), $user, $state['owner'], 'Controlled provider failed before effects; old iterator ended.');
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => continuationStreamResponse()]);
++    $response = (new ContinuationTestAgent)->continue($turn->conversationId, $user)->stream($next, provider: 'anthropic')->then(fn () => throw new RuntimeException('Caller stream callback'));
++    expect(fn () => $response->each(fn () => true))->toThrow(RuntimeException::class, 'Caller stream callback');
++    expect($store->continuationReceipt($next, $user)['text'])->toBe('Recovered.');
++});
++
++test('a newly requested approval is waiting rather than a completed receipt', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    $body = continuationResponse(true);
++    $body['content'][1]['id'] = 'toolu_2';
++    Http::fake(['api.anthropic.com/*' => Http::response($body)]);
++    $response = (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic');
++    expect($response->hasPendingApprovals())->toBeTrue()->and(ApprovableNumberGenerator::$invocations)->toBe(1);
++    expect(fn () => $store->continuationReceipt($turn, $user))->toThrow(ContinuationConflictException::class);
++});
++
++class InterruptingApprovalTool extends ApprovableNumberGenerator
++{
++    public static bool $deliberate = true;
++
++    public function handle(Request $request): string
++    {
++        if (self::$deliberate) {
++            throw new ExecutionInterruptedException('Reconcile effect');
++        }
++        throw new RuntimeException('Ordinary tool failure');
++    }
++}
++class InterruptingContinuationAgent extends ContinuationTestAgent
++{
++    public function tools(): iterable
++    {
++        return [new InterruptingApprovalTool];
++    }
++}
++
++test('deliberate interruption escapes approved tool conversion while ordinary errors remain model visible', function () {
++    config(['ai.conversations.generate_title' => false]);
++    $body = continuationResponse(true);
++    $body['content'][1]['name'] = 'InterruptingApprovalTool';
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::sequence()->push($body)->push(continuationResponse())]);
++    $user = (object) ['id' => 1];
++    $paused = (new InterruptingContinuationAgent)->forUser($user)->prompt('Act', provider: 'anthropic');
++    InterruptingApprovalTool::$deliberate = true;
++    expect(fn () => (new InterruptingContinuationAgent)->continue($paused->conversationId, $user)->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic'))->toThrow(ExecutionInterruptedException::class);
++    Http::assertSentCount(1);
++    $row = DB::table('agent_conversation_messages')->where('role', 'assistant')->first();
++    expect(json_decode($row->meta, true)['continuation']['status'])->toBe('interrupted');
++    $token = new Continuation($paused->conversationId, $row->id, 2);
++    expect(fn () => resolve(ConversationStore::class)->reconcileTurn($token, $user, json_decode($row->meta, true)['continuation']['owner'], 'Unknown effect'))->toThrow(ContinuationConflictException::class);
++    expect(fn () => (new InterruptingContinuationAgent)->continue($paused->conversationId, $user)->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    Http::assertSentCount(1);
++    InterruptingApprovalTool::$deliberate = false;
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::sequence()->push($body)->push(continuationResponse())]);
++    $other = (new InterruptingContinuationAgent)->forUser($user)->prompt('Act', provider: 'anthropic');
++    $response = (new InterruptingContinuationAgent)->continue($other->conversationId, $user)->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic');
++    expect($response->text)->toBe('Recovered.')->and($response->toolResults[0]->failed)->toBeTrue();
++    Http::assertSentCount(2);
++});
++
++test('stores without continuation capability retain ordinary prompts and explicitly reject continuation', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    $custom = Mockery::mock(ConversationStore::class);
++    foreach ((new ReflectionClass(ConversationStore::class))->getMethods() as $method) {
++        $name = $method->name;
++        $custom->shouldReceive($name)->andReturnUsing(fn (...$args) => $store->{$name}(...$args));
++    }
++    app()->instance(ConversationStore::class, $custom);
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::response(continuationResponse())]);
++    expect(fn () => (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    Http::assertNothingSent();
++    $response = (new ContinuationTestAgent)->forUser($user)->prompt('Ordinary', provider: 'anthropic');
++    expect($response->text)->toBe('Recovered.');
++});
++
++test('receipt persistence failure rolls back native assistant completion', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    $claim = $store->claimTurn(continuationPrompt($turn, $user));
++    $before = DB::table('agent_conversation_messages')->count();
++    $response = new AgentResponse('native-id', 'Done', new TextUsage, new Meta);
++    expect(fn () => $store->finishTurn($claim, $response, function () use ($store, $turn, $claim) {
++        $store->storeContinuationUserMessage($turn->conversationId, 'user', 1, ContinuationTestAgent::class, new UserMessage('Must roll back'), $claim['owner']);
++        throw new RuntimeException('Persistence fault');
++    }))->toThrow(RuntimeException::class, 'Persistence fault');
++    expect(DB::table('agent_conversation_messages')->count())->toBe($before);
++    expect(fn () => $store->continuationReceipt($turn, $user))->toThrow(ContinuationConflictException::class);
++});
++
++class ContinuationProviderAgent extends ContinuationTestAgent
++{
++    public function tools(): iterable
++    {
++        return [new FixedNumberGenerator, new ApprovableNumberGenerator];
++    }
++}
++function replayProviderResponse(string $provider, ?string $tool, string $id): array
++{
++    if ($provider === 'anthropic') {
++        $body = continuationResponse($tool !== null);
++        if ($tool !== null) {
++            $body['content'][0]['signature'] = 'signature-'.$id;
++            $body['content'][1]['name'] = $tool;
++            $body['content'][1]['id'] = $id;
++        }
++
++        return $body;
++    }
++    if ($provider === 'gemini') {
++        return [
++            'id' => 'interaction_'.$id,
++            'model' => 'gemini-3.7-flash',
++            'status' => 'completed',
++            'steps' => $tool === null
++                ? [['type' => 'model_output', 'status' => 'done', 'content' => [['type' => 'text', 'text' => 'Recovered.']]]]
++                : [
++                    ['type' => 'thought', 'status' => 'done', 'summary' => [['type' => 'text', 'text' => 'reasoning']], 'signature' => 'signature-'.$id],
++                    ['type' => 'function_call', 'status' => 'done', 'id' => $id, 'name' => $tool, 'arguments' => (object) []],
++                ],
++            'usage' => ['total_input_tokens' => 10, 'total_output_tokens' => 5, 'total_thought_tokens' => 1, 'total_tokens' => 16],
++        ];
++    }
++
++    return ['id' => 'resp_'.$id, 'model' => 'gpt-5.4', 'status' => 'completed', 'output' => $tool === null ?
++        [['type' => 'message', 'id' => 'msg_done', 'role' => 'assistant', 'content' => [['type' => 'output_text', 'text' => 'Recovered.', 'annotations' => []]]]] :
++        [['type' => 'reasoning', 'id' => 'rs_'.$id, 'summary' => [], 'encrypted_content' => 'encrypted-'.$id], ['type' => 'function_call', 'id' => 'fc_'.$id, 'call_id' => $id, 'name' => $tool, 'arguments' => '{}', 'status' => 'completed']],
++        'usage' => ['input_tokens' => 10, 'output_tokens' => 5, 'total_tokens' => 15]];
++}
++
++test('multi step provider replay survives resolved approvals and a failed generation', function (string $provider) {
++    config(['ai.conversations.generate_title' => false]);
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['*' => Http::sequence()->push(replayProviderResponse($provider, 'FixedNumberGenerator', 'call1'))->push(replayProviderResponse($provider, 'ApprovableNumberGenerator', 'call2'))->push(status: 500)]);
++    $user = (object) ['id' => 1];
++    ApprovableNumberGenerator::$invocations = 0;
++    $paused = (new ContinuationProviderAgent)->forUser($user)->prompt('Both', provider: $provider);
++    expect($paused->hasPendingApprovals())->toBeTrue();
++    try {
++        (new ContinuationProviderAgent)->continue($paused->conversationId, $user)->prompt(Decisions::from([$paused->pendingApprovals[0]->id => true]), provider: $provider);
++    } catch (RequestException) {
++    }
++    $store = resolve(ConversationStore::class);
++    $row = DB::table('agent_conversation_messages')->where('role', 'assistant')->first();
++    $state = json_decode($row->meta, true)['continuation'];
++    $turn = $store->reconcileTurn(new Continuation($paused->conversationId, $row->id, $state['revision']), $user, $state['owner'], 'Controlled fixture and stopped old process.');
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['*' => Http::response(replayProviderResponse($provider, null, 'final'))]);
++    $response = (new ContinuationProviderAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: $provider);
++    expect($response->text)->toBe('Recovered.')->and(ApprovableNumberGenerator::$invocations)->toBe(1);
++    $request = json_encode(Http::recorded()->last()[0]->data());
++    $prefix = $provider === 'openai' ? 'encrypted-' : 'signature-';
++    expect($request)->toContain($prefix.'call1', $prefix.'call2', '72019');
++    expect(strpos($request, $prefix.'call1'))->toBeLessThan(strpos($request, $prefix.'call2'));
++    $row = DB::table('agent_conversation_messages')->where('role', 'assistant')->first();
++    expect(DB::table('agent_conversation_messages')->where('role', 'user')->count())->toBe(1)
++        ->and(json_decode($row->usage, true))->toMatchArray([
++            'input_tokens' => 30,
++            'output_tokens' => $provider === 'gemini' ? 18 : 15,
++        ]);
++
++    if ($provider === 'openai') {
++        expect(Http::recorded()->last()[0]->data())->not->toHaveKey('previous_response_id');
++    }
++})->with(['anthropic', 'openai', 'gemini']);
++
++test('two fresh PHP processes compete for one conditional native claim', function () {
++    $path = tempnam(sys_get_temp_dir(), 'ai-race-');
++    $barrier = $path.'.go';
++    try {
++        foreach (['seed', 'prepare'] as $phase) {
++            (new Process([PHP_BINARY, __DIR__.'/../../prototype/reproduce.php', $phase], env: ['PROBE_DATABASE' => $path]))->mustRun();
++        }
++        $workers = [];
++        for ($i = 0; $i < 2; $i++) {
++            $p = new Process([PHP_BINARY, __DIR__.'/../../prototype/compete.php', $barrier], env: ['PROBE_DATABASE' => $path]);
++            $p->start();
++            $workers[] = $p;
++        }
++        foreach ($workers as $worker) {
++            $worker->waitUntil(fn ($type, $buffer) => str_contains($buffer, 'ready'));
++        }
++        touch($barrier);
++        $results = [];
++        foreach ($workers as $worker) {
++            $worker->wait();
++            $lines = explode("\n", trim($worker->getOutput()));
++            $results[] = json_decode(end($lines), true, flags: JSON_THROW_ON_ERROR);
++        }
++        expect(array_column($results, 'claimed'))->toContain(true, false)->and(array_unique(array_column($results, 'pid')))->toHaveCount(2);
++    } finally {
++        foreach ($workers ?? [] as $worker) {
++            if ($worker->isRunning()) {
++                $worker->stop();
++            }
++        }unlink($path);
++        if (file_exists($barrier)) {
++            unlink($barrier);
++        }
++    }
++});
++
++test('an abandoned ordinary owner can be reconciled after existing later history', function () {
++    [$store,$turn,$user] = readyContinuationTurn();
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['api.anthropic.com/*' => Http::response(continuationResponse())]);
++    (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt($turn, provider: 'anthropic');
++    (new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt('Later question', provider: 'anthropic');
++    $agent = (new ContinuationTestAgent)->continue($turn->conversationId, $user);
++    $provider = Ai::textProviderFor($agent, 'anthropic');
++    $claim = $store->claimTurn(new AgentPrompt($agent, 'Abandoned', [], $provider, $provider->defaultTextModel()));
++    $state = $store->continuationState($turn, $user);
++    $store->reconcileTurn(new Continuation($turn->conversationId, $turn->turnId, $state['revision']), $user, $claim['owner'], 'Old ordinary worker terminated before effects.');
++    expect($store->continuationState($turn, $user)['status'])->toBe('completed');
++    expect(fn () => $store->assertTurnOwner($claim))->toThrow(ContinuationConflictException::class);
++    expect($store->continuationReceipt($turn, $user)['text'])->toBe('Recovered.');
++    expect((new ContinuationTestAgent)->continue($turn->conversationId, $user)->prompt('Next', provider: 'anthropic')->text)->toBe('Recovered.');
++});
++
++class LaterEffectTool extends FixedNumberGenerator
++{
++    public static int $effects = 0;
++
++    public function handle(Request $request): string
++    {
++        self::$effects++;
++
++        return 'Effect happened';
++    }
++}
++class LaterEffectAgent extends ContinuationTestAgent
++{
++    public function tools(): iterable
++    {
++        return [new ApprovableNumberGenerator, new LaterEffectTool];
++    }
++}
++
++test('later tool effect followed by provider failure parks for reconciliation', function () {
++    config(['ai.conversations.generate_title' => false]);
++    LaterEffectTool::$effects = ApprovableNumberGenerator::$invocations = 0;
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['*' => Http::sequence()->push(continuationResponse(true))->push(replayProviderResponse('anthropic', 'LaterEffectTool', 'later'))->push(status: 500)]);
++    $user = (object) ['id' => 1];
++    $paused = (new LaterEffectAgent)->forUser($user)->prompt('Act', provider: 'anthropic');
++    expect(fn () => (new LaterEffectAgent)->continue($paused->conversationId, $user)->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic'))->toThrow(RequestException::class);
++    $row = DB::table('agent_conversation_messages')->where('role', 'assistant')->first();
++    $state = json_decode($row->meta, true)['continuation'];
++    $token = new Continuation($paused->conversationId, $row->id, $state['revision']);
++    expect(fn () => (new LaterEffectAgent)->continue($paused->conversationId, $user)->prompt($token, provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    expect($state['status'])->toBe('interrupted')->and(LaterEffectTool::$effects)->toBe(1)->and(ApprovableNumberGenerator::$invocations)->toBe(1);
++    Http::assertSentCount(3);
++});
++
++class FailingApprovalResultStore extends DatabaseConversationStore
++{
++    public function storeContinuationApprovalResults(string $conversationId, array $toolResults, ?string $continuationOwner): void
++    {
++        throw new RuntimeException('Result persistence unavailable');
++    }
++}
++
++test('result persistence failure cannot reexecute an approved tool through decisions', function () {
++    config(['ai.conversations.generate_title' => false]);
++    app()->instance(ConversationStore::class, new FailingApprovalResultStore);
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['*' => Http::response(continuationResponse(true))]);
++    ApprovableNumberGenerator::$invocations = 0;
++    $user = (object) ['id' => 1];
++    $paused = (new ContinuationTestAgent)->forUser($user)->prompt('Act', provider: 'anthropic');
++    expect(fn () => (new ContinuationTestAgent)->continue($paused->conversationId, $user)->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic'))->toThrow(RuntimeException::class, 'Result persistence unavailable');
++    expect(fn () => (new ContinuationTestAgent)->continue($paused->conversationId, $user)->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic'))->toThrow(ContinuationConflictException::class);
++    expect(ApprovableNumberGenerator::$invocations)->toBe(1);
++    Http::assertSentCount(1);
++});
++
++class StructuredContinuationAgent extends ContinuationTestAgent implements HasMiddleware, HasStructuredOutput
++{
++    public static int $middlewareCalls = 0;
++
++    public function schema(JsonSchema $schema): array
++    {
++        return ['answer' => $schema->string()->required()];
++    }
++
++    public function middleware(): array
++    {
++        return [function ($step, Closure $next) {
++            self::$middlewareCalls++;
++
++            return $next($step);
++        }];
++    }
++}
++
++test('continuation preserves native structured response and step middleware', function () {
++    config(['ai.conversations.generate_title' => false]);
++    StructuredContinuationAgent::$middlewareCalls = 0;
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['*' => Http::sequence()->push(continuationResponse(true))->push(status: 500)]);
++    $user = (object) ['id' => 1];
++    $paused = (new StructuredContinuationAgent)->forUser($user)->prompt('Act', provider: 'anthropic');
++    expect(fn () => (new StructuredContinuationAgent)->continue($paused->conversationId, $user)->prompt(Decisions::from(['toolu_1' => true]), provider: 'anthropic'))->toThrow(RequestException::class);
++    $row = DB::table('agent_conversation_messages')->where('role', 'assistant')->first();
++    $state = json_decode($row->meta, true)['continuation'];
++    $store = resolve(ConversationStore::class);
++    $token = $store->reconcileTurn(new Continuation($paused->conversationId, $row->id, $state['revision']), $user, $state['owner'], 'Old fixture attempt ended without later effects.');
++    $body = continuationResponse();
++    $body['content'][0]['text'] = '{"answer":"Recovered"}';
++    Http::swap(new Factory);
++    Http::preventStrayRequests();
++    Http::fake(['*' => Http::response($body)]);
++    $before = StructuredContinuationAgent::$middlewareCalls;
++    $response = (new StructuredContinuationAgent)->continue($paused->conversationId, $user)->prompt($token, provider: 'anthropic');
++    expect($response)->toBeInstanceOf(StructuredAgentResponse::class)
++        ->and($response['answer'])->toBe('Recovered')->and(StructuredContinuationAgent::$middlewareCalls)->toBe($before + 1)
++        ->and($store->continuationReceipt($token, $user)['structured'])->toBe(['answer' => 'Recovered']);
++});
+diff --git a/tests/Feature/Storage/DatabaseConversationStoreTest.php b/tests/Feature/Storage/DatabaseConversationStoreTest.php
+index aa727ef..732020a 100644
+--- a/tests/Feature/Storage/DatabaseConversationStoreTest.php
++++ b/tests/Feature/Storage/DatabaseConversationStoreTest.php
+@@ -563,7 +563,7 @@ function storeTestGeminiInteraction(array $steps): array
+         new ToolUsingAgent,
+         '',
+         [],
+-        Mockery::mock(TextProvider::class),
++        Mockery::mock(TextProvider::class)->shouldReceive('name')->andReturn('anthropic')->getMock(),
+         'test-model',
+         approvalDecisions: Decisions::from(['call-1' => true]),
+     );
+@@ -924,7 +924,16 @@ function storeTestGeminiInteraction(array $steps): array
+             ->tool_calls->toHaveCount(1)->each->toMatchArray(['id' => 'call-1'])->each->not->toHaveKey('result'),
+     )
+         ->and($record->steps)->json()->{'0'}->tool_calls->toHaveCount(1)
+-        ->and($record->meta)->json()->toBe(['provider' => 'anthropic', 'model' => null, 'citations' => []])
++        ->and($record->meta)->json()->toMatchArray(['provider' => 'anthropic', 'model' => null, 'citations' => []])
++        ->and($record->meta)->json()->continuation->toMatchArray([
++            'version' => 1,
++            'revision' => 0,
++            'status' => 'awaiting',
++            'owner' => null,
++            'provider' => 'anthropic',
++            'model' => 'test-model',
++            'agent' => ToolUsingAgent::class,
++        ])
+         ->and($record->steps)->json()->{'1'}->tool_calls->{'0'}->approval_reason->toBe('Deletes a file')
+         ->and($record->status)->toBe('paused');
+ });
+@@ -937,7 +946,7 @@ function storeTestGeminiInteraction(array $steps): array
+         new ToolUsingAgent,
+         'Delete config/app.php.',
+         [],
+-        Mockery::mock(TextProvider::class),
++        Mockery::mock(TextProvider::class)->shouldReceive('name')->andReturn('anthropic')->getMock(),
+         'test-model',
+     );
+ 

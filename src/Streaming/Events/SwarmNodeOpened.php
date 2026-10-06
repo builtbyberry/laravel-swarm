@@ -43,8 +43,7 @@ final class SwarmNodeOpened extends SwarmStreamEvent
     {
         return [
             'id' => $this->id,
-            'invocation_id' => $this->invocationId,
-            'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'type' => 'swarm_node_opened',
             'run_id' => $this->runId,
             'parent_node_id' => $this->parentNodeId,

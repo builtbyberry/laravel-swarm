@@ -205,6 +205,7 @@ Event::listen(SwarmStepStarted::class, function (SwarmStepStarted $event): void 
 | `$metadata` | `array<string, mixed>` | Run context metadata. |
 | `$artifacts` | `array<int, SwarmArtifact>` | Artifacts produced during this step. |
 | `$executionMode` | `string\|null` | Execution mode. |
+| `$nativeResult` | `NativeStepResult\|null` | Capture-shaped, bounded native completion projection. Full keeps the bounded projection, the shipped false output-capture flag yields Redact, and a custom Skip policy yields omitted. See [Native Step Results](native-step-results.md). |
 
 ```php
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;

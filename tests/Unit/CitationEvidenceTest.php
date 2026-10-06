@@ -5,6 +5,7 @@ declare(strict_types=1);
 use BuiltByBerry\LaravelSwarm\Persistence\CitationEvidenceCodec;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidenceLimits;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmCitation;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -70,7 +71,7 @@ it('reconciles occurrences one for one and never erases event sources with empty
 });
 
 it('retains new evidence in typed end-event wire payloads while old payloads read unknown', function () {
-    $event = new SwarmStepEnd('event', 'run', 0, 'Agent', 'agent', 'out', 1, [], 123, sourceEvidence());
+    $event = new SwarmStepEnd('event', 'run', 0, 'Agent', 'agent', 'out', 1, [], 123, sourceEvidence(), NativeStepResult::unavailable(['legacy']));
     expect(SwarmStreamEvent::fromArray($event->toArray())->toArray())->toBe($event->toArray());
     $old = $event->toArray();
     unset($old['citations'], $old['citation_status'], $old['citation_reasons']);

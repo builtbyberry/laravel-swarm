@@ -2,13 +2,18 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
+use BuiltByBerry\LaravelSwarm\Commands\SwarmHealthCommand;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\ChecksNativeStepResultStorage;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Memory\StreamStepCheckpoint;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheContextStore;
 use BuiltByBerry\LaravelSwarm\Persistence\CacheRunHistoryStore;
@@ -16,11 +21,16 @@ use BuiltByBerry\LaravelSwarm\Persistence\CacheStreamEventStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseStreamEventStore;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
+use Illuminate\Console\OutputStyle;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Symfony\Component\Console\Input\ArrayInput;
+use Symfony\Component\Console\Output\BufferedOutput;
 
 class SwarmHealthRecordingCacheStore extends ArrayStore
 {
@@ -55,6 +65,21 @@ class SwarmHealthRecordingAuditSink implements SwarmAuditSink
     public function emit(string $category, array $payload): void
     {
         // no-op: presence of the binding is what the health check verifies.
+    }
+}
+
+class SwarmHealthNativeFailingCheckpointStore implements ChecksNativeStepResultStorage, StreamStepCheckpointStore
+{
+    public function record(string $runId, int $stepIndex, string $output, array $usage): void {}
+
+    public function find(string $runId, int $stepIndex): ?StreamStepCheckpoint
+    {
+        return null;
+    }
+
+    public function assertNativeStepResultStorageReady(): void
+    {
+        throw new SwarmException('native-result readiness was checked');
     }
 }
 
@@ -116,22 +141,153 @@ test('swarm health durable option verifies durable database readiness', function
     expect(Artisan::output())->toContain('missing_swarm_durable_runs');
 });
 
+test('swarm health parallel streaming option exercises the real provider-free process transport', function (): void {
+    config()->set('concurrency.default', 'process');
+
+    expect(Artisan::call('swarm:health', ['--parallel-streaming' => true]))->toBe(0);
+    expect(Artisan::output())
+        ->toContain('Parallel live streaming')
+        ->toContain('provider-free child bootstrap and authenticated loopback handshake passed');
+});
+
+test('swarm health keeps its four argument direct invocation contract', function (): void {
+    $command = app(SwarmHealthCommand::class);
+    $input = new ArrayInput(['--json' => true], $command->getDefinition());
+    $command->setInput($input);
+    $command->setOutput(new OutputStyle($input, new BufferedOutput));
+
+    expect($command->handle(
+        app(),
+        app(ConfigRepository::class),
+        app(Connection::class),
+        app(CommandOverlapGuard::class),
+    ))->toBe(0);
+});
+
+test('enabled parallel live streaming fails health when the process driver is unavailable', function (): void {
+    config()->set('swarm.streaming.parallel.enabled', true);
+    config()->set('concurrency.default', 'sync');
+
+    expect(Artisan::call('swarm:health'))->toBe(1);
+    expect(Artisan::output())
+        ->toContain('Parallel live streaming')
+        ->toContain('must resolve to the process driver');
+});
+
+test('parallel streaming health validates the effective runtime limits', function (string $key, int $value): void {
+    config()->set('concurrency.default', 'process');
+    config()->set($key, $value);
+
+    expect(Artisan::call('swarm:health', ['--parallel-streaming' => true]))->toBe(1);
+    expect(Artisan::output())
+        ->toContain('Parallel live streaming')
+        ->toContain("Invalid [{$key}] value [{$value}]");
+})->with([
+    ['swarm.streaming.parallel.max_branches', 0],
+    ['swarm.streaming.parallel.max_frame_bytes', 1],
+    ['swarm.streaming.parallel.cancel_grace_milliseconds', 20_000],
+]);
+
+test('parallel streaming readiness cannot be silently combined with audit-only mode', function (): void {
+    expect(Artisan::call('swarm:health', [
+        '--parallel-streaming' => true,
+        '--audit' => true,
+        '--json' => true,
+    ]))->toBe(1);
+
+    $payload = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+    expect($payload['ok'])->toBeFalse()
+        ->and(collect($payload['checks'])->firstWhere('component', 'Command options')['details'])
+        ->toContain('cannot be combined');
+});
+
+test('custom checkpoint citation notes do not bypass native-result readiness failures', function (): void {
+    app()->instance(StreamStepCheckpointStore::class, new SwarmHealthNativeFailingCheckpointStore);
+
+    expect(Artisan::call('swarm:health', ['--json' => true]))->toBe(1);
+    $checkpoint = collect(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['checks'])
+        ->firstWhere('component', 'Stream checkpoints');
+
+    expect($checkpoint['status'])->toBe('failed')
+        ->and($checkpoint['details'])->toContain('native-result readiness was checked');
+});
+
 test('swarm health json output is structured', function (): void {
     expect(Artisan::call('swarm:health', ['--json' => true]))->toBe(0);
 
     $payload = json_decode(Artisan::output(), true);
 
-    // 5 persistence checks + 3 governed-by-default checks (Guardrails, Audit sink, Capture policy).
+    // 5 persistence checks + native-input readiness + 3 governed-by-default checks.
     expect($payload)
         ->toBeArray()
         ->and($payload['ok'])->toBeTrue()
-        ->and($payload['checks'])->toHaveCount(8)
+        ->and($payload['checks'])->toHaveCount(9)
         ->and($payload['checks'][0])->toHaveKeys(['component', 'driver', 'store', 'status', 'details']);
 
     // Every check — including the new governance checks — carries the same shape.
     foreach ($payload['checks'] as $check) {
         expect($check)->toHaveKeys(['component', 'driver', 'store', 'status', 'details']);
     }
+});
+
+test('disabled native-input health reports an absent table as unverifiable instead of an empty drain', function (): void {
+    config()->set('swarm.native_inputs.enabled', false);
+    config()->set('swarm.tables.native_inputs', 'missing_native_input_envelopes');
+
+    Artisan::call('swarm:health', ['--json' => true]);
+    $checks = collect(json_decode(Artisan::output(), true)['checks']);
+    $native = $checks->firstWhere('component', 'Native inputs');
+
+    expect($native['details'])->toContain('drain cannot be verified because the table is absent')
+        ->and($native['details'])->toContain('pre-enable readiness');
+});
+
+test('configured pre-enable native-input rollout fails health when migrations are not ready', function (): void {
+    config()->set('swarm.native_inputs.enabled', false);
+    config()->set('swarm.native_inputs.disk', 'local');
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.tables.native_inputs', 'missing_native_input_envelopes');
+
+    expect(Artisan::call('swarm:health'))->toBe(1);
+    expect(Artisan::output())
+        ->toContain('Native inputs')
+        ->toContain('pre-enable readiness')
+        ->toContain('missing required columns');
+});
+
+test('native-input health reports v2 writer and drain state independently', function (): void {
+    config()->set('swarm.native_inputs.enabled', true);
+    config()->set('swarm.native_agent_settings.enabled', false);
+    config()->set('swarm.native_inputs.disk', 'local');
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+
+    foreach (['active', 'revoked'] as $index => $state) {
+        DB::table('swarm_native_inputs')->insert([
+            'id' => 'health-v2-'.$index,
+            'run_id' => 'health-v2-run-'.$index,
+            'format_version' => 2,
+            'state' => $state,
+            'payload' => 'sealed-placeholder',
+            'payload_hash' => hash('sha256', 'sealed-placeholder'),
+            'expires_at' => now()->addHour(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    Artisan::call('swarm:health', ['--json' => true]);
+    $native = collect(json_decode(Artisan::output(), true)['checks'])->firstWhere('component', 'Native inputs');
+
+    expect($native['details'])->toContain('v2 writer disabled')
+        ->and($native['details'])->toContain('1 active and 2 total v2 envelope(s) remain')
+        ->and($native['details'])->toContain('prune to zero before removing v2 readers');
+
+    config()->set('swarm.native_inputs.enabled', false);
+    config()->set('swarm.native_agent_settings.enabled', true);
+    expect(Artisan::call('swarm:health'))->toBe(1);
+    expect(Artisan::output())->toContain('native_agent_settings.enabled requires swarm.native_inputs.enabled');
 });
 
 test('swarm health identifies failing cache component', function (): void {

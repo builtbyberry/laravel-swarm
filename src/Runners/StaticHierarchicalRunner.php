@@ -9,6 +9,9 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
+use BuiltByBerry\LaravelSwarm\Routing\HierarchicalWorkerNode;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 
 /**
@@ -36,6 +39,7 @@ class StaticHierarchicalRunner extends HierarchicalRunner
         $workerMap = $this->workerMap($agents);
 
         $plan = $this->planner->fromStaticPlan($agents, $swarm->plan(), $swarm::class);
+        $state->context->assertNativeNodeRecipients('static:', $plan->workerNodeIds());
         $this->ensureStaticPlanWithinExecutionBudget($state, $plan);
 
         $steps = [];
@@ -113,12 +117,34 @@ class StaticHierarchicalRunner extends HierarchicalRunner
 
     public function buildPlanForSwarm(Swarm $swarm): HierarchicalRoutePlan
     {
-        assert($swarm instanceof HasRoutePlan);
+        if (! $swarm instanceof HasRoutePlan) {
+            throw new SwarmException(
+                $swarm::class.': static hierarchical swarms must implement HasRoutePlan and define a plan() method.'
+            );
+        }
 
         $agents = $swarm->agents();
         $this->ensureUniqueWorkerClasses($swarm::class, $agents);
 
         return $this->planner->fromStaticPlan($agents, $swarm->plan(), $swarm::class);
+    }
+
+    public function assertNativeSettingsCompatible(Swarm $swarm, RunContext $context): void
+    {
+        $plan = $this->buildPlanForSwarm($swarm);
+        $workers = $this->workerMap($swarm->agents());
+
+        foreach ($plan->nodes as $node) {
+            if (! $node instanceof HierarchicalWorkerNode) {
+                continue;
+            }
+
+            $recipient = $context->nativeRecipient('static:'.$node->id);
+            $worker = $workers[$node->agentClass] ?? null;
+            if ($recipient !== null && $worker !== null) {
+                NativeAgentInvoker::assertCompatible($worker, $recipient);
+            }
+        }
     }
 
     public function runDurableStep(SwarmExecutionState $state, int $stepIndex, array $run): DurableHierarchicalStepResult
@@ -150,6 +176,7 @@ class StaticHierarchicalRunner extends HierarchicalRunner
         $agents = $state->swarm->agents();
         $this->ensureUniqueWorkerClasses($state->swarm::class, $agents);
         $plan = $this->planner->fromStaticPlan($agents, $state->swarm->plan(), $state->swarm::class);
+        $state->context->assertNativeNodeRecipients('static:', $plan->workerNodeIds());
         $this->ensureStaticPlanWithinExecutionBudget($state, $plan);
         $cursor = $this->buildStaticDurableCursor($plan);
         $nodeOutputs = [];

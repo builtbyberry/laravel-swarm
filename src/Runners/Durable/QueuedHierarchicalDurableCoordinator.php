@@ -16,6 +16,7 @@ use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\QueueHierarchicalParallelBoundary;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmAttributeResolver;
 use BuiltByBerry\LaravelSwarm\Support\BranchWaitPayload;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -39,6 +40,7 @@ class QueuedHierarchicalDurableCoordinator
         protected DurableOutbox $outbox,
         protected Connection $connection,
         protected SwarmAttributeResolver $resolver,
+        protected NativeInputManager $nativeInputs,
     ) {}
 
     public function enter(SwarmExecutionState $state, QueueHierarchicalParallelBoundary $boundary): void
@@ -164,6 +166,7 @@ class QueuedHierarchicalDurableCoordinator
             );
 
             $this->contextStore->put($this->capture->activeContext($context), $this->runs->ttlSeconds());
+            $this->nativeInputs->commitConsumedMessages($context, $state->nativeSettingsAttempt);
 
             $run = $this->runs->requireRun($runId);
 

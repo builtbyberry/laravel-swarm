@@ -102,6 +102,15 @@ abstract class TestCase extends Orchestra
             ];
         }
 
+        if ($connection === 'sqlite' && is_string(getenv('DB_DATABASE')) && getenv('DB_DATABASE') !== '') {
+            return [
+                'driver' => 'sqlite',
+                'database' => getenv('DB_DATABASE'),
+                'prefix' => '',
+                'foreign_key_constraints' => true,
+            ];
+        }
+
         return [
             'driver' => 'sqlite',
             'database' => ':memory:',

@@ -59,6 +59,7 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
      * @param  Closure():iterable<int, SwarmStreamEvent>  $generator
      * @param  Closure(Throwable):SwarmStreamEvent|null  $onReplayFailure
      * @param  Closure(SwarmException):void|null  $onAbandoned
+     * @param  Closure(Throwable):void|null  $onAbandonmentFailure
      */
     public function __construct(
         public readonly string $runId,
@@ -69,6 +70,7 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
         protected string $replayFailurePolicy = 'fail',
         protected ?Closure $onReplayFailure = null,
         protected ?Closure $onAbandoned = null,
+        protected ?Closure $onAbandonmentFailure = null,
     ) {
         if (! in_array($this->replayFailurePolicy, ['fail', 'continue'], true)) {
             throw new SwarmException("Invalid swarm stream replay failure policy [{$this->replayFailurePolicy}]. Supported policies: fail, continue.");
@@ -123,7 +125,11 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
             }
 
             yield "data: [DONE]\n\n";
-        }, headers: ['Content-Type' => 'text/event-stream']);
+        }, headers: [
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache, no-transform',
+            'X-Accel-Buffering' => 'no',
+        ]);
     }
 
     public function getIterator(): Traversable
@@ -286,8 +292,14 @@ class StreamableSwarmResponse implements IteratorAggregate, Responsable
 
         try {
             ($this->onAbandoned)($this->abandonedException);
-        } catch (Throwable) {
-            //
+        } catch (Throwable $exception) {
+            try {
+                if ($this->onAbandonmentFailure !== null) {
+                    ($this->onAbandonmentFailure)($exception);
+                }
+            } catch (Throwable) {
+                // Generator teardown must remain non-throwing.
+            }
         }
     }
 }

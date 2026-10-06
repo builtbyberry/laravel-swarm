@@ -28,6 +28,15 @@ class HierarchicalRoutePlan
         return $this->nodes[$nodeId];
     }
 
+    /** @return list<string> */
+    public function workerNodeIds(): array
+    {
+        return array_values(array_map(
+            static fn (HierarchicalWorkerNode $node): string => $node->id,
+            array_filter($this->nodes, static fn (HierarchicalRouteNode $node): bool => $node instanceof HierarchicalWorkerNode),
+        ));
+    }
+
     /**
      * Worst-case number of worker executions the plan can require, including
      * bounded loop replays.

@@ -17,17 +17,24 @@ use Laravel\Ai\Streaming\Events\StreamEvent as LaravelAiStreamEvent;
  * streaming machinery while shifting the public type boundary into Swarm's
  * namespace.
  *
- * It also owns `nodeId` — the structural seam (#284) that tags every
- * substantive event with the run-structure node it belongs to. This mirrors
- * the vendor's `invocationId` exactly: a nullable property restored centrally
- * by {@see Events\SwarmStreamEvent::fromArray()}. An absent or null `nodeId`
- * means a top-level event with no enclosing node; old persisted logs that
- * predate the grammar simply lack the key and rehydrate to null. Additive and
- * non-breaking.
+ * It also owns the Swarm orchestration identities restored centrally by
+ * {@see Events\SwarmStreamEvent::fromArray()}: `nodeId` tags the run-structure
+ * node, while `branchId`, `attemptId`, and `branchSequence` scope live parallel
+ * events without rewriting provider-native identities. Absent keys on older
+ * persisted logs rehydrate to null. Additive and non-breaking.
  */
 abstract class StreamEvent extends LaravelAiStreamEvent
 {
     public ?string $nodeId = null;
+
+    /** Stable logical parallel branch identity (for example `parallel:0`). */
+    public ?string $branchId = null;
+
+    /** Swarm-owned identity for one live execution attempt of a branch. */
+    public ?string $attemptId = null;
+
+    /** Zero-based semantic ordering within one branch attempt. */
+    public ?int $branchSequence = null;
 
     /**
      * The durable per-node attempt this event belongs to (#298). Stamped only on
@@ -53,5 +60,41 @@ abstract class StreamEvent extends LaravelAiStreamEvent
         $this->attemptEpoch = $epoch;
 
         return $this;
+    }
+
+    public function withBranchIdentity(string $branchId, string $attemptId, int $sequence): static
+    {
+        $this->branchId = $branchId;
+        $this->attemptId = $attemptId;
+        $this->branchSequence = $sequence;
+
+        return $this;
+    }
+
+    /**
+     * Additive transport identity shared by every Swarm stream event.
+     *
+     * @return array<string, string|int|null>
+     */
+    protected function transportIdentity(): array
+    {
+        $identity = [
+            'invocation_id' => $this->invocationId,
+            'node_id' => $this->nodeId,
+        ];
+
+        return [...$identity, ...$this->branchIdentity()];
+    }
+
+    /** @return array<string, string|int> */
+    protected function branchIdentity(): array
+    {
+        return $this->branchId !== null && $this->attemptId !== null && $this->branchSequence !== null
+            ? [
+                'branch_id' => $this->branchId,
+                'attempt_id' => $this->attemptId,
+                'branch_sequence' => $this->branchSequence,
+            ]
+            : [];
     }
 }

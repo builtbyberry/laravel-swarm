@@ -77,13 +77,25 @@ test('persistence documentation names durable runtime inspection access', functi
 test('streaming documentation covers topology replay capture and limits', function () {
     $contents = file_get_contents(__DIR__.'/../../docs/streaming.md');
 
-    expect($contents)->toContain('Sequential, Static-Hierarchical, and Hierarchical')
+    expect($contents)->toContain('Sequential, Parallel, Static-Hierarchical, and Hierarchical')
         ->and($contents)->toContain('bounded loops')
         ->and($contents)->toContain('storeForReplay')
         ->and($contents)->toContain('SwarmHistory::replay')
         ->and($contents)->toContain('swarm_stream_error')
         ->and($contents)->toContain('persistence-and-history.md#payload-limits')
         ->and($contents)->toContain('swarm.capture');
+});
+
+test('parallel streaming upgrade guidance includes the complete published config block', function () {
+    $contents = file_get_contents(__DIR__.'/../../UPGRADING.md');
+
+    expect($contents)
+        ->toContain("'parallel' => [")
+        ->toContain('SWARM_PARALLEL_STREAMING_ENABLED')
+        ->toContain('SWARM_PARALLEL_STREAMING_MAX_BRANCHES')
+        ->toContain('SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES')
+        ->toContain('SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS')
+        ->toContain("config('swarm.streaming.parallel.enabled')");
 });
 
 test('maintenance documentation includes the enterprise pilot posture', function () {

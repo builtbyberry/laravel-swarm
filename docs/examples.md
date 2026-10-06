@@ -156,18 +156,18 @@ Runner: `php artisan swarm:example:streaming run "Weekly engineering digest"`
 ## ScriptedAgent — how the starters avoid API keys
 
 Most starter agents extend `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent`
-— a runnable, provider-free agent that returns canned text. The swarm
-runner treats it identically to a real Laravel AI agent: same `prompt()`
-signature, same `AgentResponse` return shape. That is what lets the
+— a deterministic offline helper that returns canned text with a compatible
+`prompt()` boundary. That is what lets the
 starters execute end-to-end on a fresh install with zero environment
 configuration. (The one exception is `durable-streaming-digest`, whose worker
 must *stream* — `ScriptedAgent` throws on `stream()`, so it ships a small
 provider-free streaming agent that implements `Agent` directly.)
 
-Each agent file has a `TODO` comment pointing to the one-line edit that
-swaps `ScriptedAgent` for a `Promptable` Laravel AI agent. The swarm class,
-the runner command, the wait declaration, and the test all keep working
-unchanged.
+For model behavior, use Laravel AI's `make:agent` command and port the
+application-owned instructions, tools, or schema. See
+[Native Agent Onboarding](native-agent-onboarding.md); the executable tutorial
+uses `Agent::fake()` to exercise a real generated-style agent, tool call, and
+Swarm stream without an external provider request.
 
 `ScriptedAgent` is intentionally minimal: `prompt()` only. `stream()`,
 `queue()`, and the broadcast helpers throw with a clear message that

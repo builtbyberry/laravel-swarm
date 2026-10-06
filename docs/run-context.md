@@ -1,10 +1,10 @@
 # RunContext
 
-`RunContext` is the envelope that carries the original task, run identity, and structured carry-forward data throughout a swarm run. It is created when a swarm is invoked — either automatically from the string or array you pass to `prompt()`, or explicitly when you construct one yourself — and it is available on the `SwarmResponse` returned after the run completes. Every persistence store, lifecycle event, and durable checkpoint operates on the same `RunContext` instance, so anything you put into it at dispatch time is accessible for the lifetime of the run.
+`RunContext` is the envelope that carries the original task, run identity, and structured carry-forward data throughout a swarm run. It is created when a swarm is invoked — automatically from the string, array, native `UserMessage`, or message-bearing Laravel AI `AgentInput` you pass to `prompt()`, or explicitly when you construct one yourself — and it is available on the `SwarmResponse` returned after the run completes. Every persistence store, lifecycle event, and durable checkpoint operates on the same `RunContext` instance, so anything you put into it at dispatch time is accessible for the lifetime of the run.
 
 ## Construction Patterns
 
-All swarm execution methods — `prompt()`, `run()`, `queue()`, `stream()`, `broadcast()`, `broadcastNow()`, `broadcastOnQueue()`, and `dispatchDurable()` — accept the same three input shapes.
+All swarm execution methods — `prompt()`, `run()`, `queue()`, `stream()`, `broadcast()`, `broadcastNow()`, `broadcastOnQueue()`, and `dispatchDurable()` — accept the same five input shapes: string, structured array, `RunContext`, Laravel AI `UserMessage`, and Laravel AI `AgentInput` containing a user message. An `AgentInput` containing approval decisions is rejected before its message is read; it belongs to the owning agent continuation flow.
 
 ### From a string
 
@@ -27,6 +27,14 @@ $response = BlogPostSwarm::make()->prompt([
 ```
 
 Array input must be plain data: strings, integers, floats, booleans, null, and nested arrays of those types. Objects, enums, closures, and other non-serializable values are rejected.
+
+### From a Laravel AI UserMessage or AgentInput
+
+`UserMessage` preserves native message content and supported attachments instead
+of serializing them into an application task array. Native input is default-off;
+attachments use explicit recipients and recoverable modes require the protected
+operational store. See [Native messages and attachments](native-inputs.md).
+`AgentInput` follows the same path after its message is extracted.
 
 ### Explicit RunContext
 

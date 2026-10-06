@@ -14,6 +14,9 @@ use BuiltByBerry\LaravelSwarm\Responses\SwarmArtifact;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Auth\Authenticatable;
 use JsonException;
+use Laravel\Ai\Contracts\AgentInput;
+use Laravel\Ai\Files\File;
+use Laravel\Ai\Messages\UserMessage;
 
 /**
  * Per-run state handle that carries the run id, input, and a write-through
@@ -48,15 +51,25 @@ class RunContext implements ArrayAccess
         public array $data = [],
         public array $metadata = [],
         public array $artifacts = [],
+        protected ?NativeInputManifest $nativeInput = null,
+        protected ?string $nativeInputReference = null,
     ) {}
 
     /**
-     * @param  string|array<string, mixed>|self  $input
+     * @param  string|array<string, mixed>|self|AgentInput|UserMessage  $input
      */
-    public static function from(string|array|self $input, ?string $runId = null): self
+    public static function from(string|array|self|AgentInput|UserMessage $input, ?string $runId = null): self
     {
         if ($input instanceof self) {
             return $input;
+        }
+
+        if ($input instanceof AgentInput) {
+            $input = NativeAgentInput::message($input);
+        }
+
+        if ($input instanceof UserMessage) {
+            return (new self($runId ?? self::newRunId(), ''))->withAgentInput($input);
         }
 
         if (is_array($input)) {
@@ -72,12 +85,20 @@ class RunContext implements ArrayAccess
     }
 
     /**
-     * @param  string|array<string, mixed>|self  $task
+     * @param  string|array<string, mixed>|self|AgentInput|UserMessage  $task
      */
-    public static function fromTask(string|array|self $task): self
+    public static function fromTask(string|array|self|AgentInput|UserMessage $task): self
     {
         if ($task instanceof self) {
             return $task;
+        }
+
+        if ($task instanceof AgentInput) {
+            $task = NativeAgentInput::message($task);
+        }
+
+        if ($task instanceof UserMessage) {
+            return (new self(self::newRunId(), ''))->withAgentInput($task);
         }
 
         if (is_array($task)) {
@@ -161,6 +182,255 @@ class RunContext implements ArrayAccess
     public function prompt(): string
     {
         return (string) ($this->data['last_output'] ?? $this->input);
+    }
+
+    /**
+     * Bind Laravel AI's native message input to this run.
+     *
+     * @param  list<NativeInputRecipient>  $recipients
+     */
+    public function withAgentInput(AgentInput|UserMessage $input, array $recipients = []): self
+    {
+        if ($input instanceof AgentInput) {
+            $input = NativeAgentInput::message($input);
+        }
+
+        foreach ($recipients as $recipient) {
+            if (! $recipient instanceof NativeInputRecipient) {
+                throw new SwarmException('Native input recipients must be NativeInputRecipient instances.');
+            }
+        }
+
+        $attachments = [];
+        foreach ($input->attachments as $attachment) {
+            if (! $attachment instanceof File) {
+                throw new SwarmException('UserMessage attachments must be Laravel AI File instances.');
+            }
+
+            $attachments[] = $attachment;
+        }
+
+        $existing = $this->nativeInput;
+        if ($existing !== null && $recipients === [] && $existing->recipients !== []) {
+            throw new SwarmException('Combining native agent configuration with implicit attachment routing is ambiguous. Pass explicit NativeInputRecipient values to withAgentInput() so attachment recipients remain intentional.');
+        }
+
+        $existingByRecipient = [];
+        foreach ($existing->recipients ?? [] as $recipient) {
+            $existingByRecipient[$recipient->recipient] = $recipient;
+        }
+
+        $mergedRecipients = [];
+        $seen = [];
+        foreach ($recipients as $recipient) {
+            $previous = $existingByRecipient[$recipient->recipient] ?? null;
+            $mergedRecipients[] = $previous instanceof NativeInputRecipient
+                ? $previous
+                    ->withInputRouting($recipient->textSource, $recipient->attachments)
+                    ->withConfigurationFrom($recipient)
+                : $recipient;
+            $seen[$recipient->recipient] = true;
+        }
+        foreach ($existingByRecipient as $identity => $recipient) {
+            if (! isset($seen[$identity]) && $recipient->hasExplicitConfiguration()) {
+                $mergedRecipients[] = $recipient->withInputRouting($recipient->textSource, []);
+            }
+        }
+
+        $this->input = $input->content;
+        $this->nativeInput = new NativeInputManifest(
+            text: $input->content,
+            attachments: $attachments,
+            recipients: $mergedRecipients,
+        );
+
+        return $this;
+    }
+
+    /**
+     * Bind reconstructible Laravel AI per-run settings without replacing the task text.
+     *
+     * @param  list<NativeInputRecipient>  $recipients
+     */
+    public function withAgentConfiguration(array $recipients): self
+    {
+        if ($recipients === []) {
+            throw new SwarmException('Native agent configuration requires at least one explicit recipient.');
+        }
+
+        foreach ($recipients as $recipient) {
+            if (! $recipient instanceof NativeInputRecipient) {
+                throw new SwarmException('Native agent configuration recipients must be NativeInputRecipient instances.');
+            }
+            if (! $recipient->hasExplicitConfiguration()) {
+                throw new SwarmException("Native agent configuration recipient [{$recipient->recipient}] must declare tools, messages, a conversation, provider, model, or timeout.");
+            }
+        }
+
+        $existing = $this->nativeInput;
+        if ($existing !== null && $existing->attachments !== [] && $existing->recipients === []) {
+            throw new SwarmException('Combining native agent configuration with implicit attachment routing is ambiguous. Declare explicit recipients in withAgentInput() before applying per-run settings.');
+        }
+
+        $configurationByRecipient = [];
+        foreach ($recipients as $recipient) {
+            $configurationByRecipient[$recipient->recipient] = $recipient;
+        }
+
+        $mergedRecipients = [];
+        foreach ($existing->recipients ?? [] as $recipient) {
+            $configuration = $configurationByRecipient[$recipient->recipient] ?? null;
+            $mergedRecipients[] = $configuration instanceof NativeInputRecipient
+                ? $recipient->withConfigurationFrom($configuration)
+                : $recipient;
+            unset($configurationByRecipient[$recipient->recipient]);
+        }
+        foreach ($configurationByRecipient as $recipient) {
+            $mergedRecipients[] = $recipient->withInputRouting($recipient->textSource, []);
+        }
+
+        $this->nativeInput = new NativeInputManifest(
+            text: $existing === null ? $this->input : $existing->text,
+            attachments: $existing === null ? [] : $existing->attachments,
+            recipients: $mergedRecipients,
+            attachmentHashes: $existing === null ? [] : $existing->attachmentHashes,
+            ownedAttachmentIndexes: $existing === null ? [] : $existing->ownedAttachmentIndexes,
+            attachmentInvocationOptions: $existing === null ? [] : $existing->attachmentInvocationOptions,
+            consumedMessageConfigurationIds: $existing === null ? [] : $existing->consumedMessageConfigurationIds,
+        );
+
+        return $this;
+    }
+
+    public function nativeInput(): ?NativeInputManifest
+    {
+        return $this->nativeInput;
+    }
+
+    public function setNativeInput(?NativeInputManifest $manifest): self
+    {
+        $this->nativeInput = $manifest;
+
+        return $this;
+    }
+
+    public function nativeInputReference(): ?string
+    {
+        return $this->nativeInputReference;
+    }
+
+    public function hasNativeSettingsFor(string $recipient): bool
+    {
+        if ($this->nativeInput === null && $this->nativeInputReference !== null) {
+            $this->nativePrompt('__settings_validation__', $this->input);
+        }
+
+        if ($this->nativeInput === null) {
+            return false;
+        }
+
+        foreach ($this->nativeInput->recipients as $selection) {
+            if ($selection->recipient === $recipient && $selection->hasExplicitConfiguration()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function nativeRecipient(string $recipient): ?NativeInputRecipient
+    {
+        if ($this->nativeInput === null && $this->nativeInputReference !== null) {
+            $this->nativePrompt('__settings_validation__', $this->input);
+        }
+
+        foreach ($this->nativeInput->recipients ?? [] as $selection) {
+            if ($selection->recipient === $recipient) {
+                return $selection;
+            }
+        }
+
+        return null;
+    }
+
+    public function setNativeInputReference(?string $reference): self
+    {
+        if ($reference !== null && trim($reference) === '') {
+            throw new SwarmException('Native input references must be non-empty strings.');
+        }
+
+        $this->nativeInputReference = $reference;
+
+        return $this;
+    }
+
+    public function nativePrompt(string $recipient, string $topologyText): string|UserMessage
+    {
+        if ($this->nativeInput === null && $this->nativeInputReference === null) {
+            return $topologyText;
+        }
+
+        return Container::getInstance()->make(NativeInputManager::class)
+            ->message($this, $recipient, $topologyText);
+    }
+
+    public function nativeInvocation(string $recipient, string $topologyText, ?NativeAgentSettingsAttempt $attempt = null): NativeAgentInvocation
+    {
+        if ($this->nativeInput === null && $this->nativeInputReference === null) {
+            return new NativeAgentInvocation($topologyText);
+        }
+
+        return Container::getInstance()->make(NativeInputManager::class)
+            ->invocation($this, $recipient, $topologyText, $attempt);
+    }
+
+    /** @param list<string> $nodeIds */
+    public function assertNativeNodeRecipients(string $prefix, array $nodeIds): void
+    {
+        if ($this->nativeInput === null) {
+            if ($this->nativeInputReference !== null) {
+                $this->nativePrompt('__recipient_validation__', $this->input);
+            } else {
+                return;
+            }
+        }
+
+        foreach ($this->nativeInput->recipients as $recipient) {
+            if (! str_starts_with($recipient->recipient, $prefix)) {
+                continue;
+            }
+
+            $nodeId = substr($recipient->recipient, strlen($prefix));
+            if ($prefix === 'generated:' && $nodeId === 'coordinator') {
+                continue;
+            }
+
+            if (! in_array($nodeId, $nodeIds, true)) {
+                throw new SwarmException("Native input recipient [{$recipient->recipient}] does not exist in the validated route plan.");
+            }
+        }
+    }
+
+    public function assertNativeSlotRecipients(string $prefix, int $slotCount): void
+    {
+        if ($this->nativeInput === null) {
+            if ($this->nativeInputReference !== null) {
+                $this->nativePrompt('__recipient_validation__', $this->input);
+            } else {
+                return;
+            }
+        }
+
+        foreach ($this->nativeInput->recipients as $recipient) {
+            if (! str_starts_with($recipient->recipient, $prefix)) {
+                continue;
+            }
+
+            $slot = substr($recipient->recipient, strlen($prefix));
+            if (! ctype_digit($slot) || (int) $slot >= $slotCount) {
+                throw new SwarmException("Native input recipient [{$recipient->recipient}] does not identify an executable agent slot.");
+            }
+        }
     }
 
     /**
@@ -351,7 +621,7 @@ class RunContext implements ArrayAccess
      */
     public function toArray(): array
     {
-        return self::validateSerializedPayload([
+        $payload = [
             'run_id' => $this->runId,
             'input' => $this->input,
             'data' => $this->data,
@@ -360,7 +630,13 @@ class RunContext implements ArrayAccess
                 static fn (SwarmArtifact $artifact): array => $artifact->toArray(),
                 $this->artifacts,
             ),
-        ], 'RunContext');
+        ];
+
+        if ($this->nativeInputReference !== null) {
+            $payload['native_input_ref'] = $this->nativeInputReference;
+        }
+
+        return self::validateSerializedPayload($payload, 'RunContext');
     }
 
     /**
@@ -368,7 +644,17 @@ class RunContext implements ArrayAccess
      */
     public function toQueuePayload(): array
     {
-        return self::validateSerializedPayload($this->toArray(), 'RunContext queue payload');
+        $payload = $this->toArray();
+
+        // The native message text and access-bearing attachment locators live in
+        // the sealed operational envelope. A queue transport receives only its
+        // opaque reference; the worker restores the textual projection during
+        // admission before input guardrails or execution run.
+        if ($this->nativeInputReference !== null) {
+            $payload['input'] = '[native-input]';
+        }
+
+        return self::validateSerializedPayload($payload, 'RunContext queue payload');
     }
 
     // ------------------------------------------------------------------
@@ -505,6 +791,7 @@ class RunContext implements ArrayAccess
             data: is_array($payload['data'] ?? null) ? PlainData::array($payload['data'], 'data') : [],
             metadata: is_array($payload['metadata'] ?? null) ? PlainData::array($payload['metadata'], 'metadata') : [],
             artifacts: self::hydrateArtifacts($payload['artifacts'] ?? []),
+            nativeInputReference: self::nativeInputReferenceFrom($payload),
         );
     }
 
@@ -532,6 +819,8 @@ class RunContext implements ArrayAccess
         if (array_key_exists('artifacts', $payload) && ! is_array($payload['artifacts'])) {
             throw new SwarmException('RunContext::from() expects [artifacts] to be an array.');
         }
+
+        self::nativeInputReferenceFrom($payload, 'RunContext::from()');
 
         if (array_key_exists('data', $payload)) {
             PlainData::array($payload['data'], 'data');
@@ -577,7 +866,24 @@ class RunContext implements ArrayAccess
             throw new SwarmException('RunContext::fromPayload() expects [artifacts] to be an array.');
         }
 
+        self::nativeInputReferenceFrom($payload, 'RunContext::fromPayload()');
+
         self::validateSerializedPayload($payload, 'RunContext payload');
+    }
+
+    /** @param array<string, mixed> $payload */
+    protected static function nativeInputReferenceFrom(array $payload, string $source = 'RunContext payload'): ?string
+    {
+        if (! array_key_exists('native_input_ref', $payload)) {
+            return null;
+        }
+
+        $reference = $payload['native_input_ref'];
+        if (! is_string($reference) || trim($reference) === '') {
+            throw new SwarmException("{$source} expects [native_input_ref] to be a non-empty string when present.");
+        }
+
+        return $reference;
     }
 
     /**

@@ -8,16 +8,25 @@ use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
+use BuiltByBerry\LaravelSwarm\Enums\ExecutionMode;
+use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Events\SwarmFailed;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeAgentSettingsSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\ResumeNativeAgentSettingsQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\QueuedHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentSettingsAttempt;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentToolReference;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputRecipient;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FailingPromptAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
@@ -26,11 +35,14 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalParallelFailBranchSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Tools\NativeSettingsTool;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Laravel\Ai\Messages\UserMessage;
+use Laravel\Ai\Prompts\AgentPrompt;
 
 function configureQueuedHierarchicalParallelRuntime(): void
 {
@@ -309,6 +321,57 @@ test('queued hierarchical parallel multi_worker defers branches then completes o
 
     FakeWriter::assertPrompted('writer-branch');
     FakeEditor::assertPrompted('editor-branch');
+});
+
+test('queued multi-worker reconstruction preserves and transactionally consumes native settings', function () {
+    config()->set('swarm.native_inputs.enabled', true);
+    config()->set('swarm.native_agent_settings.enabled', true);
+    config()->set('swarm.persistence.encrypt_at_rest', true);
+    config()->set('swarm.history.driver', 'database');
+    config()->set('swarm.native_inputs.disk', 'local');
+    app()->forgetInstance(NativeInputManager::class);
+
+    $runId = 'qhpc-native-settings-1';
+    $context = RunContext::from('queued-hierarchical-task', $runId)->withAgentConfiguration([
+        NativeInputRecipient::generatedCoordinator()
+            ->withTools([new NativeAgentToolReference(NativeSettingsTool::class, ['tenant' => 'coordinator'])])
+            ->withMessages([new UserMessage('coordinator-history')]),
+        NativeInputRecipient::generatedNode('writer_node')
+            ->withTools([new NativeAgentToolReference(NativeSettingsTool::class, ['tenant' => 'writer'])])
+            ->withMessages([new UserMessage('writer-history')]),
+        NativeInputRecipient::generatedNode('editor_node')
+            ->withTools([new NativeAgentToolReference(NativeSettingsTool::class, ['tenant' => 'editor'])])
+            ->withMessages([new UserMessage('editor-history')]),
+    ]);
+    app(NativeInputManager::class)->admit($context, Topology::Hierarchical, ExecutionMode::Queue);
+
+    (new InvokeNativeAgentSettingsSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))
+        ->handle(app(SwarmRunner::class));
+
+    FakeHierarchicalCoordinator::assertPrompted(fn (AgentPrompt $prompt): bool => $prompt->messages[0]->content === 'coordinator-history'
+        && $prompt->tools[0] instanceof NativeSettingsTool
+        && $prompt->tools[0]->tenant === 'coordinator');
+
+    $manager = app(DurableSwarmManager::class);
+    foreach (DB::table('swarm_durable_branches')->where('run_id', $runId)->get() as $branch) {
+        (new AdvanceNativeAgentSettingsDurableBranch($runId, (string) $branch->branch_id))->handle($manager);
+    }
+    (new ResumeNativeAgentSettingsQueuedHierarchicalSwarm($runId))
+        ->handle(app(QueuedHierarchicalCoordinator::class));
+
+    FakeWriter::assertPrompted(fn (AgentPrompt $prompt): bool => $prompt->messages[0]->content === 'writer-history'
+        && $prompt->tools[0] instanceof NativeSettingsTool
+        && $prompt->tools[0]->tenant === 'writer');
+    FakeEditor::assertPrompted(fn (AgentPrompt $prompt): bool => $prompt->messages[0]->content === 'editor-history'
+        && $prompt->tools[0] instanceof NativeSettingsTool
+        && $prompt->tools[0]->tenant === 'editor');
+
+    $fresh = RunContext::fromPayload($context->toQueuePayload());
+    foreach (['generated:coordinator', 'generated:writer_node', 'generated:editor_node'] as $recipient) {
+        $invocation = $fresh->nativeInvocation($recipient, 'retry', new NativeAgentSettingsAttempt);
+        expect($invocation->messages)->toBeEmpty()
+            ->and($invocation->tools)->toHaveCount(1);
+    }
 });
 
 test('queued hierarchical resume fails loud on an undecryptable context input (#212 T3)', function () {

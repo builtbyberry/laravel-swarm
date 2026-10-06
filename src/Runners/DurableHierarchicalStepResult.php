@@ -14,7 +14,7 @@ final readonly class DurableHierarchicalStepResult
     /**
      * @param  array<string, mixed>  $routeCursor
      * @param  array<string, mixed>|null  $routePlan
-     * @param  array{node_id: string, output: string, citation_evidence?: array<string, mixed>}|null  $nodeOutput
+     * @param  array{node_id: string, output: string, citation_evidence?: array<string, mixed>, native_result_status?: string|null, native_result?: array<string, mixed>|null}|null  $nodeOutput
      * @param  array<int, array<string, mixed>>  $branches
      * @param  array<int, string>  $clearBranchParentNodeIds  Parallel node ids whose
      *                                                        persisted branch rows must be

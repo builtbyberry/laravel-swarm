@@ -26,7 +26,13 @@ use BuiltByBerry\LaravelSwarm\Exceptions\LostSwarmLeaseException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingActorException;
 use BuiltByBerry\LaravelSwarm\Exceptions\MissingQueueLeaseSchemaException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeAgentSettingsDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceNativeInputDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeAgentSettingsSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\BroadcastNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeAgentSettingsSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeNativeInputSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Responses\DurableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\QueuedSwarmResponse;
@@ -38,6 +44,9 @@ use BuiltByBerry\LaravelSwarm\Support\AdHocParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManifest;
 use BuiltByBerry\LaravelSwarm\Support\PendingAgentRun;
 use BuiltByBerry\LaravelSwarm\Support\PendingSwarmRun;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -51,6 +60,8 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Foundation\Bus\PendingDispatch;
 use Laravel\Ai\Attributes\WithoutBroadcasting;
 use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\AgentInput;
+use Laravel\Ai\Messages\UserMessage;
 use Throwable;
 
 /**
@@ -79,6 +90,7 @@ class SwarmRunner
         protected SequentialRunner $sequential,
         protected SequentialStreamRunner $sequentialStream,
         protected ParallelRunner $parallel,
+        protected ParallelStreamRunner $parallelStream,
         protected HierarchicalRunner $hierarchical,
         protected StaticHierarchicalRunner $staticHierarchical,
         protected StaticHierarchicalStreamRunner $staticHierarchicalStream,
@@ -93,6 +105,7 @@ class SwarmRunner
         protected RunAuditEmitter $auditEmitter,
         protected DispatchValidator $validator,
         protected LeaseManager $leases,
+        protected NativeInputManager $nativeInputs,
     ) {}
 
     /**
@@ -160,7 +173,7 @@ class SwarmRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function run(Swarm $swarm, string|array|RunContext $task): SwarmResponse
+    public function run(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task): SwarmResponse
     {
         return $this->runWithExecutionMode($swarm, $task, ExecutionMode::Run);
     }
@@ -168,7 +181,7 @@ class SwarmRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function runQueued(Swarm $swarm, string|array|RunContext $task): ?SwarmResponse
+    public function runQueued(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task): ?SwarmResponse
     {
         return $this->runWithExecutionMode($swarm, $task, ExecutionMode::Queue);
     }
@@ -176,7 +189,7 @@ class SwarmRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    protected function runWithExecutionMode(Swarm $swarm, string|array|RunContext $task, ExecutionMode $executionMode): ?SwarmResponse
+    protected function runWithExecutionMode(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task, ExecutionMode $executionMode): ?SwarmResponse
     {
         $startedAt = MonotonicTime::now();
         $topology = $this->resolver->resolveTopology($swarm);
@@ -230,6 +243,8 @@ class SwarmRunner
         $historyStarted = false;
 
         try {
+            $this->nativeInputs->admit($context, $topology, $executionMode);
+            $this->assertNativeRecipientsExist($swarm, $topology, $context);
             $this->guardrails->validateInput($swarm, $context);
 
             if ($executionMode === ExecutionMode::Queue && $this->historyStore instanceof ClaimsQueuedRunExecution) {
@@ -297,10 +312,16 @@ class SwarmRunner
 
             return $this->finalizeSuccessfulSwarmExecution($state, $swarm, $topology, $executionMode, $response, $startedAt, $contextTtl);
         } catch (MissingQueueLeaseSchemaException $e) {
+            if (! $historyStarted) {
+                $this->nativeInputs->abandon($context);
+            }
             throw $e;
         } catch (LostSwarmLeaseException) {
             return null;
         } catch (Throwable $exception) {
+            if (! $historyStarted) {
+                $this->nativeInputs->abandon($context);
+            }
             try {
                 if ($exception instanceof GuardrailViolation) {
                     $context->mergeMetadata($exception->safeContextMetadata());
@@ -361,30 +382,34 @@ class SwarmRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function stream(Swarm $swarm, string|array|RunContext $task): StreamableSwarmResponse
+    public function stream(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task): StreamableSwarmResponse
     {
+        $this->validator->ensureStreamableTopology($swarm);
         $topology = $this->resolver->resolveTopology($swarm);
         $context = RunContext::fromTask($task);
         $this->resolveActor($context);
+        try {
+            $this->nativeInputs->admit($context, $topology, ExecutionMode::Stream);
+            $this->assertNativeRecipientsExist($swarm, $topology, $context);
 
-        if ($topology === Topology::StaticHierarchical) {
-            return $this->staticHierarchicalStream->stream($swarm, $context);
+            return match ($topology) {
+                Topology::StaticHierarchical => $this->staticHierarchicalStream->stream($swarm, $context),
+                Topology::Hierarchical => $this->hierarchicalStream->stream($swarm, $context),
+                Topology::Parallel => $this->parallelStream->stream($swarm, $context),
+                default => $this->sequentialStream->stream($swarm, $context),
+            };
+        } catch (Throwable $exception) {
+            $this->nativeInputs->abandon($context);
+
+            throw $exception;
         }
-
-        if ($topology === Topology::Hierarchical) {
-            return $this->hierarchicalStream->stream($swarm, $context);
-        }
-
-        $this->validator->ensureStreamableTopology($swarm);
-
-        return $this->sequentialStream->stream($swarm, $context);
     }
 
     /**
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcast(Swarm $swarm, string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
+    public function broadcast(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
     {
         // Honor a swarm's #[WithoutBroadcasting(...)] declaration: excluded
         // stream-event types still flow through the returned stream (so replay
@@ -404,24 +429,39 @@ class SwarmRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function queue(Swarm $swarm, string|array|RunContext $task): QueuedSwarmResponse
+    public function queue(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task): QueuedSwarmResponse
     {
         $this->validator->validateForDispatch($swarm);
         $this->validator->ensureQueueable($swarm);
         $this->validator->ensureContainerResolvable($swarm);
 
         $context = RunContext::fromTask($task);
+        $topology = $this->resolver->resolveTopology($swarm);
         $this->validator->checkInputPayload($task, $context, ExecutionMode::Queue);
         $this->validator->ensureActiveContextCompatible(ExecutionMode::Queue);
         $this->resolveActor($context);
         try {
+            $this->nativeInputs->admit($context, $topology, ExecutionMode::Queue);
+            $this->assertNativeRecipientsExist($swarm, $topology, $context);
             $this->guardrails->validateInput($swarm, $context);
-        } catch (GuardrailViolation $e) {
-            $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Queue, $e);
-            throw $e;
-        }
+            $job = match ($context->nativeInput()?->formatVersion()) {
+                NativeInputManifest::SETTINGS_VERSION => new InvokeNativeAgentSettingsSwarm($swarm::class, $context->toQueuePayload()),
+                NativeInputManifest::VERSION => new InvokeNativeInputSwarm($swarm::class, $context->toQueuePayload()),
+                default => new InvokeSwarm($swarm::class, $context->toQueuePayload()),
+            };
+        } catch (Throwable $exception) {
+            if ($exception instanceof GuardrailViolation) {
+                $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Queue, $exception);
+            }
+            $this->nativeInputs->abandon($context);
 
-        $pendingDispatch = new PendingDispatch(new InvokeSwarm($swarm::class, $context->toQueuePayload()));
+            throw $exception;
+        }
+        $pendingDispatch = new PendingDispatch($job);
+
+        if ($job instanceof InvokeNativeInputSwarm || $job instanceof InvokeNativeAgentSettingsSwarm) {
+            $pendingDispatch->afterCommit();
+        }
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
             $pendingDispatch->onConnection($connection);
@@ -438,7 +478,7 @@ class SwarmRunner
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcastOnQueue(Swarm $swarm, string|array|RunContext $task, Channel|array $channels): QueuedSwarmResponse
+    public function broadcastOnQueue(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels): QueuedSwarmResponse
     {
         $this->validator->ensureStreamableTopology($swarm);
         $this->validator->validateForDispatch($swarm);
@@ -446,17 +486,32 @@ class SwarmRunner
         $this->validator->ensureContainerResolvable($swarm);
 
         $context = RunContext::fromTask($task);
+        $topology = $this->resolver->resolveTopology($swarm);
         $this->validator->checkInputPayload($task, $context, ExecutionMode::Queue);
         $this->validator->ensureActiveContextCompatible(ExecutionMode::Queue);
         $this->resolveActor($context);
         try {
+            $this->nativeInputs->admit($context, $topology, ExecutionMode::Queue);
+            $this->assertNativeRecipientsExist($swarm, $topology, $context);
             $this->guardrails->validateInput($swarm, $context);
-        } catch (GuardrailViolation $e) {
-            $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Queue, $e);
-            throw $e;
-        }
+            $job = match ($context->nativeInput()?->formatVersion()) {
+                NativeInputManifest::SETTINGS_VERSION => new BroadcastNativeAgentSettingsSwarm($swarm::class, $context->toQueuePayload(), $channels),
+                NativeInputManifest::VERSION => new BroadcastNativeInputSwarm($swarm::class, $context->toQueuePayload(), $channels),
+                default => new BroadcastSwarm($swarm::class, $context->toQueuePayload(), $channels),
+            };
+        } catch (Throwable $exception) {
+            if ($exception instanceof GuardrailViolation) {
+                $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Queue, $exception);
+            }
+            $this->nativeInputs->abandon($context);
 
-        $pendingDispatch = new PendingDispatch(new BroadcastSwarm($swarm::class, $context->toQueuePayload(), $channels));
+            throw $exception;
+        }
+        $pendingDispatch = new PendingDispatch($job);
+
+        if ($job instanceof BroadcastNativeInputSwarm || $job instanceof BroadcastNativeAgentSettingsSwarm) {
+            $pendingDispatch->afterCommit();
+        }
 
         if ($connection = $this->config->get('swarm.queue.connection')) {
             $pendingDispatch->onConnection($connection);
@@ -472,7 +527,7 @@ class SwarmRunner
     /**
      * @param  SwarmTaskInput  $task
      */
-    public function dispatchDurable(Swarm $swarm, string|array|RunContext $task): DurableSwarmResponse
+    public function dispatchDurable(Swarm $swarm, string|array|RunContext|AgentInput|UserMessage $task): DurableSwarmResponse
     {
         $this->validator->ensureSwarmHasAgents($swarm);
         $this->validator->ensureQueueable($swarm);
@@ -483,7 +538,7 @@ class SwarmRunner
         $this->validator->ensureDatabaseDurableInfrastructure($swarm);
 
         if ($topology === Topology::Parallel) {
-            $this->parallel->ensureAgentsAreContainerResolvable($swarm->agents(), $swarm::class);
+            $this->parallel->ensureAgentsAreContainerResolvable($swarm);
         }
 
         if ($topology === Topology::Hierarchical) {
@@ -503,17 +558,59 @@ class SwarmRunner
         $this->validator->checkInputPayload($task, $context, ExecutionMode::Durable);
         $this->validator->ensureActiveContextCompatible(ExecutionMode::Durable);
         $this->resolveActor($context);
-
         try {
+            $this->nativeInputs->admit($context, $topology, ExecutionMode::Durable);
+            $this->assertNativeRecipientsExist($swarm, $topology, $context);
             $this->guardrails->validateInput($swarm, $context);
-        } catch (GuardrailViolation $e) {
-            $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Durable, $e);
-            throw $e;
+            $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $this->resolver->resolveDurableParallelFailurePolicy($swarm));
+        } catch (Throwable $exception) {
+            if ($exception instanceof GuardrailViolation) {
+                $this->recordDispatchPreflightFailure($swarm, $context, ExecutionMode::Durable, $exception);
+            }
+            $this->nativeInputs->abandon($context);
+
+            throw $exception;
         }
 
-        $start = $this->durable->start($swarm, $context, $topology, $timeoutSeconds, $totalSteps, $this->resolver->resolveDurableParallelFailurePolicy($swarm));
+        $pendingDispatch = new PendingDispatch($start->job);
+        if ($start->job instanceof AdvanceNativeInputDurableSwarm || $start->job instanceof AdvanceNativeAgentSettingsDurableSwarm) {
+            $pendingDispatch->afterCommit();
+        }
 
-        return new DurableSwarmResponse(new PendingDispatch($start->job), $this->durable, $start->runId);
+        return new DurableSwarmResponse($pendingDispatch, $this->durable, $start->runId);
+    }
+
+    protected function assertNativeRecipientsExist(Swarm $swarm, Topology $topology, RunContext $context): void
+    {
+        if ($topology === Topology::Hierarchical) {
+            $coordinator = $swarm->agents()[0] ?? null;
+            $recipient = $context->nativeRecipient('generated:coordinator');
+            if ($coordinator instanceof Agent && $recipient !== null) {
+                NativeAgentInvoker::assertCompatible($coordinator, $recipient);
+            }
+
+            return;
+        }
+
+        if ($topology === Topology::StaticHierarchical) {
+            $this->staticHierarchical->assertNativeSettingsCompatible($swarm, $context);
+
+            return;
+        }
+
+        if (! in_array($topology, [Topology::Sequential, Topology::Parallel], true)) {
+            return;
+        }
+
+        $slotCount = min(count($swarm->agents()), $this->resolver->resolveMaxAgentExecutions($swarm));
+        $context->assertNativeSlotRecipients($topology->value.':', $slotCount);
+
+        foreach (array_slice($swarm->agents(), 0, $slotCount) as $index => $agent) {
+            $recipient = $context->nativeRecipient($topology->value.":{$index}");
+            if ($recipient !== null) {
+                NativeAgentInvoker::assertCompatible($agent, $recipient);
+            }
+        }
     }
 
     /**
@@ -765,7 +862,13 @@ class SwarmRunner
         $capturedResponse = $this->limits->response($this->capture->response($response));
 
         try {
-            $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
+            $this->nativeInputs->commitTerminal(
+                $context,
+                $state->nativeSettingsAttempt,
+                function () use ($context, $capturedResponse, $contextTtl, $state): void {
+                    $this->historyStore->complete($context->runId, $capturedResponse, $contextTtl, $state->executionToken, $state->leaseSeconds);
+                },
+            );
         } catch (LostSwarmLeaseException) {
             return null;
         }

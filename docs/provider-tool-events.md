@@ -22,6 +22,7 @@ foreach (ResearchSwarm::make()->stream('Research the subject') as $event) {
 | Path | Observed provider activity |
 | --- | --- |
 | Ordinary sequential `stream()` | Final agent only; earlier agents run through `prompt()`. |
+| Opt-in top-level parallel `stream()` | Every process branch streams provider activity with explicit branch/attempt/sequence identity. Native IDs remain unchanged and may repeat across branches. |
 | Static/generated hierarchy | Streamed worker nodes and sequential-mode parallel branches. Generated coordinators and concurrent-mode parallel branches use `prompt()` and provide no progress stream. |
 | `broadcast()`, `broadcastNow()`, `broadcastOnQueue()` | Same events and capture policy as their underlying supported stream path. |
 | Completed streamed response | The existing `events` collection retains observed events in order. No second reconstruction from native completed-response events. |

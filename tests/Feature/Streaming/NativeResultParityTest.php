@@ -3,38 +3,77 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Concerns\Runnable;
 use BuiltByBerry\LaravelSwarm\Contracts\CapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
+use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCompleted;
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;
+use BuiltByBerry\LaravelSwarm\Memory\DatabaseStreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseColdArchiveDriver;
 use BuiltByBerry\LaravelSwarm\Persistence\SwarmPersistenceCipher;
+use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
+use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\StaticHierarchicalStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmCausalSealBarrier;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures\NativeResultAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Feature\Streaming\Fixtures\NativeResultStaticSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalStreamSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingAuditCapturePolicy;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Laravel\Ai\Approvals\Decisions;
+use Laravel\Ai\Contracts\AgentInput;
+use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Messages\UserMessage;
+use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Octane\Events\RequestTerminated;
 
 // Attribute coverage to the C3 mapping boundary, not incidental application boot.
 covers(StreamEventMapper::class, StaticHierarchicalStreamRunner::class, SwarmToolResult::class);
 
 require_once __DIR__.'/Fixtures/WorkerResetStub.php';
+
+final class ResumeProbeNativeResultAgent extends NativeResultAgent
+{
+    public static int $promptCount = 0;
+
+    public function prompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
+    {
+        self::$promptCount++;
+
+        return parent::prompt($prompt, $attachments, $provider, $model, $timeout);
+    }
+}
+
+final class NativeResultSequentialResumeSwarm implements Swarm
+{
+    use Runnable;
+
+    public function agents(): array
+    {
+        return [new ResumeProbeNativeResultAgent, new ResumeProbeNativeResultAgent];
+    }
+}
 
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');
@@ -53,6 +92,90 @@ function nativeParityStream(string $path, string $label): StreamableSwarmRespons
         ? (new NativeResultStaticSwarm($label))->stream($context)
         : app(SwarmRunner::class)->agent(new NativeResultAgent)->stream($context);
 }
+
+it('matches the direct native final response through each supported stream path', function (string $path) {
+    $directResponse = null;
+    $direct = (new NativeResultAgent)->stream('direct-compare');
+    $direct->then(function ($response) use (&$directResponse): void {
+        $directResponse = $response;
+    });
+    iterator_to_array($direct);
+    $expected = app(NativeStepResultProjector::class)->fromResponse($directResponse)->toArray();
+
+    $stream = nativeParityStream($path, 'direct-compare');
+    iterator_to_array($stream);
+
+    expect($stream->streamedResponse->steps[0]->nativeResult->toArray())->toBe($expected)
+        ->and($expected['reasoning'])->toBe('reason-secret')
+        ->and($expected['provider'])->toBe('fixture')
+        ->and($expected['model'])->toBe('model')
+        ->and($expected['invocation_id'])->toBe('invocation-direct-compare')
+        ->and($expected['tools'][0]['status'])->toBe('succeeded');
+})->with(['sequential', 'static']);
+
+it('preserves the generated-hierarchical coordinator structured result', function () {
+    $plan = HierarchicalTestPlan::make('writer_node', [
+        'writer_node' => [
+            'type' => 'worker',
+            'agent' => FakeWriter::class,
+            'prompt' => 'writer-task',
+        ],
+    ]);
+    FakeHierarchicalCoordinator::fake([$plan]);
+    FakeWriter::fake(['writer-out']);
+
+    $stream = FakeHierarchicalStreamSwarm::make()->stream('generated-compare');
+    $events = collect(iterator_to_array($stream));
+    $coordinator = $events->whereInstanceOf(SwarmStepEnd::class)->firstWhere('nodeId', '__coordinator__');
+
+    expect($coordinator?->nativeResult?->structured)->toBe($plan)
+        ->and($stream->streamedResponse?->steps[0]->nativeResult?->structured)->toBe($plan)
+        ->and($coordinator?->nativeResult?->status)->toBe(NativeStepResult::AVAILABLE);
+});
+
+it('reuses the capture-shaped native result when a streamed step resumes', function (CaptureDecision $decision) {
+    app()->instance(CapturePolicy::class, new SkippingAuditCapturePolicy(outputs: $decision));
+    app()->forgetInstance(SwarmCapture::class);
+    app()->forgetInstance(DatabaseStreamStepCheckpointStore::class);
+    ResumeProbeNativeResultAgent::$promptCount = 0;
+    $context = RunContext::from('resume-native', 'run-resume-native-'.strtolower($decision->name));
+    $full = new NativeStepResult(
+        structured: ['secret' => 'typed-secret'],
+        reasoning: 'reason-secret',
+        provider: 'provider',
+        invocationId: 'native-invocation',
+        conversationId: 'conversation-row',
+    );
+    $captured = app(SwarmCapture::class)->nativeResult($full, $context);
+    app(RunHistoryStore::class)->start($context->runId, NativeResultSequentialResumeSwarm::class, 'sequential', $context, [], 3600);
+    app(DatabaseStreamStepCheckpointStore::class)->recordWithNativeResult(
+        $context->runId,
+        0,
+        'checkpoint-output',
+        [],
+        new CitationEvidence,
+        $captured,
+    );
+
+    $stream = NativeResultSequentialResumeSwarm::make()->stream($context);
+    $events = collect(iterator_to_array($stream));
+    $resumed = $events->whereInstanceOf(SwarmStepEnd::class)->firstWhere('stepIndex', 0)?->nativeResult;
+
+    expect(ResumeProbeNativeResultAgent::$promptCount)->toBe(0)
+        ->and($resumed?->status)->toBe(match ($decision) {
+            CaptureDecision::Full => NativeStepResult::AVAILABLE,
+            CaptureDecision::Redact => NativeStepResult::REDACTED,
+            CaptureDecision::Skip => NativeStepResult::OMITTED,
+        })
+        ->and($stream->streamedResponse?->steps[0]->nativeResult?->toArray())->toBe($resumed?->toArray());
+
+    if ($decision === CaptureDecision::Full) {
+        expect($resumed?->structured)->toBe(['secret' => 'typed-secret']);
+    } else {
+        expect($resumed?->structured)->toBeNull()
+            ->and($resumed?->conversationId)->toBeNull();
+    }
+})->with(CaptureDecision::cases());
 
 it('preserves native result status and identity through capture and database replay', function (string $path, string $status, CaptureDecision $capture) {
     app()->instance(CapturePolicy::class, new SkippingAuditCapturePolicy(outputs: $capture));
@@ -81,8 +204,26 @@ it('preserves native result status and identity through capture and database rep
     }
     $end = $events->whereInstanceOf(SwarmStreamEnd::class)->sole();
     expect($end->usage['input_tokens'])->toBe(2)->and($end->usage['output_tokens'])->toBe(3);
+    $stepEnd = $events->whereInstanceOf(SwarmStepEnd::class)->sole();
+    expect($stepEnd->nativeResult->status)->toBe(match ($capture) {
+        CaptureDecision::Full => NativeStepResult::AVAILABLE,
+        CaptureDecision::Redact => NativeStepResult::REDACTED,
+        CaptureDecision::Skip => NativeStepResult::OMITTED,
+    });
+    if ($capture !== CaptureDecision::Skip) {
+        expect($stepEnd->nativeResult->invocationId)->toBe('invocation-'.$status)
+            ->and($stepEnd->nativeResult->provider)->toBe('fixture')
+            ->and($stepEnd->nativeResult->model)->toBe('model');
+    }
+    $liveNative = $stream->streamedResponse->steps[0]->nativeResult;
+    expect($liveNative->status)->toBe(NativeStepResult::AVAILABLE)
+        ->and($liveNative->invocationId)->toBe('invocation-'.$status)
+        ->and($liveNative->provider)->toBe('fixture')
+        ->and($liveNative->model)->toBe('model')
+        ->and($liveNative->reasoning)->toBe('reason-secret');
     $replay = collect(iterator_to_array(app(SwarmHistory::class)->replay($stream->runId)));
     expect($replay->whereInstanceOf(SwarmToolResult::class)->sole()->toArray())->toBe($payload);
+    expect($replay->whereInstanceOf(SwarmStepEnd::class)->sole()->nativeResult->toArray())->toBe($stepEnd->nativeResult->toArray());
     if ($capture !== CaptureDecision::Full) {
         $stored = DB::table('swarm_stream_events')->where('run_id', $stream->runId)->pluck('payload')->implode('');
         expect($stored)->not->toContain('argument-secret', 'result-secret', 'reason-secret', 'summary-secret');

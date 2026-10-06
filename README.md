@@ -53,6 +53,14 @@ echo $response->output;
 
 For background execution, streaming, and durable workflows, see [Choosing an Execution Mode](#choosing-an-execution-mode).
 
+Laravel AI `UserMessage` or message-bearing `AgentInput` input and explicitly
+routed image/document/audio/video attachments are available behind the default-off
+v0.28 rollout controls. A layered v2 flag enables reconstructible per-run native
+tools, one-shot message history and conversations across worker reconstruction;
+provider, model and timeout remain part of the base recipient envelope. Approval
+decisions remain outside this input surface. See
+[Native messages and attachments](docs/native-inputs.md).
+
 ## Requirements
 
 - PHP **^8.4**
@@ -123,9 +131,12 @@ Prefer to wire things by hand? Every step `swarm:install` performs has a stable 
 
 ## Your First Swarm
 
-Generate a swarm class:
+Generate native Laravel AI agents, then generate the swarm that composes them:
 
 ```bash
+php artisan make:agent ArticlePlanner
+php artisan make:agent ArticleWriter
+php artisan make:agent ArticleEditor
 php artisan make:swarm:swarm ContentPipeline
 ```
 
@@ -135,7 +146,7 @@ Or scaffold a **complete, runnable** swarm from a curated blueprint — the swar
 php artisan make:swarm:blueprint SupportTriage --template=triage
 ```
 
-See [Generators](docs/generators.md) for the full generator surface, including `make:swarm:blueprint` and its catalog, `make:swarm:agent`, and the `--topology` flag.
+See [Native Agent Onboarding](docs/native-agent-onboarding.md) for a no-paid-provider tools-and-streaming tutorial and [Generators](docs/generators.md) for the full generator surface. `make:swarm:agent` remains available as the deterministic offline compatibility scaffold.
 
 Swarms live in `App\Ai\Swarms`, implement `BuiltByBerry\LaravelSwarm\Contracts\Swarm`, use the `Runnable` trait, and return their participating Laravel AI agents from `agents()`:
 
@@ -224,7 +235,25 @@ return response()->json($response);
 
 `queue()` and `dispatchDurable()` return dispatch handles with a `runId`. Listen for lifecycle events or inspect persisted history for eventual results.
 
-`stream()` and the broadcast helpers support sequential, generated hierarchical and static hierarchical swarms. The generated coordinator runs synchronously; workers stream. Top-level parallel live streaming is unsupported. See [streaming topology](docs/streaming.md#topology-sequential-static-hierarchical-and-hierarchical). For workflow operations feeds across all modes, use lifecycle events and application-owned broadcasts.
+Every completed step also exposes a bounded native Laravel AI projection:
+
+```php
+$native = ContentPipeline::make()->prompt('Draft it.')->steps[0]->nativeResult;
+$typed = $native?->structured;
+```
+
+It preserves structured data and native identities without serializing raw
+provider responses, and persistence still follows capture controls. See
+[Native Step Results](docs/native-step-results.md).
+
+`stream()` and the broadcast helpers support sequential, generated hierarchical,
+and static hierarchical swarms. Top-level parallel live multiplexing is also
+available behind the default-off `SWARM_PARALLEL_STREAMING_ENABLED` flag when
+Laravel's `process` concurrency driver is active. Parallel events carry explicit
+branch/attempt/sequence identity; their arrival order is deliberately not a
+global workflow order. See [streaming topology](docs/streaming.md#topology-sequential-parallel-static-hierarchical-and-hierarchical).
+For workflow operations feeds across all modes, use lifecycle events and
+application-owned broadcasts.
 
 ## Queueing a Swarm
 
@@ -289,25 +318,28 @@ return ContentPipeline::make()->stream([
 Broadcast the same typed stream events through Laravel broadcasting:
 
 ```php
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Support\Str;
 
-ContentPipeline::make()->broadcast(
-    ['topic' => 'Laravel queues'],
-    new PrivateChannel('swarm.content-pipeline'),
-);
+$runId = (string) Str::uuid();
+$channel = new PrivateChannel("tenants.{$tenantId}.swarm.{$runId}");
+$context = RunContext::from([
+    'input' => 'Draft an article about Laravel queues.',
+    'data' => ['topic' => 'Laravel queues'],
+], runId: $runId);
 
-ContentPipeline::make()->broadcastNow(
-    ['topic' => 'Laravel queues'],
-    new PrivateChannel('swarm.content-pipeline'),
-);
-
-ContentPipeline::make()
-    ->broadcastOnQueue(
-        ['topic' => 'Laravel queues'],
-        new PrivateChannel('swarm.content-pipeline'),
-    )
-    ->onQueue('ai-streams');
+// Choose exactly one delivery verb for this run.
+ContentPipeline::make()->broadcast($context, $channel);
+// ContentPipeline::make()->broadcastNow($context, $channel);
+// ContentPipeline::make()->broadcastOnQueue($context, $channel)
+//     ->onQueue('ai-streams');
 ```
+
+Authorize the private channel only when the subscriber belongs to the named
+tenant and may inspect that exact run ID. Define the corresponding application
+policy in `routes/channels.php`; never reuse one shared channel across tenants
+or unrelated runs.
 
 Persisted stream replay is opt in:
 
