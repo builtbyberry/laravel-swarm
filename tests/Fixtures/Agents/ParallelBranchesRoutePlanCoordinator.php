@@ -28,11 +28,11 @@ class ParallelBranchesRoutePlanCoordinator implements Agent, HasStructuredOutput
         return [
             'start_at' => $schema->string()->required(),
             'nodes' => $schema->object([
-                'fan' => RoutePlanSchema::parallel($schema),
-                'research' => RoutePlanSchema::worker($schema),
-                'draft' => RoutePlanSchema::node($schema),
-                'join' => RoutePlanSchema::worker($schema),
-                'done' => RoutePlanSchema::finish($schema),
+                'fan' => RoutePlanSchema::parallel($schema)->required(),
+                'research' => RoutePlanSchema::worker($schema)->required(),
+                'draft' => RoutePlanSchema::node($schema)->required(),
+                'join' => RoutePlanSchema::worker($schema)->required(),
+                'done' => RoutePlanSchema::finish($schema)->required(),
             ])->required(),
         ];
     }

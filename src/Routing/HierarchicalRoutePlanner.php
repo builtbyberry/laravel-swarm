@@ -134,10 +134,14 @@ class HierarchicalRoutePlanner
     }
 
     /**
-     * Drop a redundant branch-to-join edge emitted by a helper-conformant
-     * coordinator. The worker helper requires `next`, so a model may name the
-     * join already owned by the parallel node; normalizing it to null preserves
-     * the branch shape consumed by validation, runners, and persistence.
+     * Normalize redundant parallel-branch successors in coordinator-generated
+     * and static plans alike. {@see RoutePlanSchema::worker()} explains why
+     * `next` may be present. This applies only to a plain worker (a rollup keeps
+     * its rollup semantics), with no loop of its own (`next` is the loop exit),
+     * whose every owning group joins at that `next` (otherwise it is not
+     * redundant), and that is not `start_at`, another node's `next`, or a loop
+     * target (those roles run the worker outside the group, where `next` is a
+     * real edge).
      *
      * @param  array<string, HierarchicalRouteNode>  $nodes
      * @return array<string, HierarchicalRouteNode>
@@ -160,7 +164,7 @@ class HierarchicalRoutePlanner
         foreach ($owners as $branchNodeId => $branchOwners) {
             $branch = $nodes[$branchNodeId] ?? null;
 
-            if ($branch === null || get_class($branch) !== HierarchicalWorkerNode::class || $branch->next === null || $branch->hasLoop()) {
+            if ($branch === null || ! $branch instanceof HierarchicalWorkerNode || $branch instanceof HierarchicalRollupNode || $branch->next === null || $branch->hasLoop()) {
                 continue;
             }
 
@@ -465,7 +469,7 @@ class HierarchicalRoutePlanner
                 }
 
                 if ($branch->next !== null) {
-                    throw new SwarmException("Hierarchical worker node [{$branch->id}] cannot define [next] when used as a parallel branch.");
+                    throw new SwarmException("Hierarchical worker node [{$branch->id}] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.");
                 }
             }
         }

@@ -22,7 +22,10 @@ stored nothing.
   `RoutePlanSchema::worker()` declares `next` as required but nullable, and the
   planner treats a branch `next` that names its group's join as redundant. The
   worker schema's `next` type changes from string to string-or-null for callers
-  snapshot-testing it; PHP-authored plans are unaffected.
+  snapshot-testing it. Existing valid PHP-authored plans keep validating
+  unchanged; a static plan whose plain branch names its group's join now
+  validates instead of throwing, and a model constrained by `worker()` may now
+  return `next: null`.
 
 ## v0.28.0 - 2026-10-06
 

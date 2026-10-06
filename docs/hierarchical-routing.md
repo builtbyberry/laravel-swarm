@@ -104,9 +104,10 @@ the field but permits `[]` when there are no prior outputs, while `rollup()`
 requires at least one id. A list is necessary because `laravel/ai` closes every
 object at dispatch, so a free-form alias map in the schema cannot carry keys.
 The `worker()` helper also requires `next`, but its value may be `null` when the
-worker is a parallel branch or the last node in the run. For a plain,
-non-looping branch worker, the planner also accepts `next` naming the parallel
-group's join and treats that edge as redundant because the group owns the join.
+worker is a parallel branch or the last node in the run. For a plain branch
+worker, the planner also accepts `next` naming the join of every parallel group
+that owns it and drops that redundant edge, provided the worker is not also
+`start_at`, another node's `next`, or a loop target.
 
 Two boundaries to keep in mind:
 
@@ -149,7 +150,8 @@ Fields:
 - `with_outputs`: optional alias-to-node-id map, or a list of node ids where each
   alias equals its node id
 - `metadata`: optional step metadata
-- `next`: optional / nullable next node id
+- `next`: next node id; omit it or set it to `null` when the worker is a parallel
+  branch or the last node of the run (the run then returns that worker's output)
 - `loop`: optional bounded loop back-edge (see [Bounded Loops](#bounded-loops))
 
 The list form is concise when the node id is also the desired label:
@@ -187,10 +189,12 @@ Rules:
 
 - `branches` may only reference worker nodes
 - `next` is required in v1; every parallel group must join into a subsequent node before the workflow can finish
-- a branch has no successor of its own: omit `next` in a PHP-authored plan, set
-  it to `null`, or, for a plain non-looping worker, name the group's join (the
-  planner treats that edge as redundant); any other target is rejected, and
-  rollups or looped workers are not eligible for redundant-edge normalization
+- a branch has no successor of its own — omit `next` or set it to `null`
+- a plain worker branch may instead name the join of every parallel group that
+  owns it, and the planner drops that redundant edge, provided the branch is not
+  also `start_at`, another node's `next`, or a loop target
+- any other `next` on a branch, and any `next` on a rollup branch, is rejected;
+  see [Bounded Loops](#bounded-loops) for the separate branch-loop rule
 - branch workers cannot depend on sibling branch outputs
 - in `prompt()`, branches execute concurrently
 - in `queue()`, with `swarm.queue.hierarchical_parallel.coordination` set to `in_process` (the default), branches execute sequentially in declaration order in v1
@@ -447,9 +451,13 @@ The plan must satisfy all of these:
 - finish nodes may not define `next`
 - parallel branches may only reference worker nodes
 - parallel nodes must define `next` in v1
-- a plain, non-looping parallel branch may omit `next`, set it to `null`, or
-  redundantly name every owning parallel group's join; any other target is
-  rejected, and rollups or looped workers carrying `next` remain rejected
+- a parallel branch has no successor of its own, so it omits `next` or sets it
+  to `null`
+- a plain worker branch may instead name the join of every parallel group that
+  owns it; the planner drops that redundant edge when the branch is not also
+  `start_at`, another node's `next`, or a loop target
+- any other `next` on a branch, and any `next` on a rollup branch, is rejected;
+  see [Bounded Loops](#bounded-loops) for the separate branch-loop rule
 - named outputs may only reference previously completed nodes
 - finish `output_from` may only reference a previously completed node
 - a `loop` back-edge must be bounded by a positive `max_iterations` and target

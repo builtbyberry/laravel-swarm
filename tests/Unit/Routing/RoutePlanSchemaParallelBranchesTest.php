@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlan;
 use BuiltByBerry\LaravelSwarm\Routing\HierarchicalRoutePlanner;
@@ -11,9 +12,13 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\ParallelBranchesRoutePlanCoordinator;
+use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
+use Illuminate\JsonSchema\Types\Type;
+use Laravel\Ai\Contracts\HasStructuredOutput;
 use Laravel\Ai\Gateway\Anthropic\AnthropicSchemaSanitizer;
 use Laravel\Ai\ObjectSchema;
+use Laravel\Ai\Promptable;
 
 /**
  * @return array{start_at: string, nodes: array<string, array<string, mixed>>}
@@ -85,6 +90,10 @@ function matchingParallelBranchesVariant(array $slot, array $payload): array
  */
 function assertParallelBranchesPayloadConformsToDispatchSchema(array $schema, array $payload): void
 {
+    expect($payload['start_at'])->toBeString()
+        ->and(array_keys($payload['nodes']))
+        ->toEqualCanonicalizing($schema['properties']['nodes']['required']);
+
     foreach ($payload['nodes'] as $nodeId => $nodePayload) {
         $slot = matchingParallelBranchesVariant(
             $schema['properties']['nodes']['properties'][$nodeId],
@@ -139,7 +148,28 @@ test('helper-conformant parallel fan-out validates through coordinator output', 
 ]);
 
 test('helper-conformant terminal worker with explicit null next validates', function () {
-    $coordinator = new ParallelBranchesRoutePlanCoordinator;
+    $coordinator = new class implements Agent, HasStructuredOutput
+    {
+        use Promptable;
+
+        public function instructions(): string
+        {
+            return 'Return one terminal worker.';
+        }
+
+        /**
+         * @return array<string, Type>
+         */
+        public function schema(JsonSchema $schema): array
+        {
+            return [
+                'start_at' => $schema->string()->required(),
+                'nodes' => $schema->object([
+                    'join' => RoutePlanSchema::worker($schema)->required(),
+                ])->required(),
+            ];
+        }
+    };
     $payload = [
         'start_at' => 'join',
         'nodes' => [
@@ -222,7 +252,7 @@ test('parallel branch next naming a node other than its join remains rejected', 
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        'Hierarchical worker node [research] cannot define [next] when used as a parallel branch.',
+        "Hierarchical worker node [research] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
     );
 });
 
@@ -270,7 +300,7 @@ test('parallel branch owned by groups with different joins remains rejected', fu
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        'Hierarchical worker node [shared] cannot define [next] when used as a parallel branch.',
+        "Hierarchical worker node [shared] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
     );
 });
 
@@ -306,6 +336,20 @@ test('dual-role parallel branch carrying next remains rejected', function (strin
         ];
     }
 
+    if ($role === 'parallel_incoming_next') {
+        $payload['start_at'] = 'parallel_incoming';
+        $payload['nodes']['parallel_incoming'] = [
+            'type' => 'parallel',
+            'branches' => ['parallel_incoming_branch'],
+            'next' => 'branch',
+        ];
+        $payload['nodes']['parallel_incoming_branch'] = [
+            'type' => 'worker',
+            'agent' => FakeEditor::class,
+            'prompt' => 'Parallel incoming branch.',
+        ];
+    }
+
     if ($role === 'loop_target') {
         // The join loops back into the branch, so the branch is also entered
         // outside its parallel group.
@@ -320,9 +364,9 @@ test('dual-role parallel branch carrying next remains rejected', function (strin
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        'Hierarchical worker node [branch] cannot define [next] when used as a parallel branch.',
+        "Hierarchical worker node [branch] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
     );
-})->with(['start_at', 'incoming_next', 'loop_target']);
+})->with(['start_at', 'incoming_next', 'parallel_incoming_next', 'loop_target']);
 
 test('looped parallel branch carrying next remains rejected', function () {
     // The loop targets an earlier node rather than the branch itself, so the
@@ -363,7 +407,7 @@ test('looped parallel branch carrying next remains rejected', function () {
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        'Hierarchical worker node [branch] cannot define [next] when used as a parallel branch.',
+        "Hierarchical worker node [branch] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
     );
 });
 
@@ -403,11 +447,11 @@ test('rollup parallel branch carrying next remains rejected', function () {
         'Tests\\ParallelBranchesSwarm',
     ))->toThrow(
         SwarmException::class,
-        'Hierarchical worker node [branch] cannot define [next] when used as a parallel branch.',
+        "Hierarchical worker node [branch] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
     );
 });
 
-test('PHP-authored parallel branch successor compatibility is unchanged', function (?string $branchNext, bool $valid) {
+test('PHP-authored parallel branches accept omitted and redundant join successors but reject other targets', function (?string $branchNext, bool $valid) {
     $payload = helperConformantParallelPlan($branchNext);
 
     if ($branchNext === null) {
@@ -428,7 +472,7 @@ test('PHP-authored parallel branch successor compatibility is unchanged', functi
 
     expect($build)->toThrow(
         SwarmException::class,
-        'Hierarchical worker node [research] cannot define [next] when used as a parallel branch.',
+        "Hierarchical worker node [research] cannot define [next] when used as a parallel branch unless it names its parallel group's join and the worker has no loop and no other incoming edge; set [next] to null.",
     );
 })->with([
     'omitted successor' => [null, true],
