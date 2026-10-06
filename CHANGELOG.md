@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.28.1 - unreleased
+
+Post-ship fixes for v0.28.0 found against a live model: make the
+`RoutePlanSchema` helpers emit route plans the hierarchical planner accepts, and
+stop the stock memory tools reporting success for an agent-scoped write that
+stored nothing.
+
+### Fixed
+
+_To be filled in during release wrap-up._
+
 ## v0.28.0 - 2026-10-06
 
 Native feature access through Laravel Swarm workflows.
