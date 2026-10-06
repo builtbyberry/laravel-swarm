@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.28.0 - unreleased
+## v0.28.0 - 2026-10-06
 
 Native feature access through Laravel Swarm workflows.
 
