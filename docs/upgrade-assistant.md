@@ -3,8 +3,43 @@
 `swarm:upgrade` previews dependency fixes using a selected recipe. The default
 remains **0.25-to-0.26**, targeting v0.26.1 and also inspecting existing v0.26
 applications. The explicit **0.26-to-0.27** recipe covers the Laravel AI 1.0
-transition. Both produce an upgrade checklist; neither certifies deployment or
-database readiness.
+transition. The explicit **0.27-to-0.28** recipe covers Swarm's native-feature
+release. All produce an upgrade checklist; none certifies deployment or database
+readiness.
+
+## Swarm v0.28 recipe
+
+Preview a stable Swarm 0.27.x application before changing its manifest:
+
+```bash
+php artisan swarm:upgrade --recipe=0.27-to-0.28 --json
+```
+
+Already-target 0.28.x receives verification advice only. Other source lines are
+refused. The recipe targets core 0.28.0 and keeps Laravel AI on the supported 1.x
+line with a 1.0.0 minimum, matching core's `laravel/ai ^1.0` requirement; it does
+not force v1.1.0. Companion targets are Pulse 0.2.0, Filament 0.4.0, MCP 0.3.0,
+and memory-vector 0.3.0. Their accepted source/target minors are 0.1/0.2,
+0.3/0.4, 0.2/0.3, and 0.2/0.3 respectively.
+
+Those companion versions add `^0.28` support and ship with core v0.28.0. Until
+they are published, the assistant's companion targets cannot be installed. The
+assistant does not query Packagist or run Composer, so its preview cannot certify
+availability. Review a Composer dry-run before the intended update.
+
+The report's short checklist points to [Upgrading to v0.28.0](../UPGRADING.md#upgrading-to-v0280):
+migrate before the code swap on database persistence; configure `APP_KEY` before
+queueing; make authored parallel swarm classes container-resolvable with stable
+reconstructed slots; and treat database run-history terminal status as write-once.
+Terminal workflow callbacks are experimental and default-off.
+
+Apply only reviewed action IDs with the same recipe and digest:
+
+```bash
+php artisan swarm:upgrade --recipe=0.27-to-0.28 \
+  --apply=dependency:builtbyberry/laravel-swarm \
+  --expect=THE_64_CHARACTER_PREVIEW_DIGEST --yes
+```
 
 ## Laravel AI 1.0 recipe
 
@@ -113,6 +148,12 @@ MCP or memory-vector companion. It does not add optional packages or add a root
 requirement for a transitive dependency. Recognized exact pins remain pins;
 recognized caret constraints remain carets. A caret that already permits the
 recommended version needs Composer resolution rather than a manifest edit.
+Accepted syntax is deliberately limited to `^X.Y`, `^X.Y.Z`, and exact
+`X.Y.Z`. The assistant treats a two-component caret as `X.Y.0` for recipe-line
+and minimum-version checks, while any required rewrite still uses the recipe's
+three-component target (for example, `^0.27` becomes `^0.28.0`). Bare `X.Y`,
+tilde/comparison/range expressions, wildcards, development constraints, aliases,
+and stability flags remain blocking constraints for manual review.
 Other constraints, custom repositories, aliases, replacements and unsupported
 version lines require manual review.
 

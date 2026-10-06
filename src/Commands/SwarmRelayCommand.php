@@ -326,7 +326,7 @@ class SwarmRelayCommand extends Command
                 $this->components->warn(
                     $lastCallbackFailed.' callback deliver'.($lastCallbackFailed === 1 ? 'y' : 'ies').' could not be dispatched due to a transient error'
                     .($maxAttempts !== null ? ' after '.$attempts.' attempt'.($attempts === 1 ? '' : 's') : '')
-                    .'. The '.($lastCallbackFailed === 1 ? 'delivery' : 'deliveries').' remain eligible according to the callback retry delay or delivery lease timeout.'
+                    .'. The '.($lastCallbackFailed === 1 ? 'delivery remains' : 'deliveries remain').' eligible according to the callback retry delay or delivery lease timeout.'
                     .' Check your error tracker and queue driver.'
                 );
             }

@@ -113,7 +113,7 @@ verified against `laravel/ai` v1.0.1 gateway source; image generation on Anthrop
 is additionally proven to fail loud **from inside a workflow tool loop**
 ([NativeCapabilityWireTest](../tests/Feature/Adoption/NativeCapabilityWireTest.php)).
 
-Laravel AI releases containing `TextGenerationLoop::toolsSupportedBy()` skip a
+Laravel AI v1.1.0 and later contain `TextGenerationLoop::toolsSupportedBy()` and skip a
 provider tool that the selected provider does not support and still send the
 request without that provider tool, preserving provider failover. On a provider
 without hosted tool search, the unsupported `ToolSearch` wrapper is removed and
@@ -122,7 +122,7 @@ earlier instead throw `LogicException` (including "does not support tool search"
 before any request or local tool effect. Swarm neither overrides nor logs the
 skip. Applications can detect the installed behavior with
 `method_exists(\Laravel\Ai\Gateway\TextGenerationLoop::class, 'toolsSupportedBy')`;
-the method's presence identifies the skip-capable implementation.
+the method's presence identifies the v1.1.0-and-later skip-capable implementation.
 
 | Capability | Not supported on | Behaviour |
 |---|---|---|

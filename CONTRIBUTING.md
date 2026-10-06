@@ -6,7 +6,7 @@ Changes should preserve the Laravel-native feel described in the README:
 familiar public verbs, small surface area, explicit configuration, and clear
 operational behavior.
 
-This file is the contributor entry point. [AGENTS.md](AGENTS.md) is the
+This file is the contributor entry point. [AGENTS.md](https://github.com/builtbyberry/laravel-swarm/blob/main/AGENTS.md) is the
 canonical package context (architecture, conventions, release workflow) and
 is required reading before any non-trivial change.
 
@@ -266,7 +266,7 @@ PRs are organized into topic branches against a long-lived `release/v<X.Y.Z>`
 branch, with Conventional Commits scoped by area (`feat(audit):`,
 `fix(runner):`, `docs(contributing):`, etc.). The full branching and
 three-phase wrap mechanics live in
-[AGENTS.md](AGENTS.md#release-workflow); read that section before opening a
+[AGENTS.md](https://github.com/builtbyberry/laravel-swarm/blob/main/AGENTS.md#release-workflow); read that section before opening a
 release-session topic branch.
 
 ## Stability Surface
@@ -275,7 +275,7 @@ Laravel Swarm distinguishes a small public surface that is covered by semver
 from a larger set of internals that may change at any time. The canonical
 definition lives in [`UPGRADING.md`](UPGRADING.md#stability-and-the-public-api);
 the matrix of public surfaces is in
-[`docs/public-surface.md`](docs/public-surface.md). The notes below are the
+[`docs/public-surface.md`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/public-surface.md). The notes below are the
 day-to-day contributor view.
 
 ### `@internal` convention
@@ -336,7 +336,7 @@ in that repository, not here.
 
 Audit pipeline work covers the contracts that emit and route audit evidence,
 the `EvidenceEnvelope` shape, and the outbox/dispatcher routing. Read
-[`docs/audit-evidence-contract.md`](docs/audit-evidence-contract.md) before
+[`docs/audit-evidence-contract.md`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md) before
 opening a PR — the frozen envelope fields and category list are the reference,
 and the guidance below should not contradict it.
 
@@ -379,7 +379,7 @@ Guidance when contributing here:
 Every emitted payload is enriched by `EvidenceEnvelope` with
 `schema_version`, `category`, and `occurred_at`. The shape and the list of
 frozen categories are documented in
-[`docs/audit-evidence-contract.md`](docs/audit-evidence-contract.md). When
+[`docs/audit-evidence-contract.md`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md). When
 contributing here:
 
 - **Additive change → no `schema_version` bump.** A new optional field on an
@@ -444,7 +444,7 @@ style preference. Expect close review on:
 - public API drift from Laravel AI conventions.
 
 Maintainers use the eight-lens multi-expert review for meaningful changes; see
-[AGENTS.md](AGENTS.md#review-method) for the lens list and the severity gate.
+[AGENTS.md](https://github.com/builtbyberry/laravel-swarm/blob/main/AGENTS.md#review-method) for the lens list and the severity gate.
 
 Avoid broad rewrites unless they are already scoped in an approved plan. If a
 refactor is needed, keep it incremental and preserve existing behavior first.
@@ -473,7 +473,7 @@ shift.
 The branching, commit, and three-phase wrap mechanics that releases follow
 (`release/v<X.Y.Z>` long-lived branch, topic branches, `review-followups` →
 `release-wrap` → `readiness-followups`) are recorded in
-[AGENTS.md](AGENTS.md#release-workflow). Maintainers driving a release should
+[AGENTS.md](https://github.com/builtbyberry/laravel-swarm/blob/main/AGENTS.md#release-workflow). Maintainers driving a release should
 read that section before opening the release branch.
 
 ## Maintainer and Ownership

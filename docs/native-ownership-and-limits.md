@@ -39,7 +39,7 @@ identity, and accounting.
 
 Provider-tool support filtering also remains native-owned. Swarm adds no
 preflight check, event, or log entry for an unsupported provider tool. Laravel AI
-releases containing `TextGenerationLoop::toolsSupportedBy()` omit unsupported
+v1.1.0 and later, which contain `TextGenerationLoop::toolsSupportedBy()`, omit unsupported
 provider tools and continue the request, which allows a provider failover target
 with a smaller tool surface to run. For unsupported `ToolSearch`, the wrapper is
 removed and its deferred tools become ordinary function tools. Laravel AI v1.0.1

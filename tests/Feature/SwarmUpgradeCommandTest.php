@@ -314,3 +314,36 @@ test('resolved companion map has standalone and Artisan parity with selective ap
         ->and(file_get_contents($this->upgradeCommandRoot.'/composer.lock'))->toBe($lockBytes)
         ->and(file_get_contents($this->upgradeCommandRoot.'/vendor/composer/installed.json'))->toBe($installedBytes);
 });
+
+test('v028 recipe is available through standalone and Artisan help preview and apply', function (): void {
+    $manifest = json_encode([
+        'require' => ['builtbyberry/laravel-swarm' => '^0.27.0', 'laravel/ai' => '^1.0.0'],
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n";
+    $lock = json_encode(['packages' => [
+        ['name' => 'builtbyberry/laravel-swarm', 'version' => 'v0.27.0'],
+        ['name' => 'laravel/ai', 'version' => 'v1.1.0'],
+    ]], JSON_THROW_ON_ERROR);
+    file_put_contents($this->upgradeCommandRoot.'/composer.json', $manifest);
+    file_put_contents($this->upgradeCommandRoot.'/composer.lock', $lock);
+
+    $help = swarmUpgradeCli($this->upgradeCommandRoot, ['--help']);
+    expect($help->getExitCode())->toBe(0)
+        ->and($help->getOutput())->toContain('0.27-to-0.28', 'targets v0.28.0');
+    $unknown = swarmUpgradeCliReport(swarmUpgradeCli($this->upgradeCommandRoot, ['--recipe=unknown', '--json']));
+    expect($unknown['message'])->toBe('Unknown upgrade recipe. Select 0.25-to-0.26, 0.26-to-0.27, or 0.27-to-0.28.');
+
+    $options = ['--recipe=0.27-to-0.28', '--json'];
+    $preview = swarmUpgradeCliReport(swarmUpgradeCli($this->upgradeCommandRoot, $options));
+    expect($preview)->toMatchArray(['recipe' => '0.27-to-0.28', 'target' => '0.28.0', 'can_apply' => true])
+        ->and(array_column($preview['actions'], 'package'))->toBe(['builtbyberry/laravel-swarm']);
+
+    $artisan = ['--path' => $this->upgradeCommandRoot, '--recipe' => '0.27-to-0.28', '--json' => true];
+    expect(Artisan::call('swarm:upgrade', $artisan))->toBe(1)
+        ->and(json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR))->toBe($preview);
+    expect(Artisan::call('swarm:upgrade', $artisan + [
+        '--apply' => 'dependency:builtbyberry/laravel-swarm',
+        '--expect' => $preview['preview_digest'],
+        '--yes' => true,
+    ]))->toBe(0)
+        ->and(file_get_contents($this->upgradeCommandRoot.'/composer.json'))->toBe(str_replace('^0.27.0', '^0.28.0', $manifest));
+});
