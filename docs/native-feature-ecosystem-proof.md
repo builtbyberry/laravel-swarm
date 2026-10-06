@@ -28,16 +28,18 @@ release branch. Core 0.28 is unreleased, so the core candidate is a reviewed com
 
 | Package | Candidate version | Immutable source (reviewed head) | Candidate evidence |
 | --- | --- | --- | --- |
-| builtbyberry/laravel-swarm | 0.28.0 | `6c3da95fcb3bc89a2ec0096346bd6efb11366cda` | release/v0.28.0 head |
-| builtbyberry/laravel-swarm-pulse | 0.2.0 | `ae23b313686319e10db892ce0af2faa92a1de263` | [PR #13](https://github.com/builtbyberry/laravel-swarm-pulse/pull/13) → release/v0.2.0 |
-| builtbyberry/laravel-swarm-filament | 0.4.0 | `00637c3782c1a12dec4ab319ec7c46fa655639c4` | [PR #47](https://github.com/builtbyberry/laravel-swarm-filament/pull/47) → release/v0.4.0 |
-| builtbyberry/laravel-swarm-mcp | 0.3.0 | `8c73bc220b3feb26b87cc653f9ba22487b30636d` | [PR #19](https://github.com/builtbyberry/laravel-swarm-mcp/pull/19) → release/v0.3.0 |
-| builtbyberry/laravel-swarm-memory-vector | 0.3.0 | `2e1b1f98fcc537d351a6a0b7dc3d97e03c1566b2` | [PR #13](https://github.com/builtbyberry/laravel-swarm-memory-vector/pull/13) → release/v0.3.0 |
+| builtbyberry/laravel-swarm | 0.28.0 | `269f749102f8d4c525c12e5486c3f57893d78d6b` | release/v0.28.0 head, the commit tagged `v0.28.0-rc1` |
+| builtbyberry/laravel-swarm-pulse | 0.2.0 | `684ec87922590929c13afc61eb6609ed42e15521` | [PR #13](https://github.com/builtbyberry/laravel-swarm-pulse/pull/13), re-pinned by [PR #14](https://github.com/builtbyberry/laravel-swarm-pulse/pull/14) → release/v0.2.0 head |
+| builtbyberry/laravel-swarm-filament | 0.4.0 | `a92b3750c182d52c46690732fef410003d47a7bb` | [PR #47](https://github.com/builtbyberry/laravel-swarm-filament/pull/47), re-pinned by [PR #48](https://github.com/builtbyberry/laravel-swarm-filament/pull/48) → release/v0.4.0 head |
+| builtbyberry/laravel-swarm-mcp | 0.3.0 | `f4ddc42d005d8c6d4175088d509cb9d4c8d69ef6` | [PR #19](https://github.com/builtbyberry/laravel-swarm-mcp/pull/19), re-pinned by [PR #20](https://github.com/builtbyberry/laravel-swarm-mcp/pull/20) → release/v0.3.0 head |
+| builtbyberry/laravel-swarm-memory-vector | 0.3.0 | `c789595d74615a02e61dd2a2b1e9ac9ee60674d5` | [PR #13](https://github.com/builtbyberry/laravel-swarm-memory-vector/pull/13), re-pinned by [PR #14](https://github.com/builtbyberry/laravel-swarm-memory-vector/pull/14) → release/v0.3.0 head |
 
-Upstream native pins: official Laravel AI `1.0.1`
-(`127fce89bc620fcf942252837669c2fc0895f4b3`), Laravel 13.33.0, and native MCP 1.0.0.
-Swarm v0.28.0 is verified against `laravel/ai` v1.0.1 (the pinned release;
-`composer.json` requires `^1.0`).
+Upstream native pins: official Laravel AI `1.1.0`
+(`a47929ad17d84528e37f1f85927d14824604b09e`), Laravel 13.34.0
+(`c829b4982d29344cbcf1d7ad78eb5d2bb8ae66c4`), and native MCP 1.0.1
+(`92987a9d03847801299ff4abe909ba7686147dde`): the current releases on the day the
+candidate was cut. `composer.json` requires `laravel/ai` `^1.0`; the package's own
+test matrix also covers v1.0.0 and v1.0.1.
 
 ### Why the companion siblings were required
 
@@ -59,7 +61,9 @@ package versions and refs, and the native `laravel/ai` / `laravel/framework` /
 `laravel/mcp` pins, come from `sources.json` (the ai-1 run reproduces unchanged with
 its own map), so this run and the ai-1 run share one harness.
 
-- **Emitted report SHA-256:** `371d6d9d4c475cd6194e42ce6b8e364a900819c25481eab4af71aa0a825c09fa`
+- **Emitted report SHA-256:** `43dbe283bd1179c3b4489a47b1f820335eb70965465c3f58f818b7d7e9b0ca4f`
+  (run of 2026-10-06 against the release-candidate set above; the first run, against core
+  `6c3da95` on Laravel AI 1.0.1, emitted `371d6d9d4c475cd6194e42ce6b8e364a900819c25481eab4af71aa0a825c09fa`)
   (a point-in-time snapshot: the eight pinned candidate identities are fixed, while
   the report also hashes the full resolved lock, whose transitive dependencies resolve
   to their latest compatible releases at run time).
@@ -83,30 +87,22 @@ its own map), so this run and the ai-1 run share one harness.
   from released packages; a fresh default-Packagist five-package install after all
   releases remains a separate shipping gate.
 
-### Post-proof addendum (not re-run)
+### Re-run against the release candidate
 
-The frozen proof above predates later v0.28.0 changes merged after the pinned core
-commit: [PR #550](https://github.com/builtbyberry/laravel-swarm/pull/550) makes the
-callback outbox deserialize only signed closures;
-[PR #551](https://github.com/builtbyberry/laravel-swarm/pull/551) bounds the job
-telemetry guard; [PR #552](https://github.com/builtbyberry/laravel-swarm/pull/552)
-encrypts queued swarm payloads and makes queuing require `APP_KEY`; and
-[PR #553](https://github.com/builtbyberry/laravel-swarm/pull/553) makes callback
-registration throw without a signing key, plus CI-only
-[PR #555](https://github.com/builtbyberry/laravel-swarm/pull/555). The combined
-fresh-install proof was **not** re-run against those changes; they are covered by
-this package's own test suite.
+The proof above was first run at core `6c3da95`. It was re-run on 2026-10-06 against
+the candidate set in the table: core at the commit tagged `v0.28.0-rc1`, which adds
+[PR #550](https://github.com/builtbyberry/laravel-swarm/pull/550) through
+[PR #564](https://github.com/builtbyberry/laravel-swarm/pull/564) (signed-closure
+callback deserialization, encrypted queued payloads, lease-based callback delivery,
+write-once database run history, changed `swarm:health` / `swarm:prune` output, and
+the `0.27-to-0.28` upgrade recipe), and each companion at its release-branch head after
+its core 0.28 lanes were re-pinned to that commit and passed. The combined fresh
+install, the identity checks, discovery, migrations, command registrations, installer
+help, upgrade-assistant checks and workflow smoke all passed, and `fault_probes.py`
+again failed each targeted guard and restored the proof to identical bytes.
 
-The readiness fixes merged afterwards are also outside this proof:
-[PR #558](https://github.com/builtbyberry/laravel-swarm/pull/558) changes
-`swarm:health` and `swarm:prune` output and bounds seeded native messages;
-[PR #559](https://github.com/builtbyberry/laravel-swarm/pull/559) makes callback
-delivery lease-based, makes database run history terminal status write-once, and
-adds the `callback.delivered` audit category; and
-[PR #561](https://github.com/builtbyberry/laravel-swarm/pull/561) follows up on
-callback delivery and health. These change run-history finalization and command
-output that companion packages read. The combined proof must be re-pinned to the
-final release head and re-run before core and the companions are tagged.
+A change to core or a companion after these commits is outside this proof and needs
+another run before the final tag.
 
 ## Per-companion compatibility (core 0.28 lanes green)
 
