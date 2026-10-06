@@ -79,6 +79,10 @@ test('the node union locks each variant\'s required shape structurally', functio
         $branches,
     );
 
+    $rollup = collect($branches)->first(
+        fn (array $branch): bool => ($branch['properties']['type']['enum'] ?? null) === ['rollup'],
+    );
+
     $worker = collect($branches)->first(
         fn (array $branch): bool => ($branch['properties']['type']['enum'] ?? null) === ['worker'],
     );
@@ -88,7 +92,7 @@ test('the node union locks each variant\'s required shape structurally', functio
     // from worker/rollup/parallel (e.g. `branches`, `with_outputs`, `next`)
     // fails here, where a substring check on the 'type' enum would not.
     expect($worker['required'])->toBe(['type', 'agent', 'prompt', 'with_outputs', 'next']);  // worker
-    expect($requiredSets)->toContain(['type', 'agent', 'prompt', 'with_outputs', 'next']);   // rollup
+    expect($rollup['required'])->toBe(['type', 'agent', 'prompt', 'with_outputs', 'next']);  // rollup
     expect($requiredSets)->toContain(['type', 'branches', 'next']);                          // parallel
     expect($requiredSets)->toContain(['type', 'output']);                                    // finish (literal)
     expect($requiredSets)->toContain(['type', 'output_from']);                               // finish (from node)

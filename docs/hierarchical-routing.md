@@ -159,6 +159,14 @@ The list form is concise when the node id is also the desired label:
 PHP-authored plans may keep using the alias-map form shown in the full worker
 example above.
 
+### Rollup Nodes
+
+Rollup nodes are worker-shaped nodes (`agent`, `prompt`, `with_outputs`, `next`)
+that digest the outputs named by `with_outputs`. `with_outputs` must name at
+least one node, in either form, and a rollup cannot define a `loop`. See
+[Rollup Nodes](streaming-substrate-author-guide.md#rollup-nodes) for what a
+rollup seals and how later nodes may reference it.
+
 ### Parallel Nodes
 
 Parallel nodes reference worker-node ids and fan out execution.

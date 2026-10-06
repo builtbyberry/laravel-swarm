@@ -530,7 +530,7 @@ class HierarchicalRoutePlanner
 
     /**
      * Accept an alias-to-node-id map or a list of node ids. Lists derive each
-     * alias from the node id; both shapes normalize to the persisted alias map.
+     * alias from the node id; both shapes normalize to one alias-to-node-id map.
      *
      * @return array<string, string>
      */

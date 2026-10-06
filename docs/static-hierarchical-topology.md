@@ -118,6 +118,10 @@ and type-specific keys.
 ],
 ```
 
+`with_outputs` also accepts a list of node ids (`['source_node_id']`), where each
+alias is the node id itself; see
+[Worker Nodes](hierarchical-routing.md#worker-nodes).
+
 When `with_outputs` is present the prompt is extended:
 
 ```
