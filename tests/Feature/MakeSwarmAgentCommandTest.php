@@ -2,12 +2,13 @@
 
 declare(strict_types=1);
 
+use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 
 afterEach(function () {
-    foreach (glob(app_path('Ai/Agents/*.php')) ?: [] as $file) {
-        File::delete($file);
+    foreach (['OutlineWriter', 'CustomStubAgent', 'ShapeCheckAgent'] as $class) {
+        File::delete(app_path("Ai/Agents/{$class}.php"));
     }
 });
 
@@ -28,7 +29,8 @@ test('make:swarm:agent generates an agent class in app/Ai/Agents', function () {
         ->toContain('use BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent;')
         ->toContain('public function instructions(): string')
         ->toContain('protected function reply(string $prompt): string')
-        ->toContain('// TODO: swap ScriptedAgent for a real Promptable agent')
+        ->toContain('php artisan make:agent OutlineWriterNative')
+        ->toContain('// TODO: replace this deterministic response with application behavior.')
         ->toContain('declare(strict_types=1);');
 });
 
@@ -82,7 +84,7 @@ STUB);
     }
 });
 
-test('make:swarm:agent generated class compiles and matches the starter-example shape', function () {
+test('make:swarm:agent preserves the deterministic offline compatibility shape', function () {
     $path = app_path('Ai/Agents/ShapeCheckAgent.php');
 
     File::ensureDirectoryExists(dirname($path));
@@ -91,13 +93,18 @@ test('make:swarm:agent generated class compiles and matches the starter-example 
 
     $contents = File::get($path);
 
-    // Visual consistency with stubs/examples/*/app/Ai/Agents/*.php:
-    // - extends ScriptedAgent
-    // - has instructions() returning a string
-    // - has protected reply(string $prompt): string with a TODO comment
     expect($contents)
         ->toMatch('/class ShapeCheckAgent extends ScriptedAgent/')
         ->toMatch('/public function instructions\(\): string/')
         ->toMatch('/protected function reply\(string \$prompt\): string/')
-        ->toContain('// TODO: swap ScriptedAgent for a real Promptable agent');
+        ->toContain('deterministic offline')
+        ->toContain('php artisan make:agent ShapeCheckAgentNative');
+});
+
+test('make:swarm:agent help keeps the native model-agent guidance explicit', function () {
+    $command = app(Kernel::class)->all()['make:swarm:agent'];
+
+    expect($command->getDescription())
+        ->toContain('deterministic offline swarm agent')
+        ->toContain('use make:agent for model agents');
 });

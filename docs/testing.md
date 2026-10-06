@@ -5,9 +5,27 @@ Laravel Swarm includes two complementary testing styles:
 - faking swarm execution
 - asserting against real persisted or dispatched runtime behavior
 
-Most tests should start with fakes.
+Most tests should start with fakes. Model-agent tests should use the native
+agent class's `fake()` method so its `Promptable` tool loop and streaming surface
+are exercised:
 
-For provider-free example agents, extend
+```php
+use App\Ai\Agents\ReleaseNoteWriter;
+use App\Ai\Swarms\ReleaseNotesSwarm;
+use Laravel\Ai\Responses\Data\ToolCall;
+
+ReleaseNoteWriter::fake([
+    new ToolCall('call-1', 'lookup_release_notes', ['release' => 'v0.28.0']),
+    'Release notes are ready.',
+])->preventStrayPrompts();
+
+$events = iterator_to_array(ReleaseNotesSwarm::make()->stream('Draft notes'));
+```
+
+This path needs no API key and makes no external provider request. See the
+executable [Native Agent Onboarding](native-agent-onboarding.md) example.
+
+For deterministic non-model example agents, extend
 [`ScriptedAgent`](../src/Testing/ScriptedAgent.php) and implement `reply(string)`.
 Its native-compatible prompt signature rejects `AgentInput`, `UserMessage` and
 `Decisions` before invoking that string reply; use a native `Promptable` agent
@@ -44,8 +62,11 @@ Their responses use the Swarm-owned internal
 job-shaped object and no dispatch on destruction. Fluent queue configuration
 returns the same response without scheduling work or updating durable routing.
 Condition callbacks passed to `when()` / `unless()` still run normally; deferred
-chain and deduplicator callbacks do not. Queued `then()` / `catch()` remain
-unsupported and throw rather than simulate completion.
+chain and deduplicator callbacks do not. With `swarm.callbacks.enabled` off (the
+default), queued `then()` / `catch()` throw. With it on and the database persistence
+driver configured, `SwarmFake::queue()` returns a real `QueuedSwarmResponse` whose
+[`then()` / `catch()`](error-handling.md#terminal-workflow-callbacks) register against
+the real callback outbox. Lifecycle events remain the always-on, guaranteed path.
 
 Fake intent does not prove provider calls, queue serialization, worker execution,
 durable coordination, database writes, or audit effects. Execute real Swarm jobs
@@ -102,6 +123,13 @@ ArticlePipeline::assertQueued('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertStreamed('Draft a blog outline about Laravel queues.');
 ArticlePipeline::assertDispatchedDurably('Draft a blog outline about Laravel queues.');
 ```
+
+These assertions normalize a message-bearing Laravel AI `AgentInput`, then compare
+native `UserMessage` values by message content and
+attachment values rather than PHP object identity. Native messages are recorded
+consistently in prompt, queue, durable, and consumed stream/broadcast buckets.
+Fakes still prove dispatch intent only; use mocked provider HTTP for wire-shape
+parity and the process-concurrency lane for cross-process reconstruction.
 
 Durable operator features should be tested through the manager or response
 helpers:

@@ -28,7 +28,9 @@ jobs:
         with:
           php-version: '8.5'
           tools: composer:v2
-          coverage: pcov
+          # This lane runs the full suite without collecting coverage. Loading
+          # a coverage engine adds risk and overhead without producing evidence.
+          coverage: none
           ini-values: memory_limit=1G
 
       - name: Preserve production manifest
@@ -78,7 +80,7 @@ jobs:
           fi
 
       - name: Execute tests
-        run: composer test
+        run: composer test:ci
 
       - name: Execute process concurrency validation
         run: composer test:process-concurrency:ci

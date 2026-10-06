@@ -176,6 +176,7 @@ function invocationsNotOwnedByThisPackage(): array
         'swarm:example:contact-extraction',
         'swarm:example:conversation-memory',
         'swarm:example:streaming',
+        'swarm:example:media-retrieval',
         // Generated into the consuming app by `make:swarm:blueprint`, which
         // mints a `swarm:run:<name>` runner alongside the blueprint
         // (MakeSwarmBlueprintCommand::327) — a different owner from the

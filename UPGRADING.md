@@ -1,8 +1,552 @@
 # Upgrading Laravel Swarm
 
+## Upgrading to v0.28.0
+
+Use the explicit `0.27-to-0.28` upgrade-assistant recipe. Preview first, select
+only action IDs from that report, then apply them with the same recipe and digest:
+
+```bash
+php artisan swarm:upgrade --recipe=0.27-to-0.28 --json
+php artisan swarm:upgrade --recipe=0.27-to-0.28 \
+  --apply=dependency:builtbyberry/laravel-swarm \
+  --expect=THE_64_CHARACTER_PREVIEW_DIGEST --yes
+```
+
+The recipe targets core 0.28.0 while retaining the supported `laravel/ai ^1.0`
+line (its minimum remains 1.0.0 rather than forcing v1.1.0). It targets Pulse
+0.2.0, Filament 0.4.0, MCP 0.3.0, and memory-vector 0.3.0, the companion releases
+that add `^0.28` support and ship with core v0.28.0. Until those versions are
+published, the companion targets cannot be installed. The assistant is offline:
+it does not verify publication or resolve Composer, so keep the Composer dry-run
+and package-availability checks manual. See the
+[upgrade-assistant guide](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/upgrade-assistant.md#swarm-v028-recipe).
+
+### Required for every upgrade
+
+- **Migrate before the code swap on database persistence.** Make the v0.28
+  migrations available, then run `php artisan migrate` before any v0.28 process
+  serves traffic; execution fails closed until the
+  [native step-result migration](#native-step-result-readers-and-storage) is
+  present. Applications with published migrations, or with
+  `LaravelSwarm::$runsMigrations = false`, must copy the new package migrations
+  into the application first.
+- **Restart long-lived HTTP and queue workers** after the
+  [migration and deploy](#native-step-result-readers-and-storage).
+- **Configure a valid `APP_KEY` before queueing a swarm.** See
+  [Encrypted queued swarm payloads](#encrypted-queued-swarm-payloads).
+- **Clear and rebuild the configuration cache** so the new defaults and
+  environment values are loaded. See
+  [Native chat protocol adapters](#native-chat-protocol-adapters).
+
+After the first v0.28 native step result is written, a code rollback requires
+the [drain procedure](#native-step-result-readers-and-storage) before old code is
+deployed.
+
+### Authored parallel and hierarchical swarms
+
+In v0.27, every parallel **agent class** already had to be container-resolvable:
+the runner resolved each class inside its worker callback. An agent with a
+runtime constructor argument the container could not supply therefore already
+failed with `parallel agent [...] must be container-resolvable because Laravel
+Concurrency serializes worker callbacks.` That agent rule is not new in v0.28.
+
+v0.28 additionally requires an authored parallel **swarm class** to be
+container-resolvable. Each worker resolves a fresh swarm and selects the same
+slot from that reconstructed swarm's `agents()` result; the slot must still be a
+Laravel AI agent. This applies with every v0.28 feature flag off and also to
+authored hierarchical parallel groups. If the parent-selected agent class differs
+from the reconstructed slot's class, that selected class must be independently
+container-resolvable as the fallback.
+
+The authored-parallel preflight exceptions are:
+
+- `{$swarmClass}: authored parallel swarms must be container-resolvable so worker slots can be reconstructed.`
+- `{$swarmClass}: authored parallel agent slot [{$index}] must reconstruct to a Laravel AI agent.`
+
+Affected applications are those whose authored swarm constructor needs runtime
+values, or whose `agents()` list/classes depend on mutable instance state. Bind
+ordinary service dependencies in the container, make `agents()` return a stable
+slot layout when the swarm is freshly resolved, and carry request- or run-specific
+values in task input or `RunContext`, not mutable swarm or agent instances.
+
+### Laravel security advisory
+
+Laravel 13.16 through 13.29 are affected by advisory
+`PKSA-d5tc-s1qs-h781` / CVE-2026-102279, fixed in Laravel 13.30.0. Laravel
+Swarm's declared floor remains `^13.16`; applications should run Laravel 13.30
+or later.
+
+### Companion packages
+
+`laravel-swarm-pulse`, `laravel-swarm-filament`, `laravel-swarm-mcp`, and
+`laravel-swarm-memory-vector` add `^0.28` core compatibility in their own
+releases. If an application uses a companion, upgrade core only after the
+companion release that permits `^0.28` is available.
+
+### Laravel AI provider-tool filtering
+
+Laravel AI v1.1.0 and later expose
+`Laravel\Ai\Gateway\TextGenerationLoop::toolsSupportedBy()` and skip a provider tool
+the selected provider does not support and send the request without it, so
+provider failover continues. Laravel AI v1.0.1 and earlier throw before any
+request is sent. Swarm inherits whichever behavior is installed: it adds no
+compatibility check and emits no event for a skipped tool. If an application
+needs strict rejection, validate provider and tool compatibility in application
+code. Detect the installed behavior with
+`method_exists(\Laravel\Ai\Gateway\TextGenerationLoop::class, 'toolsSupportedBy')`.
+Both behaviors are within Swarm's supported `laravel/ai ^1.0` dependency range,
+so do not infer the behavior from the Swarm version alone.
+
+### Native ownership, limits, and legacy retirement
+
+No action is required. This release records the native-first ownership contract in
+[Native Ownership and Limits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-ownership-and-limits.md): what Swarm
+delegates to native Laravel AI, the limits it keeps on purpose, and the deprecation
+schedule. Two points to be aware of:
+
+- Structured-output agents still cannot be streamed — upstream `laravel/ai` v1.0.1
+  rejects it. Swarm fails loud early with `StructuredOutputStreamingException`; run
+  those agents with `prompt()` / `run()`, `queue()`, or durable non-streaming
+  execution. Nothing changes unless you stream a structured-output worker today.
+- Native conversation storage, authorization, retention, and encryption are owned by
+  your application and Laravel AI — Swarm capture and sealing do not cover native
+  rows. See [Native Conversation Upgrade](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-conversation-upgrade.md).
+
+`BuiltByBerry\LaravelSwarm\Contracts\Agent`, deprecated since v0.23.0, remains
+available and unchanged; it is now tracked for removal in v1.0
+([#547](https://github.com/builtbyberry/laravel-swarm/issues/547)). New code should
+type-hint `Laravel\Ai\Contracts\Agent` directly. No symbol is removed in this release.
+
+### Encrypted queued swarm payloads
+
+The jobs behind `queue()` and `broadcastOnQueue()` carry the run's input, data,
+metadata, and artifacts inline. They now implement Laravel's `ShouldBeEncrypted`,
+so that payload is encrypted with your `APP_KEY` in the queue backend and in
+`failed_jobs`, matching the at-rest sealing of `swarm_*` rows. Durable, resume,
+compaction, and callback jobs are unchanged: they carry only identifiers.
+There is no opt-out for queued swarm encryption. The queue carries the same
+regulated payload, and broker-level encryption does not cover a database queue
+or `failed_jobs`.
+
+- **An application key is now required to queue a swarm.** Applications that use
+  the default cache persistence may not have needed one for Swarm before. Without
+  a valid `APP_KEY`, `queue()` and `broadcastOnQueue()` throw
+  `NonQueueableSwarmException` at the call site, before input is admitted or a job
+  is queued. The message names the swarm class and `APP_KEY`; for a missing key,
+  the previous exception is Laravel's `MissingAppKeyException`. This also applies
+  to sync queues and tests because `SyncQueue` builds the encrypted payload.
+- **Every dispatcher and worker must share the same `APP_KEY`.** When you rotate it,
+  keep the old key in `APP_PREVIOUS_KEYS` until queued and failed swarm jobs written
+  under it have run or been flushed. A job that no configured key can decrypt fails
+  before its handler, logs a warning, and emits a degraded `job.failed` with a null
+  `run_id`. Add the old key to `APP_PREVIOUS_KEYS` before `queue:retry`, or remove
+  the row with `queue:forget` / `queue:flush`. See
+  [APP_KEY Rotation](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/app-key-rotation.md).
+- **No queue drain is needed for encryption.** Laravel decides per job whether a
+  stored command is encrypted, not per class. A v0.28 worker runs plaintext jobs
+  queued by v0.27, and a v0.27 worker runs encrypted `InvokeSwarm` and
+  `BroadcastSwarm` jobs. `queue:retry` works for both. The native-input and
+  native-settings job classes exist only in v0.28, so keep the existing rule:
+  upgrade every worker before enabling those writers.
+- **Encryption only covers jobs queued after the upgrade.** Jobs already waiting in
+  the queue and existing `failed_jobs` rows stay plaintext, including through
+  `queue:retry`, until they complete or are removed with `queue:forget` /
+  `queue:flush`.
+- **Payloads grow.** An encrypted command is about 1.8x the size of the plaintext
+  one. If you queue large inline inputs, check your queue backend's maximum job
+  size. `swarm.limits.max_input_bytes` bounds the plaintext input before encryption,
+  not the stored queue payload.
+- **Rollback** is safe for job execution while the old worker has a matching key.
+  A rolled-back worker has none of the new encrypted fallback telemetry code, so a
+  failure before the handler produces no warning or degraded `job.failed` while
+  encrypted jobs remain.
+- Anything that read the run from a stored job's `data.command` now sees ciphertext.
+  `displayName` (the swarm class) and `data.commandName` stay readable. See
+  [Observability: logging and tracing](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/observability-logging-tracing.md) for
+  safe payload correlation.
+- `Queue::createPayloadUsing()` hooks and `JobQueueing` / `JobQueued` listeners,
+  including Telescope, still receive the plaintext job object. Hook-added payload
+  keys are stored in plaintext and are not sealed by this change.
+- **Post-upgrade smoke check:** queue one swarm and confirm `job.completed` and
+  `run.completed`; a key mismatch should fail with `DecryptException`.
+
+### Terminal workflow callbacks
+
+Terminal workflow callbacks are **experimental** in v0.28: the feature, its
+settings, and its contracts may change or be removed in a later `0.x` release
+without a deprecation cycle (see [Experimental surfaces](#experimental-surfaces)).
+Lifecycle events remain the stable path.
+
+Terminal workflow callbacks are default-off behind
+`swarm.callbacks.enabled` / `SWARM_CALLBACKS_ENABLED`. Registration requires the
+database persistence driver, and every process that registers or delivers a
+callback must have the same valid `APP_KEY`.
+
+Package migration `2026_09_26_000001` creates
+`swarm_callback_deliveries` for every consumer that runs the package
+migrations. Roll out callbacks in this order:
+
+1. Run `php artisan migrate`.
+2. Deploy v0.28 to every application and worker process.
+3. Schedule `swarm:relay`.
+4. Enable `SWARM_CALLBACKS_ENABLED=true`.
+
+A plain `queue()` application that did not previously use durable execution or
+the audit outbox must newly schedule the relay before enabling callbacks. A bare
+`swarm:relay` drains the durable, audit, and callback lanes;
+`swarm:relay --type=callback` selects only callback deliveries. Code that
+matches `RelayLane` exhaustively must handle the new `RelayLane::Callback` case.
+
+This fix adds four callback delivery settings:
+
+- `swarm.callbacks.queue.connection` /
+  `SWARM_CALLBACKS_QUEUE_CONNECTION` (default `null`) routes delivery jobs to a
+  queue connection.
+- `swarm.callbacks.queue.name` / `SWARM_CALLBACKS_QUEUE` (default `null`) routes
+  delivery jobs to a queue; null routing uses the application's defaults.
+- `swarm.callbacks.retry_backoff_seconds` /
+  `SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS` (default `60`) delays a retry after a
+  callback or queue-dispatch failure and is clamped to at least one second.
+- `swarm.callbacks.stale_warning_threshold_seconds` /
+  `SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS` (default `0`) controls when
+  eligible work warns in `swarm:health`; zero means twice the effective
+  reservation timeout.
+
+Size `swarm.callbacks.reservation_timeout_seconds` /
+`SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS` above the longest expected
+callback execution, including queue delay. Delivery is at-least-once, and an
+expired lease can overlap a still-running callback, so callbacks must be
+idempotent. A worker must consume the configured callback queue/connection;
+`swarm:health` fails when an enabled configured connection is absent from
+`queue.connections` and reports a note while callbacks are disabled. The
+`swarm.callbacks.enabled` kill switch stops registration and
+deliveries that have not started; rows registered earlier still settle with
+their run and resume after re-enablement. A delivery already executing is not
+interrupted.
+
+A callback exception is reported through the application's exception handler
+before the outbox retries or dead-letters it. The stored `last_error` reason is
+sealed; the package's dead-letter log line includes identifiers, attempts, a
+static reason, and the exception class, but never the exception message.
+`swarm:health` warns on aged eligible work, stale reservations/deliveries, and
+dead letters. `swarm:prune` removes eligible callback rows before their expired
+run history and never prunes a `delivering` row. A positive
+`swarm.callbacks.dead_letter_retention_days` may remove dead letters sooner;
+null disables age-based dead-letter pruning but does not preserve a row after its
+run history expires. Only positive callback readiness is cached per process;
+missing or transiently unreadable schema is re-probed so workers can recover
+after the migration appears.
+
+Before rolling back the callback migration, stop new callback registration and
+run:
+
+```bash
+php artisan swarm:relay --type=callback --drain-until-empty
+```
+
+Wait for the dispatched callback deliveries to finish, then stop or restart all
+long-lived workers. `swarm:health` reports only aggregate callback counts and a
+dead-letter warning; there is currently no callback list or requeue command. If
+dead letters remain, inspect them with database tooling in the table configured
+by `swarm.tables.callback_deliveries` (default
+`swarm_callback_deliveries`), filtering `status = 'dead_letter'` and reviewing
+the id, run id, slot, attempts, and timestamps. The stored `last_error` is sealed.
+Reconcile the callback's intended side effect by hand before disposing of the row.
+
+For a rollback that can wait, let `swarm:prune` remove the row after the positive
+`swarm.callbacks.dead_letter_retention_days` window (measured from
+`last_attempted_at`), or when the associated terminal run history has expired.
+If rollback cannot wait, delete the reconciled dead-letter rows directly from
+the configured callback-delivery table before the down migration. That deletion
+is irreversible and discards the sealed failure reason, so record the identifiers
+and any required incident evidence first. Do not run the down migration until no
+callback rows remain. See
+[Terminal workflow callbacks](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/error-handling.md#terminal-workflow-callbacks)
+for the runtime contract and operating guidance.
+
+#### Run history is write-once on database persistence
+
+No configuration action is required. A stored database terminal outcome is now
+write-once for terminal writers: without an execution token, they cannot change
+a run already marked `completed`, `failed`, or `cancelled`.
+`failWithMetadata()` and `recordPreflightFailure()` also leave the finished row
+and its metadata untouched. The cache history store is unchanged.
+
+This protects stored history only. A failure event can still follow a completed
+run when an exception occurs after completion, unchanged from v0.27 and tracked
+for a later release. Even with callbacks disabled, each finished database run
+performs one indexed callback-existence check. Callback-free terminal writes add
+no transaction except `recordPreflightFailure()`, which now always opens one
+transaction so its write-once check and `updateOrInsert()` are atomic.
+
+### Native chat protocol adapters
+
+Vercel and AG-UI projection is default-off. Applications with a published
+`config/swarm.php` do not need to republish the file: v0.28 recursively supplies
+the missing `streaming.native_protocols.enabled` default while preserving every
+published override. Associative configuration sections receive missing defaults;
+application-defined lists, such as `durable.job.backoff_seconds`, remain atomic
+and are not extended with package defaults. Set
+`SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED=true` only after the endpoint has selected
+its projection and enforces tenant authorization around persisted replay.
+
+If configuration is cached, clear and rebuild it after deploying v0.28 so the
+new package default and environment value are present in the cached array:
+
+```bash
+php artisan config:clear
+php artisan config:cache
+```
+
+Changing the environment variable without rebuilding cached configuration does
+not activate or deactivate the adapter. Restart long-lived HTTP and queue
+workers after rebuilding the cache. Rollback remains revert-safe after active
+protocol streams drain.
+
+### Native agent authoring
+
+Use Laravel AI's `php artisan make:agent <Name>` command for new model-backed
+agents. Pass `--structured` when the agent returns schema-backed output, and add
+the generated class directly to a swarm. See
+[Native Agent Onboarding](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-agent-onboarding.md) for the tool and
+streaming tutorial that uses `Agent::fake()` without an external provider
+request.
+
+This transition is non-breaking. `make:swarm:agent` and deprecated
+`make:swarm --single` keep their existing command names, arguments, namespaces,
+`ScriptedAgent` inheritance, and published-stub precedence. The upgrade does not
+rewrite existing agent classes or application-published `stubs/swarm.agent.stub`
+and `stubs/swarm.single-agent.stub` files. Those commands now describe their
+actual supported purpose: deterministic offline helpers and compatibility
+scaffolds.
+
+Laravel AI and Swarm stubs remain independent. Publish Swarm generator stubs with
+`vendor:publish --tag=swarm-stubs`; publish Laravel AI's native agent and
+structured-agent stubs with `vendor:publish --tag=ai-stubs`. If replacing an
+offline helper with a model agent, generate a new native class and port only the
+application-owned instructions, tools, and schema before changing callers.
+
+No migration, feature flag, config key, persistence, pruning, transaction,
+recovery, or operational command change is introduced by this authoring update.
+Rollback is a code revert; consumer files remain untouched.
+
+### Native messages and attachments
+
+Native Laravel AI `UserMessage` and message-bearing `AgentInput` workflow input is
+additive and default-off. An `AgentInput` carrying approval decisions is rejected
+before its message is read; approval continuation remains a separate workflow. Run
+the package migration and deploy v0.28 readers to every queue and durable worker
+before setting `SWARM_NATIVE_INPUTS_ENABLED=true`. Configure database persistence,
+application-layer sealing, and a private `SWARM_NATIVE_INPUTS_DISK`; bind
+`AuthorizesNativeInputAttachment` before admitting application-owned stored or
+provider-file references. See [Native messages and attachments](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-inputs.md)
+for the complete deployment and drain-before-rollback procedure.
+
+Recoverable native input must be admitted outside an open database transaction.
+The staged sealed envelope is the failure-recovery locator for promoted files;
+an outer rollback after a filesystem write would destroy that invariant.
+
+Before rotating `APP_KEY`, drain or re-encrypt active `swarm_native_inputs.payload`
+values along with the existing sealed operational inventory. These envelopes use
+strict decryption and cannot be reconstructed with the wrong key.
+
+### Top-level parallel live streaming
+
+No migration is required. The capability is default-off. Deploy v0.28 code to
+every HTTP and queue worker, configure Laravel's concurrency driver as `process`,
+run `php artisan swarm:health --parallel-streaming` in the serving environment,
+require the `Parallel live streaming` row to report `ok`, and only then set
+`SWARM_PARALLEL_STREAMING_ENABLED=true` for endpoints that use a top-level
+parallel swarm's `stream()` or broadcast helpers.
+
+Laravel Swarm recursively backfills newly shipped nested defaults into an
+existing published `config/swarm.php` while preserving application overrides.
+You do not need to republish or manually copy the `streaming.parallel` block.
+Confirm `config('swarm.streaming.parallel.enabled')` reflects the environment
+after clearing and rebuilding the application's configuration cache.
+
+Parallel branch events add optional wire keys. Existing replay rows and
+non-parallel events omit them; branch-scoped events contain string `branch_id`,
+string `attempt_id`, and integer `branch_sequence`. The PHP object properties
+remain nullable for compatibility. Update exhaustive event consumers before
+enabling the writer. Order only within one `(branch_id, attempt_id)` by
+`branch_sequence`; arrival order across branches is not a causal order. Native
+IDs remain unchanged and can repeat across branches.
+
+Text and function-tool stream events also add an optional `payload_status` wire
+key by default, without a feature flag; text events include `message_id` when the
+native event supplies one. Older replay rows can omit these additive keys.
+
+The live path requires the `process` driver. `sync`, `fork`, and custom drivers
+fail before agent invocation because their public result is buffered. Use
+`prompt()` where process streaming is unavailable. There is no automatic
+buffered fallback. Tune `max_branches`, `max_frame_bytes`, and cancellation grace
+for the worker's process and memory budgets; a frame is one atomic event and is
+never split. `max_branches` is a per-stream branch-process admission limit, not a
+raw file-descriptor or application-wide ceiling. Each branch owns several
+descriptors, so budget aggregate capacity as concurrent live streams times
+`max_branches` and enforce that capacity through application HTTP/queue
+concurrency controls or a rate limiter.
+
+On a branch failure, protocol failure, deadline, or client disconnect, partial
+events may already have reached the consumer. The run fails and active siblings
+are canceled/reaped. Retry only under the application's normal effect/idempotency
+policy. Broadcast transport retry remains Laravel/application-owned. Existing
+stream replay retention and `swarm:prune` ownership apply; this feature adds no
+new persistent table, retention hook, or standalone command. It extends the
+existing `swarm:health` command with `--parallel-streaming`; after the feature is
+enabled, bare `swarm:health` runs the same provider-free transport check.
+
+Stream responses add advisory `Cache-Control: no-cache, no-transform` and
+`X-Accel-Buffering: no` headers. Verify application-server, FastCGI/proxy, and
+CDN flushing end to end before treating browser delivery as live.
+
+Rollback is safe only after active live streams drain. Disable
+`SWARM_PARALLEL_STREAMING_ENABLED`, restart long-lived workers so no new parallel
+streams begin, stop or drain the queue that owns queued broadcasts, and wait for
+the serving layer to report zero active streaming requests and the broadcast
+queue to report zero active/reserved jobs before deploying old readers.
+`swarm:history --status=running` can identify known persisted runs, but it is
+advisory rather than an authoritative active-connection count; use the HTTP
+server/load balancer and queue worker as the rollback stop condition. Retaining
+replay rows with the optional identity keys is schema-safe, but older consumers
+may discard the optional keys and cannot reconstruct cross-branch provenance.
+
+### Widened method signatures
+
+The `Runnable`, inline pending-run, and `SwarmFake` execution verbs now accept
+`AgentInput|UserMessage` in addition to string, array, and `RunContext`.
+The `Runnable` static assertion helpers and `SwarmFake` instance assertions
+also widen the task parameters on `assertPrompted()`, `assertRan()`,
+`assertQueued()`, `assertDispatchedDurably()`, and `assertStreamed()`.
+Subclasses of `SwarmFake` must also widen overrides of the protected
+`resolveResponse()`, `matchesStructuredTask()`, and `actorFromTask()` helpers.
+`RunContext::from()` and
+`RunContext::fromTask()` accept the native input types as well.
+
+Applications that override these methods with the old narrower parameter union
+must add both types to remain PHP-signature-compatible. Subclasses overriding
+`SwarmRelayCommand::handle()` must also add its new
+`CallbackDeliveryOutbox $callbackOutbox` parameter. Only subclasses that
+override one of these methods need to change; `SwarmPruneCommand::handle()`
+retains its existing public signature.
+
+### Native per-run agent settings
+
+Deploy this release's v2 readers and restart every queue, durable and concurrency
+worker before setting `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true`. The v2 flag is a
+layered writer: `SWARM_NATIVE_INPUTS_ENABLED=true` is required first because v2
+settings use the base sealed native-input envelope. Disabling only the v2 writer
+does not stop already-admitted v2 references from draining. Roll out in this order:
+
+1. Run the v0.28 native-input migration and deploy v1/v2-capable readers with both writer flags off.
+2. Enable `SWARM_NATIVE_INPUTS_ENABLED=true` before admitting native input or settings.
+3. After every worker is on v0.28, enable `SWARM_NATIVE_AGENT_SETTINGS_ENABLED=true`.
+4. Before rollback, disable the settings writer, restart long-lived workers, drain
+   active v2 envelopes, wait through retention, run `swarm:prune`, and confirm
+   `swarm:health` reports zero total v2 envelopes before removing v2 readers.
+
+`RunContext::withAgentConfiguration()` accepts topology-stable
+`NativeInputRecipient` values. Laravel AI `withTools()` configuration persists for
+each recipient invocation; `withMessages()` is one-shot and is consumed only with
+the owning successful step/checkpoint transaction. Recoverable message attachments
+use the same private-disk promotion, content verification and prune path as direct
+native input. Operational settings stay in the cipher-sealed native-input envelope
+even when capture is disabled; they are not history or audit evidence.
+
+Do not pass closures, resolved container services or runtime tool objects. Use
+`NativeAgentToolReference`, or register a `NativeAgentToolFactory` under
+`swarm.native_agent_settings.tool_factories` and pass a
+`NativeAgentToolFactoryReference`. Factory output is expanded once at admission
+and the resulting class/argument descriptors are sealed.
+
+An explicit empty override remains meaningful: `withTools([])` disables declared
+agent tools and `withMessages([])` applies empty ad-hoc history. Recoverable
+non-empty messages require `swarm.history.driver=database`; otherwise admission
+fails because terminal history and one-shot consumption cannot commit atomically.
+Custom `NativeInputStore` implementations that support these messages must also
+implement `ConsumesNativeInputMessages`, including the same-connection transaction
+callback. Legacy/custom readers may omit `format_version` from `find()` while
+upgrading; v0.28 derives it from the sealed payload.
+
+Authored concurrent swarms reconstruct the swarm definition and select the same
+stable slot/node. With the settings writer enabled, ad-hoc concurrent builders must
+declare settings for every reconstructed recipient; otherwise dispatch fails with
+guidance instead of dropping live instance state. This may expose unsafe ad-hoc
+parallel construction that previously happened to work. Keep the writer disabled
+until those call sites use explicit recipient settings or an authored swarm.
+
+Native conversation continuation is denied by default. Bind
+`AuthorizesNativeAgentConversation`; recoverable execution also requires an existing
+conversation ID, an Eloquent participant and a Laravel AI conversation store that
+verifies ownership. New conversations remain request-local. A recipient cannot
+combine `withMessages()` and a native conversation, and Laravel AI
+`Conversational` agents cannot receive `withMessages()` at all.
+
+Request-local message attachments now enforce the same authorization and size/count
+limits as background work. Recoverable message attachments with headers or provider
+options fail before dispatch; move those files to top-level native input when their
+invocation profile must be frozen. The complete encoded operational envelope is
+also bounded by `swarm.limits.max_input_bytes` before persistence or file promotion.
+
+Seeded `withMessages()` history is bounded per recipient: 100 messages and 1 MiB
+encoded by default, on both request-local and recoverable admission. Raise
+`SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGES` or
+`SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGE_BYTES` before enabling the writer when
+larger bounded histories are required; configured values are capped at 1,000
+messages and 16 MiB. For durable runs, keep every per-recipient provider timeout
+below `SWARM_DURABLE_STEP_TIMEOUT` (300 seconds by default) so the step lease
+cannot expire mid-call.
+
+Recovery re-applies the current seeded-message limits to stored envelopes. Drain
+in-flight runs before lowering either limit, or a run admitted under the earlier
+higher value can fail when a worker reconstructs it.
+
+Before removing native-input v2 readers, `swarm:health` must report zero active,
+zero total v2, and zero expired-unpruned envelopes. If `swarm:prune` retains an
+envelope, restore its disk and delete permissions or its encryption key
+(`APP_PREVIOUS_KEYS` is honored) and rerun prune; there is no force-discard
+option.
+
+These settings do not propagate into durable child swarms. Child recovery and
+inheritance remain v0.29 work; configure a child explicitly rather than depending
+on parent state.
+
+### Native step result readers and storage
+
+Completed `SwarmStep` values now expose a bounded, versioned
+`NativeStepResult`. On database persistence, every run in every process —
+including inline `prompt()`, `run()`, and `stream()` calls — fails closed with
+`SwarmException` until migration `2026_09_25_000001` has run. Cache persistence
+is unaffected. The migration adds nullable native-result status/payload columns
+to history steps, durable branches, durable node outputs, and stream step
+checkpoints. Restart long-lived workers after the migration. Existing rows read
+as `unavailable` / `legacy`; custom stores that do not adopt the optional
+native-result capabilities also degrade explicitly rather than fabricating data.
+
+Live result access does not override capture. Full output capture stores the
+bounded projection; Redact removes content and native conversation/message IDs.
+The shipped `SWARM_CAPTURE_OUTPUTS=false` path is Redact, not Skip. Only a custom
+capture policy returning Skip stores an `omitted` status without a payload.
+Database envelopes are sealed when encryption at rest is enabled. Owning history,
+durable, checkpoint, and hot replay rows are pruned normally; application-owned
+cold archives require their own deletion and legal-hold policy.
+
+Code rollback is unsafe after native results have been written while an affected
+identity can resume or retry. An old writer can update output/usage while leaving
+the new nullable native-result columns stale. Stop intake; drain or terminate
+active queued, durable, and streamed work; preserve or deliberately clean the
+evidence; deploy old code everywhere; and restart every long-lived worker before
+resuming. Retaining the columns only makes old readers schema-tolerant. Dropping
+them remains destructive: verify retention and evidence obligations before the
+migration down. Include direct and nested native-result envelopes in APP_KEY
+rotation. See [Native Step Results](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-step-results.md)
+for the field inventory, usage/citation ownership, privacy, bounds, and complete
+rollout/rollback procedure.
+
 ## Upgrading to v0.27.0
 
-The [adoption evidence index](docs/ai-1-release-evidence.md) records the reviewed
+The [adoption evidence index](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-release-evidence.md) records the reviewed
 candidate sources and migration proof; publication and your own application
 rehearsal remain separate requirements.
 
@@ -21,24 +565,24 @@ restarting production work.
 
 ### Explicit recipe and native conversation conversion
 
-The [upgrade assistant](docs/upgrade-assistant.md#laravel-ai-10-recipe) retains
+The [upgrade assistant](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/upgrade-assistant.md#laravel-ai-10-recipe) retains
 its old default. Select `--recipe=0.26-to-0.27` explicitly for this transition.
-Its static report cannot certify native database safety. The [reviewed companion source map](docs/ai-1-companion-evidence.md) selects
+Its static report cannot certify native database safety. The [reviewed companion source map](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-companion-evidence.md) selects
 Pulse 0.1.8, Filament 0.3.0, MCP 0.2.0 and memory-vector 0.2.0. The recipe handles
 present supported optional requirements without adding absent companions. Verify
-the [combined application proof](docs/ai-1-ecosystem-evidence.md) and actual package
+the [combined application proof](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-ecosystem-evidence.md) and actual package
 availability before resolving production dependencies; candidate proof is not
 publication.
 
-Follow the [native conversation upgrade procedure](docs/native-conversation-upgrade.md)
+Follow the [native conversation upgrade procedure](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-conversation-upgrade.md)
 for the application-owned executable migration, pending-turn disposition,
 configured connection/tables, custom-store signatures, authorization and tested
 backup/restore boundary. Stop all writers and stage the new autoload environment
 before running the migration; restart only after semantic verification. Do not
 run the migration on real data merely because dependency checks are green.
 
-See [persisted-state upgrade evidence](docs/ai-1-upgrade-evidence.md) for the
-representative old-worker/job/replay boundary, and the [preservation ledger](docs/ai-1-preservation-evidence.md)
+See [persisted-state upgrade evidence](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-upgrade-evidence.md) for the
+representative old-worker/job/replay boundary, and the [preservation ledger](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-1-preservation-evidence.md)
 for retained workflow guarantees and explicit exclusions.
 
 ### Native agent inputs and test agents
@@ -107,12 +651,13 @@ compatibility interpretation, not recovered original event provenance.
 
 Full, Redact and Skip retain the established function-tool capture rules for
 partial and final results. No new payload size budget or retention policy is
-introduced. See [streaming](docs/streaming.md#tool-calls-including-mcp-tools).
+introduced. See [streaming](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md#tool-calls-including-mcp-tools).
 Older readers can drop the new flags and mistake partials for finals. After this
 evidence is written, retain v0.27-capable readers and backups; a parseable older
-reader is not an evidence-preserving rollback. Native approval continuation,
-top-level parallel live streaming and queued whole-workflow callbacks retain
-their existing unsupported boundaries.
+reader is not an evidence-preserving rollback. Native approval continuation and
+queued whole-workflow callbacks retain their existing unsupported boundaries.
+Top-level parallel live streaming was still unsupported in v0.27; v0.28 adds the
+separately gated process-backed path described above.
 
 ## v0.26.3 provider-tool event readers
 
@@ -128,7 +673,7 @@ retain backups and v0.26.3 readers for audit, and do not run down migrations.
 Existing cold archives that already lost attempt metadata cannot be repaired by
 this upgrade. Internal database event/cold store constructors now take the composed
 stream payload codec. Custom event-store integrations should preserve the new
-fields and protected envelope; see [storage and compatibility details](docs/provider-tool-events.md).
+fields and protected envelope; see [storage and compatibility details](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/provider-tool-events.md).
 
 
 ## v0.26.2 citation evidence
@@ -137,7 +682,7 @@ Run migrations before starting v0.26.2 workers, then drain and restart existing 
 
 Response constructors add an optional final `citationEvidence` argument. End-event payloads add `citation_status`, `citation_reasons`, and `citations` (absent under Skip). New `swarm_citation` events require consumers with exhaustive event switches to add a case. Older payloads read as unknown evidence. Completed live streams now retain their executed steps in the response.
 
-Citations follow output capture and database encrypt-at-rest. They can contain sensitive URLs and titles. Byte/range provenance belongs to the original agent output, including when Swarm combines or truncates output. Custom stores can adopt the optional citation capabilities described in [citation evidence](docs/citations.md).
+Citations follow output capture and database encrypt-at-rest. They can contain sensitive URLs and titles. Byte/range provenance belongs to the original agent output, including when Swarm combines or truncates output. Custom stores can adopt the optional citation capabilities described in [citation evidence](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/citations.md).
 
 Code rollback is not evidence-loss-safe: older workers can discard fields and events. Keep the additive columns and retained replay data; do not drop the migration as a routine code rollback. Existing `swarm:prune` ownership and retention apply.
 
@@ -215,6 +760,18 @@ reachable through the public surfaces above is treated as public.
 Static analysis tools that respect `@internal` (PHPStan, Psalm) will flag
 application code that reaches into marked classes. Treat those warnings as a
 signal to switch to a public verb or open an issue describing the use case.
+
+### Experimental surfaces
+
+A surface documented as **experimental** is shipped for early use and feedback.
+It is outside the deprecation policy below: it may change or be removed in any
+later `0.x` release, minor or patch, and the change is recorded in the changelog.
+Experimental features are default-off. In v0.28 the experimental surface is
+terminal workflow callbacks: queued and durable `then()` / `catch()`, the
+`swarm.callbacks.*` configuration, `swarm:relay --type=callback`, the
+`CallbackDeliveryOutbox` and `ReadableCallbackDeliveryOutbox` contracts,
+`CallbackDrainResult`, `SwarmTerminalContext`, the `swarm_callback_deliveries`
+table, and the `callback.delivered` audit category.
 
 ### Deprecation policy
 
@@ -428,7 +985,7 @@ stability settings to install Swarm — see
 ## Upgrading to v0.26.1
 
 This additive support release introduces `swarm:upgrade` and the standalone
-`swarm-upgrade` entry point. See the [upgrade assistant](docs/upgrade-assistant.md)
+`swarm-upgrade` entry point. See the [upgrade assistant](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/upgrade-assistant.md)
 for pre-upgrade archive usage, read-only inspection, selected safe manifest edits,
 backups and guarded restore. No migration, capture default or orchestration
 behavior changes. Runtime and application-specific verification remain manual.
@@ -453,7 +1010,7 @@ repositories, synthetic metadata and installs against core v0.25 do not satisfy
 that gate. Verify published companion compatibility before applying this example
 to an app that installs them; the historical C5 contract harnesses are not that proof.
 
-The [44-row release evidence](docs/ai-0112-release-evidence.md) preserves public
+The [44-row release evidence](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-0112-release-evidence.md) preserves public
 verbs/aliases, response and operator types, attributes/config defaults, declared-class
 background constraints and supported deprecated helpers. The only selected removal
 is obsolete vendor fake coupling. Queued whole-workflow `then()` / `catch()` were
@@ -476,7 +1033,7 @@ These are contract clarifications, not new callback, history or recovery feature
 4. Retain `APP_KEY` for existing sealed rows. Key rotation without a compatible
    re-encryption/key strategy is a separate operation and can make rows unreadable.
 
-The [C5 upgrade evidence](docs/ai-0112-upgrade-evidence.md) records executed
+The [C5 upgrade evidence](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/ai-0112-upgrade-evidence.md) records executed
 v0.25 job/row fixtures, candidate-to-old-reader checks, a custom native
 `ConversationStore`, dependency lanes and bounded companion contract smoke.
 These fixtures do not validate every application's serialized classes. Validate
@@ -512,7 +1069,7 @@ Deploy the compatible reader and official dependency together, draining existing
 workers before switching code. This restriction also applies to evidence moved
 to cold storage. C2's approval rejection and nonretryability must remain intact.
 
-See [streaming provenance and failure stages](docs/streaming.md).
+See [streaming provenance and failure stages](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming.md).
 
 ### Native pending approval now fails explicitly
 
@@ -530,7 +1087,7 @@ No supported Swarm approval continuation is removed: native approval integration
 remains unavailable, and existing Swarm inter-step waits/signals remain supported.
 Inspect effects before manually restarting: other native tools, conversation
 storage and ordinary captured tool events may already exist. Do not treat the
-failure as proof that nothing acted. See [native approval outcomes](docs/native-outcome-boundary.md).
+failure as proof that nothing acted. See [native approval outcomes](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/native-outcome-boundary.md).
 
 No new schema, config, serialized job format or maintenance command is introduced.
 Deploy and roll back the official dependency/Swarm code pair together after worker
@@ -548,7 +1105,7 @@ Swarm now owns its internal fake pending dispatch. Queued and durable fake
 responses keep their public `PendingDispatch` constructor contract and fluent
 routing, but record intent only. They never wrap a real job or dispatch on
 object destruction. Unsupported response methods, including queued `then()`
-and `catch()`, still fail. See [testing limits](docs/testing.md#fake-dispatch-limits).
+and `catch()`, still fail. See [testing limits](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/testing.md#fake-dispatch-limits).
 
 Deploy the dependency and Swarm code as a pair: stop intake, drain in-flight
 calls and queued work, stop workers, update Composer dependencies and application
@@ -635,7 +1192,7 @@ Schedule::command('swarm:recover')
 The scheduler mutex uses Laravel's scheduler cache store; the command lease uses
 the configured overlap store. `swarm:health --durable` now validates and reports
 the command lease without acquiring it. See
-[Command overlap leases](docs/maintenance.md#command-overlap-leases).
+[Command overlap leases](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#command-overlap-leases).
 
 ### `DurableRunStore` interface: child-dispatch claim signatures changed (#431)
 
@@ -856,10 +1413,10 @@ No other contract changed, and no application-facing behavior changed.
 
 **No required action — additive, developer-experience release.** Every addition is new public surface you can adopt at your own pace. One behavior note before the list: `swarm:health` gains new checks that can exit non-zero (see below) — worth knowing if you gate CI on it.
 
-- **Class-free entry points.** `Swarm::agent($agent)` runs a single agent through the full governed pipeline, and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical($coordinator, [$workers])` run inline multi-agent swarms — all without authoring a `Swarm` class, all with the same audit, guardrails, capture, telemetry, and encrypt-at-rest as a class-based swarm. The class-free builders run **in-process** (`prompt`/`run`/`stream`/`broadcast`/`broadcastNow`); for **queued or durable** execution, author a one-agent `Swarm` class (`make:swarm:swarm YourSwarm`) *(corrected in v0.23.0 — this line originally named a one-agent flag on that command, which never existed)* — a background run is re-resolved from the container by class on the worker, which an ad-hoc swarm can't provide. See [Execution Modes](docs/execution-modes.md#single-agent-swarmagent) and the [Cookbook](docs/cookbook.md).
-- **Testing.** `SwarmFake::interceptSwarmAuditSink()` returns a recording sink with `assertAuditChain()`, `assertEmittedAudit()`, `assertNotEmittedAudit()`, and `assertStepCount()`. See [Testing](docs/testing.md#use-swarmfake-intercepts-for-the-audit-contracts-v07).
-- **`swarm:health`** gained governed-by-default checks (guardrails resolvable, audit sink reachable, capture policy sane), included in `--json`. **Behavior note:** the guardrail and capture-policy checks report `failed` (command exits non-zero) when a configured `swarm.guardrails.*` ref or the bound `CapturePolicy` cannot be resolved from the container — a *new* failure condition on this command. If you gate CI on `swarm:health` and have a broken binding, it will now surface here (it would have thrown mid-run regardless). The default `NoOpSwarmAuditSink` is reported as a `note`, not a failure. See [Maintenance](docs/maintenance.md).
-- **`make:swarm`** is now an interactive front door (single-agent vs. multi-agent, topology prompts) with a `--single` scaffold; non-interactive/`--no-interaction` usage is unchanged. See [Generators](docs/generators.md).
+- **Class-free entry points.** `Swarm::agent($agent)` runs a single agent through the full governed pipeline, and `Swarm::sequential()` / `Swarm::parallel()` / `Swarm::hierarchical($coordinator, [$workers])` run inline multi-agent swarms — all without authoring a `Swarm` class, all with the same audit, guardrails, capture, telemetry, and encrypt-at-rest as a class-based swarm. The class-free builders run **in-process** (`prompt`/`run`/`stream`/`broadcast`/`broadcastNow`); for **queued or durable** execution, author a one-agent `Swarm` class (`make:swarm:swarm YourSwarm`) *(corrected in v0.23.0 — this line originally named a one-agent flag on that command, which never existed)* — a background run is re-resolved from the container by class on the worker, which an ad-hoc swarm can't provide. See [Execution Modes](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/execution-modes.md#single-agent-swarmagent) and the [Cookbook](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/cookbook.md).
+- **Testing.** `SwarmFake::interceptSwarmAuditSink()` returns a recording sink with `assertAuditChain()`, `assertEmittedAudit()`, `assertNotEmittedAudit()`, and `assertStepCount()`. See [Testing](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/testing.md#use-swarmfake-intercepts-for-the-audit-contracts-v07).
+- **`swarm:health`** gained governed-by-default checks (guardrails resolvable, audit sink reachable, capture policy sane), included in `--json`. **Behavior note:** the guardrail and capture-policy checks report `failed` (command exits non-zero) when a configured `swarm.guardrails.*` ref or the bound `CapturePolicy` cannot be resolved from the container — a *new* failure condition on this command. If you gate CI on `swarm:health` and have a broken binding, it will now surface here (it would have thrown mid-run regardless). The default `NoOpSwarmAuditSink` is reported as a `note`, not a failure. See [Maintenance](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md).
+- **`make:swarm`** is now an interactive front door (single-agent vs. multi-agent, topology prompts) with a `--single` scaffold; non-interactive/`--no-interaction` usage is unchanged. See [Generators](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/generators.md).
 - **Laravel Boost.** The package ships Boost AI guidelines and a `swarm-development` skill; consuming apps pick them up via `php artisan boost:install`.
 
 No migration, config, or schema change. `Swarm::run()`, `prompt()`, and class-based swarms are untouched. See the [CHANGELOG](CHANGELOG.md) for the full list.
@@ -876,11 +1433,11 @@ None of laravel/ai's own breaking changes affect Swarm's integration surface: th
 
 ## Upgrading to v0.19.0
 
-**No required action — additive.** This release adds three public, read-only display seams for companion packages and external readers — `InspectsDurableRuns` (durable-run inspection), `ReadableRunHistoryStore` (run + step history), and `ReadableAuditOutbox` (audit-outbox health) — plus a `SwarmPersistenceCipher::openForDisplay()` helper. They are new interfaces, container-bound alongside the existing stores; no existing contract is widened, and there is no migration, config, or schema change. Every operational read (durable resume, guardrail, `RunHistoryStore::find()`, `AuditOutbox::drain()`) is untouched and still decrypts strictly / fails loud. If you are building an observability surface, bind these contracts instead of the `@internal` cipher or manager; otherwise nothing changes. See the [CHANGELOG](CHANGELOG.md#v0190---2026-07-08) and [Public Surface](docs/public-surface.md#read-only-inspection-contracts-v0190) for details.
+**No required action — additive.** This release adds three public, read-only display seams for companion packages and external readers — `InspectsDurableRuns` (durable-run inspection), `ReadableRunHistoryStore` (run + step history), and `ReadableAuditOutbox` (audit-outbox health) — plus a `SwarmPersistenceCipher::openForDisplay()` helper. They are new interfaces, container-bound alongside the existing stores; no existing contract is widened, and there is no migration, config, or schema change. Every operational read (durable resume, guardrail, `RunHistoryStore::find()`, `AuditOutbox::drain()`) is untouched and still decrypts strictly / fails loud. If you are building an observability surface, bind these contracts instead of the `@internal` cipher or manager; otherwise nothing changes. See the [CHANGELOG](CHANGELOG.md#v0190---2026-07-08) and [Public Surface](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/public-surface.md#read-only-inspection-contracts-v0190) for details.
 
 ## Upgrading to v0.18.0
 
-**No required action — additive.** This release adds the `make:swarm:blueprint` generator and four new curated blueprint trees (`triage`, `extraction`, `memory`, `streaming`) to the starter corpus. It is purely additive — a new Artisan command plus new stub files, with no migration, config, schema, or breaking API change. `swarm:install:examples`' behavior and file output are unchanged (it now also skips the package-side `blueprint.json` metadata alongside `README.md`). If you want the new scaffolder, run `php artisan make:swarm:blueprint <Name> --template=<slug>`; otherwise nothing changes. See the [CHANGELOG](CHANGELOG.md#v0180---2026-07-07) and [Generators](docs/generators.md#make-swarm-blueprint) for details.
+**No required action — additive.** This release adds the `make:swarm:blueprint` generator and four new curated blueprint trees (`triage`, `extraction`, `memory`, `streaming`) to the starter corpus. It is purely additive — a new Artisan command plus new stub files, with no migration, config, schema, or breaking API change. `swarm:install:examples`' behavior and file output are unchanged (it now also skips the package-side `blueprint.json` metadata alongside `README.md`). If you want the new scaffolder, run `php artisan make:swarm:blueprint <Name> --template=<slug>`; otherwise nothing changes. See the [CHANGELOG](CHANGELOG.md#v0180---2026-07-07) and [Generators](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/generators.md#makeswarmblueprint) for details.
 
 ## Upgrading to v0.17.4
 
@@ -896,7 +1453,7 @@ None of laravel/ai's own breaking changes affect Swarm's integration surface: th
 
 ## Upgrading to v0.17.1
 
-**`CausalLogStore` and `ColdArchiveDriver` are now public contracts (#349) — no required action.** No behavior change, no config change, no migration. If you want to implement a custom persistence backend for the streaming substrate's hot/cold tiering, see the new [Streaming Substrate Driver Guide](docs/streaming-substrate-driver-guide.md) for what's actually pluggable (the read/query seam) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming both stay coupled to the concrete database implementations).
+**`CausalLogStore` and `ColdArchiveDriver` are now public contracts (#349) — no required action.** No behavior change, no config change, no migration. If you want to implement a custom persistence backend for the streaming substrate's hot/cold tiering, see the new [Streaming Substrate Driver Guide](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/streaming-substrate-driver-guide.md) for what's actually pluggable (the read/query seam) and what isn't yet (compaction, `#[DurableStreaming]` per-node streaming both stay coupled to the concrete database implementations).
 
 **BREAKING: Pulse integration extracted to a companion package (#351) — required action only if you use Pulse.** If you never installed `laravel/pulse` alongside Swarm, skip this. If you did:
 
@@ -905,7 +1462,7 @@ None of laravel/ai's own breaking changes affect Swarm's integration surface: th
 3. If you dispatch `swarm:install` with `--with-pulse` or `--without-pulse` in scripts or CI, remove those flags — the base installer no longer knows about Pulse. Run `php artisan swarm:install:pulse` directly instead (still the same command, now shipped by the companion package).
 4. Re-run `php artisan swarm:install:pulse` (or `--force` if the managed blocks are already present) to confirm the card/recorder registration still resolves correctly from the new package.
 
-See [Pulse](docs/pulse.md) for the full install flow.
+See [Pulse](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/pulse.md) for the full install flow.
 
 **Shared `swarm:install*` test harness extracted to `builtbyberry/laravel-swarm-installer-testkit` (#355) — no required action.** Dev-only change to this repo's own test suite (`require-dev`), with no public API or runtime behavior change. Only relevant if you were extending or importing `BuiltByBerry\LaravelSwarm\Tests\Installer\InstallerTestCase` directly from outside this repo (not a supported pattern — `tests/` is `autoload-dev`, never part of the public surface); that base class now lives in the new package under `BuiltByBerry\LaravelSwarmInstallerTestkit\InstallerTestCase`.
 
@@ -917,10 +1474,10 @@ See [Pulse](docs/pulse.md) for the full install flow.
 
 **No required action for most applications.** v0.16.0 is additive and backward-compatible — it promotes a public operator control contract and finalizes several audit and relay surfaces. Notes if any apply to you:
 
-- **Prefer the new `SwarmOperator` contract for programmatic control.** To pause, resume, cancel, signal, or recover durable runs from application code, resolve `BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator` (`app(SwarmOperator::class)`) instead of reaching into `DurableSwarmManager`, which stays `@internal`. The contract is control-only (reads stay on `SwarmHistory` / `RunHistoryStore`), authorization-agnostic (gate the call in your own app), and fails loud on an unknown run. See [docs/durable-execution.md](docs/durable-execution.md#operator-control-contract).
+- **Prefer the new `SwarmOperator` contract for programmatic control.** To pause, resume, cancel, signal, or recover durable runs from application code, resolve `BuiltByBerry\LaravelSwarm\Contracts\SwarmOperator` (`app(SwarmOperator::class)`) instead of reaching into `DurableSwarmManager`, which stays `@internal`. The contract is control-only (reads stay on `SwarmHistory` / `RunHistoryStore`), authorization-agnostic (gate the call in your own app), and fails loud on an unknown run. See [docs/durable-execution.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md#operator-control-contract).
 - **`DurableSwarmResponse::pause()`, `resume()`, and `cancel()` return result objects, not `bool`.** They previously returned `true`-or-throw. They now return `DurablePauseResult`, `DurableResumeResult`, and `DurableCancelResult`, which report the *effective* transition (`paused` vs `pause_scheduled`, `cancelled` vs `cancel_scheduled`, `resumed` vs `waiting`). If you assigned the return to a `bool`-typed variable or asserted `=== true`, update it — read `->status` / `->isImmediate()` instead. Most callers ignored the return and need no change; the verbs still throw on an invalid transition exactly as before.
-- **`signature_key_id` on signed evidence + `IdentifiesSigningKey` (#49) — no required action; additive and opt-in.** Signed records now carry a `signature_key_id` naming the key that produced the signature, but only when your `SwarmAuditSigner` *also* implements the new opt-in `BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey` interface (`keyId(): ?string`). Existing signers that implement only `sign()` are unaffected — no field is stamped. To adopt it, implement `IdentifiesSigningKey` and return a **non-secret** key identifier (HMAC key id, cert fingerprint, key-version label); sinks should treat the field as a routing *hint* and retain a try-all-keys fallback. See [docs/audit-evidence-contract.md](docs/audit-evidence-contract.md#exposing-the-key-id).
-- **Tolerant `schema_version` verifier — `SinkEnvelopeValidator` (#50) — no required action; additive and opt-in.** A new sink-side helper (`BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator`) manages the accepted-`schema_version` set for you across rolling deploys. The dispatcher does not consult it and strict-version sinks are unaffected; adopt it only if you want the package to own the supported-versions list. See [docs/audit-evidence-contract.md](docs/audit-evidence-contract.md#versioning).
+- **`signature_key_id` on signed evidence + `IdentifiesSigningKey` (#49) — no required action; additive and opt-in.** Signed records now carry a `signature_key_id` naming the key that produced the signature, but only when your `SwarmAuditSigner` *also* implements the new opt-in `BuiltByBerry\LaravelSwarm\Contracts\IdentifiesSigningKey` interface (`keyId(): ?string`). Existing signers that implement only `sign()` are unaffected — no field is stamped. To adopt it, implement `IdentifiesSigningKey` and return a **non-secret** key identifier (HMAC key id, cert fingerprint, key-version label); sinks should treat the field as a routing *hint* and retain a try-all-keys fallback. See [docs/audit-evidence-contract.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md#exposing-the-key-id).
+- **Tolerant `schema_version` verifier — `SinkEnvelopeValidator` (#50) — no required action; additive and opt-in.** A new sink-side helper (`BuiltByBerry\LaravelSwarm\Audit\SinkEnvelopeValidator`) manages the accepted-`schema_version` set for you across rolling deploys. The dispatcher does not consult it and strict-version sinks are unaffected; adopt it only if you want the package to own the supported-versions list. See [docs/audit-evidence-contract.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md#versioning).
 - **The `@internal` promotion survey (#52) promoted nothing new — no action.** The pre-1.0 audit of `@internal` markers (`docs/internal-audit-1.0.md`) concluded the public extension surface is already correctly drawn. If you were depending on `RunAuditEmitter`, `DispatchValidator`, `LeaseManager`, `SwarmAuditDispatcher`, or a concrete `AuditOutbox` implementation directly (all still `@internal`): don't — customize audit and dispatch behavior by binding the already-public `SwarmAuditSink`, `SinkFailureHandler`, `AuditOutbox`, and `SwarmAuditSigner` contracts instead. The `AuditOutbox` contract and `AuditDrainResult` have been public since v0.5.0 and are unchanged.
 
 ### `OutboxDispatchType` is deprecated, split into `RelayLane` + `DurableDispatchType`
@@ -943,7 +1500,7 @@ The enum is scheduled for removal in a future major release.
 
 **No required action.** v0.15.1 is three fixes to v0.15.0, with no migration, no config change, and no breaking API. A few notes if any apply to you:
 
-- **`assertEventFired()` now works.** If you followed the testing docs and hit *"Swarm event recording is only available in tests where the recorder has been activated,"* add `use BuiltByBerry\LaravelSwarm\Testing\InteractsWithSwarmEvents;` to your test case — the trait the docs referenced now ships. See [docs/testing.md](docs/testing.md#asserting-lifecycle-events).
+- **`assertEventFired()` now works.** If you followed the testing docs and hit *"Swarm event recording is only available in tests where the recorder has been activated,"* add `use BuiltByBerry\LaravelSwarm\Testing\InteractsWithSwarmEvents;` to your test case — the trait the docs referenced now ships. See [docs/testing.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/testing.md#asserting-lifecycle-events).
 - **Compaction is now scoped to durable streaming.** `swarm:compact` only ever graduated durable per-node streaming runs (`#[DurableStreaming]`); it now no longer generates phantom work for live, non-durable `stream()` runs. Those runs' hot `swarm_stream_events` rows are bounded by TTL via `swarm:prune` — schedule that command if you run high-volume live streaming and weren't already. (This was the effective behaviour before; v0.15.1 just stops the no-op churn and documents it.)
 - **Streaming a structured-output agent now fails loud in-package.** A worker implementing `HasStructuredOutput` placed on a streaming path previously surfaced a bare `laravel/ai` `InvalidArgumentException`; it now throws a `StructuredOutputStreamingException` naming the node, the agent, and the remedy — and, for `#[DurableStreaming]` swarms, fails at dispatch rather than mid-run. The hierarchical coordinator (which legitimately uses structured output and runs via `prompt()`) is unaffected.
 
@@ -970,7 +1527,7 @@ The background compactor is **not auto-scheduled** — if you stream long or hig
 $schedule->command('swarm:compact')->hourly();
 ```
 
-`swarm:compact` discovers runs with a sealed window and dispatches a `CompactSwarmRun` queue job per run, so ensure a worker drains that queue. It is a no-op on the cache driver. Tune the lease with `SWARM_COMPACTION_LEASE_SECONDS` (default `300`). See the [Streaming Substrate Operator Runbook](docs/operator-runbook-streaming-substrate.md) for the retention horizon and the quarantine recovery flow. Applications that do not stream, or that are content to let the hot log retain a run's full event history until `swarm:prune`, need take no action.
+`swarm:compact` discovers runs with a sealed window and dispatches a `CompactSwarmRun` queue job per run, so ensure a worker drains that queue. It is a no-op on the cache driver. Tune the lease with `SWARM_COMPACTION_LEASE_SECONDS` (default `300`). See the [Streaming Substrate Operator Runbook](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/operator-runbook-streaming-substrate.md) for the retention horizon and the quarantine recovery flow. Applications that do not stream, or that are content to let the hot log retain a run's full event history until `swarm:prune`, need take no action.
 
 ### New config block: `swarm.context_growth.*` (inert by default)
 
@@ -1201,7 +1758,7 @@ extends a Swarm class. Everything new is opt-in:
   attach the tools to an agent. Granting an LLM read/write access to shared run
   memory is an explicit decision — review your `MemoryPropagationPolicy` and
   `MemoryCapturePolicy` before enabling. See
-  [docs/memory-recipes.md](docs/memory-recipes.md) for the safe patterns.
+  [docs/memory-recipes.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/memory-recipes.md) for the safe patterns.
 - The `make:memory-tool` generator is a new command; it changes nothing about
   existing tools.
 - The Octane worker-reset listener (#171) is wired only when `laravel/octane`
@@ -1252,7 +1809,7 @@ does; a no-op store may simply `return [];`.
 No action required — additive. `php artisan swarm:memory:inspect <run-id>` renders
 the frozen `MemorySnapshot` rows for a run (the database persistence driver only;
 under the cache driver it surfaces a configuration hint). See
-[docs/memory.md](docs/memory.md) for usage.
+[docs/memory.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/memory.md) for usage.
 
 ### New: memory propagation policy (semantic change, default preserves v0.9)
 
@@ -1332,7 +1889,7 @@ entry at the address untouched. Because redaction happens at the store, the
 propagation view and frozen `MemorySnapshot` honor it automatically. A `Redact`
 dispatches a new `MemoryRedacted` event and a `Skip` a new `MemoryWriteSkipped`
 event (address only, no value) for audit listeners; the default `Full` policy
-fires neither. See [docs/memory.md](docs/memory.md#capture-policy-write-time-redaction).
+fires neither. See [docs/memory.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/memory.md#capture-policy-write-time-redaction).
 
 ### New: retention purge command and `(scope, created_at)` index migration
 
@@ -1353,7 +1910,7 @@ adds a `(scope, created_at)` index to `swarm_memories`. Two operational notes:
   batches. On large tables a flat-out scheduled sweep can pressure the database
   or a read replica; pass `--pause=<ms>` to sleep between batches (e.g.
   `--pause=100`) and schedule it off-peak. The default is no pause, preserving
-  prior behavior. See [docs/compliance-audit.md](docs/compliance-audit.md#memory-retention).
+  prior behavior. See [docs/compliance-audit.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/compliance-audit.md#memory-retention).
 
 ## Upgrading to v0.9.0
 
@@ -2288,7 +2845,7 @@ configurable from your application config:
 Applications that have not published the config are unaffected — the missing key falls
 back to the package default automatically.
 
-See [Static Hierarchical Topology — Streaming](docs/static-hierarchical-topology.md#streaming)
+See [Static Hierarchical Topology — Streaming](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/static-hierarchical-topology.md#streaming)
 for valid values (`concurrent`, `sequential`) and their behavior.
 
 ## Upgrading to v0.3.0
@@ -2359,7 +2916,7 @@ exists. Foreign-key creation will fail on those rows. Export, delete, or
 reconcile orphaned operational records before running `php artisan migrate`.
 
 For general information about the FK contract and prune order, see
-[docs/maintenance.md § Foreign-key constraints and prune order](docs/maintenance.md#foreign-key-constraints-and-prune-order).
+[docs/maintenance.md § Foreign-key constraints and prune order](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#foreign-key-constraints-and-prune-order).
 
 **Custom table names:** If you have published the package migrations and renamed
 any table, run the same orphan checks against your renamed tables and add the
@@ -2387,7 +2944,7 @@ the normal start path, and durable step/branch jobs are built by
 `BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher`. Typical
 application code should keep using `dispatchDurable()` and operator methods on
 the manager; see
-[docs/durable-runtime-architecture.md](docs/durable-runtime-architecture.md) for
+[docs/durable-runtime-architecture.md](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-runtime-architecture.md) for
 the full map and testing notes.
 
 ## Audit exception messages redacted by default (minor)

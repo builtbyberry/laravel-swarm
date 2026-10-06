@@ -15,13 +15,19 @@ The recommended reading path for new users.
 - [Introduction](introduction.md) — what Swarm is, the three core concepts, and a decision tree for where to start
 - [Sequential Topology](sequential.md) — the default topology; start here to build your first swarm
 - [Cookbook](cookbook.md) — copy-paste recipes for the class-free entry points (`Swarm::agent()` and the inline `sequential`/`parallel`/`hierarchical` builders), plus when to author a `Swarm` class instead
-- [Generators](generators.md) — `make:swarm:swarm` and `make:swarm:agent` for scaffolding new swarms and agents
+- [Generators](generators.md) — Laravel AI `make:agent`, Swarm generators, and compatibility commands
+- [Native Agent Onboarding](native-agent-onboarding.md) — generated native agent with tools and streaming, tested without an external provider request
 - [Choosing an Execution Mode](execution-modes.md) — prompt, queue, stream, or durable: when to use each
 - [Structured Input](structured-input.md)
+- [Native Messages and Attachments](native-inputs.md) — default-off `UserMessage` input, explicit recipients, operational storage, deployment and rollback
+- [Native Step Results](native-step-results.md) — bounded native response fields on each completed step, with capture-aware persistence
+- [Native Media & Retrieval Capabilities](native-capabilities.md) — classification, images, audio/transcription, files/vector stores, embeddings and reranking inside a workflow, with a support matrix and unsupported combinations
 - [Testing](testing.md)
 - [Upgrading to v0.27.0 / Laravel AI 1.0](../UPGRADING.md#upgrading-to-v0270) — dependency, reader, usage and rollback boundaries
 - [Native Conversation Upgrade](native-conversation-upgrade.md) — application-owned migration, rehearsal, authorization and restore procedure
-- [Upgrade Assistant](upgrade-assistant.md#laravel-ai-10-recipe) — the explicit `0.26-to-0.27` recipe and guarded manifest edits
+- [Upgrade Assistant](upgrade-assistant.md#swarm-v028-recipe) — the explicit `0.27-to-0.28` and `0.26-to-0.27` recipes plus guarded manifest edits
+- [Native-feature ecosystem proof (v0.28.0)](native-feature-ecosystem-proof.md) — combined candidate install proof, per-companion compatibility, F/R reconciliation and carried-forward limits
+- [Native approval recovery proof](native-approval-recovery-proof.md) — executable upstream approval, crash-boundary, and unsupported same-turn continuation evidence
 - [Laravel AI 1.0 adoption evidence](ai-1-release-evidence.md) — reviewed core/companion candidates, preservation gates and publication boundaries
 - [Historical Laravel AI 0.11.2 adoption evidence](ai-0112-release-evidence.md) — v0.26 dispositions, executed proof and deletion manifest
 
@@ -40,6 +46,7 @@ The recommended reading path for new users.
 
 - [Choosing an Execution Mode](execution-modes.md) — comparison table and decision tree
 - [Streaming](streaming.md) — real-time token streaming
+- [Vercel and AG-UI protocol projection](native-chat-protocols.md) — native encoder reuse, workflow and final-agent projections, identity, privacy, replay, and error limits
 - [Streaming Substrate Author Guide](streaming-substrate-author-guide.md) — streaming dynamic swarms, the causal-log fold (`CausalLogView`), rollup nodes, and the context-growth policy (v0.15.0+)
 - [Durable Execution](durable-execution.md) — checkpointed, recoverable, long-running workflows
 
@@ -50,6 +57,8 @@ The recommended reading path for new users.
 - [RunContext](run-context.md) — the envelope that carries input, identity, and carry-forward data through a run
 - [Artifacts](artifacts.md) — named content attached to runs and steps
 - [Structured Input](structured-input.md) — passing arrays and typed input to swarms
+- [Native Messages and Attachments](native-inputs.md) — Laravel AI messages and explicitly routed file input
+- [Native Step Results](native-step-results.md) — structured values, native identity, generation evidence, privacy, storage, and rollback
 - [Persistence & History](persistence-and-history.md) — how run history is stored and queried
 
 ---
@@ -99,6 +108,7 @@ The recommended reading path for new users.
 
 - [Configuration](configuration.md) — every config key, grouped and searchable
 - [Public Surface](public-surface.md)
+- [Native Ownership and Limits](native-ownership-and-limits.md) — what is native-owned versus Swarm-retained, the limits kept on purpose (with evidence and reevaluation triggers), and the deprecation and legacy-retirement schedule
 - [Maintenance](maintenance.md)
 - [APP_KEY Rotation](app-key-rotation.md) — runbook for rotating the application key alongside sealed swarm rows
 

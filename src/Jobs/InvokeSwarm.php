@@ -13,14 +13,19 @@ use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
 /**
+ * Carries the run payload, including the prompt, inline, so it is
+ * ShouldBeEncrypted. Jobs that carry only identifiers (durable, resume,
+ * compaction, callback) reload state and are not encrypted.
+ *
  * @internal
  */
-class InvokeSwarm implements ShouldQueue
+class InvokeSwarm implements ShouldBeEncrypted, ShouldQueue
 {
     use ConfiguresQueuedSwarmJob;
     use EmitsSwarmJobTelemetry;

@@ -10,6 +10,8 @@ use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
 use BuiltByBerry\LaravelSwarm\Runners\DurableRunRecorder;
+use BuiltByBerry\LaravelSwarm\Support\NativeAgentSettingsAttempt;
+use BuiltByBerry\LaravelSwarm\Support\NativeInputManager;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 
 /**
@@ -26,6 +28,7 @@ class DurableStepCheckpointCoordinator
         protected DurableRunRecorder $recorder,
         protected DurableHierarchicalCoordinator $hierarchical,
         protected DurableOutbox $outbox,
+        protected NativeInputManager $nativeInputs,
     ) {}
 
     public function afterStepCheckpointForTesting(?callable $hook): void
@@ -52,6 +55,7 @@ class DurableStepCheckpointCoordinator
         ?DurableHierarchicalStepResult $hierarchicalResult,
         ?SwarmStep $step,
         callable $enterDurableBoundary,
+        ?NativeAgentSettingsAttempt $nativeSettingsAttempt = null,
     ): void {
         $runId = (string) $run['run_id'];
         $context->mergeMetadata([
@@ -88,7 +92,10 @@ class DurableStepCheckpointCoordinator
         // branch rows in the same transaction — so the closure must read after that write.
         // The step advancer's exclusive lease ensures no concurrent process can modify
         // the branch list between the write and this read.
-        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult): void {
+        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult, $context, $nativeSettingsAttempt): void {
+            if ($nativeSettingsAttempt !== null) {
+                $this->nativeInputs->commitConsumedMessages($context, $nativeSettingsAttempt);
+            }
             if ($hierarchicalResult !== null && $hierarchicalResult->branches !== []) {
                 $branches = $this->durableRuns->branchesFor($runId, $hierarchicalResult->waitingParentNodeId);
 

@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Jobs\BroadcastSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
+use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
@@ -41,6 +42,15 @@ function nativeUpgradeJob(string $name): object
 function nativeUpgradeUnavailableUsage(): array
 {
     return array_fill_keys(['input_tokens', 'output_tokens', 'prompt_tokens', 'completion_tokens', 'cache_read_input_tokens', 'cache_write_input_tokens', 'reasoning_tokens'], null);
+}
+
+function nativeUpgradeLegacyResult(): array
+{
+    return [
+        'format_version' => 1,
+        'status' => 'unavailable',
+        'reasons' => ['legacy'],
+    ];
 }
 
 beforeEach(function () {
@@ -86,7 +96,17 @@ it('reads completed v0263 history without renaming legacy counters or rewriting 
     $fixture = nativeUpgradeFixture();
     $before = DB::table('swarm_run_histories')->where('run_id', 'v0263-completed')->first();
     $history = app(RunHistoryStore::class)->find('v0263-completed');
-    expect($history)->toBe($fixture['histories']['completed'])
+    $expected = $fixture['histories']['completed'];
+    foreach ($expected['steps'] as &$step) {
+        $offset = array_search('artifacts', array_keys($step), true);
+        $step = array_merge(
+            array_slice($step, 0, $offset, true),
+            ['native_result_status' => 'unavailable', 'native_result' => nativeUpgradeLegacyResult()],
+            array_slice($step, $offset, null, true),
+        );
+    }
+    unset($step);
+    expect($history)->toBe($expected)
         ->and($history['usage'])->toBe(['prompt_tokens' => 41, 'completion_tokens' => 15, 'cache_write_input_tokens' => 2, 'cache_read_input_tokens' => 6, 'reasoning_tokens' => 4])
         ->and($history['output'])->toBe('old-edited')
         ->and(app(ContextStore::class)->find('v0263-completed')['input'])->toBe('old completed input')
@@ -207,6 +227,10 @@ it('replays frozen v0263 stream identity and legacy usage without provider calls
         expect($raw['attempt_epoch'] ?? null)->toBeNull()
             ->and($current['attempt_epoch'] ?? null)->toBeNull();
         unset($raw['attempt_epoch'], $current['attempt_epoch']);
+        if ($event instanceof SwarmStepEnd && ! isset($raw['native_result'])) {
+            expect($current['native_result'])->toBe(nativeUpgradeLegacyResult());
+            unset($current['native_result']);
+        }
         expect($current)->toEqual($raw);
     }
     expect(app(RunHistoryStore::class)->find('v0263-stream')['usage'])->toBe(nativeUpgradeFixture()['histories']['stream']['usage'])

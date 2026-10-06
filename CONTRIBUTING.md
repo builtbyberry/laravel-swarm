@@ -6,7 +6,7 @@ Changes should preserve the Laravel-native feel described in the README:
 familiar public verbs, small surface area, explicit configuration, and clear
 operational behavior.
 
-This file is the contributor entry point. [AGENTS.md](AGENTS.md) is the
+This file is the contributor entry point. [AGENTS.md](https://github.com/builtbyberry/laravel-swarm/blob/main/AGENTS.md) is the
 canonical package context (architecture, conventions, release workflow) and
 is required reading before any non-trivial change.
 
@@ -44,16 +44,30 @@ composer lint
 composer analyse
 ```
 
-Normal development uses **Pest 5**. Continuous integration runs the same checks on PHP **8.4** and **8.5**, each on
+Normal development uses **Pest 5**. Continuous integration runs the same suites on PHP **8.4** and **8.5**, each on
 **stable-latest** and **lowest** Composer resolutions:
 `composer test:coverage:ci`, `composer test:process-concurrency:ci`, and
 `composer analyse`; plus `composer lint` and `composer test:compliance` (the
 scope-isolation/propagation + replay-determinism `compliance` Pest group, a
 discrete re-runnable evidence lane) on **stable-latest** only. The real MySQL
 and PostgreSQL process-concurrency jobs run on PHP **8.4**, the minimum supported
-runtime. Install PCOV for PHP locally when you want to match CI or debug coverage
-failures; otherwise `composer test` remains the default fast path without
-coverage. If workflow runtime becomes prohibitive, maintainers may split
+runtime. Install Xdebug for PHP locally when you want to match CI or debug coverage
+failures; otherwise `composer test` remains the default sequential fast path
+without coverage. Hosted Pest 5 uses four concurrent ParaTest workers through
+`composer test:ci` and `composer test:coverage:ci`, starting a fresh worker for
+every parallel test-file assignment. The database-heavy
+`ProviderToolPreservationTest` belongs to the named `ci-serial` group: both
+hosted commands exclude it from ParaTest and then run that group in a fresh,
+non-parallel Pest process with a bounded 512 MB PHP memory limit. No test or
+assertion is skipped. This preserves the
+Unit, Feature, and Installer suites while preventing state accumulated by one
+test file from crossing into the next. In the coverage command, Pest merges
+coverage from the parallel non-`ci-serial` tests against the complete source
+filter before enforcing the existing 80% aggregate floor; the following serial
+run verifies provider-tool behavior but does not contribute execution data to
+that percentage. Both processes must pass. Per-file startup and the serial
+boundary deliberately trade additional hosted runtime for deterministic
+isolation. If workflow runtime becomes prohibitive, maintainers may split
 **lowest**-resolution lint, coverage, or process-concurrency into a nightly job;
 until then, pull requests validate both matrices equally.
 
@@ -66,10 +80,15 @@ installed packages. These jobs run `composer test`,
 Pest 5's Laravel plugin excludes Laravel 13.16, so its lowest resolution alone
 cannot prove that compatibility. Swarm's production requirements remain unchanged.
 
-The four normal Pest 5 jobs retain PCOV, `memory_limit=1G`, the complete source
-filter, and the **80%** coverage floor. The separate compatibility jobs run the
-full suite without coverage reporting to avoid Pest 4's report reload overhead.
-PHPStan retains its separate existing `--memory-limit=2G` setting.
+The four normal Pest 5 jobs use Xdebug, `memory_limit=1G`, four concurrent test
+workers with a fresh worker for every parallel test-file assignment, the
+complete source filter, and the **80% aggregate** coverage floor, followed by
+the fresh serial `ci-serial` behavior-verification process described above.
+The scheduled mutation baseline uses the
+same driver because mutation requires coverage data. The separate compatibility
+jobs and moving-development nightly load no coverage driver: they run the full
+suite without collecting coverage. PHPStan retains its separate existing
+`--memory-limit=2G` setting.
 
 **Moving development proof** — PR/nightly and real-database canaries resolve
 official Laravel AI `1.x-dev` and Laravel `13.x-dev`. Capture official branch
@@ -247,7 +266,7 @@ PRs are organized into topic branches against a long-lived `release/v<X.Y.Z>`
 branch, with Conventional Commits scoped by area (`feat(audit):`,
 `fix(runner):`, `docs(contributing):`, etc.). The full branching and
 three-phase wrap mechanics live in
-[AGENTS.md](AGENTS.md#release-workflow); read that section before opening a
+[AGENTS.md](https://github.com/builtbyberry/laravel-swarm/blob/main/AGENTS.md#release-workflow); read that section before opening a
 release-session topic branch.
 
 ## Stability Surface
@@ -256,7 +275,7 @@ Laravel Swarm distinguishes a small public surface that is covered by semver
 from a larger set of internals that may change at any time. The canonical
 definition lives in [`UPGRADING.md`](UPGRADING.md#stability-and-the-public-api);
 the matrix of public surfaces is in
-[`docs/public-surface.md`](docs/public-surface.md). The notes below are the
+[`docs/public-surface.md`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/public-surface.md). The notes below are the
 day-to-day contributor view.
 
 ### `@internal` convention
@@ -317,7 +336,7 @@ in that repository, not here.
 
 Audit pipeline work covers the contracts that emit and route audit evidence,
 the `EvidenceEnvelope` shape, and the outbox/dispatcher routing. Read
-[`docs/audit-evidence-contract.md`](docs/audit-evidence-contract.md) before
+[`docs/audit-evidence-contract.md`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md) before
 opening a PR — the frozen envelope fields and category list are the reference,
 and the guidance below should not contradict it.
 
@@ -360,7 +379,7 @@ Guidance when contributing here:
 Every emitted payload is enriched by `EvidenceEnvelope` with
 `schema_version`, `category`, and `occurred_at`. The shape and the list of
 frozen categories are documented in
-[`docs/audit-evidence-contract.md`](docs/audit-evidence-contract.md). When
+[`docs/audit-evidence-contract.md`](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/audit-evidence-contract.md). When
 contributing here:
 
 - **Additive change → no `schema_version` bump.** A new optional field on an
@@ -425,7 +444,7 @@ style preference. Expect close review on:
 - public API drift from Laravel AI conventions.
 
 Maintainers use the eight-lens multi-expert review for meaningful changes; see
-[AGENTS.md](AGENTS.md#review-method) for the lens list and the severity gate.
+[AGENTS.md](https://github.com/builtbyberry/laravel-swarm/blob/main/AGENTS.md#review-method) for the lens list and the severity gate.
 
 Avoid broad rewrites unless they are already scoped in an approved plan. If a
 refactor is needed, keep it incremental and preserve existing behavior first.
@@ -454,7 +473,7 @@ shift.
 The branching, commit, and three-phase wrap mechanics that releases follow
 (`release/v<X.Y.Z>` long-lived branch, topic branches, `review-followups` →
 `release-wrap` → `readiness-followups`) are recorded in
-[AGENTS.md](AGENTS.md#release-workflow). Maintainers driving a release should
+[AGENTS.md](https://github.com/builtbyberry/laravel-swarm/blob/main/AGENTS.md#release-workflow). Maintainers driving a release should
 read that section before opening the release branch.
 
 ## Maintainer and Ownership

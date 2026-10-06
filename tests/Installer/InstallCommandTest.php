@@ -42,7 +42,9 @@ test('swarm:install runs the happy path with database persistence and seeds env 
         ->assertOutputContains('Installing Laravel Swarm.')
         ->assertOutputContains('Laravel Swarm is installed.')
         ->assertOutputContains('Next steps')
-        ->assertOutputContains('php artisan swarm:health');
+        ->assertOutputContains('php artisan swarm:health')
+        ->assertOutputContains('php artisan make:agent ArticlePlanner')
+        ->assertOutputContains('php artisan make:swarm:swarm ContentPipeline');
 
     // Config publish happened (vendor:publish writes config/swarm.php).
     expect(file_exists($this->skeletonPath('config/swarm.php')))->toBeTrue();

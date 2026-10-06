@@ -148,9 +148,11 @@ test('queue fails before dispatching invalid max step config', function () {
         ->toThrow(SwarmException::class, 'Swarm max agent steps must be a positive integer.');
 });
 
-test('queue fails before dispatching non container resolvable parallel agents', function () {
-    expect(fn () => UnresolvableParallelSwarm::make()->queue('queued-task'))
-        ->toThrow(SwarmException::class, UnresolvableParallelSwarm::class.': parallel agent ['.UnresolvableParallelAgent::class.'] must be container-resolvable because Laravel Concurrency serializes worker callbacks.');
+test('queue accepts authored parallel agent slots that reconstruct through the swarm definition', function () {
+    UnresolvableParallelAgent::fake(['queued-authored-slot']);
+
+    expect(UnresolvableParallelSwarm::make()->queue('queued-task'))
+        ->toBeInstanceOf(QueuedSwarmResponse::class);
 });
 
 test('queue fails before dispatching duplicate hierarchical worker classes', function () {

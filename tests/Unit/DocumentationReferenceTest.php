@@ -92,6 +92,135 @@ function docRefRelative(string $path): string
 }
 
 /**
+ * Markdown targets from inline links/images and reference-style definitions.
+ *
+ * @return array<int, array{line: int, target: string}>
+ */
+function docRefMarkdownTargets(string $contents): array
+{
+    $targets = [];
+
+    foreach (explode("\n", $contents) as $index => $line) {
+        if (preg_match_all('/\]\(\s*<?([^)>\s]+)>?(?:\s+["\'].*?["\'])?\s*\)/', $line, $inline) > 0) {
+            foreach ($inline[1] as $target) {
+                $targets[] = ['line' => $index + 1, 'target' => $target];
+            }
+        }
+
+        if (preg_match('/^\s*\[[^]]+\]:\s*<?([^>\s]+)>?(?:\s+["\'(].*)?$/', $line, $reference) === 1) {
+            $targets[] = ['line' => $index + 1, 'target' => $reference[1]];
+        }
+    }
+
+    return $targets;
+}
+
+/** @return array{path: string, anchor: string|null, absolute: bool}|null */
+function docRefRepositoryTarget(string $target, string $source): ?array
+{
+    $githubPrefixes = [
+        'https://github.com/builtbyberry/laravel-swarm/blob/main/' => false,
+        'https://github.com/builtbyberry/laravel-swarm/tree/main/' => true,
+    ];
+
+    foreach ($githubPrefixes as $prefix => $_directory) {
+        if (! str_starts_with($target, $prefix)) {
+            continue;
+        }
+
+        [$path, $anchor] = array_pad(explode('#', substr($target, strlen($prefix)), 2), 2, null);
+
+        return ['path' => rawurldecode($path), 'anchor' => $anchor === null ? null : rawurldecode($anchor), 'absolute' => true];
+    }
+
+    if (preg_match('~^[a-z][a-z0-9+.-]*:~i', $target) === 1 || str_starts_with($target, '#')) {
+        return null;
+    }
+
+    [$path, $anchor] = array_pad(explode('#', $target, 2), 2, null);
+    $resolved = str_starts_with($path, '/')
+        ? docRefRepoRoot().$path
+        : dirname($source).'/'.$path;
+    $realDirectory = realpath(dirname($resolved));
+    $normalized = $realDirectory === false
+        ? $resolved
+        : $realDirectory.'/'.basename($resolved);
+
+    return [
+        'path' => docRefRelative($normalized),
+        'anchor' => $anchor === null ? null : rawurldecode($anchor),
+        'absolute' => false,
+    ];
+}
+
+function docRefAnchorExists(string $path, string $anchor): bool
+{
+    if ($anchor === '' || ! is_file(docRefRepoRoot().'/'.$path)) {
+        return $anchor === '';
+    }
+
+    $contents = (string) file_get_contents(docRefRepoRoot().'/'.$path);
+
+    if (preg_match('/\b(?:id|name)=["\']'.preg_quote($anchor, '/').'["\']/', $contents) === 1) {
+        return true;
+    }
+
+    $seen = [];
+
+    foreach (explode("\n", $contents) as $line) {
+        if (preg_match('/^#{1,6}\s+(.+?)\s*#*\s*$/', $line, $heading) !== 1) {
+            continue;
+        }
+
+        $slug = strtolower($heading[1]);
+        $slug = preg_replace('/<[^>]+>/', '', $slug) ?? $slug;
+        $slug = preg_replace('/[`*~]/', '', $slug) ?? $slug;
+        $slug = preg_replace('/[^\pL\pN _-]/u', '', $slug) ?? $slug;
+        $slug = str_replace(' ', '-', $slug);
+        $suffix = $seen[$slug] ?? 0;
+        $seen[$slug] = $suffix + 1;
+        $candidate = $suffix === 0 ? $slug : $slug.'-'.$suffix;
+
+        if ($candidate === strtolower($anchor)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function docRefPathIsExportIgnored(string $path): bool
+{
+    $path = ltrim(str_replace('\\', '/', $path), '/');
+    $ignored = false;
+
+    foreach (file(docRefRepoRoot().'/.gitattributes', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+        $line = trim($line);
+
+        if ($line === '' || str_starts_with($line, '#')) {
+            continue;
+        }
+
+        [$pattern, $attributes] = array_pad(preg_split('/\s+/', $line, 2), 2, '');
+
+        if (! str_contains($attributes, 'export-ignore')) {
+            continue;
+        }
+
+        $pattern = ltrim($pattern, '/');
+        $matches = strpbrk($pattern, '*?[') === false
+            ? $path === $pattern || str_starts_with($path, rtrim($pattern, '/').'/')
+            : fnmatch($pattern, $path, FNM_PATHNAME);
+
+        if ($matches) {
+            $ignored = ! str_contains($attributes, '-export-ignore');
+        }
+    }
+
+    return $ignored;
+}
+
+/**
  * Namespace, use-alias map and enclosing type for one source file.
  *
  * Regex rather than an AST parser: this package ships no parser dependency, and
@@ -490,35 +619,28 @@ test('every repository path referenced in source comments and docs exists', func
         }
     }
 
-    // Relative markdown links, which is where a dead pointer actually reaches a
-    // reader. External links and pure anchors are out of scope.
+    // Relative links and repository-owned absolute GitHub links. The latter
+    // keep shipped-package links usable after Composer export while still
+    // receiving the same local existence and anchor checks.
     foreach (docRefMarkdownFiles() as $file) {
-        $lines = explode("\n", (string) file_get_contents($file));
+        foreach (docRefMarkdownTargets((string) file_get_contents($file)) as $link) {
+            $resolved = docRefRepositoryTarget($link['target'], $file);
 
-        foreach ($lines as $index => $line) {
-            if (preg_match_all('/\]\(([^)\s]+)\)/', $line, $matches) === 0) {
+            if ($resolved === null || $resolved['path'] === '') {
                 continue;
             }
 
-            foreach ($matches[1] as $target) {
-                if (str_starts_with($target, 'http') || str_starts_with($target, '#') || str_starts_with($target, 'mailto:')) {
-                    continue;
-                }
+            $scanned++;
+            $targetPath = docRefRepoRoot().'/'.$resolved['path'];
 
-                $path = explode('#', $target)[0];
+            if (! file_exists($targetPath)) {
+                $offenders[] = sprintf('%s:%d  %s', docRefRelative($file), $link['line'], $link['target']);
 
-                if ($path === '') {
-                    continue;
-                }
+                continue;
+            }
 
-                $scanned++;
-                $resolved = str_starts_with($path, '/')
-                    ? docRefRepoRoot().$path
-                    : dirname($file).'/'.$path;
-
-                if (! file_exists($resolved)) {
-                    $offenders[] = sprintf('%s:%d  %s', docRefRelative($file), $index + 1, $target);
-                }
+            if ($resolved['absolute'] && $resolved['anchor'] !== null && ! docRefAnchorExists($resolved['path'], $resolved['anchor'])) {
+                $offenders[] = sprintf('%s:%d  %s (anchor does not exist)', docRefRelative($file), $link['line'], $link['target']);
             }
         }
     }
@@ -526,6 +648,34 @@ test('every repository path referenced in source comments and docs exists', func
     expect($scanned)->toBeGreaterThan(50, 'The path scan found almost nothing — the check is probably broken.');
 
     expect($offenders)->toBe([], "Referenced paths that do not exist:\n".implode("\n", $offenders));
+});
+
+test('shipped markdown never links relatively into composer export ignored paths', function () {
+    $offenders = [];
+
+    foreach (['README.md', 'UPGRADING.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md'] as $name) {
+        $file = docRefRepoRoot().'/'.$name;
+
+        foreach (docRefMarkdownTargets((string) file_get_contents($file)) as $link) {
+            $target = $link['target'];
+
+            if (preg_match('~^[a-z][a-z0-9+.-]*:~i', $target) === 1 || str_starts_with($target, '#')) {
+                continue;
+            }
+
+            $path = explode('#', $target, 2)[0];
+            $resolved = realpath(dirname($file).'/'.dirname($path));
+            $relative = $resolved === false
+                ? ltrim($path, './')
+                : docRefRelative($resolved.'/'.basename($path));
+
+            if (docRefPathIsExportIgnored($relative)) {
+                $offenders[] = sprintf('%s:%d  %s', $name, $link['line'], $target);
+            }
+        }
+    }
+
+    expect($offenders)->toBe([], "Relative links into Composer export-ignored paths:\n".implode("\n", $offenders));
 });
 
 test('every documented artisan command this package owns is registered', function () {

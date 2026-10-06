@@ -120,6 +120,8 @@ it('parses the actual nightly workflow and requires hard gates after verified mo
     expect($workflow['on'])->toHaveKeys(['schedule', 'workflow_dispatch', 'pull_request']);
     $job = $workflow['jobs']['tests'];
     expect($job)->not->toHaveKey('continue-on-error');
+    $setup = array_values(array_filter($job['steps'], fn (array $step): bool => str_starts_with($step['uses'] ?? '', 'shivammathur/setup-php@')))[0];
+    expect($setup['with'])->toMatchArray(['php-version' => '8.5', 'coverage' => 'none', 'ini-values' => 'memory_limit=1G']);
     $runs = [];
     foreach ($job['steps'] as $step) {
         expect($step)->not->toHaveKeys(['continue-on-error', 'if']);
@@ -131,7 +133,7 @@ it('parses the actual nightly workflow and requires hard gates after verified mo
     expect($commands)->toContain('"laravel/ai:1.x-dev#${SWARM_AI_DEV_REF}"', '"laravel/framework:13.x-dev#${SWARM_FRAMEWORK_DEV_REF}"', 'verify-adoption-dependencies.php moving-dev')
         ->not->toContain('0.x-dev', '|| true');
     $verify = strpos($commands, 'verify-adoption-dependencies.php moving-dev');
-    foreach (['composer test', 'composer test:process-concurrency:ci', 'composer analyse', 'composer test:compliance', 'composer lint'] as $gate) {
+    foreach (['composer test:ci', 'composer test:process-concurrency:ci', 'composer analyse', 'composer test:compliance', 'composer lint'] as $gate) {
         expect($runs)->toContain($gate);
         expect(strpos($commands, $gate))->toBeGreaterThan($verify);
     }
@@ -147,10 +149,54 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
     expect($coverage)->toHaveCount(1);
     expect($coverage[0])->not->toHaveKeys(['if', 'continue-on-error']);
     $normalSetup = array_values(array_filter($normal['steps'], fn (array $step): bool => str_starts_with($step['uses'] ?? '', 'shivammathur/setup-php@')))[0];
-    expect($normalSetup['with']['coverage'])->toBe('pcov');
+    expect($normalSetup['with']['coverage'])->toBe('xdebug');
     expect($normalSetup['with']['ini-values'])->toBe('memory_limit=1G');
+    $normalCommands = implode("\n", array_column($normal['steps'], 'run'));
+    expect($normalCommands)->not->toContain('policy.advisories.ignore', 'policy.advisories.block');
     $manifest = json_decode(file_get_contents(dirname(__DIR__, 3).'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
-    expect($manifest['scripts']['test:coverage:ci'])->toBe('vendor/bin/pest tests/Feature tests/Unit tests/Installer --coverage --min=80');
+    $productionAdvisoryPolicy = $manifest['config']['policy']['advisories'] ?? [];
+    expect($productionAdvisoryPolicy)->not->toHaveKeys(['ignore-id', 'ignore', 'block']);
+    expect($manifest['scripts']['test'])->toBe('vendor/bin/pest tests/Feature tests/Unit tests/Installer')
+        ->and($manifest['scripts']['test:ci'])->toBe([
+            'vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --exclude-group=ci-serial',
+            '@php -d memory_limit=512M vendor/bin/pest --group=ci-serial',
+        ])
+        ->and($manifest['scripts']['test:coverage:ci'])->toBe([
+            'vendor/bin/pest --parallel --processes=4 --max-batch-size=1 --exclude-group=ci-serial --coverage --min=80',
+            '@php -d memory_limit=512M vendor/bin/pest --group=ci-serial',
+        ]);
+    foreach (['test:ci', 'test:coverage:ci'] as $script) {
+        [$parallel, $serial] = $manifest['scripts'][$script];
+        expect($parallel)->toContain('--parallel', '--processes=4', '--max-batch-size=1', '--exclude-group=ci-serial')
+            ->and($serial)->toBe('@php -d memory_limit=512M vendor/bin/pest --group=ci-serial')
+            ->and($serial)->not->toContain('--parallel', '--coverage');
+    }
+    expect($manifest['scripts']['test:coverage:ci'][0])->toContain('--coverage --min=80')
+        ->and($manifest['scripts']['test:ci'][0])->not->toContain('--coverage');
+
+    $testsRoot = dirname(__DIR__, 2);
+    $serialTests = [];
+    $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($testsRoot, FilesystemIterator::SKIP_DOTS));
+    foreach ($files as $file) {
+        if (! $file->isFile() || $file->getExtension() !== 'php' || $file->getPathname() === __FILE__) {
+            continue;
+        }
+        if (str_contains(file_get_contents($file->getPathname()), 'ci-serial')) {
+            $relativePath = str_replace($testsRoot.DIRECTORY_SEPARATOR, '', $file->getPathname());
+            $serialTests[] = str_replace(DIRECTORY_SEPARATOR, '/', $relativePath);
+        }
+    }
+    expect($serialTests)->toBe(['Feature/ProviderTools/ProviderToolPreservationTest.php'])
+        ->and(file_get_contents($testsRoot.'/Feature/ProviderTools/ProviderToolPreservationTest.php'))
+        ->toContain("pest()->group('ci-serial');");
+    $phpunit = file_get_contents(dirname(__DIR__, 3).'/phpunit.xml');
+    preg_match_all('#<directory>tests/(Unit|Feature|Installer)</directory>#', $phpunit, $suiteMatches);
+    expect(substr_count($phpunit, '<directory>'))->toBe(3)
+        ->and($suiteMatches[1])->toBe(['Unit', 'Feature', 'Installer']);
+    foreach (['MakeSwarmCommandTest.php', 'MakeSwarmSwarmCommandTest.php', 'MakeSwarmAgentCommandTest.php', 'MakeMemoryToolCommandTest.php'] as $generatorTest) {
+        expect(file_get_contents(dirname(__DIR__, 2).'/Feature/'.$generatorTest))
+            ->not->toContain("glob(app_path('Ai/");
+    }
 
     $job = $workflow['jobs']['laravel-13-16'];
     expect($job['strategy']['matrix'])->toBe(['php' => ['8.4', '8.5']]);
@@ -166,9 +212,17 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
         }
     }
     $commands = implode("\n", $runs);
-    expect($commands)->not->toContain('|| true', '--ignore-platform', '--no-security-blocking', '--coverage');
+    $advisoryIgnoreCommands = array_values(array_filter(
+        $runs,
+        fn (string $run): bool => str_starts_with($run, 'composer config policy.advisories.ignore-id '),
+    ));
+    expect($advisoryIgnoreCommands)->toBe([
+        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781',
+    ]);
+    expect($commands)->not->toContain('|| true', '--ignore-platform', '--no-security-blocking', '--coverage', 'policy.advisories.block', 'policy.advisories.ignore laravel/framework');
     $ordered = [
         'cp composer.json /tmp/swarm-production-composer.json',
+        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781',
         'composer require --no-update --dev "pestphp/pest:^4.7" "pestphp/pest-plugin-laravel:^4.1" "laravel/framework:13.16.0"',
         'composer update --with laravel/ai:1.0.0 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress',
         'cp /tmp/swarm-production-composer.json composer.json',
@@ -184,6 +238,25 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
         expect($position)->toBeGreaterThan($previous);
         $previous = $position;
     }
+});
+
+it('keeps mutation coverage on the hosted stable driver without weakening its baseline', function () {
+    $workflow = Yaml::parseFile(dirname(__DIR__, 3).'/.github/workflows/mutation.yml');
+    expect($workflow['on'])->toHaveKeys(['schedule', 'workflow_dispatch']);
+    expect($workflow['permissions'])->toBe(['contents' => 'read']);
+    $job = $workflow['jobs']['mutate'];
+    expect($job['continue-on-error'])->toBeTrue()
+        ->and($job['timeout-minutes'])->toBe(240);
+    $steps = array_column($job['steps'], null, 'name');
+    expect($steps['Setup PHP']['with'])->toMatchArray([
+        'php-version' => '8.5',
+        'coverage' => 'xdebug',
+        'ini-values' => 'memory_limit=1G',
+    ]);
+    expect($steps['Run Pest mutation testing']['run'])->toBe('composer test:mutation');
+    expect(file_get_contents(dirname(__DIR__, 3).'/docs/maintenance.md'))
+        ->toContain('with Xdebug, the same hosted coverage driver as the ordinary coverage gate.')
+        ->toContain('Timeout is 240');
 });
 
 it('rejects the same wrong well formed branch SHA in lock and installed metadata', function (int $package) {

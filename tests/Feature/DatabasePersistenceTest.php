@@ -682,15 +682,24 @@ test('database run history store persists start step completion and failure payl
     expect(json_decode(DB::table('swarm_run_histories')->where('run_id', 'history-run-id')->value('steps'), true))->toBe([]);
     expect(DB::table('swarm_run_histories')->where('run_id', 'history-run-id')->value('expires_at'))->not->toBeNull();
 
-    $history->fail('history-run-id', new Exception('stream failed'), 60);
+    $failureRunId = 'history-failure-run-id';
+    $history->start(
+        $failureRunId,
+        'ExampleSwarm',
+        'sequential',
+        RunContext::from('history-failure-task', $failureRunId),
+        ['run_id' => $failureRunId],
+        60,
+    );
+    $history->fail($failureRunId, new Exception('stream failed'), 60);
 
-    expect($history->find('history-run-id')['error'])->toBe([
+    expect($history->find($failureRunId)['error'])->toBe([
         'message' => 'stream failed',
         'class' => Exception::class,
     ]);
-    expect($history->find('history-run-id')['finished_at'])->not->toBeNull();
+    expect($history->find($failureRunId)['finished_at'])->not->toBeNull();
 
-    expect($history->query(limit: 10)[0]['run_id'])->toBe('history-run-id');
+    expect(collect($history->query(limit: 10))->pluck('run_id'))->toContain('history-run-id');
     expect($history->query(status: 'failed', limit: 10)[0]['status'])->toBe('failed');
 });
 
@@ -724,7 +733,13 @@ test('database run history store reads legacy inline steps when normalized rows 
         'updated_at' => $now,
     ]);
 
-    expect(app(DatabaseRunHistoryStore::class)->find('legacy-steps-run-id')['steps'])->toBe([$legacyStep + ['citation_status' => 'unknown', 'citation_reasons' => [], 'citations' => []]]);
+    expect(app(DatabaseRunHistoryStore::class)->find('legacy-steps-run-id')['steps'])->toBe([$legacyStep + [
+        'native_result' => ['format_version' => 1, 'status' => 'unavailable', 'reasons' => ['legacy']],
+        'native_result_status' => 'unavailable',
+        'citation_status' => 'unknown',
+        'citation_reasons' => [],
+        'citations' => [],
+    ]]);
 });
 
 test('database run history store merges legacy inline steps with normalized step rows', function () {
@@ -784,8 +799,20 @@ test('database run history store merges legacy inline steps with normalized step
     ]);
 
     expect(app(DatabaseRunHistoryStore::class)->find('mixed-steps-run-id')['steps'])->toBe([
-        $legacyStep + ['citation_status' => 'unknown', 'citation_reasons' => [], 'citations' => []],
-        array_slice($normalizedStep, 0, 3, true) + ['citation_status' => 'unknown', 'citation_reasons' => [], 'citations' => []] + array_slice($normalizedStep, 3, null, true),
+        $legacyStep + [
+            'native_result' => ['format_version' => 1, 'status' => 'unavailable', 'reasons' => ['legacy']],
+            'native_result_status' => 'unavailable',
+            'citation_status' => 'unknown',
+            'citation_reasons' => [],
+            'citations' => [],
+        ],
+        array_slice($normalizedStep, 0, 3, true) + [
+            'citation_status' => 'unknown',
+            'citation_reasons' => [],
+            'citations' => [],
+            'native_result_status' => 'unavailable',
+            'native_result' => ['format_version' => 1, 'status' => 'unavailable', 'reasons' => ['legacy']],
+        ] + array_slice($normalizedStep, 3, null, true),
     ]);
 });
 
@@ -901,6 +928,7 @@ test('database persistence repositories honor overridden table names when matchi
     config()->set('swarm.tables.history', 'custom_swarm_histories');
     config()->set('swarm.tables.history_steps', 'custom_swarm_history_steps');
     (require __DIR__.'/../../database/migrations/2026_09_22_000001_add_swarm_citation_evidence.php')->up();
+    (require __DIR__.'/../../database/migrations/2026_09_25_000001_add_swarm_native_step_results.php')->up();
 
     $contextStore = app(DatabaseContextStore::class);
     $artifactRepository = app(DatabaseArtifactRepository::class);
@@ -1917,4 +1945,26 @@ test('database run history seals completed context input when encrypt at rest is
     expect(json_decode((string) $rawContext, true)['input'])->toStartWith('sw0:');
 
     expect($store->find($runId)['context']['input'])->toBe('classified-history-prompt');
+});
+
+test('database run history atomically merges failure metadata without losing prior context', function () {
+    $store = app(DatabaseRunHistoryStore::class);
+    $runId = (string) str()->uuid();
+    $context = RunContext::from('failure-metadata', $runId);
+    $store->start($runId, FakeSequentialSwarm::class, 'parallel', $context, [
+        'existing' => 'kept',
+        'usage' => ['input_tokens' => 2],
+    ], 3600);
+
+    $store->failWithMetadata($runId, new RuntimeException('branch failed'), [
+        'branch_id' => 'parallel:1',
+        'usage' => ['input_tokens' => 7, 'output_tokens' => 9],
+    ], 3600);
+
+    $record = $store->find($runId);
+    expect($record['status'])->toBe('failed')
+        ->and($record['error']['message'])->toBe('branch failed')
+        ->and($record['metadata']['existing'])->toBe('kept')
+        ->and($record['metadata']['branch_id'])->toBe('parallel:1')
+        ->and($record['metadata']['usage'])->toBe(['input_tokens' => 7, 'output_tokens' => 9]);
 });

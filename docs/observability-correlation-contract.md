@@ -81,7 +81,7 @@ Emitted by `SwarmTelemetryEventListener` when `listen_to_events` is `true`:
 
 | Category | Source |
 | --- | --- |
-| `stream.event` | `SequentialStreamRunner` and `StaticHierarchicalStreamRunner` — one record per typed `SwarmStreamEvent` (`event_type`, `sequence_index`, `duration_ms` since stream start, `is_replay`). |
+| `stream.event` | `SequentialStreamRunner`, `StaticHierarchicalStreamRunner`, and `ParallelStreamRunner` — one record per typed `SwarmStreamEvent` (`event_type`, `sequence_index`, `duration_ms` since stream start, `is_replay`). Parallel branch records also include `branch_id`, `attempt_id`, and `branch_sequence`; those correlation fields are null for non-branch events. |
 | `broadcast.event` | `BroadcastSwarm` job — same shape plus `channel_names`. |
 
 ### Package queue jobs (listener filter)
@@ -93,6 +93,10 @@ Only these job classes produce `job.*` telemetry:
 - `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm`
 - `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch`
 - `BuiltByBerry\LaravelSwarm\Jobs\ResumeQueuedHierarchicalSwarm`
+
+Their native-input and native-settings subclasses (for example
+`InvokeNativeInputSwarm` and `AdvanceNativeAgentSettingsDurableSwarm`) are
+included, and `job_class` names the subclass.
 
 Payloads include `job_class`, `job_id`, `attempt`, `queue_connection`,
 `queue_name`, and `run_id` (resolved from the job payload or durable run row for
@@ -123,7 +127,13 @@ timing.
 The Laravel queue failure listener remains subscribed as a fallback for package
 job failures that occur before a handler can emit telemetry. In that fallback,
 `duration_ms` is `null`; normal package handler failures emit non-null
-`duration_ms` and suppress the fallback duplicate.
+`duration_ms` and suppress the fallback duplicate. If no configured key can
+decrypt an encrypted `InvokeSwarm` or `BroadcastSwarm` command, the handler never
+runs. The listener logs a warning beginning `laravel-swarm: a queued swarm job
+could not be decrypted` and emits a degraded `job.failed`. Its `run_id`,
+`duration_ms`, `queue_wait_ms`, and `total_elapsed_ms` are null. Its readable
+`displayName` and `data.commandName` supply `swarm_class` and `job_class`, and
+`exception_class` reports the decryption failure.
 
 ### Intentionally omitted (audit-only)
 

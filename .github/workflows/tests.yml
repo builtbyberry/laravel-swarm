@@ -34,7 +34,10 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           tools: composer:v2
-          coverage: pcov
+          # The expanded v0.28 suite reproducibly crashes hosted PCOV with
+          # exit 139. Keep the complete coverage gate on the supported Xdebug
+          # driver rather than weakening the matrix, test scope, or floor.
+          coverage: xdebug
           ini-values: memory_limit=1G
 
       - name: Install dependencies
@@ -107,6 +110,11 @@ jobs:
       # compatibility toolchain local to the job; consumer requirements stay intact.
       - name: Preserve production manifest
         run: cp composer.json /tmp/swarm-production-composer.json
+
+      # This lane proves the declared Laravel 13.16 floor; this advisory was
+      # fixed only in 13.30.0. Ignore only its id in this temporary lane manifest.
+      - name: Allow the Laravel 13.16 compatibility advisory
+        run: composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781
 
       - name: Select compatibility test toolchain
         run: composer require --no-update --dev "pestphp/pest:^4.7" "pestphp/pest-plugin-laravel:^4.1" "laravel/framework:13.16.0"

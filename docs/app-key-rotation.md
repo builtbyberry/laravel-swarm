@@ -15,7 +15,9 @@ rotation in different ways:
 
 - **Operational rows** stored in `swarm_*` database tables (context input,
   run history step I/O, durable branch input and output, hierarchical node
-  outputs, child durable run outputs). When `encrypt_at_rest` is on, the
+  outputs, child durable run outputs, native-input operational envelopes, and
+  native step-result envelopes).
+  When `encrypt_at_rest` is on, the
   sealed values are prefixed `sw0:` and decrypt with the configured encrypter.
   This includes designated fields nested inside otherwise unsealed JSON and
   package-owned cold replay archives; see the inventory below.
@@ -32,6 +34,18 @@ The same applies to telemetry payloads emitted through `SwarmTelemetrySink`:
 they carry redacted or allowlisted fields only, and are not sealed by the
 package.
 
+Queued jobs are a third case:
+
+- **Queue backend and `failed_jobs`.** The jobs behind `queue()` and
+  `broadcastOnQueue()` are encrypted with `APP_KEY`, whatever persistence driver
+  Swarm uses. Laravel's encrypter reads them with any key listed in
+  `APP_PREVIOUS_KEYS`. When you rotate, keep the old key there until every job
+  queued under it has completed or been removed — `queue:retry` re-queues the
+  same ciphertext, so retrying is not enough. Durable, resume, compaction, and
+  callback jobs carry only identifiers and are not encrypted by this boundary.
+  Failed-job retention is governed by `queue:prune-failed` / `queue:flush`, not
+  `swarm:prune`.
+
 ## What Breaks After Rotation
 
 When `APP_KEY` no longer matches the key used to write the sealed rows,
@@ -45,7 +59,7 @@ follow `swarm.persistence.decrypt_failure_policy`:
 | `throw`          | Decrypt exception bubbles up. Reads fail loudly.               |
 
 The default is `null_with_log`, but not every reader follows that display
-policy. Citation and provider-tool envelope reads use display-safe decoding and
+policy. Citation, provider-tool, and native-result envelope reads use display-safe decoding and
 return `unavailable` with reason `decrypt_failed` when their key is missing, without returning ciphertext
 or throwing under the `legacy` or `throw` policies. Operational checkpoint and
 cold-snapshot readers use strict decryption; losing their key can prevent reuse
@@ -58,6 +72,15 @@ provider-tool envelopes. Preserve unrelated JSON fields while rotating these val
 `data`, `metadata`, or artifact content is not automatically sealed; any
 application-owned encryption has its own rotation requirements.
 
+An encrypted queued swarm job that no configured key can decrypt fails before
+its handler runs. Operators see a `failed_jobs` row and Laravel's
+`DecryptException` message `The MAC is invalid.` Laravel Swarm logs
+`laravel-swarm: a queued swarm job could not be decrypted ...` and emits a
+degraded `job.failed` with a null `run_id` and null timing fields. Add the old
+key to `APP_PREVIOUS_KEYS`, then run `queue:retry`; the retry reuses the same
+ciphertext. If the work must not run, remove the row with `queue:forget` or all
+failed rows with `queue:flush`.
+
 ## Citation And Replay Inventory
 
 Resolve actual table names from `swarm.tables.*`; the names below are defaults.
@@ -66,10 +89,11 @@ History](persistence-and-history.md) with these locations:
 
 | Location | Value to re-encrypt |
 | --- | --- |
-| `swarm_run_histories`, `swarm_run_steps`, `swarm_durable_branches`, `swarm_durable_node_outputs`, `swarm_stream_step_checkpoints` | The direct `citation_evidence` column, when its value starts with `sw0:`. |
-| `swarm_run_histories.steps` legacy inline JSON | Each step's `citation_evidence`, alongside its existing sealed I/O fields. |
-| `swarm_stream_events.payload` JSON, including causal-log events | The nested `citation_evidence` and `provider_tool_evidence` strings, when present. The entire JSON column does not start with `sw0:`. |
-| `swarm_cold_archives.payload`, where `archive_type = event` | The nested `citation_evidence` and `provider_tool_evidence` strings copied from the hot event. |
+| `swarm_native_inputs.payload` | The whole strict operational envelope. Every active row must remain `sw0:` sealed; do not convert it to legacy plaintext. |
+| `swarm_run_histories`, `swarm_run_steps`, `swarm_durable_branches`, `swarm_durable_node_outputs`, `swarm_stream_step_checkpoints` | Direct `citation_evidence` and `native_result` columns, when their values start with `sw0:`. |
+| `swarm_run_histories.steps` legacy inline JSON | Each step's nested `citation_evidence` and `native_result`, alongside its existing sealed I/O fields. |
+| `swarm_stream_events.payload` JSON, including causal-log events | Nested `citation_evidence`, `provider_tool_evidence`, and `native_result` strings, when present. The entire JSON column does not start with `sw0:`. |
+| `swarm_cold_archives.payload`, where `archive_type = event` | Nested `citation_evidence`, `provider_tool_evidence`, and `native_result` strings copied from the hot event. |
 | `swarm_cold_archives.payload`, where `archive_type = snapshot` | The existing whole sealed snapshot string; do not treat it as an event JSON object. |
 
 Only transform values written in the package's sealing format. Leave null,
@@ -167,6 +191,9 @@ table categories:
   rows. Retain and re-encrypt them, or delete them explicitly under your
   application's retention policy; see the [streaming retention
   horizon](operator-runbook-streaming-substrate.md#4-the-retention-horizon).
+- **Queued commands and `failed_jobs`** use `APP_KEY` encryption and can read
+  `APP_PREVIOUS_KEYS`. Manage failed-job retention with `queue:prune-failed` or
+  `queue:flush`; `swarm:prune` does not remove these records.
 
 A drain-then-rotate plan is only as fast as the longest active retention. If
 you keep durable run history for 90 days and a durable run is currently

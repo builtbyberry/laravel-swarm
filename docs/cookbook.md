@@ -50,8 +50,9 @@ Swarm::agent(new ArticlePlanner)->broadcast($task, $ch);  // push to Echo/Reverb
 ```
 
 A single agent runs under sequential topology (pinned), a pass-through for one
-agent — so `stream()` and the broadcast helpers are available here (parallel is
-the only topology that cannot stream).
+agent — so `stream()` and the broadcast helpers are available here without an
+additional topology opt-in. Top-level parallel streams use the separate,
+default-off [process-backed multiplexing contract](streaming.md#parallel-live-multiplexing).
 
 For **queued or durable** execution, author a one-agent `Swarm` class — a
 background run is re-resolved from the container by class on the worker, which an
@@ -153,9 +154,12 @@ durable execution, author a `Swarm` class — `php artisan make:swarm:swarm
 YourSwarm`, then return a single agent from `agents()`; there is no dedicated
 one-agent flag. A background run is re-resolved from the container by class on the
 worker, which an ad-hoc swarm can't provide. (2) `stream()` and the broadcast
-helpers need a streamable topology — sequential, hierarchical, or
-static-hierarchical, **not** parallel (concurrent agents don't map to one ordered
-stream). See [Execution Modes](execution-modes.md#stream) for the reasoning.
+helpers support sequential, hierarchical, and static-hierarchical topology by
+default. Top-level parallel delivery requires the default-off process-backed
+[parallel multiplexing contract](streaming.md#parallel-live-multiplexing), whose
+branch-identified events have per-branch order but no global order. Run the
+[parallel streaming health check](maintenance.md#scheduling) before enabling it.
+See [Execution Modes](execution-modes.md#stream) for the complete matrix.
 
 ---
 

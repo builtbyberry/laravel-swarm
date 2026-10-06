@@ -14,7 +14,7 @@ class SwarmUpgradeCommand extends Command
 {
     protected $signature = 'swarm:upgrade
         {--path= : Application directory (defaults to this application)}
-        {--recipe=0.25-to-0.26 : Upgrade recipe (0.25-to-0.26 or 0.26-to-0.27)}
+        {--recipe=0.25-to-0.26 : Upgrade recipe (0.25-to-0.26, 0.26-to-0.27, or 0.27-to-0.28)}
         {--json : Print a machine-readable upgrade report}
         {--apply= : Comma-separated action IDs from a reviewed preview}
         {--expect= : Require this exact preview SHA-256 before applying}

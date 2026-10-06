@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableNativeStepResults;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
@@ -94,13 +95,16 @@ class DurableRunRecorder
         ]);
     }
 
-    public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null): void
+    public function complete(string $runId, string $token, RunContext $context, SwarmResponse $capturedResponse, int $stepLeaseSeconds, ?SwarmStep $step = null, ?callable $withTransaction = null): void
     {
-        $this->connection->transaction(function () use ($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step): void {
+        $this->connection->transaction(function () use ($runId, $token, $context, $capturedResponse, $stepLeaseSeconds, $step, $withTransaction): void {
             $this->persistStepArtifacts($runId, $step);
             $this->durableRuns->markCompleted($runId, $token);
             $this->contextStore->put($this->capture->terminalContext($context), $this->ttlSeconds());
             $this->historyStore->complete($runId, $capturedResponse, $this->ttlSeconds(), $token, $stepLeaseSeconds);
+            if ($withTransaction !== null) {
+                ($withTransaction)();
+            }
         });
         $this->audit->emit('durable.completed', [
             'run_id' => $runId,
@@ -127,7 +131,10 @@ class DurableRunRecorder
         $this->connection->transaction(function () use ($runId, $token, $nextStepIndex, $context, $stepLeaseSeconds, $result, $step, $withTransaction, $durableStreaming): void {
             $this->historyStore->syncDurableState($runId, 'pending', $this->capture->context($context), $context->metadata, $this->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->persistStepArtifacts($runId, $step);
-            $this->durableRuns->checkpointHierarchicalStep(
+            $method = $this->durableRuns instanceof StoresDurableNativeStepResults
+                ? 'checkpointHierarchicalStepWithNativeResult'
+                : 'checkpointHierarchicalStep';
+            $this->durableRuns->{$method}(
                 runId: $runId,
                 executionToken: $token,
                 nextStepIndex: $nextStepIndex,

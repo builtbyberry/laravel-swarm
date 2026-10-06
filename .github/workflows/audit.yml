@@ -14,15 +14,13 @@ jobs:
   audit:
     name: composer audit (${{ matrix.resolution.name }})
     runs-on: ubuntu-24.04
-    # Non-blocking for now: surfaces dependency advisories on every push/PR
-    # without gating merges on a transient upstream advisory that may land
-    # mid-review. Path to gating: drop `continue-on-error` once the tree has
-    # held advisory-clean for a release cycle (tracked alongside the v0.12.2
-    # hardening work). This package commits no composer.lock, so the audit runs
-    # against a freshly resolved tree. We audit BOTH resolutions CI tests in
-    # tests.yml — prefer-stable (latest in-range) and prefer-lowest (oldest
-    # in-range) — because an advisory can exist only in the lowest tree. The
-    # matrix job name shows which resolution flagged a given advisory.
+    # Deliberate deferral owned by the maintainer: this job remains non-blocking,
+    # so a green workflow check does not prove the resolved tree is advisory-clean.
+    # The maintainer reads both matrix job outputs by hand before every tag.
+    # Revisit whether to remove `continue-on-error` during the v0.29 release.
+    # This package commits no composer.lock, so the audit runs against freshly
+    # resolved prefer-stable and prefer-lowest trees; an advisory may affect only
+    # one resolution, and the matrix job name identifies which one.
     continue-on-error: true
 
     strategy:

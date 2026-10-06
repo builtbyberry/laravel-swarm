@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Streaming\Events;
 
+use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Support\ToolResultEncoding;
 use Laravel\Ai\Responses\Data\ToolCall;
 
@@ -16,6 +17,7 @@ final class SwarmToolCall extends SwarmStreamEvent
         public string $agentClass,
         public ToolCall $toolCall,
         public int $timestamp,
+        public PayloadAvailability $payloadAvailability = PayloadAvailability::Unknown,
     ) {}
 
     /**
@@ -25,8 +27,7 @@ final class SwarmToolCall extends SwarmStreamEvent
     {
         return [
             'id' => $this->id,
-            'invocation_id' => $this->invocationId,
-            'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'type' => 'swarm_tool_call',
             'run_id' => $this->runId,
             'step_index' => $this->stepIndex,
@@ -53,6 +54,9 @@ final class SwarmToolCall extends SwarmStreamEvent
                 'reasoning_id' => $this->toolCall->reasoningId,
                 'reasoning_summary' => $this->toolCall->reasoningSummary,
             ],
+            ...($this->payloadAvailability === PayloadAvailability::Unknown
+                ? []
+                : ['payload_status' => $this->payloadAvailability->value]),
             'timestamp' => $this->timestamp,
         ];
     }
@@ -78,6 +82,8 @@ final class SwarmToolCall extends SwarmStreamEvent
                 reasoningSummary: is_array($toolCall['reasoning_summary'] ?? null) ? $toolCall['reasoning_summary'] : null,
             ),
             timestamp: self::intValue($payload, 'timestamp', self::timestamp()),
+            payloadAvailability: PayloadAvailability::tryFrom(self::stringValue($payload, 'payload_status'))
+                ?? PayloadAvailability::Unknown,
         );
     }
 }

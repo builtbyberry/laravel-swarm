@@ -17,10 +17,11 @@ test('DurableDispatchType string values are the persisted contract', function ()
         ->and(DurableDispatchType::cases())->toHaveCount(3);
 });
 
-test('RelayLane names the two relay lanes', function (): void {
+test('RelayLane names the relay lanes', function (): void {
     expect(RelayLane::Durable->value)->toBe('durable')
         ->and(RelayLane::Audit->value)->toBe('audit')
-        ->and(RelayLane::cases())->toHaveCount(2);
+        ->and(RelayLane::Callback->value)->toBe('callback')
+        ->and(RelayLane::cases())->toHaveCount(3);
 });
 
 test('durable dispatch type values match the deprecated enum for backward compatibility', function (): void {

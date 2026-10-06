@@ -55,6 +55,7 @@ class StreamedSwarmResponse extends SwarmResponse
                     citationEvidence: $event->citationEvidence,
                     input: '',
                     output: $event->output ?? '',
+                    nativeResult: $event->nativeResult,
                     metadata: array_merge($event->metadata, [
                         'index' => $event->stepIndex,
                         'duration_ms' => $event->durationMs,

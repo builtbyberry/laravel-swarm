@@ -28,7 +28,10 @@ use Laravel\Ai\Contracts\Agent as LaravelAiAgent;
  *
  * New code should type-hint `Laravel\Ai\Contracts\Agent` directly.
  *
+ * The retirement schedule is recorded in docs/native-ownership-and-limits.md and
+ * tracked at https://github.com/builtbyberry/laravel-swarm/issues/547.
+ *
  * @deprecated since v0.23.0. Type-hint or implement `Laravel\Ai\Contracts\Agent`
- *             instead. Slated for removal in v1.0.
+ *             instead. Slated for removal in v1.0 (#547).
  */
 interface Agent extends LaravelAiAgent {}

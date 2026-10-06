@@ -9,6 +9,8 @@ use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use Illuminate\Broadcasting\Channel;
+use Laravel\Ai\Contracts\AgentInput;
+use Laravel\Ai\Messages\UserMessage;
 
 /**
  * Shared fluent surface for the class-free swarm entry points
@@ -69,7 +71,7 @@ abstract class PendingRun
      *
      * @param  SwarmTaskInput  $task
      */
-    public function prompt(string|array|RunContext $task): SwarmResponse
+    public function prompt(string|array|RunContext|AgentInput|UserMessage $task): SwarmResponse
     {
         return $this->toSwarm()->prompt($task);
     }
@@ -79,7 +81,7 @@ abstract class PendingRun
      *
      * @param  SwarmTaskInput  $task
      */
-    public function run(string|array|RunContext $task): SwarmResponse
+    public function run(string|array|RunContext|AgentInput|UserMessage $task): SwarmResponse
     {
         return $this->prompt($task);
     }
@@ -90,7 +92,7 @@ abstract class PendingRun
      *
      * @param  SwarmTaskInput  $task
      */
-    public function stream(string|array|RunContext $task): StreamableSwarmResponse
+    public function stream(string|array|RunContext|AgentInput|UserMessage $task): StreamableSwarmResponse
     {
         return $this->toSwarm()->stream($task);
     }
@@ -101,7 +103,7 @@ abstract class PendingRun
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcast(string|array|RunContext $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
+    public function broadcast(string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels, bool $now = false): StreamableSwarmResponse
     {
         return $this->toSwarm()->broadcast($task, $channels, $now);
     }
@@ -112,7 +114,7 @@ abstract class PendingRun
      * @param  SwarmTaskInput  $task
      * @param  SwarmBroadcastChannels  $channels
      */
-    public function broadcastNow(string|array|RunContext $task, Channel|array $channels): StreamableSwarmResponse
+    public function broadcastNow(string|array|RunContext|AgentInput|UserMessage $task, Channel|array $channels): StreamableSwarmResponse
     {
         return $this->broadcast($task, $channels, now: true);
     }

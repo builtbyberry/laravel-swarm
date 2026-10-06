@@ -18,7 +18,7 @@ class TechnicalResponder extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent to use a live model.
+        // For model behavior, generate TechnicalResponder with make:agent and port these instructions.
         return "[TechnicalResponder] {$prompt}\n"
             .'- Reproduced the failure and captured the stack trace.'."\n"
             .'- Suggested a workaround and filed a ticket for the root cause.';

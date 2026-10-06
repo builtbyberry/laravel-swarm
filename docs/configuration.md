@@ -23,7 +23,7 @@ Top-level settings that apply to every swarm run regardless of topology or execu
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.topology` | string | `sequential` | `SWARM_TOPOLOGY` | Default topology used when a swarm class does not declare `#[Topology]`. Values: `sequential`, `parallel`, `hierarchical`. |
-| `swarm.timeout` | int | `300` | `SWARM_TIMEOUT` | Best-effort orchestration deadline in seconds. Checked before and between swarm steps. Does not hard-cancel an in-flight provider call. |
+| `swarm.timeout` | int | `300` | `SWARM_TIMEOUT` | Best-effort orchestration deadline in seconds. Ordinary modes check before/between steps. Process-backed top-level parallel streaming enforces the absolute deadline while multiplexing and terminates local branch processes, but cannot guarantee cancellation of remote provider effects already accepted. |
 | `swarm.max_agent_steps` | int | `10` | `SWARM_MAX_AGENT_STEPS` | Maximum number of agent steps per run. The swarm fails before exceeding this limit. |
 | `swarm.retention.prevent_prune` | bool | `false` | `SWARM_PREVENT_PRUNE` | When `true`, `swarm:prune` skips all destructive deletes (scheduled pruning becomes a no-op). Use in regulated deployments that manage retention outside the package. `--dry-run` still reports counts when this is enabled. |
 
@@ -55,6 +55,32 @@ Controls the primary persistence driver and at-rest encryption behavior. Changin
 > **Note:** JSON columns (context data, metadata, artifacts) remain structured JSON in the database; `encrypt_at_rest` seals designated string columns only. Do not store secrets inside JSON payloads unless your application encrypts them separately.
 
 > **Key rotation:** Rotating `APP_KEY` without re-encrypting existing rows leaves them undecipherable. Plan key rotation with your operational model. See [APP_KEY Rotation](app-key-rotation.md) for the runbook.
+
+---
+
+## Native Inputs
+
+Native Laravel AI `UserMessage` admission is default-off. Existing admitted
+references remain readable when the writer flag is disabled so workers can drain
+before rollback.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.native_inputs.enabled` | bool | `false` | `SWARM_NATIVE_INPUTS_ENABLED` | Admit new native message input. Enable only after migrations and v1 readers are present on every worker. |
+| `swarm.native_inputs.disk` | string\|null | `null` | `SWARM_NATIVE_INPUTS_DISK` | Private disk used for Swarm-promoted local/base64 files and approved stored references. Required for recoverable attachments. |
+| `swarm.native_inputs.retention_seconds` | int | `86400` | `SWARM_NATIVE_INPUTS_RETENTION_SECONDS` | Envelope retention and execution deadline. Size beyond the longest queue plus durable recovery window. |
+| `swarm.native_inputs.max_attachments` | int | `8` | `SWARM_NATIVE_INPUTS_MAX_ATTACHMENTS` | Maximum attachment count admitted for one native message. |
+| `swarm.native_inputs.max_attachment_bytes` | int | `10485760` | `SWARM_NATIVE_INPUTS_MAX_ATTACHMENT_BYTES` | Maximum bytes admitted for each locally readable or configured-disk attachment. |
+| `swarm.native_agent_settings.enabled` | bool | `false` | `SWARM_NATIVE_AGENT_SETTINGS_ENABLED` | Admit new v2 per-run tool, message-history and conversation settings. Requires `swarm.native_inputs.enabled=true`; existing v2 references remain readable while this layered writer is disabled. Enable only after every worker has v2 readers. |
+| `swarm.native_agent_settings.max_messages` | int | `100` | `SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGES` | Maximum seeded `withMessages()` entries per recipient. Values are clamped to the inclusive range 1–1,000; zero, negative, and non-numeric values normalize to 1. |
+| `swarm.native_agent_settings.max_message_bytes` | int | `1048576` | `SWARM_NATIVE_AGENT_SETTINGS_MAX_MESSAGE_BYTES` | Maximum total encoded bytes across seeded `withMessages()` entries per recipient. Values are clamped to the inclusive range 1 byte–16 MiB; zero, negative, and non-numeric values normalize to 1 byte. |
+| `swarm.native_agent_settings.tool_factories` | array | `[]` | none | Application-owned stable identifier to `NativeAgentToolFactory` class map. Factories expand once at admission into sealed reconstructible tool references. |
+| `swarm.tables.native_inputs` | string | `swarm_native_inputs` | `SWARM_NATIVE_INPUTS_TABLE` | Operational envelope table. A custom name requires a matching published migration. |
+
+Recoverable native input also requires database persistence and
+`swarm.persistence.encrypt_at_rest=true`. Ownership authorization, explicit
+recipient selection, rollout, and rollback are documented in
+[Native messages and attachments](native-inputs.md).
 
 ---
 
@@ -110,6 +136,41 @@ Negative integer settings clamp to zero, non-integers use defaults, and values
 above the ceilings clamp to those ceilings. Withheld data reports `partial` with
 reason `limit`; these settings do not cap event count. There are no environment
 variable aliases for these keys.
+
+---
+
+## Citations
+
+Bounds the provider citation evidence kept for each agent invocation. Whole
+sources are retained until either limit is reached; evidence cut by a limit is
+reported as partial with the reason `limit`. These keys have no environment
+variables; set them in a published `config/swarm.php`. See
+[Citations](citations.md).
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.citations.max_count` | int | `256` | — | Maximum citation records kept per invocation. |
+| `swarm.citations.max_bytes` | int | `262144` | — | Maximum encoded bytes of citation evidence kept per invocation. |
+
+## Native step results
+
+Completed steps expose a bounded native Laravel AI response projection. These
+limits apply before process/queue serialization and before persistence. See
+[Native Step Results](native-step-results.md) for the field inventory, capture
+behavior, and hard ceilings.
+
+| Key | Type | Default | Env Var |
+| --- | --- | --- | --- |
+| `swarm.native_results.max_bytes` | int | `262144` | `SWARM_NATIVE_RESULTS_MAX_BYTES` |
+| `swarm.native_results.max_event_bytes` | int | `4096` | `SWARM_NATIVE_RESULTS_MAX_EVENT_BYTES` |
+| `swarm.native_results.max_generation_steps` | int | `64` | `SWARM_NATIVE_RESULTS_MAX_GENERATION_STEPS` |
+| `swarm.native_results.max_tool_statuses` | int | `256` | `SWARM_NATIVE_RESULTS_MAX_TOOL_STATUSES` |
+| `swarm.native_results.max_structured_depth` | int | `32` | `SWARM_NATIVE_RESULTS_MAX_STRUCTURED_DEPTH` |
+| `swarm.native_results.max_structured_items` | int | `4096` | `SWARM_NATIVE_RESULTS_MAX_STRUCTURED_ITEMS` |
+| `swarm.native_results.max_reasoning_bytes` | int | `65536` | `SWARM_NATIVE_RESULTS_MAX_REASONING_BYTES` |
+
+Values clamp to the hard ceilings documented in the guide. A limited result is
+explicitly marked `partial`; the projector never stores a truncated JSON string.
 
 ---
 
@@ -173,6 +234,10 @@ Controls behavior specific to the dynamic `Hierarchical` topology when streamed 
 ## Queue
 
 Queue connection and name used for `queue()` execution and hierarchical parallel coordination.
+The jobs behind `queue()` and `broadcastOnQueue()` always encrypt their command
+with `APP_KEY`; there is no Swarm config opt-out. A valid key is required for
+sync and test queues too. See
+[Encrypted queued swarm payloads](../UPGRADING.md#encrypted-queued-swarm-payloads).
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
@@ -195,12 +260,41 @@ uses [ConfiguresDurableAdvanceJob](../src/Jobs/Concerns/ConfiguresDurableAdvance
 for retries, backoff and timeout; ordinary `swarm.queue.tries` / `timeout` do not
 configure it.
 
-## Streaming / Replay
+## Callbacks
 
-Controls the optional persisted stream replay feature. Replay is disabled by default. See [streaming.md](streaming.md) for full streaming and replay behavior.
+Queue and durable terminal callbacks require database persistence and are
+delivered by `swarm:relay --type=callback`. Stream `catch()` runs in-process and
+does not use these settings.
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
+| `swarm.callbacks.enabled` | bool | `false` | `SWARM_CALLBACKS_ENABLED` | Registration and delivery kill switch. Boolean strings such as `off` and `no` are false. Earlier rows still settle while disabled and resume after re-enablement. |
+| `swarm.callbacks.queue.connection` | string\|null | `null` | `SWARM_CALLBACKS_QUEUE_CONNECTION` | Queue connection for callback delivery jobs; `null` uses the application default. |
+| `swarm.callbacks.queue.name` | string\|null | `null` | `SWARM_CALLBACKS_QUEUE` | Queue name for callback delivery jobs; `null` uses the connection default. |
+| `swarm.callbacks.max_attempts` | int | `5` | `SWARM_CALLBACKS_MAX_ATTEMPTS` | Delivery acquisitions allowed before dead-lettering. Relay reservations and queue-dispatch attempts do not consume this count. |
+| `swarm.callbacks.reservation_timeout_seconds` | int\|null | `null` | `SWARM_CALLBACKS_RESERVATION_TIMEOUT_SECONDS` | Delivery lease; `null` uses `swarm.durable.relay.reservation_timeout_seconds` (default `60`). Set above queue delay plus the longest callback execution. |
+| `swarm.callbacks.retry_backoff_seconds` | int | `60` | `SWARM_CALLBACKS_RETRY_BACKOFF_SECONDS` | Delay after callback or queue-dispatch failure before another relay claim is eligible; clamped to at least 1 second. |
+| `swarm.callbacks.stale_warning_threshold_seconds` | int | `0` | `SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS` | Age at which eligible work warns in `swarm:health`; `0` means twice the effective reservation timeout. |
+| `swarm.callbacks.dead_letter_retention_days` | int\|null | `null` | `SWARM_CALLBACKS_DEAD_LETTER_RETENTION_DAYS` | Positive days allow age-based dead-letter pruning. With `null`, dead letters remain until their terminal run history expires; non-delivering callback rows are then pruned with that run. |
+
+Callbacks are delivered at least once. Keep them idempotent and schedule the
+relay whenever this feature is enabled.
+
+## Streaming / Replay
+
+Controls HTTP protocol projection, process-backed parallel streaming, and the
+optional persisted replay feature. Each is disabled by default. See
+[Streaming](streaming.md) for the typed event/replay contract and
+[Vercel and AG-UI protocol projection](native-chat-protocols.md) for the native
+HTTP adapter, deployment checklist, and exact privacy limits.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.streaming.native_protocols.enabled` | bool | `false` | `SWARM_NATIVE_CHAT_PROTOCOLS_ENABLED` | Enables explicit Vercel and AG-UI projection on `StreamableSwarmResponse`. This does not create a route or bypass application authorization. Rebuild cached configuration and recycle long-lived application workers when changing it. |
+| `swarm.streaming.parallel.enabled` | bool | `false` | `SWARM_PARALLEL_STREAMING_ENABLED` | Enables real top-level parallel live multiplexing. Requires Laravel's `process` concurrency driver and loopback process transport; unsupported drivers fail before agent invocation and never masquerade buffered completion as streaming. |
+| `swarm.streaming.parallel.max_branches` | int | `32` | `SWARM_PARALLEL_STREAMING_MAX_BRANCHES` | Maximum branch processes admitted to one parallel live stream. This is not a raw file-descriptor or application-wide ceiling: every branch uses multiple pipes/sockets, and overlapping requests multiply the total. Runtime range: 1–256. |
+| `swarm.streaming.parallel.max_frame_bytes` | int | `2097152` | `SWARM_PARALLEL_STREAMING_MAX_FRAME_BYTES` | Maximum encoded bytes for one atomic branch event or terminal frame. Events are never split. Runtime range: 1 KiB–4 MiB. |
+| `swarm.streaming.parallel.cancel_grace_milliseconds` | int | `250` | `SWARM_PARALLEL_STREAMING_CANCEL_GRACE_MILLISECONDS` | Grace period before active sibling processes are forcibly stopped after branch failure, deadline, protocol failure, or consumer abandonment. Runtime range: 0–10000 ms. |
 | `swarm.streaming.replay.enabled` | bool | `false` | `SWARM_STREAM_REPLAY_ENABLED` | When `true`, all streamed swarm runs are automatically stored for replay via `SwarmHistory::replay($runId)`. Can also be enabled per-run with `storeForReplay()`. |
 | `swarm.streaming.replay.driver` | string\|null | `null` (inherits) | `SWARM_STREAM_REPLAY_DRIVER` | Storage driver for stream replay events. `null` inherits from `swarm.persistence.driver`. |
 | `swarm.streaming.replay.failure_policy` | string | `fail` | `SWARM_STREAM_REPLAY_FAILURE_POLICY` | What happens when writing a replay event fails. `fail` — the stream fails (default). `continue` — the failure is swallowed and partial replay is unavailable. |
@@ -333,6 +427,17 @@ Controls the telemetry sink that exports structured correlation payloads. Bind `
 
 ---
 
+## Pulse
+
+Pulse recorders and dashboard cards ship in the
+[`builtbyberry/laravel-swarm-pulse`](https://github.com/builtbyberry/laravel-swarm-pulse)
+companion package; core does not read this key. See [Pulse](pulse.md) and
+[Memory](memory.md).
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.pulse.memory.sample_rate` | float | `1.0` | `SWARM_PULSE_MEMORY_SAMPLE_RATE` | Share of memory events the companion's memory metrics recorder samples, clamped to `0.0`–`1.0`. `0.0` disables sampling. |
+
 ## Audit
 
 Controls the audit evidence sink. Bind `SwarmAuditSink` in your service container to route package-owned audit evidence to an append-only store, SIEM export, or queue listener. The default binding (`NoOpSwarmAuditSink`) discards all evidence. See [audit-evidence-contract.md](audit-evidence-contract.md) for sink implementation details.
@@ -369,7 +474,9 @@ SWARM_MEMORY_REPLAY_MODE=frozen_view
 
 ## Tables
 
-Table name overrides for all database-backed stores. If you change these, publish and update the package migrations as well.
+Table name overrides for all database-backed stores. If you change these,
+publish and update the package migrations unless the row states that the
+package migration honors the configured name.
 
 | Key | Default Table | Env Var |
 |-----|---------------|---------|
@@ -394,6 +501,7 @@ Table name overrides for all database-backed stores. If you change these, publis
 | `swarm.tables.durable_child_runs` | `swarm_durable_child_runs` | `SWARM_DURABLE_CHILD_RUNS_TABLE` |
 | `swarm.tables.durable_webhook_idempotency` | `swarm_durable_webhook_idempotency` | `SWARM_DURABLE_WEBHOOK_IDEMPOTENCY_TABLE` |
 | `swarm.tables.durable_outbox` | `swarm_durable_outbox` | `SWARM_DURABLE_OUTBOX_TABLE` |
+| `swarm.tables.callback_deliveries` | `swarm_callback_deliveries` (the package migration honors the configured name) | `SWARM_CALLBACK_DELIVERIES_TABLE` |
 | `swarm.tables.cold_archives` | `swarm_cold_archives` | `SWARM_COLD_ARCHIVES_TABLE` |
 
 Table names are honored by all database repositories at runtime.

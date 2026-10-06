@@ -20,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -56,6 +57,7 @@ class StreamEventMapper
         protected NativeOutcomeValidator $outcomes,
         protected NativeCitationEvidence $citations,
         protected ProviderToolEventMapper $providerTools,
+        protected NativeStepResultProjector $nativeResults,
     ) {}
 
     /**
@@ -104,6 +106,8 @@ class StreamEventMapper
                 agentClass: $agent::class,
                 delta: $this->capture->applyOutput($event->delta, $state->context),
                 timestamp: $event->timestamp,
+                messageId: $event->messageId,
+                payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($state->context)),
             );
             $this->syncInvocationId($swarmEvent, $event->invocationId);
 
@@ -118,6 +122,7 @@ class StreamEventMapper
                 agentClass: $agent::class,
                 messageId: $event->messageId,
                 timestamp: $event->timestamp,
+                payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($state->context)),
             );
             $this->syncInvocationId($swarmEvent, $event->invocationId);
 
@@ -169,6 +174,7 @@ class StreamEventMapper
                 agentClass: $agent::class,
                 toolCall: $this->captureToolCall($event->toolCall, $state->context),
                 timestamp: $event->timestamp,
+                payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($state->context)),
             );
             $this->syncInvocationId($swarmEvent, $event->invocationId);
 
@@ -198,6 +204,7 @@ class StreamEventMapper
                 timestamp: $event->timestamp,
                 preliminary: $event->preliminary,
                 denied: $event->denied,
+                payloadAvailability: PayloadAvailability::fromCaptureDecision($this->capture->outputsDecision($state->context)),
             );
             $this->syncInvocationId($swarmEvent, $event->invocationId);
 
@@ -237,6 +244,7 @@ class StreamEventMapper
         $this->outcomes->validateResponse($response);
         $accumulator->citationEvidence = $this->citations->reconcile($accumulator->citationEvidence,
             $this->citations->response($response, $state->context->runId, $index, $agent::class));
+        $accumulator->nativeResult = $this->nativeResults->fromResponse($response);
     }
 
     /**

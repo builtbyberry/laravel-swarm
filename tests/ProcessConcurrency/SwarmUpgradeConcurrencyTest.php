@@ -77,7 +77,7 @@ PHP, $lockPath, $this->upgradeProcessRoot.'/release-lock'], timeout: 10);
     expect($holder->getExitCode())->toBe(0)
         ->and($writer->getExitCode())->toBe(0)
         ->and(json_decode($writer->getOutput(), true, 512, JSON_THROW_ON_ERROR)['status'])->toBe('applied');
-})->with(['0.25-to-0.26', '0.26-to-0.27']);
+})->with(['0.25-to-0.26', '0.26-to-0.27', '0.27-to-0.28']);
 
 test('two real same-digest CLI writers apply once and reject the second busy or stale writer', function (string $recipe): void {
     swarmUpgradeProcessRecipe($this, $recipe);
@@ -98,7 +98,11 @@ test('two real same-digest CLI writers apply once and reject the second busy or 
 
         expect($exits)->toBe([0, 2])
             ->and($statuses)->toBe(['applied', 'error'])
-            ->and(json_decode(file_get_contents($this->upgradeProcessRoot.'/composer.json'), true, 512, JSON_THROW_ON_ERROR)['require']['builtbyberry/laravel-swarm'])->toBe($recipe === '0.26-to-0.27' ? '^0.27.0' : '^0.26.1')
+            ->and(json_decode(file_get_contents($this->upgradeProcessRoot.'/composer.json'), true, 512, JSON_THROW_ON_ERROR)['require']['builtbyberry/laravel-swarm'])->toBe(match ($recipe) {
+                '0.26-to-0.27' => '^0.27.0',
+                '0.27-to-0.28' => '^0.28.0',
+                default => '^0.26.1',
+            })
             ->and(glob($this->upgradeProcessRoot.'/.swarm-upgrade/*.json'))->toHaveCount(1)
             ->and(fileperms($this->upgradeProcessRoot.'/.swarm-upgrade') & 0777)->toBe(0700)
             ->and(fileperms($this->upgradeProcessRoot.'/.swarm-upgrade/lock') & 0777)->toBe(0600);
@@ -113,7 +117,7 @@ test('two real same-digest CLI writers apply once and reject the second busy or 
         $first->stop();
         $second->stop();
     }
-})->with(['0.25-to-0.26', '0.26-to-0.27']);
+})->with(['0.25-to-0.26', '0.26-to-0.27', '0.27-to-0.28']);
 
 function swarmUpgradeProcessRecipe(object $test, string $recipe): void
 {
@@ -122,5 +126,10 @@ function swarmUpgradeProcessRecipe(object $test, string $recipe): void
         file_put_contents($test->upgradeProcessRoot.'/composer.json', $test->upgradeProcessManifest);
         $lock = file_get_contents($test->upgradeProcessRoot.'/composer.lock');
         file_put_contents($test->upgradeProcessRoot.'/composer.lock', str_replace(['v0.25.0', 'v0.10.3'], ['v0.26.3', 'v0.11.2'], $lock));
+    } elseif ($recipe === '0.27-to-0.28') {
+        $test->upgradeProcessManifest = str_replace('^0.25.0', '^0.27.0', $test->upgradeProcessManifest);
+        file_put_contents($test->upgradeProcessRoot.'/composer.json', $test->upgradeProcessManifest);
+        $lock = file_get_contents($test->upgradeProcessRoot.'/composer.lock');
+        file_put_contents($test->upgradeProcessRoot.'/composer.lock', str_replace(['v0.25.0', 'v0.10.3'], ['v0.27.0', 'v1.0.0'], $lock));
     }
 }

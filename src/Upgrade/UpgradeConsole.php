@@ -13,6 +13,7 @@ final class UpgradeConsole
     public const HELP = <<<'TEXT'
 Preview a Swarm upgrade recipe. Default: 0.25-to-0.26, target v0.26.1.
 Explicit 0.26-to-0.27 targets v0.27.0 / Laravel AI 1.x.
+Explicit 0.27-to-0.28 targets v0.28.0 and keeps Laravel AI on supported 1.x.
 Candidate compatibility evidence is not published-install proof; verify package availability.
 
   swarm-upgrade [--path=APP] [--recipe=RECIPE] [--json]
@@ -21,7 +22,7 @@ Candidate compatibility evidence is not published-install proof; verify package 
 
 Options:
   --path=APP       Application directory; defaults to the current directory.
-  --recipe=NAME   Select 0.25-to-0.26 (default) or 0.26-to-0.27 explicitly.
+  --recipe=NAME   Select 0.25-to-0.26 (default), 0.26-to-0.27, or 0.27-to-0.28.
   --json          Print a machine-readable report.
   --apply=IDS     Apply only these comma-separated action IDs from a preview.
   --expect=HASH   Require this exact preview SHA-256 before applying.

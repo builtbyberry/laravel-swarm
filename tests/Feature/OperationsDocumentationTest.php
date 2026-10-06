@@ -77,13 +77,24 @@ test('persistence documentation names durable runtime inspection access', functi
 test('streaming documentation covers topology replay capture and limits', function () {
     $contents = file_get_contents(__DIR__.'/../../docs/streaming.md');
 
-    expect($contents)->toContain('Sequential, Static-Hierarchical, and Hierarchical')
+    expect($contents)->toContain('Sequential, Parallel, Static-Hierarchical, and Hierarchical')
         ->and($contents)->toContain('bounded loops')
         ->and($contents)->toContain('storeForReplay')
         ->and($contents)->toContain('SwarmHistory::replay')
         ->and($contents)->toContain('swarm_stream_error')
         ->and($contents)->toContain('persistence-and-history.md#payload-limits')
         ->and($contents)->toContain('swarm.capture');
+});
+
+test('parallel streaming upgrade guidance reflects recursive published config defaults', function () {
+    $contents = file_get_contents(__DIR__.'/../../UPGRADING.md');
+
+    expect($contents)
+        ->toContain('recursively backfills newly shipped nested defaults')
+        ->toContain('You do not need to republish or manually copy')
+        ->toContain('SWARM_PARALLEL_STREAMING_ENABLED')
+        ->toContain("config('swarm.streaming.parallel.enabled')")
+        ->not->toContain('Laravel\'s package config merge will not add nested keys');
 });
 
 test('maintenance documentation includes the enterprise pilot posture', function () {

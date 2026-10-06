@@ -3,7 +3,9 @@
 
 Candidate: proof.py candidate --output /new/path --sources sources.json
 Published: proof.py published --output /new/path --sources published-sources.json
-Each sources.json entry is package-name: {"version": "0.27.0", "reference": "40hex"}.
+Each sources.json maps the five ecosystem package names to {"version", "reference": "40hex"};
+an optional "native" block overrides the laravel/ai, laravel/framework and laravel/mcp pins
+(defaulting to the AI 1.0 ecosystem), so one harness serves every release's candidate set.
 Published mode requires the same immutable map but NEVER creates repositories.
 Outputs are private disposable fixtures, not production configuration or publication proof.
 """
@@ -20,14 +22,19 @@ import subprocess
 import sys
 import urllib.request
 
-VERSIONS = {
-    'builtbyberry/laravel-swarm': '0.27.0',
-    'builtbyberry/laravel-swarm-pulse': '0.1.8',
-    'builtbyberry/laravel-swarm-filament': '0.3.0',
-    'builtbyberry/laravel-swarm-mcp': '0.2.0',
-    'builtbyberry/laravel-swarm-memory-vector': '0.2.0',
-}
-NATIVE = {
+# The five ecosystem packages (core + four companions). Their versions and refs
+# come from sources.json, not this list, so one harness serves every release
+# (ai-1 core 0.27, v0.28 core 0.28, ...).
+PACKAGES = (
+    'builtbyberry/laravel-swarm',
+    'builtbyberry/laravel-swarm-pulse',
+    'builtbyberry/laravel-swarm-filament',
+    'builtbyberry/laravel-swarm-mcp',
+    'builtbyberry/laravel-swarm-memory-vector',
+)
+# Default upstream native pins (the AI 1.0 ecosystem). A sources.json may override
+# them with its own "native" block (e.g. AI 1.0.1 for the v0.28 candidate set).
+DEFAULT_NATIVE = {
     'laravel/ai': {'version': '1.0.0', 'reference': '101c7ea33cd8569d82570f753fbf38e48b7d3d95'},
     'laravel/framework': {'version': '13.33.0', 'reference': '91188a17ceaa3dbace6e8a5f7abd0d042e466359'},
     'laravel/mcp': {'version': '1.0.0', 'reference': 'cfa4f38f82873eeb6848527883545f98f871e229'},
@@ -48,11 +55,15 @@ def save(path, value):
 
 
 def source_map(value):
-    check(set(value) == set(VERSIONS), 'Expected exactly five ecosystem packages')
-    for name, version in VERSIONS.items():
-        check(value[name].get('version') == version, f'Wrong expected version: {name}')
-        check(re.fullmatch('[0-9a-f]{40}', value[name].get('reference', '')), f'Immutable 40hex ref required: {name}')
-    return value | NATIVE
+    native = value.get('native')
+    packages = {name: entry for name, entry in value.items() if name != 'native'}
+    check(set(packages) == set(PACKAGES), 'Expected exactly five ecosystem packages')
+    native = native if native is not None else DEFAULT_NATIVE
+    check(set(native) == set(DEFAULT_NATIVE), 'Native block must pin laravel/ai, laravel/framework and laravel/mcp')
+    for name, entry in {**packages, **native}.items():
+        check(isinstance(entry, dict) and re.fullmatch(r'\d+\.\d+\.\d+', str(entry.get('version', ''))), f'Expected an exact x.y.z version: {name}')
+        check(re.fullmatch('[0-9a-f]{40}', entry.get('reference', '')), f'Immutable 40hex ref required: {name}')
+    return packages | native
 
 
 def verify(app, expected):
@@ -113,7 +124,11 @@ def assistant(app, env, logs, mode):
         result = run(prefix + ['--recipe=0.26-to-0.27', '--json'], app, env, logs, f'assistant-preview-{index}', (1,))
         report = json.loads(result.stdout)
         check(report['runtime_verified'] is False, 'Assistant overstates runtime proof')
-        check('already-target' in [f['id'] for f in report['findings']] and not report['actions'], 'Already-target verification-only behavior')
+        # The 0.26-to-0.27 recipe accepts only 0.26/0.27 sources. A core-0.27 candidate
+        # app is 'already-target'; a core-0.28 app is beyond the recipe and reported as
+        # 'unsupported-source' (manual upgrade guidance). Either way the assistant is
+        # verification-only for a candidate install — findings, never actions.
+        check({'already-target', 'unsupported-source'} & {f['id'] for f in report['findings']} and not report['actions'], 'Verification-only behavior for the pinned recipe')
         reports.append(report)
     check(reports[0] == reports[1], 'Standalone/Artisan report parity')
     if mode == 'candidate':
@@ -154,7 +169,7 @@ def main():
     originals.mkdir()
     overrides = []
     if args.mode == 'candidate':
-        for name in VERSIONS:
+        for name in PACKAGES:
             target = expected[name]
             url = f'https://raw.githubusercontent.com/{name}/{target["reference"]}/composer.json'
             request = urllib.request.Request(url, headers={'User-Agent': 'Laravel-Swarm-Ecosystem-Proof'})
@@ -176,7 +191,7 @@ def main():
     save(output / 'freshness.json', {'app': str(app), 'vendor_absent': True, 'lock_absent': True, 'composer_home_absent': not Path(env['COMPOSER_HOME']).exists(), 'composer_cache_absent': not Path(env['COMPOSER_CACHE_DIR']).exists()})
     run(['composer', 'update', '--prefer-dist', '--no-progress', '--no-interaction', '--no-scripts'], app, env, logs, 'composer', timeout=900)
     identities = verify(app, expected)
-    for name in VERSIONS:
+    for name in PACKAGES:
         installed_manifest = app / 'vendor' / name / 'composer.json'
         if args.mode == 'candidate':
             check(digest(installed_manifest) == digest(originals / (name.split('/')[1] + '.json')), f'Installed/source manifest mismatch: {name}')

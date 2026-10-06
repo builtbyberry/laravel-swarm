@@ -155,6 +155,29 @@ Event::listen(SwarmFailed::class, function (SwarmFailed $event): void {
 
 ---
 
+### `NativeProtocolProjectionFailed`
+
+**Full class:** `BuiltByBerry\LaravelSwarm\Events\NativeProtocolProjectionFailed`
+
+**When it fires:** when the native Vercel or AG-UI adapter cannot produce a safe
+projection. This is a server-side diagnostic, not an access audit record or
+proof that the client received the failure.
+
+| Property | Type | Description |
+|---|---|---|
+| `$runId` | `string` | Run identifier for the source swarm stream. |
+| `$protocol` | `string` | Native protocol being projected. |
+| `$projection` | `NativeProtocolProjection` | `Workflow` or `FinalAgent`. |
+| `$reason` | `string` | Stable bounded failure category. |
+| `$timestamp` | `int` | Event timestamp. |
+
+The event carries no prompt, output, tool payload, tenant identity, or client
+acknowledgement. See
+[Completion, errors, cancellation, and replay](native-chat-protocols.md#completion-errors-cancellation-and-replay)
+for the reason-code catalog.
+
+---
+
 ### `SwarmStepStarted`
 
 **Full class:** `BuiltByBerry\LaravelSwarm\Events\SwarmStepStarted`
@@ -205,6 +228,7 @@ Event::listen(SwarmStepStarted::class, function (SwarmStepStarted $event): void 
 | `$metadata` | `array<string, mixed>` | Run context metadata. |
 | `$artifacts` | `array<int, SwarmArtifact>` | Artifacts produced during this step. |
 | `$executionMode` | `string\|null` | Execution mode. |
+| `$nativeResult` | `NativeStepResult\|null` | Capture-shaped, bounded native completion projection. Full keeps the bounded projection, the shipped false output-capture flag yields Redact, and a custom Skip policy yields omitted. See [Native Step Results](native-step-results.md). |
 
 ```php
 use BuiltByBerry\LaravelSwarm\Events\SwarmStepCompleted;

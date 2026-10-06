@@ -6,9 +6,10 @@ example ships as a complete `app/` tree (swarm, agents, runner command) plus
 its own README.
 
 Every starter is built on `BuiltByBerry\LaravelSwarm\Testing\ScriptedAgent`
-so it runs end-to-end with **no provider configured and no API key**. The
-agents return canned text. Each agent file has a `TODO` marker pointing to
-the one-line edit that swaps in a real Laravel AI agent.
+so it runs end-to-end with **no provider configured and no API key**. These are
+deterministic offline helpers, not the normal model-agent path. For model
+behavior, generate native classes with `php artisan make:agent`, then port the
+starter's application-owned instructions, tools, and schemas.
 
 ## The three starters
 

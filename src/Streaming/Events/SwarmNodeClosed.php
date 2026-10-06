@@ -27,8 +27,7 @@ final class SwarmNodeClosed extends SwarmStreamEvent
     {
         return [
             'id' => $this->id,
-            'invocation_id' => $this->invocationId,
-            'node_id' => $this->nodeId,
+            ...$this->transportIdentity(),
             'type' => 'swarm_node_closed',
             'run_id' => $this->runId,
             'result' => $this->result,

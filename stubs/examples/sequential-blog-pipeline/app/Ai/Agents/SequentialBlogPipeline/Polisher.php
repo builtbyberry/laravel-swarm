@@ -21,7 +21,7 @@ class Polisher extends ScriptedAgent
 
     protected function reply(string $prompt): string
     {
-        // TODO: swap ScriptedAgent for a real Promptable agent to use a live model.
+        // For model behavior, generate Polisher with make:agent and port these instructions.
         return <<<POLISHED
             Polished blog post (scripted demo output):
 

@@ -126,7 +126,7 @@ Alignment](#redaction-and-capture-alignment) below.
 When `failure_policy` is `queue` or `dead_letter` (the v0.5 default is
 `queue`), failed evidence records are persisted to the `swarm_audit_outbox`
 table. The `swarm:relay --type=audit` lane (or bare `swarm:relay`, which
-drains both durable and audit lanes) re-emits pending records through the
+drains the durable, audit, and callback lanes) re-emits pending records through the
 bound sink. The retry contract:
 
 - `pending` records are re-attempted up to
@@ -251,6 +251,33 @@ Both include `step_index` and `agent_class`.
 `step.completed` includes `duration_ms`, `metadata_keys`, and allowlisted
 `metadata`.
 
+### Native Input Release
+
+| Category                | Description                                                    |
+|-------------------------|----------------------------------------------------------------|
+| `native_input.released` | A native `UserMessage` invocation was released to a recipient. |
+
+The payload contains `run_id`, `recipient`, `attachment_count`, boolean
+`provider_override`, `model_override`, and `timeout_override`, boolean
+`tools_configured` with `tool_count`, boolean `messages_configured` with
+`message_count`, and `conversation_mode` (`none`, `start`, or `continue`). It
+contains no prompt text, attachment contents, tool configuration, or message
+history.
+
+### Terminal Callback Delivery
+
+| Category             | Description                                                        |
+|----------------------|--------------------------------------------------------------------|
+| `callback.delivered` | A queue or durable terminal callback completed and its row was removed. |
+
+The record is emitted only after the delivery row is deleted. It contains
+`delivery_id` (int), `run_id` (string), `slot` (string), and `attempts` (int).
+It never includes the closure, terminal context, callback result, or exception
+message. In the audit evidence contract, callback dead letters are log-only;
+there is no callback dead-letter evidence category. This is an additive
+category and does not change `schema_version`; sinks must tolerate unknown
+categories.
+
 ### Durable State Transitions
 
 | Category                         | Description                                                |
@@ -284,8 +311,8 @@ advance execution.
 | `command.resume`  | `swarm:resume` was invoked for a run.                          |
 | `command.cancel`  | `swarm:cancel` was invoked for a run.                          |
 | `command.recover` | `swarm:recover` was invoked. Includes `recovered_count` and `recovered_run_ids`. `status: skipped_overlap` means another invocation held the finite command lease; the command exited non-zero without sweeping. |
-| `command.relay`   | `swarm:relay` completed or failed. Always includes `dispatched_count`, `skipped_count`, `failed_count`, `claimed_count` (rows reserved in phase 1), `reclaimed_count` (of those, rows with a stale prior reservation), `types`, `limit`, `drain_until_empty`, `max_attempts` (null when not set), and `attempts` (number of drain iterations executed). As of v0.5.0, also always includes `audit_replayed_count` (audit records successfully re-emitted through the bound sink during this drain) and `audit_dead_lettered_count` (audit records that exhausted `swarm.audit.outbox.max_attempts` during this drain and moved to dead-letter status). Status values: `dispatched` (at least one entry dispatched or audit record replayed, no transient failures at exit); `skipped` (only permanently invalid entries processed, none dispatched); `skipped_overlap` (another invocation held the finite command lease; no outbox was drained and the command exited non-zero); `none_found` (both outboxes were empty); `transient_failure` (one or more entries could not be dispatched due to a transient queue error — `failed_count` is > 0, entries remain in the outbox for reclaim); `error` (an unhandled exception escaped the drain loop — includes `exception_class`). Note: `exception_class` is present only on `status: "error"` events. Individual `run_id`s of permanently deleted rows (counted in `skipped_count`) are not in the audit payload — they are in the application error tracker via `report()`, where the exception message includes the outbox entry ID. Cross-reference by entry ID for post-incident reconstruction. |
-| `command.prune`   | `swarm:prune` completed. Includes `dry_run`, `prevent_prune`, `status`, and `counts` (row counts per table). |
+| `command.relay`   | `swarm:relay` completed or failed. Always includes `dispatched_count`, `skipped_count`, `failed_count`, `claimed_count` (rows reserved in phase 1), `reclaimed_count` (of those, rows with a stale prior reservation), `types`, `limit`, `drain_until_empty`, `max_attempts` (null when not set), and `attempts` (number of drain iterations executed). As of v0.5.0, also always includes `audit_replayed_count` (audit records successfully re-emitted through the bound sink during this drain) and `audit_dead_lettered_count` (audit records that exhausted `swarm.audit.outbox.max_attempts` during this drain and moved to dead-letter status). As of v0.28.0 it also always includes `callback_dispatched_count` and `callback_dead_lettered_count`. Status values: `dispatched` (at least one durable entry, audit record, or callback delivery was dispatched, no transient failures at exit); `skipped` (only permanently invalid or dead-lettered entries processed, none dispatched); `skipped_overlap` (another invocation held the finite command lease; no outbox was drained and the command exited non-zero); `none_found` (all three outboxes were empty); `transient_failure` (one or more entries could not be dispatched due to a transient error — `failed_count` is > 0, entries remain in the outbox for reclaim); `error` (an unhandled exception escaped the drain loop — includes `exception_class`). Note: `exception_class` is present only on `status: "error"` events. Individual `run_id`s of permanently deleted rows (counted in `skipped_count`) are not in the audit payload — they are in the application error tracker via `report()`, where the exception message includes the outbox entry ID. Cross-reference by entry ID for post-incident reconstruction. |
+| `command.prune`   | `swarm:prune` completed. Includes `dry_run`, `prevent_prune`, `status`, and `counts` (row counts per table), including the v0.28 `callback_deliveries` and `native_inputs` keys. |
 | `command.audit_reconcile` | Emitted on every `--requeue`, `--dismiss`, or `--show` of an audit outbox row by `swarm:audit:reconcile` (v0.6.0+). Chain-of-custody for operator triage actions. `--show` emits with `action=show` and no `payload` contents — reads are at least counted. `--dismiss` includes `target_payload_digest` (sha256 of the stored payload bytes) so the deleted row can be tied back to a forensic backup of the table without unsealing it. |
 
 All command categories carry actor identity under `metadata.actor` as an
@@ -572,6 +599,47 @@ Additional frozen fields by category:
 |------------------|---------------------------|
 | `step.completed` | `duration_ms` (int)       |
 
+#### Native Input Release
+
+| Category                |
+|-------------------------|
+| `native_input.released` |
+
+Frozen fields on `native_input.released` evidence:
+
+| Field                 | Type   | Notes                                      |
+|-----------------------|--------|--------------------------------------------|
+| `run_id`              | string | Run identifier.                            |
+| `recipient`           | string | Topology-stable invocation recipient.      |
+| `attachment_count`    | int    | Number of released attachments.            |
+| `provider_override`   | bool   | Whether a provider override is present.    |
+| `model_override`      | bool   | Whether a model override is present.       |
+| `timeout_override`    | bool   | Whether a timeout override is present.     |
+| `tools_configured`    | bool   | Whether tools were configured explicitly. |
+| `tool_count`          | int    | Number of configured tools.                |
+| `messages_configured` | bool   | Whether messages were configured.          |
+| `message_count`       | int    | Number of configured messages.             |
+| `conversation_mode`   | string | `none`, `start`, or `continue`.             |
+
+#### Terminal Callback Delivery
+
+| Category             |
+|----------------------|
+| `callback.delivered` |
+
+Frozen fields on `callback.delivered` evidence:
+
+| Field         | Type   | Notes                                      |
+|---------------|--------|--------------------------------------------|
+| `delivery_id` | int    | Removed callback delivery row identifier.  |
+| `run_id`      | string | Settled workflow run identifier.           |
+| `slot`        | string | Delivered terminal slot (`then` or `catch`). |
+| `attempts`    | int    | Delivery acquisitions including this one.  |
+
+The event is emitted after the row is removed and never includes the closure,
+terminal context, callback result, or exception message. In the audit evidence
+contract, dead letters are log-only and have no evidence category.
+
 #### Durable Runtime
 
 | Category                              |
@@ -683,8 +751,8 @@ Additional frozen fields by category:
 | `command.resume`  | `run_id` (string). `exception_class` (string) when `status: "failed"`.                                            |
 | `command.cancel`  | `run_id` (string). `exception_class` (string) when `status: "failed"`.                                            |
 | `command.recover` | `target_run_id` (string&#124;null), `target_swarm_class` (string&#124;null). On success or `skipped_overlap`: `recovered_count` (int), `recovered_run_ids` (array&lt;string&gt;). On failure: `exception_class` (string). |
-| `command.relay`   | `types` (array&lt;string&gt;), `limit` (int), `drain_until_empty` (bool), `max_attempts` (int&#124;null), `attempts` (int), `dispatched_count` (int), `skipped_count` (int), `failed_count` (int), `claimed_count` (int), `reclaimed_count` (int), `audit_replayed_count` (int, v0.5.0+), `audit_dead_lettered_count` (int, v0.5.0+). |
-| `command.prune`   | `dry_run` (bool), `prevent_prune` (bool), `counts` (array&lt;string, int&gt;).                                    |
+| `command.relay`   | `types` (array&lt;string&gt;), `limit` (int), `drain_until_empty` (bool), `max_attempts` (int&#124;null), `attempts` (int), `dispatched_count` (int), `skipped_count` (int), `failed_count` (int), `claimed_count` (int), `reclaimed_count` (int), `audit_replayed_count` (int, v0.5.0+), `audit_dead_lettered_count` (int, v0.5.0+), `callback_dispatched_count` (int, v0.28.0+), `callback_dead_lettered_count` (int, v0.28.0+). |
+| `command.prune`   | `dry_run` (bool), `prevent_prune` (bool), `counts` (array&lt;string, int&gt;, including `callback_deliveries` and `native_inputs` in v0.28.0+). |
 | `command.audit_reconcile` | `action` (string, one of `requeue`, `dismiss`, `show`), `target_id` (int), `target_category` (string), `target_run_id` (string&#124;null), `prior_attempts` (int), `target_created_at` (ISO 8601 string), `target_age_seconds` (int). `reason` (string) is required on `dismiss`, optional on `requeue`, and omitted on `show`. `target_payload_digest` (sha256 hex string) is present on `dismiss` only — computed over the stored (sealed or plaintext fallback) payload bytes so an auditor can verify the deletion against a forensic backup without unsealing. v0.6.0+. |
 
 #### Webhook Idempotency

@@ -8,10 +8,12 @@ use BuiltByBerry\LaravelSwarm\Audit\Actor;
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Commands\Concerns\CommandOverlapGuard;
 use BuiltByBerry\LaravelSwarm\Contracts\AuditOutbox;
+use BuiltByBerry\LaravelSwarm\Contracts\CallbackDeliveryOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
 use BuiltByBerry\LaravelSwarm\Enums\RelayLane;
 use BuiltByBerry\LaravelSwarm\Responses\AuditDrainResult;
+use BuiltByBerry\LaravelSwarm\Responses\CallbackDrainResult;
 use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
@@ -22,24 +24,25 @@ use Throwable;
 class SwarmRelayCommand extends Command
 {
     protected $signature = 'swarm:relay
-                            {--type=* : Dispatch types to relay (step, branch, queued_resume, audit). Defaults to all.}
+                            {--type=* : Dispatch types to relay (step, branch, queued_resume, audit, callback). Defaults to all.}
                             {--limit= : Maximum number of outbox entries to drain per invocation (overrides config; capped at 10,000).}
                             {--drain-until-empty : Keep draining in a loop until no entries remain.}
                             {--max-attempts= : Maximum drain iterations when using --drain-until-empty. Includes retrying transient failures. Must be >= 1.}';
 
-    protected $description = 'Drain the durable and audit swarm outboxes (durable dispatches queue jobs; audit re-emits failed evidence records through the bound sink)';
+    protected $description = 'Drain the durable, audit, and callback swarm outboxes (durable dispatches queue jobs; audit re-emits failed evidence records through the bound sink; callback delivers terminal workflow then/catch)';
 
     protected $help = <<<'HELP'
-        This command drains the swarm_durable_outbox table and dispatches the
-        corresponding queue jobs. It must be scheduled to run regularly so that
-        durable runs can advance:
+        This command drains the durable, audit, and callback outbox lanes. It
+        dispatches durable work, re-emits failed audit evidence, and delivers
+        terminal workflow callbacks. Schedule it to run regularly:
 
           Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(
               max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60))
           );
 
-        Without the relay, durable runs will stall permanently after writing to
-        the outbox. Use --drain-until-empty to clear backlogs in a single invocation.
+        Without the relay, durable runs stall after writing to the outbox, failed
+        audit evidence remains pending, and enabled terminal callbacks are not
+        delivered. Use --drain-until-empty to clear backlogs in one invocation.
 
         The command also owns a finite atomic lease. Configure its store and duration
         with swarm.commands.overlap; the lease must exceed the worst-case drain time.
@@ -73,11 +76,12 @@ class SwarmRelayCommand extends Command
           php artisan swarm:relay
           php artisan swarm:relay --type=step --type=branch
           php artisan swarm:relay --type=audit
+          php artisan swarm:relay --type=callback
           php artisan swarm:relay --limit=500 --drain-until-empty
           php artisan swarm:relay --drain-until-empty --max-attempts=10
         HELP;
 
-    public function handle(DurableOutbox $outbox, AuditOutbox $auditOutbox, SwarmAuditDispatcher $audit, ConfigRepository $config, CommandOverlapGuard $overlap): int
+    public function handle(DurableOutbox $outbox, AuditOutbox $auditOutbox, CallbackDeliveryOutbox $callbackOutbox, SwarmAuditDispatcher $audit, ConfigRepository $config, CommandOverlapGuard $overlap): int
     {
         $selection = $this->resolveTypes();
 
@@ -90,6 +94,7 @@ class SwarmRelayCommand extends Command
             'durable' => $durableTypes,
             'drainDurable' => $shouldDrainDurable,
             'drainAudit' => $shouldDrainAudit,
+            'drainCallback' => $shouldDrainCallback,
         ] = $selection;
 
         $limit = $this->resolveLimit($config);
@@ -107,9 +112,12 @@ class SwarmRelayCommand extends Command
         $totalReclaimed = 0;
         $totalAuditReplayed = 0;
         $totalAuditDeadLettered = 0;
+        $totalCallbackDispatched = 0;
+        $totalCallbackDeadLettered = 0;
         $attempts = 0;
         $durableResult = new DrainResult(0, 0, 0, 0, 0);
         $auditResult = new AuditDrainResult(0, 0, 0, 0, 0);
+        $callbackResult = new CallbackDrainResult(0, 0, 0, 0, 0);
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
         try {
@@ -118,12 +126,14 @@ class SwarmRelayCommand extends Command
                 function () use (
                     $outbox,
                     $auditOutbox,
+                    $callbackOutbox,
                     $durableTypes,
                     $limit,
                     $drainUntilEmpty,
                     $maxAttempts,
                     $shouldDrainDurable,
                     $shouldDrainAudit,
+                    $shouldDrainCallback,
                     &$totalDispatched,
                     &$totalSkipped,
                     &$totalFailed,
@@ -131,9 +141,12 @@ class SwarmRelayCommand extends Command
                     &$totalReclaimed,
                     &$totalAuditReplayed,
                     &$totalAuditDeadLettered,
+                    &$totalCallbackDispatched,
+                    &$totalCallbackDeadLettered,
                     &$attempts,
                     &$durableResult,
                     &$auditResult,
+                    &$callbackResult,
                 ): int {
                     do {
                         $attempts++;
@@ -141,6 +154,8 @@ class SwarmRelayCommand extends Command
                         $lastDurableTransient = 0;
                         $lastAuditProgress = 0;
                         $lastAuditTransient = 0;
+                        $lastCallbackProgress = 0;
+                        $lastCallbackTransient = 0;
 
                         if ($shouldDrainDurable) {
                             $durableResult = $outbox->drain($durableTypes, $limit);
@@ -164,8 +179,19 @@ class SwarmRelayCommand extends Command
                             $lastAuditTransient = $auditResult->failed;
                         }
 
-                        $madeProgress = ($lastDurableProgress + $lastAuditProgress) > 0;
-                        $hasTransient = ($lastDurableTransient + $lastAuditTransient) > 0;
+                        if ($shouldDrainCallback) {
+                            $callbackResult = $callbackOutbox->drain($limit);
+                            $totalCallbackDispatched += $callbackResult->dispatched;
+                            $totalCallbackDeadLettered += $callbackResult->deadLettered;
+                            $totalFailed += $callbackResult->failed;
+                            $totalClaimed += $callbackResult->claimed;
+                            $totalReclaimed += $callbackResult->reclaimed;
+                            $lastCallbackProgress = $callbackResult->total();
+                            $lastCallbackTransient = $callbackResult->failed;
+                        }
+
+                        $madeProgress = ($lastDurableProgress + $lastAuditProgress + $lastCallbackProgress) > 0;
+                        $hasTransient = ($lastDurableTransient + $lastAuditTransient + $lastCallbackTransient) > 0;
 
                         // Only retry transient failures when --max-attempts gives a finite budget.
                         // Without it the loop would spin forever during a sustained queue outage.
@@ -193,6 +219,8 @@ class SwarmRelayCommand extends Command
                 'reclaimed_count' => $totalReclaimed,
                 'audit_replayed_count' => $totalAuditReplayed,
                 'audit_dead_lettered_count' => $totalAuditDeadLettered,
+                'callback_dispatched_count' => $totalCallbackDispatched,
+                'callback_dead_lettered_count' => $totalCallbackDeadLettered,
                 'status' => 'error',
                 'exception_class' => $exception::class,
                 ...$audit->metadata($actorMetadata),
@@ -215,6 +243,8 @@ class SwarmRelayCommand extends Command
                 'reclaimed_count' => 0,
                 'audit_replayed_count' => 0,
                 'audit_dead_lettered_count' => 0,
+                'callback_dispatched_count' => 0,
+                'callback_dead_lettered_count' => 0,
                 'status' => 'skipped_overlap',
                 ...$audit->metadata($actorMetadata),
             ]);
@@ -226,7 +256,8 @@ class SwarmRelayCommand extends Command
 
         $lastDurableFailed = $durableResult->failed;
         $lastAuditFailed = $auditResult->failed;
-        $hasUnresolvedTransient = ($lastDurableFailed + $lastAuditFailed) > 0;
+        $lastCallbackFailed = $callbackResult->failed;
+        $hasUnresolvedTransient = ($lastDurableFailed + $lastAuditFailed + $lastCallbackFailed) > 0;
 
         $audit->emit('command.relay', [
             'types' => $selectedTypeValues,
@@ -241,11 +272,13 @@ class SwarmRelayCommand extends Command
             'reclaimed_count' => $totalReclaimed,
             'audit_replayed_count' => $totalAuditReplayed,
             'audit_dead_lettered_count' => $totalAuditDeadLettered,
-            'status' => $this->auditStatus($totalDispatched + $totalAuditReplayed, $totalSkipped + $totalAuditDeadLettered, $hasUnresolvedTransient),
+            'callback_dispatched_count' => $totalCallbackDispatched,
+            'callback_dead_lettered_count' => $totalCallbackDeadLettered,
+            'status' => $this->auditStatus($totalDispatched + $totalAuditReplayed + $totalCallbackDispatched, $totalSkipped + $totalAuditDeadLettered + $totalCallbackDeadLettered, $hasUnresolvedTransient),
             ...$audit->metadata($actorMetadata),
         ]);
 
-        $totalRemoved = $totalDispatched + $totalSkipped + $totalAuditReplayed + $totalAuditDeadLettered;
+        $totalRemoved = $totalDispatched + $totalSkipped + $totalAuditReplayed + $totalAuditDeadLettered + $totalCallbackDispatched + $totalCallbackDeadLettered;
 
         if ($totalRemoved === 0 && $totalFailed === 0) {
             $this->components->info('No pending outbox entries were found.');
@@ -261,6 +294,14 @@ class SwarmRelayCommand extends Command
             $this->components->info('Replayed '.$totalAuditReplayed.' audit record'.($totalAuditReplayed === 1 ? '' : 's').'.');
         }
 
+        if ($totalCallbackDispatched > 0) {
+            $this->components->info('Dispatched '.$totalCallbackDispatched.' terminal callback deliver'.($totalCallbackDispatched === 1 ? 'y' : 'ies').'.');
+        }
+
+        if ($totalCallbackDeadLettered > 0) {
+            $this->components->warn('Dead-lettered '.$totalCallbackDeadLettered.' terminal callback'.($totalCallbackDeadLettered === 1 ? '' : 's').' that exceeded swarm.callbacks.max_attempts.');
+        }
+
         if ($totalAuditDeadLettered > 0) {
             $this->components->warn('Dead-lettered '.$totalAuditDeadLettered.' audit record'.($totalAuditDeadLettered === 1 ? '' : 's').' that exceeded swarm.audit.outbox.max_attempts.');
         }
@@ -270,13 +311,25 @@ class SwarmRelayCommand extends Command
         }
 
         if ($hasUnresolvedTransient) {
-            $stuck = $lastDurableFailed + $lastAuditFailed;
-            $this->components->warn(
-                $stuck.' outbox entr'.($stuck === 1 ? 'y' : 'ies').' could not be dispatched due to a transient error'
-                .($maxAttempts !== null ? ' after '.$attempts.' attempt'.($attempts === 1 ? '' : 's') : '')
-                .'. The '.($stuck === 1 ? 'entry' : 'entries').' will be re-claimed after the reservation timeout.'
-                .' Check your error tracker and queue driver.'
-            );
+            $legacyStuck = $lastDurableFailed + $lastAuditFailed;
+
+            if ($legacyStuck > 0) {
+                $this->components->warn(
+                    $legacyStuck.' outbox entr'.($legacyStuck === 1 ? 'y' : 'ies').' could not be dispatched due to a transient error'
+                    .($maxAttempts !== null ? ' after '.$attempts.' attempt'.($attempts === 1 ? '' : 's') : '')
+                    .'. The '.($legacyStuck === 1 ? 'entry' : 'entries').' will be re-claimed after the reservation timeout.'
+                    .' Check your error tracker and queue driver.'
+                );
+            }
+
+            if ($lastCallbackFailed > 0) {
+                $this->components->warn(
+                    $lastCallbackFailed.' callback deliver'.($lastCallbackFailed === 1 ? 'y' : 'ies').' could not be dispatched due to a transient error'
+                    .($maxAttempts !== null ? ' after '.$attempts.' attempt'.($attempts === 1 ? '' : 's') : '')
+                    .'. The '.($lastCallbackFailed === 1 ? 'delivery remains' : 'deliveries remain').' eligible according to the callback retry delay or delivery lease timeout.'
+                    .' Check your error tracker and queue driver.'
+                );
+            }
 
             return self::FAILURE;
         }
@@ -293,25 +346,32 @@ class SwarmRelayCommand extends Command
      * become DurableDispatchType cases restricting the durable drain, and `audit`
      * selects the audit lane. No flag means drain both lanes.
      *
-     * @return array{raw: list<string>, durable: list<DurableDispatchType>, drainDurable: bool, drainAudit: bool}|false
-     *                                                                                                                  false signals a validation failure
+     * @return array{raw: list<string>, durable: list<DurableDispatchType>, drainDurable: bool, drainAudit: bool, drainCallback: bool}|false
+     *                                                                                                                                       false signals a validation failure
      */
     protected function resolveTypes(): array|false
     {
         $raw = (array) $this->option('type');
         $raw = array_values(array_filter($raw, static fn (mixed $v): bool => is_string($v) && $v !== ''));
 
-        // No --type flag: drain both lanes with no durable-type restriction.
+        // No --type flag: drain every lane with no durable-type restriction.
         if ($raw === []) {
-            return ['raw' => [], 'durable' => [], 'drainDurable' => true, 'drainAudit' => true];
+            return ['raw' => [], 'durable' => [], 'drainDurable' => true, 'drainAudit' => true, 'drainCallback' => true];
         }
 
         $durable = [];
         $drainAudit = false;
+        $drainCallback = false;
 
         foreach ($raw as $value) {
             if ($value === RelayLane::Audit->value) {
                 $drainAudit = true;
+
+                continue;
+            }
+
+            if ($value === RelayLane::Callback->value) {
+                $drainCallback = true;
 
                 continue;
             }
@@ -322,6 +382,7 @@ class SwarmRelayCommand extends Command
                 $valid = implode(', ', [
                     ...array_column(DurableDispatchType::cases(), 'value'),
                     RelayLane::Audit->value,
+                    RelayLane::Callback->value,
                 ]);
                 $this->components->error("Unknown dispatch type [{$value}]. Valid types: {$valid}.");
 
@@ -336,6 +397,7 @@ class SwarmRelayCommand extends Command
             'durable' => $durable,
             'drainDurable' => $durable !== [],
             'drainAudit' => $drainAudit,
+            'drainCallback' => $drainCallback,
         ];
     }
 

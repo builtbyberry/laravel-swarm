@@ -35,6 +35,10 @@ function buildQueuePayload(object $job): array
         }
     };
 
+    // Invoke and broadcast jobs are ShouldBeEncrypted; building their payload
+    // needs the container's encrypter.
+    $queue->setContainer(app());
+
     return $queue->expose($job);
 }
 
