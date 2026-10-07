@@ -95,8 +95,9 @@ Allowed worker agents:
 - App\Ai\Agents\ApprovalSummarizer
 
 Use a parallel node when legal and security review are independent. The
-parallel branches must be worker nodes, branch workers must not define next,
-and the parallel node must join into the approval summarizer.
+parallel branches must be worker nodes with no next of their own (omit next or
+set it to null), and the parallel node's next must join into the approval
+summarizer.
 INSTRUCTIONS;
     }
 

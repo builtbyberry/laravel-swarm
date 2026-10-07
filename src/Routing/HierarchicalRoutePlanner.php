@@ -119,6 +119,8 @@ class HierarchicalRoutePlanner
             throw new SwarmException("Hierarchical route plan [start_at] references unknown node [{$startAt}].");
         }
 
+        $nodes = $this->normalizeParallelBranchSuccessors($startAt, $nodes);
+
         $plan = new HierarchicalRoutePlan($startAt, $nodes);
 
         $this->validateReferences($plan);
@@ -129,6 +131,94 @@ class HierarchicalRoutePlanner
         $this->validateDataDependencies($plan);
 
         return $plan;
+    }
+
+    /**
+     * Normalize redundant parallel-branch successors in coordinator-generated
+     * and static plans alike: a coordinator constrained by
+     * {@see RoutePlanSchema::worker()} may name the join its parallel group
+     * already owns. This applies only to a plain worker (a rollup keeps
+     * its rollup semantics), with no loop of its own (`next` is the loop exit),
+     * whose every owning group joins at that `next` (otherwise it is not
+     * redundant), and that is not `start_at`, another node's `next`, or a loop
+     * target (those roles run the worker outside the group, where `next` is a
+     * real edge).
+     *
+     * @param  array<string, HierarchicalRouteNode>  $nodes
+     * @return array<string, HierarchicalRouteNode>
+     */
+    protected function normalizeParallelBranchSuccessors(string $startAt, array $nodes): array
+    {
+        /** @var array<string, array<int, HierarchicalParallelNode>> $owners */
+        $owners = [];
+
+        foreach ($nodes as $node) {
+            if (! $node instanceof HierarchicalParallelNode) {
+                continue;
+            }
+
+            foreach ($node->branches as $branchNodeId) {
+                $owners[$branchNodeId][] = $node;
+            }
+        }
+
+        foreach ($owners as $branchNodeId => $branchOwners) {
+            $branch = $nodes[$branchNodeId] ?? null;
+
+            if ($branch === null || ! $branch instanceof HierarchicalWorkerNode || $branch instanceof HierarchicalRollupNode || $branch->next === null || $branch->hasLoop()) {
+                continue;
+            }
+
+            if ($branchNodeId === $startAt) {
+                continue;
+            }
+
+            $allOwnersJoinAtBranchNext = array_all(
+                $branchOwners,
+                static fn (HierarchicalParallelNode $owner): bool => $owner->next === $branch->next,
+            );
+
+            if (! $allOwnersJoinAtBranchNext) {
+                continue;
+            }
+
+            $hasOrdinaryIncomingPath = false;
+
+            foreach ($nodes as $node) {
+                if (
+                    ($node instanceof HierarchicalWorkerNode || $node instanceof HierarchicalParallelNode)
+                    && $node->next === $branchNodeId
+                ) {
+                    $hasOrdinaryIncomingPath = true;
+
+                    break;
+                }
+
+                if ($node instanceof HierarchicalWorkerNode && $node->loopTo === $branchNodeId) {
+                    $hasOrdinaryIncomingPath = true;
+
+                    break;
+                }
+            }
+
+            if ($hasOrdinaryIncomingPath) {
+                continue;
+            }
+
+            $nodes[$branchNodeId] = new HierarchicalWorkerNode(
+                id: $branch->id,
+                agentClass: $branch->agentClass,
+                prompt: $branch->prompt,
+                withOutputs: $branch->withOutputs,
+                metadata: $branch->metadata,
+                next: null,
+                loopTo: $branch->loopTo,
+                loopMaxIterations: $branch->loopMaxIterations,
+                type: $branch->type,
+            );
+        }
+
+        return $nodes;
     }
 
     /**
@@ -380,7 +470,7 @@ class HierarchicalRoutePlanner
                 }
 
                 if ($branch->next !== null) {
-                    throw new SwarmException("Hierarchical worker node [{$branch->id}] cannot define [next] when used as a parallel branch.");
+                    throw new SwarmException("Hierarchical worker node [{$branch->id}] cannot define [next] when used as a parallel branch. Set [next] to null; a plain, non-looping worker with no other role in the plan may instead name the join of every parallel group that owns it.");
                 }
             }
         }
