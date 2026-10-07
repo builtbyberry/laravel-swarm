@@ -51,8 +51,7 @@ trait HasSwarmMemoryTools
 {
     /**
      * The Swarm memory tools enabled for this agent, per `swarm.memory.tools`.
-     * Pass `agentScope: true` to bind them to this agent; the binding takes
-     * effect while `swarm.memory.tools.agent_scope` is on.
+     * Pass `agentScope: true` to bind them to this agent with `forAgent()`.
      *
      * @return list<Tool>
      */
