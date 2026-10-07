@@ -284,6 +284,8 @@ test('an agent-scoped generated Remember is addressable only after forAgent bind
         '--scope' => 'agent',
         '--base' => 'remember',
     ]);
+    // AgentRemember exists only once the generator has written it; it is not
+    // autoloadable, so load the generated file before using the class.
     require_once $path;
 
     ActiveRunContext::enter(

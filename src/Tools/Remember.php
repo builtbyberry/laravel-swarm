@@ -80,7 +80,10 @@ class Remember implements Tool
         TEXT;
 
         if ($this->agent() !== null) {
-            $description .= ' Use "agent" to keep a value for this agent across runs.';
+            $description .= ' '.<<<'TEXT'
+            Use "agent" to keep a value for this agent across runs; it is read
+            back only when the swarm's propagation policy includes the agent scope.
+            TEXT;
         }
 
         return $description;

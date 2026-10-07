@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Support;
 
+use BuiltByBerry\LaravelSwarm\Runners\StaticHierarchicalStreamRunner;
+use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
 use Laravel\Ai\Streaming\Events\ToolResult as ToolResultEvent;
@@ -16,6 +18,13 @@ use Laravel\Ai\Streaming\Events\ToolResult as ToolResultEvent;
  * the run to continue while its result reads as failed therefore notes the
  * call on the active run ({@see ActiveRunContext::declineToolCall()}), and
  * the runners apply that note here before projecting or capturing the result.
+ *
+ * Prompted agents are covered by {@see NativeAgentInvoker::prompt()}. Streamed
+ * results are not centralised: every place that handles a Laravel AI
+ * `ToolResult` stream event must call {@see applyToStreamEvent()} first,
+ * today {@see StreamEventMapper::map()} and
+ * {@see StaticHierarchicalStreamRunner}. A new handler that skips it reports
+ * declined calls as successful.
  *
  * @internal
  */

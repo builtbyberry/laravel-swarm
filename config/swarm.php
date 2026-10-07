@@ -478,8 +478,11 @@ return [
          *
          * 'recall' / 'remember' toggle each tool individually (both default on
          * once 'enabled' is true). The class names are resolved from the
-         * container, so bind a subclass to customise a tool's description or
-         * bind it to a specific agent for Agent-scope addressing.
+         * container, so bind a subclass to customise a tool's description.
+         * The trait binds each tool to the agent using it, which makes the
+         * agent scope writable under that agent's class: shared across every
+         * run and tenant of the class, and read back only under a propagation
+         * policy that includes the agent scope.
          */
         'tools' => [
             'enabled' => filter_var(

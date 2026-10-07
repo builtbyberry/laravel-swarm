@@ -15,8 +15,12 @@ stored nothing.
   retry (#569). `HasSwarmMemoryTools` now binds `Recall` and `Remember` to the
   using agent, so agent-scoped writes work without subclassing and a bound
   `Recall` returns that class-keyed memory under an agent-inclusive propagation
-  policy where trait users previously skipped it. Agent memory is shared across
-  runs and tenants of the same agent class. `make:memory-tool --scope=agent`
+  policy where trait users previously skipped it. This means an agent already
+  using the trait can now write to the `agent` scope with no further opt-in:
+  those entries are shared across runs and tenants of the same agent class, and
+  are read back only under a propagation policy that includes that scope (the
+  default policy is run-only). Disable `swarm.memory.tools.remember` if that is
+  not wanted. `make:memory-tool --scope=agent`
   now warns that the generated tool needs `forAgent()` binding, and new stubs no
   longer generate an unaddressable `agent()` override; existing generated
   classes that override `agent()` keep working.

@@ -10,7 +10,8 @@ test('its default description only advertises agent scope when bound', function 
     $bound = (string) (new Remember)->forAgent(new MemoryToolAgent)->description();
 
     expect($unbound)->not->toContain('"agent"')
-        ->and($bound)->toContain('Use "agent" to keep a value for this agent across runs');
+        ->and($bound)->toContain('Use "agent" to keep a value for this agent across runs')
+        ->and($bound)->toContain('propagation policy includes the agent scope');
 });
 
 test('a custom Remember description overrides bound defaults', function () {

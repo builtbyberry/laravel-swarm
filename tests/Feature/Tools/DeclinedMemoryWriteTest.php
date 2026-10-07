@@ -2,10 +2,20 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\ArtifactRepository;
+use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
+use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
+use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\StreamEventStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
+use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\DeclinedToolResults;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
@@ -14,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\DeclinedMemoryAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\DeclinedMemoryParentAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SecondDeclinedMemoryAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemoryDurableStreamingParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemoryGeneratedHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemoryNestedSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemoryParallelSwarm;
@@ -29,6 +40,21 @@ beforeEach(function (): void {
     config()->set('swarm.memory.tools.enabled', true);
     config()->set('swarm.persistence.driver', 'database');
     config()->set('database.default', 'testing');
+    config()->set('queue.connections.durable-test', ['driver' => 'null']);
+    config()->set('swarm.durable.queue.connection', 'durable-test');
+    config()->set('swarm.durable.queue.name', 'swarm-durable');
+
+    foreach ([
+        ContextStore::class,
+        ArtifactRepository::class,
+        RunHistoryStore::class,
+        DurableRunStore::class,
+        SwarmRunner::class,
+        DurableSwarmManager::class,
+    ] as $abstract) {
+        app()->forgetInstance($abstract);
+    }
+
     Artisan::call('migrate:fresh', ['--database' => 'testing']);
 });
 
@@ -115,6 +141,41 @@ test('parallel prompt projects a declined memory write as failed', function (): 
     $response = DeclinedMemoryParallelSwarm::make()->prompt('remember');
 
     expect(nativeToolStatus($response->steps[0]))->toBe('failed');
+});
+
+test('durable parallel prompt persists a declined branch write as a failed native tool result', function (): void {
+    DeclinedMemoryAgent::fake([declinedCall(['key' => '', 'value' => 'x']), 'done']);
+
+    $runId = DeclinedMemoryParallelSwarm::make()->dispatchDurable('remember')->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableBranch($runId, 'parallel:0'))->handle($manager);
+
+    $branch = app(DurableRunStore::class)->findBranch($runId, 'parallel:0');
+
+    expect($branch['status'])->toBe('completed')
+        ->and($branch['native_result']['tools'][0]['status'])->toBe('failed');
+});
+
+test('durable parallel branch streaming persists a declined write as unsuccessful', function (): void {
+    $message = 'A memory key is required.';
+    DeclinedMemoryAgent::fake([declinedCall(['key' => '', 'value' => 'x']), 'done']);
+
+    $runId = DeclinedMemoryDurableStreamingParallelSwarm::make()->dispatchDurable('remember')->runId;
+    $manager = app(DurableSwarmManager::class);
+
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    (new AdvanceDurableBranch($runId, 'parallel:0'))->handle($manager);
+
+    $toolResult = collect(CausalLogView::forRun(app(StreamEventStore::class), $runId)->fold())
+        ->whereInstanceOf(SwarmToolResult::class)
+        ->sole();
+    $branch = app(DurableRunStore::class)->findBranch($runId, 'parallel:0');
+
+    expect($toolResult->successful)->toBeFalse()
+        ->and($toolResult->error)->toBe($message)
+        ->and($branch['native_result']['tools'][0]['status'])->toBe('failed');
 });
 
 test('hierarchical streams project a worker declined write as failed', function (string $swarmClass, bool $generated): void {
