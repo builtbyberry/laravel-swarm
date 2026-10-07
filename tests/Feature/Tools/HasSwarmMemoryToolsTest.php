@@ -133,6 +133,7 @@ test('a container-bound subclass is honoured and bound only when both agent-scop
 test('a subclass agent override still wins after trait binding', function () {
     config()->set('swarm.memory.tools.enabled', true);
     config()->set('swarm.memory.tools.remember', false);
+    config()->set('swarm.memory.tools.agent_scope', true);
 
     app()->bind(Recall::class, fn () => new class extends Recall
     {
@@ -142,7 +143,7 @@ test('a subclass agent override still wins after trait binding', function () {
         }
     });
 
-    $recall = collect((new MemoryToolAgent)->tools())->sole();
+    $recall = collect((new DeclinedMemoryAgent)->tools())->sole();
 
     expect($recall->agent())->toBeInstanceOf(SecondDeclinedMemoryAgent::class);
 });
@@ -233,3 +234,25 @@ test('with both switches on an agent write is stored under the default propagati
     expect($response->steps[0]->nativeResult->toArray()['tools'][0]['status'])->toBe('succeeded')
         ->and(storedAgentPreference(DeclinedMemoryAgent::class))->toBe('concise');
 });
+
+test('agent memory stays unreadable through the trait unless the config key and the agent both ask for it', function (bool $key, string $agentClass, string $swarmClass, string $expected) {
+    // An agent-inclusive propagation policy is in force, so only the trait's
+    // binding stands between Recall and the class-keyed agent entry.
+    config()->set('swarm.memory.tools.enabled', true);
+    config()->set('swarm.memory.tools.agent_scope', $key);
+    config()->set('swarm.memory.propagation_policy', WideViewPropagationPolicy::class);
+    app(SwarmMemory::class)->put(MemoryScope::Agent, $agentClass, 'preference', 'concise');
+    $agentClass::fake([
+        new ToolCall('call-1', 'recall', ['key' => 'preference', 'scope' => 'agent']),
+        'done',
+    ]);
+
+    $events = collect(iterator_to_array($swarmClass::make()->stream('recall')));
+
+    expect($events->whereInstanceOf(SwarmToolResult::class)->sole()->toolResult->result)->toBe($expected);
+})->with([
+    'neither switch' => [false, MemoryToolAgent::class, MemoryToolSequentialSwarm::class, 'No memory found for key [preference].'],
+    'the agent asks but the key is off' => [false, DeclinedMemoryAgent::class, DeclinedMemorySequentialSwarm::class, 'No memory found for key [preference].'],
+    'the key is on but the agent does not ask' => [true, MemoryToolAgent::class, MemoryToolSequentialSwarm::class, 'No memory found for key [preference].'],
+    'both switches' => [true, DeclinedMemoryAgent::class, DeclinedMemorySequentialSwarm::class, 'preference: concise'],
+]);

@@ -481,8 +481,8 @@ return [
          * container, so bind a subclass to customise a tool's description.
          *
          * 'agent_scope' lets the trait bind its tools to the agent using it,
-         * which makes the agent scope readable and writable under that
-         * agent's class. **Disabled by default**: that scope is shared across
+         * which makes the agent scope addressable under that agent's
+         * class. **Disabled by default**: that scope is shared across
          * every run and every tenant of the agent class, and nothing clears
          * it when a run ends. An agent must also ask for it with
          * swarmMemoryTools(agentScope: true); with either left off the tools
