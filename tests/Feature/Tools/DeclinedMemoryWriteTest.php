@@ -160,6 +160,21 @@ test('matching uses the declined result text when one invocation reuses a tool c
     expect(array_column($tools, 'status'))->toBe(['failed', 'succeeded']);
 });
 
+test('a stored write that reuses a later declined call id stays succeeded', function (): void {
+    // Stored first, declined second: only matching on the declined result text
+    // keeps the marker off the stored write that shares its id.
+    DeclinedMemoryAgent::fake([
+        declinedCall(['key' => 'topic', 'value' => 'stored']),
+        declinedCall(['key' => '', 'value' => 'x']),
+        'done',
+    ]);
+
+    $response = DeclinedMemorySequentialSwarm::make()->prompt('remember twice');
+    $tools = $response->steps[0]->nativeResult->toArray()['tools'];
+
+    expect(array_column($tools, 'status'))->toBe(['succeeded', 'failed']);
+});
+
 test('declined markers do not cross sequential agent invocations with the same tool call id', function (): void {
     DeclinedMemoryAgent::fake([declinedCall(['key' => '', 'value' => 'x']), 'first done']);
     SecondDeclinedMemoryAgent::fake([
