@@ -20,6 +20,6 @@ final class SecondDeclinedMemoryAgent implements Agent, HasTools
 
     public function tools(): iterable
     {
-        return [...$this->swarmMemoryTools()];
+        return [...$this->swarmMemoryTools(agentScope: true)];
     }
 }

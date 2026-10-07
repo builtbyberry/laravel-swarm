@@ -479,10 +479,16 @@ return [
          * 'recall' / 'remember' toggle each tool individually (both default on
          * once 'enabled' is true). The class names are resolved from the
          * container, so bind a subclass to customise a tool's description.
-         * The trait binds each tool to the agent using it, which makes the
-         * agent scope writable under that agent's class: shared across every
-         * run and tenant of the class, and read back only under a propagation
-         * policy that includes the agent scope.
+         *
+         * 'agent_scope' lets the trait bind its tools to the agent using it,
+         * which makes the agent scope readable and writable under that
+         * agent's class. **Disabled by default**: that scope is shared across
+         * every run and every tenant of the agent class, and nothing clears
+         * it when a run ends. An agent must also ask for it with
+         * swarmMemoryTools(agentScope: true); with either left off the tools
+         * decline agent-scope writes. This switch only governs the trait's
+         * binding. Which agents are shown agent-scope entries is decided
+         * separately, by the swarm's propagation policy.
          */
         'tools' => [
             'enabled' => filter_var(
@@ -495,6 +501,10 @@ return [
             ),
             'remember' => filter_var(
                 env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'agent_scope' => filter_var(
+                env('SWARM_MEMORY_TOOLS_AGENT_SCOPE', false),
                 FILTER_VALIDATE_BOOLEAN,
             ),
         ],

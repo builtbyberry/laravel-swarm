@@ -342,8 +342,9 @@ memory keyed to the agent itself.
 **Solution.** That is exactly the `agent` scope, memory addressed by the agent
 *class*, so it persists for that agent across every run. But `agent` scope is only
 addressable when the tool knows which agent it acts as. Bind a custom tool with
-`forAgent()`, or use `HasSwarmMemoryTools` to have the stock `Recall` and
-`Remember` instances bound automatically.
+`forAgent()`. For the stock `Recall` and `Remember`, `HasSwarmMemoryTools` binds
+them when the agent calls `swarmMemoryTools(agentScope: true)` and
+`swarm.memory.tools.agent_scope` is enabled.
 
 Scaffold both halves with the generator:
 

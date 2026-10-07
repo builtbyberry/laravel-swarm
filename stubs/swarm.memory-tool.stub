@@ -20,7 +20,9 @@ use BuiltByBerry\LaravelSwarm\Tools\{{ baseTool }};
  * protected hooks below to specialise it, for example tenant-scope a read or
  * add validation to a write. To make the `agent` scope addressable, return
  * `(new {{ class }})->forAgent($this)` from the agent's `tools()` method. The
- * stock tools are bound automatically by the `HasSwarmMemoryTools` trait.
+ * `HasSwarmMemoryTools` trait binds the stock tools the same way when an agent
+ * calls `swarmMemoryTools(agentScope: true)` and
+ * `swarm.memory.tools.agent_scope` is enabled.
  *
  * See: docs/generators.md, docs/memory.md#recall-and-remember-tools
  */

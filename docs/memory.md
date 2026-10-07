@@ -402,7 +402,7 @@ id:
 | -------------- | ------------------------------------ |
 | `run` (default) | the active run id                   |
 | `swarm`        | the active swarm class               |
-| `agent`        | the bound agent's class, when bound by `HasSwarmMemoryTools` or `forAgent()` |
+| `agent`        | the bound agent's class, when the tool is bound with `forAgent()` or by `HasSwarmMemoryTools` with agent scope switched on (see [Optional default-on registration](#optional-default-on-registration)); otherwise unaddressable |
 | `conversation` | the run's bound conversation id, when set (see [Conversation-scoped memory](#conversation-scoped-memory)); otherwise unaddressable |
 
 `run` is the safe default: memory scoped to the current task, cleared with it.
@@ -419,10 +419,13 @@ Use `swarm` for state shared across the whole swarm class.
 
 The same boundary applies to `agent` scope. Its id is the agent class, so a
 bound tool shares that memory across every run and every tenant that uses the
-same agent class. The default propagation policy remains Run-only. A bound
-`Recall` returns agent entries only when the swarm's propagation policy includes
-`MemoryScope::Agent`. In a multi-tenant application, use distinct agent classes
-per tenant or enforce tenant isolation in the memory policy and store design.
+same agent class, and nothing clears it when a run ends. That is why the stock
+tools are unbound by default. Writing and reading are separate decisions: a
+bound `Remember` stores an `agent` write whatever the propagation policy is,
+while a bound `Recall` returns agent entries only when the swarm's propagation
+policy includes `MemoryScope::Agent` (the default policy is Run-only). In a
+multi-tenant application, use distinct agent classes per tenant or enforce
+tenant isolation in the memory policy and store design.
 
 ### Policy interaction
 
@@ -537,20 +540,47 @@ true, so adding the trait is inert until you opt in app-wide:
 // policies first.
 'memory' => [
     'tools' => [
-        'enabled'  => env('SWARM_MEMORY_TOOLS_ENABLED', false),
-        'recall'   => env('SWARM_MEMORY_TOOLS_RECALL', true),
-        'remember' => env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+        'enabled'     => env('SWARM_MEMORY_TOOLS_ENABLED', false),
+        'recall'      => env('SWARM_MEMORY_TOOLS_RECALL', true),
+        'remember'    => env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+        'agent_scope' => env('SWARM_MEMORY_TOOLS_AGENT_SCOPE', false),
     ],
 ],
 ```
 
 The `recall` / `remember` toggles enable each tool individually. The tool
 classes are resolved from the container, so you can bind a subclass, for
-example to override a tool's `description()`. Each resolved tool is then bound
-to the agent using the trait. This makes `agent` scope addressable under that
-agent's class without subclassing. Agent memory is shared across every run and
-every tenant of that class, and `Recall` surfaces it only under a propagation
-policy that includes `MemoryScope::Agent`; the default policy remains Run-only.
+example to override a tool's `description()`.
+
+#### Agent scope through the trait
+
+By default the trait's tools are not bound to an agent, so `agent` scope is
+unaddressable: `Remember` declines an `agent` write and `Recall` finds nothing
+there. Two switches, both required, turn it on:
+
+1. `swarm.memory.tools.agent_scope` (`SWARM_MEMORY_TOOLS_AGENT_SCOPE`) is true.
+   This is the app-wide switch and is off by default.
+2. The agent asks for it:
+
+```php
+public function tools(): iterable
+{
+    return [...$this->swarmMemoryTools(agentScope: true), new MyOtherTool];
+}
+```
+
+With both set, each resolved tool is bound to the agent with `forAgent()`, and
+`agent` scope resolves to that agent's class without subclassing. With either
+one missing the tools stay unbound.
+
+Agent memory is shared across every run and every tenant of that agent class.
+These switches only decide whether the tools can address it. What agents are
+*shown* is a separate decision made by the swarm's propagation policy: a bound
+`Remember` stores the entry under any policy, and a bound `Recall` returns it
+only under a policy that includes `MemoryScope::Agent` (the default is
+Run-only). An application can therefore let an agent save notes that only its
+own code reads back, through `SwarmMemory`, without widening what any agent
+sees.
 
 A native per-run `withTools` configuration replaces the agent's tool list.
 Those substituted tool instances did not come from `swarmMemoryTools()` and
