@@ -40,9 +40,10 @@ use Laravel\Ai\Contracts\Tool;
  * guessing.
  *
  * The Agent memory scope stays unaddressable unless two things are both set:
- * `swarm.memory.tools.agent_scope` is true, and the agent asks for it with
- * `swarmMemoryTools(agentScope: true)`. Each resolved tool is then bound to
- * the agent with `forAgent()`. That scope is keyed by agent class, so it is
+ * the agent asks for it with `swarmMemoryTools(agentScope: true)`, which binds
+ * each resolved tool to the agent with `forAgent()`, and
+ * `swarm.memory.tools.agent_scope` is true, without which no `forAgent()`
+ * binding takes effect. That scope is keyed by agent class, so it is
  * shared across every run and tenant of the class; which agents are shown its
  * entries is a separate decision, made by the swarm's propagation policy.
  */
@@ -50,8 +51,8 @@ trait HasSwarmMemoryTools
 {
     /**
      * The Swarm memory tools enabled for this agent, per `swarm.memory.tools`.
-     * Pass `agentScope: true` to bind them to this agent when
-     * `swarm.memory.tools.agent_scope` allows it.
+     * Pass `agentScope: true` to bind them to this agent; the binding takes
+     * effect while `swarm.memory.tools.agent_scope` is on.
      *
      * @return list<Tool>
      */
@@ -69,9 +70,7 @@ trait HasSwarmMemoryTools
             return [];
         }
 
-        $bind = $agentScope
-            && $this instanceof Agent
-            && (bool) $config->get('swarm.memory.tools.agent_scope', false);
+        $bind = $agentScope && $this instanceof Agent;
 
         $tools = [];
 

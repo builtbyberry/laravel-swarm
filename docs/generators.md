@@ -175,11 +175,11 @@ in the container.
 
 For `--scope=agent`, the command prints a warning because the scope is
 addressable only after the tool is bound to an agent. Return
-`(new YourTool)->forAgent($this)` from the agent's `tools()` method. The
-`HasSwarmMemoryTools` trait binds the stock tools the same way when the agent
-calls `swarmMemoryTools(agentScope: true)` and `swarm.memory.tools.agent_scope`
-is enabled. Generated stubs no longer include an `agent()` placeholder; existing
-generated classes that override `agent()` remain supported.
+`(new YourTool)->forAgent($this)` from the agent's `tools()` method and set
+`swarm.memory.tools.agent_scope` to true; a `forAgent()` binding has no effect
+while that key is off. Generated stubs no longer include an `agent()`
+placeholder; existing generated classes that override `agent()` remain
+supported.
 
 ### Options
 

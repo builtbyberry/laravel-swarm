@@ -402,7 +402,7 @@ id:
 | -------------- | ------------------------------------ |
 | `run` (default) | the active run id                   |
 | `swarm`        | the active swarm class               |
-| `agent`        | the bound agent's class, when the tool is bound with `forAgent()` or by `HasSwarmMemoryTools` with agent scope switched on (see [Optional default-on registration](#optional-default-on-registration)); otherwise unaddressable |
+| `agent`        | the bound agent's class, when the tool is bound with `forAgent()` (by your code or by `HasSwarmMemoryTools`) and `swarm.memory.tools.agent_scope` is on (see [Optional default-on registration](#optional-default-on-registration)); otherwise unaddressable |
 | `conversation` | the run's bound conversation id, when set (see [Conversation-scoped memory](#conversation-scoped-memory)); otherwise unaddressable |
 
 `run` is the safe default: memory scoped to the current task, cleared with it.
@@ -552,15 +552,17 @@ The `recall` / `remember` toggles enable each tool individually. The tool
 classes are resolved from the container, so you can bind a subclass, for
 example to override a tool's `description()`.
 
-#### Agent scope through the trait
+#### Agent scope
 
-By default the trait's tools are not bound to an agent, so `agent` scope is
+By default the memory tools are not bound to an agent, so `agent` scope is
 unaddressable: `Remember` declines an `agent` write and `Recall` finds nothing
-there. Two switches, both required, turn it on:
+there. Two things, both required, turn it on:
 
 1. `swarm.memory.tools.agent_scope` (`SWARM_MEMORY_TOOLS_AGENT_SCOPE`) is true.
-   This is the app-wide switch and is off by default.
-2. The agent asks for it:
+   This is the app-wide switch and is off by default. While it is off, a
+   `forAgent()` binding has no effect, whoever made it.
+2. The tool is bound to its agent with `forAgent()`. With the trait, the agent
+   asks for that:
 
 ```php
 public function tools(): iterable
@@ -569,9 +571,15 @@ public function tools(): iterable
 }
 ```
 
-With both set, each resolved tool is bound to the agent with `forAgent()`, and
-`agent` scope resolves to that agent's class without subclassing. With either
-one missing the tools stay unbound.
+   For a custom or generated tool, bind it yourself:
+   `(new ProfileRemember)->forAgent($this)`.
+
+With both in place, `agent` scope resolves to that agent's class without
+subclassing. With either one missing the tool behaves as unbound.
+
+The one way around the key is deliberate: a subclass that overrides the
+protected `agent()` hook names its agent itself, as it could before
+`forAgent()` existed, and is not governed by `agent_scope`.
 
 Agent memory is shared across every run and every tenant of that agent class.
 These switches only decide whether the tools can address it. What agents are
@@ -584,8 +592,7 @@ sees.
 
 A native per-run `withTools` configuration replaces the agent's tool list.
 Those substituted tool instances did not come from `swarmMemoryTools()` and
-remain unbound unless the application calls `forAgent()` itself. A subclass may
-still override `agent()` when it needs a fixed identity.
+remain unbound unless the application calls `forAgent()` itself.
 
 For worked, copy-paste patterns built on these hooks — per-user and tenant-scoped
 recall, a policy-enforced custom `Recall`, recall + redact, and sub-agent memory

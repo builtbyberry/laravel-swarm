@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\DeclinedMemoryAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\MemoryToolAgent;
@@ -17,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Responses\Data\ToolCall;
+use Laravel\Ai\Tools\Request;
 
 /**
  * The HasSwarmMemoryTools concern exposes the Recall/Remember tools on an agent
@@ -256,3 +258,53 @@ test('agent memory stays unreadable through the trait unless the config key and 
     'the key is on but the agent does not ask' => [true, MemoryToolAgent::class, MemoryToolSequentialSwarm::class, 'No memory found for key [preference].'],
     'both switches' => [true, DeclinedMemoryAgent::class, DeclinedMemorySequentialSwarm::class, 'preference: concise'],
 ]);
+
+test('a tool bound by hand with forAgent() reads and writes agent scope only while the config key is on', function () {
+    // The key governs every forAgent() binding, not only the trait's. An
+    // agent-inclusive propagation policy is set so only the key gates the read.
+    config()->set('swarm.memory.propagation_policy', WideViewPropagationPolicy::class);
+    $agent = new DeclinedMemoryAgent;
+    $write = new Request(['key' => 'preference', 'value' => 'concise', 'scope' => 'agent']);
+    $read = new Request(['key' => 'preference', 'scope' => 'agent']);
+    ActiveRunContext::enter('run-1', DeclinedMemorySequentialSwarm::class, RunContext::fake(['run_id' => 'run-1', 'input' => 'go']));
+
+    try {
+        $declined = (new Remember)->forAgent($agent)->handle($write);
+        $storedWhileOff = storedAgentPreference(DeclinedMemoryAgent::class);
+
+        config()->set('swarm.memory.tools.agent_scope', true);
+        $stored = (new Remember)->forAgent($agent)->handle($write);
+        $recalled = (new Recall)->forAgent($agent)->handle($read);
+
+        config()->set('swarm.memory.tools.agent_scope', false);
+        $recalledWhileOff = (new Recall)->forAgent($agent)->handle($read);
+    } finally {
+        ActiveRunContext::flush();
+    }
+
+    expect($declined)->toBe('The [agent] scope is not addressable in this run.')
+        ->and($storedWhileOff)->toBeNull()
+        ->and($stored)->toBe('Stored [preference] in agent memory.')
+        ->and($recalled)->toBe('preference: concise')
+        ->and($recalledWhileOff)->toBe('No memory found for key [preference].');
+});
+
+test('a subclass that overrides agent() is not governed by the agent-scope key', function () {
+    ActiveRunContext::enter('run-1', DeclinedMemorySequentialSwarm::class, RunContext::fake(['run_id' => 'run-1', 'input' => 'go']));
+
+    try {
+        $result = (new class extends Remember
+        {
+            protected function agent(): ?Agent
+            {
+                return new DeclinedMemoryAgent;
+            }
+        })->handle(new Request(['key' => 'preference', 'value' => 'concise', 'scope' => 'agent']));
+    } finally {
+        ActiveRunContext::flush();
+    }
+
+    expect(config('swarm.memory.tools.agent_scope'))->toBeFalse()
+        ->and($result)->toBe('Stored [preference] in agent memory.')
+        ->and(storedAgentPreference(DeclinedMemoryAgent::class))->toBe('concise');
+});

@@ -140,9 +140,13 @@ test('it reads from conversation scope when the run is bound to a conversation',
 
 test('its default description only advertises agent scope when bound', function () {
     $unbound = (string) (new Recall)->description();
+    $boundWithKeyOff = (string) (new Recall)->forAgent(new MemoryToolAgent)->description();
+
+    config()->set('swarm.memory.tools.agent_scope', true);
     $bound = (string) (new Recall)->forAgent(new MemoryToolAgent)->description();
 
     expect($unbound)->not->toContain('"agent"')
+        ->and($boundWithKeyOff)->toBe($unbound)
         ->and($bound)->toContain('Use "agent" to read this agent\'s own memory from earlier runs')
         ->and($bound)->toContain('propagation policy includes the agent scope');
 });

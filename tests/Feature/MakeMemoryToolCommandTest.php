@@ -276,7 +276,7 @@ test('make:memory-tool warns only when an agent-scoped class is created', functi
     expect(Artisan::output())->not->toContain('agent scope is addressable only on an agent-bound tool');
 });
 
-test('an agent-scoped generated Remember is addressable only after forAgent binding', function () {
+test('an agent-scoped generated Remember is addressable only after forAgent binding with the agent-scope key on', function () {
     $path = app_path('Ai/Tools/AgentRemember.php');
     File::ensureDirectoryExists(dirname($path));
     Artisan::call('make:memory-tool', [
@@ -294,12 +294,18 @@ test('an agent-scoped generated Remember is addressable only after forAgent bind
         RunContext::fake(['run_id' => 'run-1', 'input' => 'go']),
     );
 
-    $unbound = (new AgentRemember)->handle(new Request(['key' => 'preference', 'value' => 'concise']));
-    $bound = (new AgentRemember)
-        ->forAgent(new DeclinedMemoryAgent)
-        ->handle(new Request(['key' => 'preference', 'value' => 'concise']));
+    $write = fn (AgentRemember $tool): string => $tool->handle(new Request(['key' => 'preference', 'value' => 'concise']));
+
+    $unbound = $write(new AgentRemember);
+    $boundWithKeyOff = $write((new AgentRemember)->forAgent(new DeclinedMemoryAgent));
+
+    expect(app(SwarmMemory::class)->get(MemoryScope::Agent, DeclinedMemoryAgent::class, 'preference'))->toBeNull();
+
+    config()->set('swarm.memory.tools.agent_scope', true);
+    $bound = $write((new AgentRemember)->forAgent(new DeclinedMemoryAgent));
 
     expect($unbound)->toBe('The [agent] scope is not addressable in this run.')
+        ->and($boundWithKeyOff)->toBe('The [agent] scope is not addressable in this run.')
         ->and($bound)->toBe('Stored [preference] in agent memory.')
         ->and(app(SwarmMemory::class)->get(MemoryScope::Agent, DeclinedMemoryAgent::class, 'preference'))
         ->toBe('concise');

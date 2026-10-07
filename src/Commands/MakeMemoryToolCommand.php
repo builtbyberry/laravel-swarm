@@ -137,7 +137,8 @@ class MakeMemoryToolCommand extends GeneratorCommand
             $class = class_basename(str_replace('/', '\\', $this->getNameInput()));
             $this->warn(
                 'The agent scope is addressable only on an agent-bound tool. '
-                .'Return (new '.$class.')->forAgent($this) from the agent\'s tools() method.'
+                .'Return (new '.$class.')->forAgent($this) from the agent\'s tools() method '
+                .'and set swarm.memory.tools.agent_scope to true.'
             );
         }
 
