@@ -402,8 +402,8 @@ id:
 | -------------- | ------------------------------------ |
 | `run` (default) | the active run id                   |
 | `swarm`        | the active swarm class               |
-| `agent`        | only when the tool is bound to a specific agent (see below) |
-| `conversation` | the run's bound conversation id, when set (see [Conversation-scoped memory](#conversation-scoped-memory)); otherwise declined gracefully |
+| `agent`        | the bound agent's class, when the tool is bound with `forAgent()` (by your code or by `HasSwarmMemoryTools`) and `swarm.memory.tools.agent_scope` is on (see [Optional default-on registration](#optional-default-on-registration)); otherwise unaddressable |
+| `conversation` | the run's bound conversation id, when set (see [Conversation-scoped memory](#conversation-scoped-memory)); otherwise unaddressable |
 
 `run` is the safe default: memory scoped to the current task, cleared with it.
 Use `swarm` for state shared across the whole swarm class.
@@ -416,6 +416,16 @@ Use `swarm` for state shared across the whole swarm class.
 > *which* tenant or agent may write it. If you enable `remember` in a
 > multi-tenant app, either keep agents to `run` scope, partition tenants into
 > distinct swarm classes, or enforce the boundary in your capture policy.
+
+The same boundary applies to `agent` scope. Its id is the agent class, so a
+bound tool shares that memory across every run and every tenant that uses the
+same agent class, and nothing clears it when a run ends. That is why the stock
+tools are unbound by default. Writing and reading are separate decisions: a
+bound `Remember` stores an `agent` write whatever the propagation policy is,
+while a bound `Recall` returns agent entries only when the swarm's propagation
+policy includes `MemoryScope::Agent` (the default policy is Run-only). In a
+multi-tenant application, use distinct agent classes per tenant or enforce
+tenant isolation in the memory policy and store design.
 
 ### Policy interaction
 
@@ -444,18 +454,36 @@ addresses its own scope. Invoked **outside** a swarm run (no active run), they
 degrade gracefully: instead of throwing, they return a short "memory is not
 available" string, so an agent wired with the tools still works standalone.
 
+### Declined writes
+
+`Remember` declines an empty key, a key using the reserved `swarm:` prefix, an
+unknown scope, or a scope the active run cannot address. Swarm reports that call
+as `failed` in the step's `nativeResult->tools` projection. Stream consumers
+receive an unsuccessful `SwarmToolResult` whose `error` is the same decline
+message. The run continues, and the model still receives that message so it can
+correct the arguments and retry.
+
+This failure marking belongs to Swarm's result surfaces. Laravel AI still sends
+the ordinary string tool result back to the provider, stores it as an ordinary
+tool result in its own conversation store, and exposes an ordinary result on a
+nested agent-as-tool child's Laravel AI response. Invocation identity prevents
+a child's decline from marking its parent's agent-tool call as failed. Outside
+an active swarm run there is no run frame to mark, so the tools keep their
+graceful plain-string result.
+
 ### Memory tools with streaming
 
 `Recall` and `Remember` work transparently inside `$agent->stream(...)`. Because
-both implement `Laravel\Ai\Contracts\Tool`, `laravel/ai` already handles their
-invocation during a streamed turn — the package adds no streaming-specific tool
-code. When the model calls a memory tool mid-stream:
+both implement `Laravel\Ai\Contracts\Tool`, `laravel/ai` handles their
+invocation during a streamed turn. Swarm only adjusts the declined-write result
+before projecting, capturing, or replaying it. When the model calls a memory
+tool mid-stream:
 
 - The tool call and its result appear in the `StreamableSwarmResponse` as
-  ordinary `swarm_tool_call` / `swarm_tool_result` events, in order, exactly as
-  any other `laravel/ai` tool would surface. The memory side-effect (a
-  `Remember` write, a `Recall` read) happens at the point of the call, before
-  the result event is yielded.
+  ordinary `swarm_tool_call` / `swarm_tool_result` events, in order. Swarm marks
+  a declined write unsuccessful before capture and replay. The memory
+  side-effect (a `Remember` write, a `Recall` read) happens at the point of the
+  call, before the result event is yielded.
 - The sequential stream runner publishes the active run *before* it invokes the
   final agent's `stream()`, so a memory tool resolves its scope id from the
   ambient run identically to a `prompt()` run. A streamed `Recall` therefore
@@ -512,17 +540,59 @@ true, so adding the trait is inert until you opt in app-wide:
 // policies first.
 'memory' => [
     'tools' => [
-        'enabled'  => env('SWARM_MEMORY_TOOLS_ENABLED', false),
-        'recall'   => env('SWARM_MEMORY_TOOLS_RECALL', true),
-        'remember' => env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+        'enabled'     => env('SWARM_MEMORY_TOOLS_ENABLED', false),
+        'recall'      => env('SWARM_MEMORY_TOOLS_RECALL', true),
+        'remember'    => env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+        'agent_scope' => env('SWARM_MEMORY_TOOLS_AGENT_SCOPE', false),
     ],
 ],
 ```
 
 The `recall` / `remember` toggles enable each tool individually. The tool
-classes are resolved from the container, so you can bind a subclass — for
-example to override a tool's `description()`, or to bind it to a specific agent
-so the `agent` scope resolves to that agent's class.
+classes are resolved from the container, so you can bind a subclass, for
+example to override a tool's `description()`.
+
+#### Agent scope
+
+By default the memory tools are not bound to an agent, so `agent` scope is
+unaddressable: `Remember` declines an `agent` write and `Recall` finds nothing
+there. Two things, both required, turn it on:
+
+1. `swarm.memory.tools.agent_scope` (`SWARM_MEMORY_TOOLS_AGENT_SCOPE`) is true.
+   This is the app-wide switch and is off by default. While it is off, a
+   `forAgent()` binding has no effect, whoever made it.
+2. The tool is bound to its agent with `forAgent()`. With the trait, the agent
+   asks for that:
+
+```php
+public function tools(): iterable
+{
+    return [...$this->swarmMemoryTools(agentScope: true), new MyOtherTool];
+}
+```
+
+   For a custom or generated tool, bind it yourself:
+   `(new ProfileRemember)->forAgent($this)`.
+
+With both in place, `agent` scope resolves to that agent's class without
+subclassing. With either one missing the tool behaves as unbound.
+
+The one way around the key is deliberate: a subclass that overrides the
+protected `agent()` hook names its agent itself, as it could before
+`forAgent()` existed, and is not governed by `agent_scope`.
+
+Agent memory is shared across every run and every tenant of that agent class.
+These switches only decide whether the tools can address it. What agents are
+*shown* is a separate decision made by the swarm's propagation policy: a bound
+`Remember` stores the entry under any policy, and a bound `Recall` returns it
+only under a policy that includes `MemoryScope::Agent` (the default is
+Run-only). An application can therefore let an agent save notes that only its
+own code reads back, through `SwarmMemory`, without widening what any agent
+sees.
+
+A native per-run `withTools` configuration replaces the agent's tool list.
+Those substituted tool instances did not come from `swarmMemoryTools()` and
+remain unbound unless the application calls `forAgent()` itself.
 
 For worked, copy-paste patterns built on these hooks — per-user and tenant-scoped
 recall, a policy-enforced custom `Recall`, recall + redact, and sub-agent memory

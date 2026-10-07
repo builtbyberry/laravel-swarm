@@ -478,8 +478,19 @@ return [
          *
          * 'recall' / 'remember' toggle each tool individually (both default on
          * once 'enabled' is true). The class names are resolved from the
-         * container, so bind a subclass to customise a tool's description or
-         * bind it to a specific agent for Agent-scope addressing.
+         * container, so bind a subclass to customise a tool's description.
+         *
+         * 'agent_scope' lets a memory tool act as a specific agent, which
+         * makes the agent scope addressable under that agent's class.
+         * **Disabled by default**: that scope is shared across every run and
+         * every tenant of the agent class, and nothing clears it when a run
+         * ends. While it is off, binding a tool with forAgent() has no
+         * effect, whether the HasSwarmMemoryTools trait does it or your own
+         * code does. With it on, an agent using the trait must still ask
+         * with swarmMemoryTools(agentScope: true). A subclass that overrides
+         * agent() names its agent itself and is not governed by this key.
+         * Which agents are shown agent-scope entries is decided separately,
+         * by the swarm's propagation policy.
          */
         'tools' => [
             'enabled' => filter_var(
@@ -492,6 +503,10 @@ return [
             ),
             'remember' => filter_var(
                 env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'agent_scope' => filter_var(
+                env('SWARM_MEMORY_TOOLS_AGENT_SCOPE', false),
                 FILTER_VALIDATE_BOOLEAN,
             ),
         ],

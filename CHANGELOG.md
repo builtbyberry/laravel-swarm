@@ -9,6 +9,27 @@ stored nothing.
 
 ### Fixed
 
+- Declined `Remember` writes now read as failed in `nativeResult->tools` and as
+  unsuccessful `SwarmToolResult` events, with the decline message as `error`,
+  where they previously read as succeeded; the run continues and the model can
+  retry (#569). `Recall` and `Remember` gain `forAgent()`, and
+  `HasSwarmMemoryTools` can now bind them to the using agent so the `agent`
+  scope works without subclassing. That is off by default and needs two
+  things: the new `swarm.memory.tools.agent_scope` key
+  (`SWARM_MEMORY_TOOLS_AGENT_SCOPE`, default `false`), without which no
+  `forAgent()` binding takes effect, and `swarmMemoryTools(agentScope: true)`
+  in the agent (or your own `forAgent()` call on a custom tool). With either
+  left off, the tools behave as in v0.28.0, apart from the decline now reading
+  as failed. A subclass that overrides `agent()` is not governed by the key. Agent memory is keyed by agent class, so it is shared across runs and
+  tenants of that class. Writing and reading are separate: a bound `Remember`
+  stores the entry under any propagation policy, and a bound `Recall` returns
+  it only under a policy that includes the `agent` scope. `make:memory-tool
+  --scope=agent` now warns that the generated tool needs `forAgent()` binding
+  and the `agent_scope` key,
+  and new stubs no longer generate an unaddressable `agent()` override;
+  existing generated classes that override `agent()` keep working. An `agent()`
+  override wins over a `forAgent()` binding, so remove the `null`-returning
+  placeholder from a previously generated tool before binding it that way.
 - Route plans following `RoutePlanSchema::rollup()` / `node()` now validate:
   the planner accepts `with_outputs` as a list of node ids (alias = node id)
   alongside the existing alias map, and `RoutePlanSchema::worker()` now declares

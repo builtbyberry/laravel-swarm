@@ -18,25 +18,31 @@ final class NativeAgentInvoker
     public static function prompt(Agent $agent, NativeAgentInvocation $invocation): AgentResponse
     {
         $agent = self::configured($agent, $invocation);
+        ActiveRunContext::resetDeclinedToolCalls();
 
-        if ($invocation->timeout !== null) {
-            return $agent->prompt($invocation->prompt, [], $invocation->provider, $invocation->model, $invocation->timeout);
+        try {
+            if ($invocation->timeout !== null) {
+                $response = $agent->prompt($invocation->prompt, [], $invocation->provider, $invocation->model, $invocation->timeout);
+            } elseif ($invocation->model !== null) {
+                $response = $agent->prompt($invocation->prompt, [], $invocation->provider, $invocation->model);
+            } elseif ($invocation->provider !== null) {
+                $response = $agent->prompt($invocation->prompt, [], $invocation->provider);
+            } else {
+                $response = $agent->prompt($invocation->prompt);
+            }
+
+            DeclinedToolResults::applyToResponse($response);
+
+            return $response;
+        } finally {
+            ActiveRunContext::resetDeclinedToolCalls();
         }
-
-        if ($invocation->model !== null) {
-            return $agent->prompt($invocation->prompt, [], $invocation->provider, $invocation->model);
-        }
-
-        if ($invocation->provider !== null) {
-            return $agent->prompt($invocation->prompt, [], $invocation->provider);
-        }
-
-        return $agent->prompt($invocation->prompt);
     }
 
     public static function stream(Agent $agent, NativeAgentInvocation $invocation): StreamableAgentResponse
     {
         $agent = self::configured($agent, $invocation);
+        ActiveRunContext::resetDeclinedToolCalls();
 
         if ($invocation->timeout !== null) {
             return $agent->stream($invocation->prompt, [], $invocation->provider, $invocation->model, $invocation->timeout);

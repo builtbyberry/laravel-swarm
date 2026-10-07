@@ -173,6 +173,17 @@ Drop the generated tool into any `laravel/ai` agent's `tools()` array, or
 expose it through the `HasSwarmMemoryTools` trait by binding your subclass
 in the container.
 
+For `--scope=agent`, the command prints a warning because the scope is
+addressable only after the tool is bound to an agent. Return
+`(new YourTool)->forAgent($this)` from the agent's `tools()` method and set
+`swarm.memory.tools.agent_scope` to true; a `forAgent()` binding has no effect
+while that key is off. Generated stubs no longer include an `agent()`
+placeholder; existing generated classes that override `agent()` remain
+supported. An override always wins over a `forAgent()` binding, so a class
+generated before v0.28.1 still has a placeholder `agent()` that returns
+`null`: delete that method, or return the agent from it, before relying on
+`forAgent()`.
+
 ### Options
 
 | Option | Values | Default | Effect |
