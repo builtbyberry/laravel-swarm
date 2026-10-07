@@ -22,6 +22,8 @@ use Symfony\Component\Console\Input\InputOption;
  * `Remember` (#128) — so a custom tool has the exact same shape as the
  * framework's own: scope ids resolve from the active run, reads honour the
  * propagation policy, and writes flow through the capture policy.
+ * Agent-scoped generation warns that the resulting tool must be bound to an
+ * agent before that scope is addressable.
  *
  * Flags:
  *  - `--scope=run|conversation|agent|swarm` seeds the tool's default scope.
@@ -91,6 +93,7 @@ class MakeMemoryToolCommand extends GeneratorCommand
      */
     public function handle(): ?bool
     {
+        $this->resolvedScope = MemoryScope::Run;
         $scope = $this->optionalOptionString('scope');
 
         if ($scope !== null) {
@@ -128,7 +131,17 @@ class MakeMemoryToolCommand extends GeneratorCommand
             return true;
         }
 
-        return parent::handle();
+        $result = parent::handle();
+
+        if ($result !== false && $this->resolvedScope === MemoryScope::Agent) {
+            $class = class_basename(str_replace('/', '\\', $this->getNameInput()));
+            $this->warn(
+                'The agent scope is addressable only on an agent-bound tool. '
+                .'Return (new '.$class.')->forAgent($this) from the agent\'s tools() method.'
+            );
+        }
+
+        return $result;
     }
 
     /**
@@ -168,8 +181,8 @@ class MakeMemoryToolCommand extends GeneratorCommand
         $className = class_basename($name);
 
         return str_replace(
-            ['{{ baseTool }}', '{{ scopeCase }}', '{{ toolName }}'],
-            [$this->resolvedBase, $this->resolvedScope->name, $this->toolName($className)],
+            ['{{ baseTool }}', '{{ scopeCase }}', '{{ toolName }}', '{{ scopeDescription }}'],
+            [$this->resolvedBase, $this->resolvedScope->name, $this->toolName($className), $this->scopeDescription()],
             $stub,
         );
     }
@@ -180,6 +193,16 @@ class MakeMemoryToolCommand extends GeneratorCommand
     protected function toolName(string $className): string
     {
         return Str::snake($className);
+    }
+
+    protected function scopeDescription(): string
+    {
+        return match ($this->resolvedScope) {
+            MemoryScope::Run => "this run's shared memory",
+            MemoryScope::Swarm => "this swarm's shared memory across runs",
+            MemoryScope::Conversation => "this conversation's shared memory across runs",
+            MemoryScope::Agent => "this agent's memory across runs (requires an agent-bound tool and a propagation policy that includes the agent scope)",
+        };
     }
 
     /**

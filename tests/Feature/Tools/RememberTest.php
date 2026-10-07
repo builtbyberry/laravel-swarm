@@ -18,6 +18,7 @@ use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Ai\Contracts\Tool;
+use Laravel\Ai\Gateway\ParentInvocation;
 use Laravel\Ai\Tools\Request;
 
 /**
@@ -199,4 +200,59 @@ test('it writes to conversation scope when the run is bound to a conversation', 
 
     expect($result)->toBe('Stored [topic] in conversation memory.');
     expect(app(SwarmMemory::class)->get(MemoryScope::Conversation, 'conv-5', 'topic'))->toBe('launch plan');
+});
+
+test('it records declined writes against the exact invocation and tool call', function (array $arguments, string $message) {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    $result = ParentInvocation::within('inv-1', 'tool-inv-1', fn (): string => app(Remember::class)->handle(
+        new Request($arguments, 'call-x'),
+    ));
+
+    expect($result)->toBe($message)
+        ->and(ActiveRunContext::consumeDeclinedToolCall('other-invocation', 'call-x', $message))->toBeFalse()
+        ->and(ActiveRunContext::consumeDeclinedToolCall(null, 'call-x', $message))->toBeFalse()
+        ->and(ActiveRunContext::consumeDeclinedToolCall('inv-1', 'call-x', $message))->toBeTrue()
+        ->and(ActiveRunContext::consumeDeclinedToolCall('inv-1', 'call-x', $message))->toBeFalse();
+})->with([
+    'empty key' => [
+        ['key' => '', 'value' => 'x'],
+        'A memory key is required.',
+    ],
+    'reserved key' => [
+        ['key' => 'swarm:owned', 'value' => 'x'],
+        'Keys starting with [swarm:] are reserved and cannot be written.',
+    ],
+    'unknown scope' => [
+        ['key' => 'k', 'value' => 'v', 'scope' => 'bogus'],
+        'Unknown memory scope. Use one of: run, swarm, agent, conversation.',
+    ],
+    'unbound agent scope' => [
+        ['key' => 'k', 'value' => 'v', 'scope' => 'agent'],
+        'The [agent] scope is not addressable in this run.',
+    ],
+    'unbound conversation scope' => [
+        ['key' => 'k', 'value' => 'v', 'scope' => 'conversation'],
+        'The [conversation] scope is not addressable in this run.',
+    ],
+]);
+
+test('it records no declined marker for a stored write', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    $message = ParentInvocation::within('inv-1', 'tool-inv-1', fn (): string => app(Remember::class)->handle(
+        new Request(['key' => 'topic', 'value' => 'launch plan'], 'call-x'),
+    ));
+
+    expect($message)->toBe('Stored [topic] in run memory.')
+        ->and(ActiveRunContext::consumeDeclinedToolCall('inv-1', 'call-x', $message))->toBeFalse();
+});
+
+test('outside a run a declined-looking message stays an unmarked graceful result', function () {
+    $message = ParentInvocation::within('inv-1', 'tool-inv-1', fn (): string => app(Remember::class)->handle(
+        new Request(['key' => 'topic', 'value' => 'x'], 'call-x'),
+    ));
+
+    expect($message)->toBe('Memory is not available outside an active swarm run.')
+        ->and(ActiveRunContext::consumeDeclinedToolCall('inv-1', 'call-x', $message))->toBeFalse();
 });

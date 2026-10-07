@@ -2,13 +2,21 @@
 
 declare(strict_types=1);
 
+use App\Ai\Tools\AgentRemember;
 use BuiltByBerry\LaravelSwarm\Commands\MakeMemoryToolCommand;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\DeclinedMemoryAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemorySequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use Composer\InstalledVersions;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Console\Kernel as FoundationKernel;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
+use Laravel\Ai\Tools\Request;
 use Symfony\Component\Console\Output\BufferedOutput;
 
 /**
@@ -25,7 +33,9 @@ final class MakeMemoryToolCommandWithVector extends MakeMemoryToolCommand
 }
 
 afterEach(function () {
-    foreach (['TenantRecall', 'DomainRemember', 'ScopedTool', 'Keeper', 'Replaceable', 'CustomStubTool', 'ShapeParityTool', 'VectorRecallShape'] as $class) {
+    ActiveRunContext::flush();
+
+    foreach (['TenantRecall', 'DomainRemember', 'ScopedTool', 'Keeper', 'Replaceable', 'CustomStubTool', 'ShapeParityTool', 'VectorRecallShape', 'AgentRecall', 'AgentRemember', 'VectorAgentRecall', 'VectorDefaultRecall'] as $class) {
         File::delete(app_path("Ai/Tools/{$class}.php"));
     }
 });
@@ -191,12 +201,12 @@ test('make:memory-tool generated class shape matches the shipped Recall tool', f
     // - extends the shipped tool
     // - exposes name()
     // - overrides resolveScope() with the same signature the base declares
-    // - overrides agent() returning ?Agent
+    // - inherits forAgent() binding from the shipped tool
     expect($contents)
         ->toMatch('/class ShapeParityTool extends Recall/')
         ->toMatch('/public function name\(\): string/')
         ->toMatch('/protected function resolveScope\(string \$scope\): \?MemoryScope/')
-        ->toMatch('/protected function agent\(\): \?Agent/');
+        ->not->toContain('function agent(');
 });
 
 test('make:memory-tool --vector scaffolds a compiling vector tool when the companion is present', function () {
@@ -234,7 +244,8 @@ test('make:memory-tool --vector scaffolds a compiling vector tool when the compa
         ->toContain('public function handle(Request $request): string')
         ->toContain('protected function semanticRecall(string $query, MemoryScope $scope): string')
         ->toContain('protected function resolveScope(string $scope): ?MemoryScope')
-        ->toContain('protected function agent(): ?Agent')
+        ->not->toContain('function agent(')
+        ->toContain("Search this run's shared memory by meaning.")
         ->not->toContain('{{');
 
     // It must actually compile and be a real Recall subclass — a broken
@@ -244,4 +255,67 @@ test('make:memory-tool --vector scaffolds a compiling vector tool when the compa
 
     expect(class_exists('App\Ai\Tools\VectorRecallShape'))->toBeTrue();
     expect((new ReflectionClass('App\Ai\Tools\VectorRecallShape'))->isSubclassOf(Recall::class))->toBeTrue();
+});
+
+test('make:memory-tool warns only when an agent-scoped class is created', function () {
+    File::ensureDirectoryExists(app_path('Ai/Tools'));
+
+    Artisan::call('make:memory-tool', ['name' => 'AgentRecall', '--scope' => 'agent']);
+    $createdOutput = Artisan::output();
+
+    expect($createdOutput)
+        ->toContain('agent scope is addressable only on an agent-bound tool')
+        ->toContain('(new AgentRecall)->forAgent($this)');
+
+    Artisan::call('make:memory-tool', ['name' => 'AgentRecall', '--scope' => 'agent']);
+
+    expect(Artisan::output())->not->toContain('agent scope is addressable only on an agent-bound tool');
+
+    Artisan::call('make:memory-tool', ['name' => 'TenantRecall', '--scope' => 'swarm', '--force' => true]);
+
+    expect(Artisan::output())->not->toContain('agent scope is addressable only on an agent-bound tool');
+});
+
+test('an agent-scoped generated Remember is addressable only after forAgent binding', function () {
+    $path = app_path('Ai/Tools/AgentRemember.php');
+    File::ensureDirectoryExists(dirname($path));
+    Artisan::call('make:memory-tool', [
+        'name' => 'AgentRemember',
+        '--scope' => 'agent',
+        '--base' => 'remember',
+    ]);
+    require_once $path;
+
+    ActiveRunContext::enter(
+        'run-1',
+        DeclinedMemorySequentialSwarm::class,
+        RunContext::fake(['run_id' => 'run-1', 'input' => 'go']),
+    );
+
+    $unbound = (new AgentRemember)->handle(new Request(['key' => 'preference', 'value' => 'concise']));
+    $bound = (new AgentRemember)
+        ->forAgent(new DeclinedMemoryAgent)
+        ->handle(new Request(['key' => 'preference', 'value' => 'concise']));
+
+    expect($unbound)->toBe('The [agent] scope is not addressable in this run.')
+        ->and($bound)->toBe('Stored [preference] in agent memory.')
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Agent, DeclinedMemoryAgent::class, 'preference'))
+        ->toBe('concise');
+});
+
+test('vector descriptions follow the generated default scope', function () {
+    $kernel = app(ConsoleKernel::class);
+    assert($kernel instanceof FoundationKernel);
+    $kernel->call('list', [], new BufferedOutput);
+    $kernel->registerCommand(app(MakeMemoryToolCommandWithVector::class));
+    File::ensureDirectoryExists(app_path('Ai/Tools'));
+
+    Artisan::call('make:memory-tool', ['name' => 'VectorAgentRecall', '--vector' => true, '--scope' => 'agent']);
+    Artisan::call('make:memory-tool', ['name' => 'VectorDefaultRecall', '--vector' => true]);
+
+    expect(File::get(app_path('Ai/Tools/VectorAgentRecall.php')))
+        ->toContain("this agent's memory across runs")
+        ->toContain('propagation policy that includes the agent scope')
+        ->and(File::get(app_path('Ai/Tools/VectorDefaultRecall.php')))
+        ->toContain("Search this run's shared memory by meaning.");
 });

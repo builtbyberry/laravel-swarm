@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Concerns;
 use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Illuminate\Container\Container;
+use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Tool;
 
 /**
@@ -34,16 +35,18 @@ use Laravel\Ai\Contracts\Tool;
  * .tools')`: `enabled` is the master switch (default off, so adding the trait is
  * safe and inert until you opt in app-wide), and `recall` / `remember` toggle
  * each tool. The concrete classes are resolved from the container so an
- * application can bind a subclass (e.g. an agent-scoped {@see Recall}) without
- * changing agent code. When the config is unavailable (an unbooted container)
- * the trait returns no tools rather than guessing.
+ * application can bind a subclass without changing agent code. When the trait
+ * is used by a Laravel AI {@see Agent}, each resolved tool is bound to that
+ * agent, making the Agent memory scope addressable. When the config is
+ * unavailable (an unbooted container) the trait returns no tools rather than
+ * guessing.
  */
 trait HasSwarmMemoryTools
 {
     /**
      * The Swarm memory tools enabled for this agent, per `swarm.memory.tools`.
      *
-     * @return array<int, Tool>
+     * @return list<Tool>
      */
     public function swarmMemoryTools(): array
     {
@@ -62,11 +65,13 @@ trait HasSwarmMemoryTools
         $tools = [];
 
         if ((bool) $config->get('swarm.memory.tools.recall', true)) {
-            $tools[] = $container->make(Recall::class);
+            $recall = $container->make(Recall::class);
+            $tools[] = $this instanceof Agent ? $recall->forAgent($this) : $recall;
         }
 
         if ((bool) $config->get('swarm.memory.tools.remember', true)) {
-            $tools[] = $container->make(Remember::class);
+            $remember = $container->make(Remember::class);
+            $tools[] = $this instanceof Agent ? $remember->forAgent($this) : $remember;
         }
 
         return $tools;

@@ -12,12 +12,14 @@ use BuiltByBerry\LaravelSwarm\Memory\MemoryToolScopeResolver;
 use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\SwarmMemoryKeys;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\DeclinedToolResults;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Tool;
+use Laravel\Ai\Gateway\ParentInvocation;
 use Laravel\Ai\Tools\Request;
 use Stringable;
 
@@ -35,8 +37,9 @@ use Stringable;
  * The scope id is never accepted from the model; it is resolved from the
  * ambient {@see ActiveRunContext} via
  * {@see MemoryToolScopeResolver}, so an agent cannot write into another run's,
- * swarm's, or conversation's memory. The Conversation scope is addressable only
- * when a conversation id is bound to the run via
+ * swarm's, agent's, or conversation's memory. Bind the tool with
+ * {@see forAgent()} to make the Agent scope addressable. The Conversation scope
+ * is addressable only when a conversation id is bound to the run via
  * {@see RunContext::withConversationId()};
  * without one, a Conversation-scoped write declines gracefully. Package-reserved keys (the `swarm:` prefix) are rejected so an
  * agent cannot overwrite framework-owned entries such as step outputs.
@@ -46,6 +49,8 @@ use Stringable;
  */
 class Remember implements Tool
 {
+    protected ?Agent $boundAgent = null;
+
     public function __construct(
         protected readonly ?string $description = null,
     ) {}
@@ -63,12 +68,34 @@ class Remember implements Tool
      */
     public function description(): Stringable|string
     {
-        return $this->description ?? <<<'TEXT'
+        if ($this->description !== null) {
+            return $this->description;
+        }
+
+        $description = <<<'TEXT'
         Save a value to shared memory so later agents in this run can read it
         with the recall tool. Provide a `key` and a `value`. `scope` defaults to
         "run" (memory for the current task); use "swarm" to share across the
         whole swarm. Values may be redacted by the application's capture policy.
         TEXT;
+
+        if ($this->agent() !== null) {
+            $description .= ' Use "agent" to keep a value for this agent across runs.';
+        }
+
+        return $description;
+    }
+
+    /**
+     * Get a copy of the tool bound to the given agent, so the Agent scope is
+     * addressable under that agent's class.
+     */
+    public function forAgent(Agent $agent): static
+    {
+        $tool = clone $this;
+        $tool->boundAgent = $agent;
+
+        return $tool;
     }
 
     /**
@@ -79,17 +106,17 @@ class Remember implements Tool
         $key = trim($request->string('key')->toString());
 
         if ($key === '') {
-            return 'A memory key is required.';
+            return $this->declined($request, 'A memory key is required.');
         }
 
         if (str_starts_with($key, SwarmMemoryKeys::RESERVED_PREFIX)) {
-            return 'Keys starting with ['.SwarmMemoryKeys::RESERVED_PREFIX.'] are reserved and cannot be written.';
+            return $this->declined($request, 'Keys starting with ['.SwarmMemoryKeys::RESERVED_PREFIX.'] are reserved and cannot be written.');
         }
 
         $scope = $this->resolveScope($request->string('scope')->toString());
 
         if ($scope === null) {
-            return 'Unknown memory scope. Use one of: run, swarm, agent, conversation.';
+            return $this->declined($request, 'Unknown memory scope. Use one of: run, swarm, agent, conversation.');
         }
 
         $resolved = $this->scopeResolver()->resolve($scope);
@@ -104,7 +131,7 @@ class Remember implements Tool
                 return 'Memory is not available outside an active swarm run.';
             }
 
-            return 'The ['.$scope->value.'] scope is not addressable in this run.';
+            return $this->declined($request, 'The ['.$scope->value.'] scope is not addressable in this run.');
         }
 
         $this->memory()->put(
@@ -181,12 +208,28 @@ class Remember implements Tool
     }
 
     /**
-     * The agent the tool writes as, used only to address the Agent scope. Null
-     * by default; {@see Remember} is scope-driven, not agent-bound.
+     * Decline a write that stored nothing. The message still goes back to the
+     * model, and the call is noted on the active run so Swarm reports its
+     * result as failed ({@see DeclinedToolResults}).
+     */
+    protected function declined(Request $request, string $message): string
+    {
+        ActiveRunContext::declineToolCall(
+            ParentInvocation::current()[0],
+            $request->toolCallId(),
+            $message,
+        );
+
+        return $message;
+    }
+
+    /**
+     * The agent the tool writes as, used to address the Agent scope.
+     * Subclasses may override this hook instead of calling {@see forAgent()}.
      */
     protected function agent(): ?Agent
     {
-        return null;
+        return $this->boundAgent;
     }
 
     protected function memory(): SwarmMemory

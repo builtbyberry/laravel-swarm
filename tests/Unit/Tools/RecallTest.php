@@ -6,6 +6,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\MemoryToolAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRestrictivePropagationSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeSequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeWideViewPropagationSwarm;
@@ -135,4 +136,19 @@ test('it reads from conversation scope when the run is bound to a conversation',
     );
 
     expect(recall(['key' => 'topic', 'scope' => 'conversation']))->toBe('topic: launch plan');
+});
+
+test('its default description only advertises agent scope when bound', function () {
+    $unbound = (string) (new Recall)->description();
+    $bound = (string) (new Recall)->forAgent(new MemoryToolAgent)->description();
+
+    expect($unbound)->not->toContain('"agent"')
+        ->and($bound)->toContain('Use "agent" to read this agent\'s own memory from earlier runs')
+        ->and($bound)->toContain('propagation policy includes the agent scope');
+});
+
+test('a custom Recall description overrides bound defaults', function () {
+    $tool = (new Recall('Custom recall instructions.'))->forAgent(new MemoryToolAgent);
+
+    expect((string) $tool->description())->toBe('Custom recall instructions.');
 });

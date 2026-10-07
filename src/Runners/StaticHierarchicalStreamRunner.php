@@ -62,6 +62,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\NativeProtocolFailureReporter;
 use BuiltByBerry\LaravelSwarm\Streaming\PayloadAvailability;
 use BuiltByBerry\LaravelSwarm\Streaming\ProviderToolEventMapper;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\DeclinedToolResults;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -1239,6 +1240,8 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     yield $swarmEvent;
                     $this->recordStreamTelemetry($swarm, $state, $swarmEvent, $streamSequenceIndex, $streamTelemetryStart, false);
                 } elseif ($event instanceof ToolResult) {
+                    DeclinedToolResults::applyToStreamEvent($event);
+
                     $matchedCallId = $event->toolResult->id;
                     $matchedCall = $pendingToolCalls[$matchedCallId] ?? null;
 

@@ -334,16 +334,16 @@ for worked HIPAA-/SOX-aware configurations.
 
 ## Sub-agent with memory continuity
 
-**Problem.** You have a reusable sub-agent — a classifier, a researcher, a
-profile-builder — that should accumulate state *across* invocations and runs, not
+**Problem.** You have a reusable sub-agent, such as a classifier, researcher, or
+profile-builder, that should accumulate state *across* invocations and runs, not
 start cold every time. Run scope is wrong (it's cleared with the run); you want
 memory keyed to the agent itself.
 
-**Solution.** That is exactly the `agent` scope — memory addressed by the agent
+**Solution.** That is exactly the `agent` scope, memory addressed by the agent
 *class*, so it persists for that agent across every run. But `agent` scope is only
-addressable when the tool knows which agent it acts as: the shipped `Recall` and
-`Remember` are scope-driven and return `null` from `agent()` by default, so they
-can't resolve it. Bind the tool to a concrete agent by overriding `agent()`.
+addressable when the tool knows which agent it acts as. Bind a custom tool with
+`forAgent()`, or use `HasSwarmMemoryTools` to have the stock `Recall` and
+`Remember` instances bound automatically.
 
 Scaffold both halves with the generator:
 
@@ -352,13 +352,12 @@ php artisan make:memory-tool ProfileRecall --scope=agent
 php artisan make:memory-tool ProfileRemember --base=remember --scope=agent
 ```
 
-Then fill in the `agent()` hook the stub leaves as a `TODO`:
+The command warns that an agent-scoped tool must be bound. Keep the generated
+scope and name, then bind both tools from the agent:
 
 ```php
 namespace App\Ai\Tools;
 
-use App\Ai\Agents\ProfileBuilder;
-use Laravel\Ai\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Tools\Remember;
 
@@ -370,21 +369,35 @@ class ProfileRemember extends Remember
     {
         return 'profile_remember';
     }
+}
+```
 
-    /**
-     * Bind the tool to ProfileBuilder, so the `agent` scope resolves to that
-     * agent's class — its memory persists across every run the agent runs in.
-     */
-    protected function agent(): ?Agent
+```php
+namespace App\Ai\Agents;
+
+use App\Ai\Tools\ProfileRecall;
+use App\Ai\Tools\ProfileRemember;
+use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\HasTools;
+
+class ProfileBuilder implements Agent, HasTools
+{
+    public function tools(): iterable
     {
-        return new ProfileBuilder;
+        return [
+            (new ProfileRecall)->forAgent($this),
+            (new ProfileRemember)->forAgent($this),
+        ];
     }
 }
 ```
 
+Overriding the protected `agent()` hook remains supported when a custom tool
+needs a fixed identity instead of the agent instance that registered it.
+
 Now when `ProfileBuilder` calls `profile_remember`, the write is addressed to
-`ProfileBuilder::class`; the next time the agent runs — in this swarm or any
-other — its `ProfileRecall` reads the same entries back. Writes are tagged with
+`ProfileBuilder::class`; the next time the agent runs, in this swarm or any
+other, its `ProfileRecall` reads the same entries back. Writes are tagged with
 the agent class in their metadata, so `MemoryWritten` audit listeners can
 attribute them.
 

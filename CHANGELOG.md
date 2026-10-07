@@ -9,6 +9,17 @@ stored nothing.
 
 ### Fixed
 
+- Declined `Remember` writes now read as failed in `nativeResult->tools` and as
+  unsuccessful `SwarmToolResult` events, with the decline message as `error`,
+  where they previously read as succeeded; the run continues and the model can
+  retry (#569). `HasSwarmMemoryTools` now binds `Recall` and `Remember` to the
+  using agent, so agent-scoped writes work without subclassing and a bound
+  `Recall` returns that class-keyed memory under an agent-inclusive propagation
+  policy where trait users previously skipped it. Agent memory is shared across
+  runs and tenants of the same agent class. `make:memory-tool --scope=agent`
+  now warns that the generated tool needs `forAgent()` binding, and new stubs no
+  longer generate an unaddressable `agent()` override; existing generated
+  classes that override `agent()` keep working.
 - Route plans following `RoutePlanSchema::rollup()` / `node()` now validate:
   the planner accepts `with_outputs` as a list of node ids (alias = node id)
   alongside the existing alias map, and `RoutePlanSchema::worker()` now declares
