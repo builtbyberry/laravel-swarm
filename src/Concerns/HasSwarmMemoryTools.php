@@ -42,8 +42,8 @@ use Laravel\Ai\Contracts\Tool;
  * The Agent memory scope stays unaddressable unless two things are both set:
  * the agent asks for it with `swarmMemoryTools(agentScope: true)`, which binds
  * each resolved tool to the agent with `forAgent()`, and
- * `swarm.memory.tools.agent_scope` is true, without which no `forAgent()`
- * binding takes effect. That scope is keyed by agent class, so it is
+ * `swarm.memory.tools.agent_scope` is true (see {@see Recall::forAgent()} and
+ * {@see Remember::forAgent()}). That scope is keyed by agent class, so it is
  * shared across every run and tenant of the class; which agents are shown its
  * entries is a separate decision, made by the swarm's propagation policy.
  */

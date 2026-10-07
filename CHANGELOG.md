@@ -27,7 +27,9 @@ stored nothing.
   --scope=agent` now warns that the generated tool needs `forAgent()` binding
   and the `agent_scope` key,
   and new stubs no longer generate an unaddressable `agent()` override;
-  existing generated classes that override `agent()` keep working.
+  existing generated classes that override `agent()` keep working. An `agent()`
+  override wins over a `forAgent()` binding, so remove the `null`-returning
+  placeholder from a previously generated tool before binding it that way.
 - Route plans following `RoutePlanSchema::rollup()` / `node()` now validate:
   the planner accepts `with_outputs` as a list of node ids (alias = node id)
   alongside the existing alias map, and `RoutePlanSchema::worker()` now declares

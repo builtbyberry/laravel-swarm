@@ -265,7 +265,8 @@ test('make:memory-tool warns only when an agent-scoped class is created', functi
 
     expect($createdOutput)
         ->toContain('agent scope is addressable only on an agent-bound tool')
-        ->toContain('(new AgentRecall)->forAgent($this)');
+        ->toContain('(new AgentRecall)->forAgent($this)')
+        ->toContain('set swarm.memory.tools.agent_scope to true');
 
     Artisan::call('make:memory-tool', ['name' => 'AgentRecall', '--scope' => 'agent']);
 

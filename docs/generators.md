@@ -179,7 +179,10 @@ addressable only after the tool is bound to an agent. Return
 `swarm.memory.tools.agent_scope` to true; a `forAgent()` binding has no effect
 while that key is off. Generated stubs no longer include an `agent()`
 placeholder; existing generated classes that override `agent()` remain
-supported.
+supported. An override always wins over a `forAgent()` binding, so a class
+generated before v0.28.1 still has a placeholder `agent()` that returns
+`null`: delete that method, or return the agent from it, before relying on
+`forAgent()`.
 
 ### Options
 

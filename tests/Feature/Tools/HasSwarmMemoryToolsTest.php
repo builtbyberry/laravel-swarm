@@ -308,3 +308,46 @@ test('a subclass that overrides agent() is not governed by the agent-scope key',
         ->and($result)->toBe('Stored [preference] in agent memory.')
         ->and(storedAgentPreference(DeclinedMemoryAgent::class))->toBe('concise');
 });
+
+test('a Recall subclass that overrides agent() is not governed by the agent-scope key', function () {
+    config()->set('swarm.memory.propagation_policy', WideViewPropagationPolicy::class);
+    app(SwarmMemory::class)->put(MemoryScope::Agent, DeclinedMemoryAgent::class, 'preference', 'concise');
+    ActiveRunContext::enter('run-1', DeclinedMemorySequentialSwarm::class, RunContext::fake(['run_id' => 'run-1', 'input' => 'go']));
+
+    try {
+        $result = (new class extends Recall
+        {
+            protected function agent(): ?Agent
+            {
+                return new DeclinedMemoryAgent;
+            }
+        })->handle(new Request(['key' => 'preference', 'scope' => 'agent']));
+    } finally {
+        ActiveRunContext::flush();
+    }
+
+    expect(config('swarm.memory.tools.agent_scope'))->toBeFalse()
+        ->and($result)->toBe('preference: concise');
+});
+
+test('a forAgent()-bound write is attributed to its agent only while the config key is on', function () {
+    $metadataFor = function (string $runId): array {
+        ActiveRunContext::enter($runId, DeclinedMemorySequentialSwarm::class, RunContext::fake(['run_id' => $runId, 'input' => 'go']));
+
+        try {
+            (new Remember)->forAgent(new DeclinedMemoryAgent)->handle(new Request(['key' => 'note', 'value' => 'x']));
+        } finally {
+            ActiveRunContext::flush();
+        }
+
+        return collect(app(SwarmMemory::class)->all(MemoryScope::Run, $runId))->sole()->metadata;
+    };
+
+    $whileOff = $metadataFor('run-off');
+
+    config()->set('swarm.memory.tools.agent_scope', true);
+    $whileOn = $metadataFor('run-on');
+
+    expect($whileOff)->not->toHaveKey('agent')
+        ->and($whileOn['agent'] ?? null)->toBe(DeclinedMemoryAgent::class);
+});
