@@ -2,6 +2,20 @@
 
 ## Upgrading to v0.28.1
 
+### Memory writes that store nothing now read as failed
+
+A `Remember` call that stored nothing is now reported as failed in
+`nativeResult->tools` and as an unsuccessful `SwarmToolResult` event, where it
+previously read as succeeded. This covers a write the tool declines (empty
+key, reserved `swarm:` prefix, unknown scope, or a scope the run cannot
+address) and a write your `MemoryCapturePolicy` skips. Nothing more or less is
+stored than before; only the reported outcome changes.
+
+If your application counts failed tool calls, alerts on them, or branches on
+`SwarmToolResult`, expect these calls to move from succeeded to failed after
+upgrading. This applies in particular to an application whose capture policy
+returns `Skip`. The run itself continues.
+
 ### Frozen-view retry memory writes
 
 The default `frozen_view` replay mode now saves a retry's Run-scope memory
@@ -2001,8 +2015,8 @@ Override per-swarm with the `#[MemoryReplay]` attribute when the global default
 does not fit a particular swarm's retry contract:
 
 ```php
-use BuiltByBerry\LaravelSwarm\Memory\Attributes\MemoryReplay;
-use BuiltByBerry\LaravelSwarm\Memory\Enums\ReplayMode;
+use BuiltByBerry\LaravelSwarm\Attributes\MemoryReplay;
+use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
 
 #[MemoryReplay(mode: ReplayMode::FreshExecution)]
 class MySpecialSwarm implements Swarm { ... }
