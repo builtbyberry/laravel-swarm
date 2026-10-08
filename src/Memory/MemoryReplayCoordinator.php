@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
 use BuiltByBerry\LaravelSwarm\Attributes\MemoryReplay;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
@@ -103,6 +104,7 @@ final class MemoryReplayCoordinator
             live: $live,
             snapshot: $existing,
             events: $this->events,
+            policy: $this->application->make(MemoryCapturePolicy::class),
         );
 
         if ($context !== null) {
@@ -169,6 +171,7 @@ final class MemoryReplayCoordinator
             live: $live,
             snapshot: $existing,
             events: $this->events,
+            policy: $this->application->make(MemoryCapturePolicy::class),
         ));
 
         return ReplayBoundary::replay($existing);

@@ -44,7 +44,8 @@ interface SwarmMemory
      * Write a value at `(scope, scopeId, key)`, inserting or updating.
      *
      * Returns the persisted entry so callers can read back timestamps and
-     * any policy-applied metadata.
+     * any policy-applied metadata. When the capture policy skips the write,
+     * returns a prospective entry that was not persisted.
      *
      * @param  array<string, mixed>  $metadata
      */

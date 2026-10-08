@@ -11,6 +11,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
+use BuiltByBerry\LaravelSwarm\Jobs\InvokeSwarm;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
@@ -19,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\View\CausalLogView;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\DeclinedToolResults;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
+use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
 use BuiltByBerry\LaravelSwarm\Support\SwarmHistory;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\DeclinedMemoryAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\DeclinedMemoryParentAgent;
@@ -31,6 +33,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemoryParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemorySequentialSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemoryStaticHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemoryTwoStepSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\RedactingMemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingMemoryCapturePolicy;
 use Illuminate\Support\Facades\Artisan;
 use Laravel\Ai\Responses\Data\ToolCall;
 use Laravel\Ai\Responses\Data\ToolResult as ToolResultData;
@@ -99,6 +103,28 @@ test('sequential prompt projects every declined memory write as failed', functio
     expect(nativeToolStatus($response->steps[0]))->toBe('failed');
 })->with('declined memory writes');
 
+test('sequential prompt projects a declined write as failed', function (array $cause): void {
+    if ($cause['skip']) {
+        bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+    }
+    DeclinedMemoryAgent::fake([declinedCall($cause['arguments']), 'done']);
+
+    $response = DeclinedMemorySequentialSwarm::make()->prompt('remember');
+
+    expect(nativeToolStatus($response->steps[0]))->toBe('failed');
+})->with('decline causes');
+
+test('sequential prompt keeps a redacted write succeeded and stores the redacted value', function (): void {
+    bindMemoryCapturePolicy(new RedactingMemoryCapturePolicy(['secret']));
+    DeclinedMemoryAgent::fake([declinedCall(['key' => 'secret', 'value' => 'sensitive']), 'done']);
+    $context = RunContext::fake(['run_id' => 'redacted-run', 'input' => 'remember']);
+
+    $response = DeclinedMemorySequentialSwarm::make()->prompt($context);
+
+    expect(nativeToolStatus($response->steps[0]))->toBe('succeeded')
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $context->runId, 'secret'))->toBe(SwarmCapture::REDACTED);
+});
+
 test('sequential prompt keeps a stored write succeeded and persists it', function (): void {
     DeclinedMemoryAgent::fake([
         declinedCall(['key' => 'topic', 'value' => 'launch plan']),
@@ -113,9 +139,11 @@ test('sequential prompt keeps a stored write succeeded and persists it', functio
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, 'stored-run', 'topic'))->toBe('launch plan');
 });
 
-test('sequential stream exposes and replays a declined write as unsuccessful', function (): void {
-    $message = 'A memory key is required.';
-    DeclinedMemoryAgent::fake([declinedCall(['key' => '', 'value' => 'x']), 'done']);
+test('sequential stream exposes and replays a declined write as unsuccessful', function (array $cause): void {
+    if ($cause['skip']) {
+        bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+    }
+    DeclinedMemoryAgent::fake([declinedCall($cause['arguments']), 'done']);
 
     $stream = DeclinedMemorySequentialSwarm::make()->stream('remember')->storeForReplay();
     $events = collect(iterator_to_array($stream));
@@ -123,7 +151,7 @@ test('sequential stream exposes and replays a declined write as unsuccessful', f
     $stepEnd = $events->whereInstanceOf(SwarmStepEnd::class)->sole();
 
     expect($toolResult->successful)->toBeFalse()
-        ->and($toolResult->error)->toBe($message)
+        ->and($toolResult->error)->toBe($cause['message'])
         ->and($toolResult->toArray()['successful'])->toBeFalse()
         ->and(nativeToolStatus($stepEnd))->toBe('failed');
 
@@ -132,19 +160,25 @@ test('sequential stream exposes and replays a declined write as unsuccessful', f
         ->sole();
 
     expect($replayed->successful)->toBeFalse()
-        ->and($replayed->error)->toBe($message);
-});
+        ->and($replayed->error)->toBe($cause['message']);
+})->with('decline causes');
 
-test('parallel prompt projects a declined memory write as failed', function (): void {
-    DeclinedMemoryAgent::fake([declinedCall(['key' => '', 'value' => 'x']), 'done']);
+test('parallel prompt projects a declined memory write as failed', function (array $cause): void {
+    if ($cause['skip']) {
+        bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+    }
+    DeclinedMemoryAgent::fake([declinedCall($cause['arguments']), 'done']);
 
     $response = DeclinedMemoryParallelSwarm::make()->prompt('remember');
 
     expect(nativeToolStatus($response->steps[0]))->toBe('failed');
-});
+})->with('decline causes');
 
-test('durable parallel prompt persists a declined branch write as a failed native tool result', function (): void {
-    DeclinedMemoryAgent::fake([declinedCall(['key' => '', 'value' => 'x']), 'done']);
+test('durable parallel prompt persists a declined branch write as a failed native tool result', function (array $cause): void {
+    if ($cause['skip']) {
+        bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+    }
+    DeclinedMemoryAgent::fake([declinedCall($cause['arguments']), 'done']);
 
     $runId = DeclinedMemoryParallelSwarm::make()->dispatchDurable('remember')->runId;
     $manager = app(DurableSwarmManager::class);
@@ -156,11 +190,13 @@ test('durable parallel prompt persists a declined branch write as a failed nativ
 
     expect($branch['status'])->toBe('completed')
         ->and($branch['native_result']['tools'][0]['status'])->toBe('failed');
-});
+})->with('decline causes');
 
-test('durable parallel branch streaming persists a declined write as unsuccessful', function (): void {
-    $message = 'A memory key is required.';
-    DeclinedMemoryAgent::fake([declinedCall(['key' => '', 'value' => 'x']), 'done']);
+test('durable parallel branch streaming persists a declined write as unsuccessful', function (array $cause): void {
+    if ($cause['skip']) {
+        bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+    }
+    DeclinedMemoryAgent::fake([declinedCall($cause['arguments']), 'done']);
 
     $runId = DeclinedMemoryDurableStreamingParallelSwarm::make()->dispatchDurable('remember')->runId;
     $manager = app(DurableSwarmManager::class);
@@ -174,11 +210,15 @@ test('durable parallel branch streaming persists a declined write as unsuccessfu
     $branch = app(DurableRunStore::class)->findBranch($runId, 'parallel:0');
 
     expect($toolResult->successful)->toBeFalse()
-        ->and($toolResult->error)->toBe($message)
+        ->and($toolResult->error)->toBe($cause['message'])
         ->and($branch['native_result']['tools'][0]['status'])->toBe('failed');
-});
+})->with('decline causes');
 
-test('hierarchical streams project a worker declined write as failed', function (string $swarmClass, bool $generated): void {
+test('hierarchical streams project a worker declined write as failed', function (string $swarmClass, bool $generated, array $cause): void {
+    if ($cause['skip']) {
+        bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+    }
+
     if ($generated) {
         FakeHierarchicalCoordinator::fake([[
             'start_at' => 'memory',
@@ -194,7 +234,7 @@ test('hierarchical streams project a worker declined write as failed', function 
         ]]);
     }
 
-    DeclinedMemoryAgent::fake([declinedCall(['key' => '', 'value' => 'x']), 'done']);
+    DeclinedMemoryAgent::fake([declinedCall($cause['arguments']), 'done']);
 
     $events = collect(iterator_to_array($swarmClass::make()->stream('remember')));
     $toolResult = $events->whereInstanceOf(SwarmToolResult::class)->sole();
@@ -206,7 +246,22 @@ test('hierarchical streams project a worker declined write as failed', function 
 })->with([
     'static hierarchical' => [DeclinedMemoryStaticHierarchicalSwarm::class, false],
     'generated hierarchical' => [DeclinedMemoryGeneratedHierarchicalSwarm::class, true],
-]);
+])->with('decline causes');
+
+test('queued execution projects a declined write as failed', function (array $cause): void {
+    if ($cause['skip']) {
+        bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+    }
+    DeclinedMemoryAgent::fake([declinedCall($cause['arguments']), 'done']);
+    $context = RunContext::fake(['run_id' => 'queued-declined-memory', 'input' => 'remember']);
+
+    (new InvokeSwarm(DeclinedMemorySequentialSwarm::class, $context->toQueuePayload()))
+        ->handle(app(SwarmRunner::class));
+
+    $history = app(RunHistoryStore::class)->find($context->runId);
+
+    expect($history['steps'][0]['native_result']['tools'][0]['status'])->toBe('failed');
+})->with('decline causes');
 
 test('matching uses the declined result text when one invocation reuses a tool call id', function (): void {
     DeclinedMemoryAgent::fake([

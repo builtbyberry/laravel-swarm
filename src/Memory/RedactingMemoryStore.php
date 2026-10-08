@@ -21,14 +21,15 @@ use Illuminate\Contracts\Events\Dispatcher;
  * {@see MemoryStore} decorator that applies the bound {@see MemoryCapturePolicy}
  * to every write before delegating to the underlying driver.
  *
- * This is the single write-time chokepoint for memory redaction. Because every
- * memory write — whether through the {@see SwarmMemory}
- * facade, {@see RunContext}, or a direct
- * store resolution — flows through the bound `MemoryStore`, wrapping it here
- * guarantees no write can bypass the policy. Reads (`get`/`all`) return the
+ * This is the persistence write-time chokepoint for memory redaction. Every
+ * persisted memory write, whether through the {@see SwarmMemory} facade,
+ * {@see RunContext}, or a direct store resolution, flows through the bound
+ * `MemoryStore`. A frozen replay's Run-scope buffer does not persist values and
+ * consults the policy itself only to enforce `Skip`; it deliberately does not
+ * apply `Redact` to values that remain in memory. Reads (`get`/`all`) return the
  * already-redacted persisted values, so the propagation view and the frozen
- * {@see MemorySnapshot} inherit redaction structurally — no separate
- * pre-snapshot pass is needed.
+ * {@see MemorySnapshot} inherit redaction structurally with no separate
+ * pre-snapshot pass.
  *
  * On a `Full` decision the inner driver dispatches {@see MemoryWritten} as
  * usual and the decorator adds nothing — so the default no-op policy's event
@@ -36,7 +37,7 @@ use Illuminate\Contracts\Events\Dispatcher;
  * driver still dispatches {@see MemoryWritten} (with the redacted byte size)
  * and the decorator additionally dispatches {@see MemoryRedacted} as the
  * explicit signal that the policy redacted the value. A {@see CaptureDecision::Skip}
- * decision drops the entry entirely — the inner driver is never called, so no
+ * decision drops the entry entirely. The inner driver is never called, so no
  * row is written and no {@see MemoryWritten} fires; the decorator dispatches
  * {@see MemoryWriteSkipped} so the dropped write is still observable.
  *
@@ -126,8 +127,9 @@ final class RedactingMemoryStore implements MemoryStore
      * no row, so the inner driver dispatches no {@see MemoryWritten}. Dispatch
      * {@see MemoryWriteSkipped} instead so the dropped write stays observable.
      * Skip suppresses this write only — any pre-existing entry at the address is
-     * left untouched. The entry is returned with prospective timestamps to
-     * satisfy the {@see MemoryStore::put()} contract, but it was never written.
+     * left untouched. A marked entry with prospective timestamps is returned
+     * so the immediate caller can distinguish this outcome, but it was never
+     * written.
      */
     protected function skip(MemoryEntry $entry): MemoryEntry
     {
@@ -139,6 +141,8 @@ final class RedactingMemoryStore implements MemoryStore
 
         $now = CarbonImmutable::now('UTC');
 
-        return $entry->withTimestamps($entry->createdAt ?? $now, $now);
+        return MemoryWriteOutcome::skipped(
+            $entry->withTimestamps($entry->createdAt ?? $now, $now),
+        );
     }
 }

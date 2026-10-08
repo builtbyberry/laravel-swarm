@@ -3,10 +3,9 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
-use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
-use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryWriteOutcome;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -39,13 +38,6 @@ function remember(array $arguments): string
 function enterRememberRun(string $runId, string $swarmClass): void
 {
     ActiveRunContext::enter($runId, $swarmClass, RunContext::fake(['run_id' => $runId, 'input' => 'go']));
-}
-
-function bindMemoryCapturePolicy(MemoryCapturePolicy $policy): void
-{
-    app()->instance(MemoryCapturePolicy::class, $policy);
-    app()->forgetInstance(MemoryStore::class);
-    app()->forgetInstance(SwarmMemory::class);
 }
 
 test('it implements the Laravel AI Tool contract', function () {
@@ -138,18 +130,41 @@ test('it applies capture-policy redaction at the write boundary', function () {
     bindMemoryCapturePolicy(new RedactingMemoryCapturePolicy(['ssn']));
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 
-    remember(['key' => 'ssn', 'value' => '123-45-6789']);
+    $result = remember(['key' => 'ssn', 'value' => '123-45-6789']);
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'ssn'))->toBe(SwarmCapture::REDACTED);
+    expect($result)->toBe('Stored [ssn] in run memory.')
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'ssn'))->toBe(SwarmCapture::REDACTED);
 });
 
 test('it honours a capture-policy skip decision', function () {
     bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 
-    remember(['key' => 'secret', 'value' => 'do-not-store']);
+    $result = remember(['key' => 'secret', 'value' => 'do-not-store']);
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBeNull();
+    expect($result)->toBe('The entry [secret] was not stored. Do not retry this write.')
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBeNull();
+});
+
+test('a capture-policy skip leaves a pre-existing entry unchanged and reports the write was not stored', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+    remember(['key' => 'secret', 'value' => 'existing']);
+
+    bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+
+    $result = remember(['key' => 'secret', 'value' => 'replacement']);
+
+    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBe('existing')
+        ->and($result)->toBe('The entry [secret] was not stored. Do not retry this write.');
+});
+
+test('a stored entry carries no write-outcome marker', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    remember(['key' => 'topic', 'value' => 'launch plan']);
+
+    expect(app(SwarmMemory::class)->entry(MemoryScope::Run, 'run-1', 'topic')?->metadata)
+        ->not->toHaveKey(MemoryWriteOutcome::KEY);
 });
 
 test('it rejects reserved swarm: keys', function () {

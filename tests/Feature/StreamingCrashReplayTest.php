@@ -38,6 +38,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRecallSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRememberSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingUnpairedToolCallSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\ConversationDeclaringPropagationPolicy;
+use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingMemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -347,6 +348,27 @@ test('a streamed Remember mid-replay writes to the frozen buffer, not live memor
     // No frame or override residue after the stream completes.
     expect(ActiveRunContext::current())->toBeNull();
     expect(ActiveRunContext::currentMemory())->toBeNull();
+});
+
+test('a capture-policy skipped Remember during frozen-view replay is unsuccessful', function () {
+    $runId = 'skipped-write-replay-run-id';
+    seedCrashReplayRunHistory($runId);
+    bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['finding']));
+
+    /** @var SnapshotsMemory $recorder */
+    $recorder = app(SnapshotsMemory::class);
+    $recorder->snapshot($runId, 0, [
+        new MemoryEntry(MemoryScope::Run, $runId, 'finding', 'frozen-seed'),
+    ]);
+
+    $events = collect(iterator_to_array(
+        StreamingRememberSwarm::make()->stream(RunContext::from('remember-task', $runId)),
+    ));
+    $toolResult = $events->whereInstanceOf(SwarmToolResult::class)->sole();
+
+    expect($toolResult->successful)->toBeFalse()
+        ->and($toolResult->toolResult->failed)->toBeTrue()
+        ->and($toolResult->error)->toBe('The entry [finding] was not stored. Do not retry this write.');
 });
 
 // ---------------------------------------------------------------------------

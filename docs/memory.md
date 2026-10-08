@@ -98,7 +98,7 @@ $tone = app(SwarmMemory::class)->get(
 
 ### `MemoryEntry`
 
-`MemoryEntry` is the immutable value object returned by `put()`, `entry()`, and `all()`. It carries the full address plus the persisted value and metadata.
+`MemoryEntry` is the immutable value object returned by `put()`, `entry()`, and `all()`. It carries the full address plus the persisted value and metadata. When a capture policy skips a `put()`, that call instead returns a prospective entry that was not persisted.
 
 | Property | Type | Description |
 | --- | --- | --- |
@@ -440,8 +440,10 @@ Neither tool bypasses Swarm's memory policies:
 - **`Remember` respects the capture policy.** Writes go through
   `SwarmMemory::put()`, which is decorated by the `RedactingMemoryStore`, so the
   `MemoryCapturePolicy` redacts (`[redacted]`) or drops (`Skip`) the entry at the
-  write boundary — the same enforcement any other write gets. PII an agent tries
-  to persist never enters memory if your policy redacts it.
+  write boundary. PII an agent tries to persist never enters memory if your
+  policy redacts or skips it. A redacted write is still reported as stored. A
+  skipped write is reported to the model as not stored, without exposing the
+  policy's reason.
 
 `Remember` also rejects the package-reserved `swarm:` key prefix, so an agent
 cannot overwrite framework-owned entries such as step outputs.
@@ -457,11 +459,17 @@ available" string, so an agent wired with the tools still works standalone.
 ### Declined writes
 
 `Remember` declines an empty key, a key using the reserved `swarm:` prefix, an
-unknown scope, or a scope the active run cannot address. Swarm reports that call
-as `failed` in the step's `nativeResult->tools` projection. Stream consumers
-receive an unsuccessful `SwarmToolResult` whose `error` is the same decline
-message. The run continues, and the model still receives that message so it can
-correct the arguments and retry.
+unknown scope, a scope the active run cannot address, or a write the
+`MemoryCapturePolicy` skips. A skipped write returns `The entry [key] was not
+stored. Do not retry this write.` Redacted writes are still reported as stored.
+Swarm reports a declined call as `failed` in the step's `nativeResult->tools`
+projection. Stream consumers receive an unsuccessful `SwarmToolResult` whose
+`error` is the same decline message. The run continues. For argument and scope
+declines, the model can correct the arguments and retry. For a capture-policy
+skip, retrying the same key is skipped again, so the message tells the model not
+to retry. An operator can identify the skipped write through the
+`MemoryWriteSkipped` event, which carries the scope, scope id, and key without
+the value or the policy's reason.
 
 This failure marking belongs to Swarm's result surfaces. Laravel AI still sends
 the ordinary string tool result back to the provider, stores it as an ordinary
@@ -606,11 +614,11 @@ Where the propagation policy decides what an agent *reads*, the **capture policy
 
 - **`Full`** — persist the value unchanged (the default for every write).
 - **`Redact`** — persist the entry with scalar values replaced by the `SwarmCapture::REDACTED` sentinel (`'[redacted]'`), preserving array structure and keys so the entry stays addressable. This is the same sentinel the audit capture path uses.
-- **`Skip`** — drop the entry entirely: no row is written and no `MemoryWritten` event fires. Skip suppresses *this* write only — any pre-existing entry at the address is left untouched (it is not deleted).
+- **`Skip`**: drop the entry entirely. No row is written and no `MemoryWritten` event fires. Skip suppresses *this* write only. Any pre-existing entry at the address is left untouched (it is not deleted). When the write comes from `Remember`, the model is told `The entry [key] was not stored. Do not retry this write.` without receiving the policy reason.
 
 This is the write-side counterpart to the audit `CapturePolicy` (`swarm.capture.*`): redacting here keeps PII out of memory in the first place, so it never reaches a frozen `MemorySnapshot`. Like the audit policy, a capture policy **never receives the value** — only the scope and key — so a decision cannot couple to payload shape or leak unredacted data.
 
-Enforcement lives in the `RedactingMemoryStore` decorator the container wraps around your memory driver (via `$app->extend(MemoryStore::class, …)`), so **every** write flows through one chokepoint — including a custom or companion driver you bind yourself. (Bind it with `bind()`/`singleton()`, not `Container::instance()`, so the decorator still wraps it.) Reads return already-redacted values, so the propagation view and frozen snapshots inherit redaction with no extra work.
+Enforcement for persisted writes lives in the `RedactingMemoryStore` decorator the container wraps around your memory driver (via `$app->extend(MemoryStore::class, …)`), so every persisted write flows through that chokepoint, including writes to a custom or companion driver you bind yourself. (Bind it with `bind()`/`singleton()`, not `Container::instance()`, so the decorator still wraps it.) A frozen replay's Run-scope buffer consults the policy itself for `Skip` only. It deliberately does not apply `Redact` because buffered values are never persisted. Reads return already-redacted persisted values, so the propagation view and frozen snapshots inherit redaction with no extra work.
 
 > **Scope.** Redaction applies at the persistence boundary and covers the entry **value** only — not the entry **`metadata`** (which carries functional annotations like `source`/`usage`) and not the **key** (keys are addressing; redacting them would break `get`/`all`). Don't put PII in memory metadata or keys. A run's own in-process `RunContext` also still holds the raw value it just wrote until the run ends; the policy governs what is *persisted*, snapshotted, and visible to other agents.
 
@@ -925,7 +933,7 @@ When a durable run crashes mid-step and is retried, the runner needs to decide w
 
 ### `frozen_view` (default)
 
-The agent re-executes against the `MemoryScope::Run` entries frozen in the snapshot captured at the original invocation. Live writes to Run scope during the retry are buffered and never reach the backing store, preserving the canonical audit record. This is the recommended mode for reproducible, audit-friendly runs.
+The agent re-executes against the `MemoryScope::Run` entries frozen in the snapshot captured at the original invocation. During the retry, a Run-scope write the capture policy skips is not buffered and dispatches `MemoryWriteSkipped`. Other live Run-scope writes are buffered and never reach the backing store, preserving the canonical audit record. A `Redact` decision is deliberately not applied to the replay buffer because buffered values are never persisted. This is the recommended mode for reproducible, audit-friendly runs.
 
 ### `fresh_execution`
 

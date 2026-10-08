@@ -11,6 +11,7 @@ use Illuminate\Container\Container;
 use Laravel\Ai\Approvals\Decisions;
 use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Gateway\ParentInvocation;
 use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
@@ -71,33 +72,43 @@ class StreamingRememberAgent implements Agent
      */
     public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
     {
-        return new StreamableAgentResponse('streaming-remember-invocation', function (): \Generator {
+        $invocationId = 'streaming-remember-invocation';
+
+        return new StreamableAgentResponse($invocationId, function () use ($invocationId): \Generator {
             $timestamp = 1_710_000_000;
             $arguments = ['key' => 'finding', 'value' => 'streamed-answer', 'scope' => 'run'];
+            $callId = 'remember-call-1';
+            $toolInvocationId = 'remember-invocation-1';
 
             // Invoke the real Remember tool: the write lands in memory now, and
             // its return string becomes the tool result that flows downstream.
-            $result = Container::getInstance()->make(Remember::class)->handle(new Request($arguments));
+            $result = ParentInvocation::within(
+                $invocationId,
+                $toolInvocationId,
+                fn (): string => Container::getInstance()->make(Remember::class)->handle(
+                    new Request($arguments, $callId, $toolInvocationId),
+                ),
+            );
 
             $toolCall = new ToolCallData(
-                id: 'remember-call-1',
+                id: $callId,
                 name: 'remember',
                 arguments: $arguments,
                 resultId: 'remember-result-1',
             );
             $toolResult = new ToolResultData(
-                id: 'remember-call-1',
+                id: $callId,
                 name: 'remember',
                 arguments: $arguments,
                 result: $result,
                 resultId: 'remember-result-1',
             );
 
-            yield new ToolCall('tool-call-remember', $toolCall, $timestamp);
-            yield new ToolResult('tool-result-remember', $toolResult, true, null, $timestamp);
-            yield new TextDelta('delta-remember', 'message-remember', 'saved', $timestamp);
-            yield new TextEnd('text-end-remember', 'message-remember', $timestamp);
-            yield new StreamEnd('stream-end-remember', 'stop', new TextUsage(inputTokens: 1, outputTokens: 1), $timestamp);
+            yield (new ToolCall('tool-call-remember', $toolCall, $timestamp))->withInvocationId($invocationId);
+            yield (new ToolResult('tool-result-remember', $toolResult, true, null, $timestamp))->withInvocationId($invocationId);
+            yield (new TextDelta('delta-remember', 'message-remember', 'saved', $timestamp))->withInvocationId($invocationId);
+            yield (new TextEnd('text-end-remember', 'message-remember', $timestamp))->withInvocationId($invocationId);
+            yield (new StreamEnd('stream-end-remember', 'stop', new TextUsage(inputTokens: 1, outputTokens: 1), $timestamp))->withInvocationId($invocationId);
         }, new Meta('fake', 'test'));
     }
 

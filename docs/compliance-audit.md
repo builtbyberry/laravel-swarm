@@ -91,14 +91,17 @@ written as-is (`Full`), structurally redacted (`Redact`), or dropped entirely
 (`Skip`).
 
 Redaction is enforced by the `RedactingMemoryStore` decorator that wraps the
-memory driver (via `$app->extend(MemoryStore::class, …)`), so it is the single
-chokepoint every write passes through — including a custom or companion store a
-deployment binds itself (bind it, don't `Container::instance()` it). Critically,
-the agent-visible propagation view and the frozen `MemorySnapshot` read back
-through that same store — so PII redacted at write **never reaches a snapshot**,
-and the audit-replay record is clean by construction rather than by a separate
-scrubbing pass. A policy never sees the value it is deciding on (only the scope
-and key), so the policy code itself cannot become a leak path.
+memory driver (via `$app->extend(MemoryStore::class, …)`), so it is the
+chokepoint every persisted write passes through, including writes to a custom
+or companion store a deployment binds itself (bind it, don't
+`Container::instance()` it). A frozen replay's Run-scope buffer consults the
+policy itself for `Skip` only. It deliberately does not apply `Redact` because
+buffered values are never persisted. Critically, the agent-visible propagation
+view and the frozen `MemorySnapshot` read back through the store, so PII
+redacted at write **never reaches a snapshot**, and the audit-replay record is
+clean by construction rather than by a separate scrubbing pass. A policy never
+sees the value it is deciding on (only the scope and key), so the policy code
+itself cannot become a leak path.
 
 **Scope.** Redaction covers the entry **value** only. The entry's `metadata`
 (functional annotations such as `source`/`usage`) and the entry **key** are
@@ -591,7 +594,10 @@ artifacts. Each is produced by a command or config already covered above.
 - [ ] **Capture-policy configuration** — the `MemoryCapturePolicy`
   implementation and its binding (`swarm.memory.capture_policy`), proving which
   fields were redacted or skipped at write, backed by the `MemoryRedacted` /
-  `MemoryWriteSkipped` events your audit listener recorded.
+  `MemoryWriteSkipped` events your audit listener recorded. From v0.28.1, a
+  skipped Run-scope write during a `frozen_view` retry fires the event again, so
+  one logical write can produce one event per attempt and the event carries no
+  attempt marker.
 - [ ] **Retention proof** — the configured `swarm.memory.retention.days`
   windows and the `MemoryPurged` events (with `criteria.dry_run === false`)
   showing the schedule was enforced; or, under legal hold, the

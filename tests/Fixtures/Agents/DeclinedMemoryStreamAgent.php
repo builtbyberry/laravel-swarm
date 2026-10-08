@@ -29,6 +29,9 @@ use Laravel\Ai\Tools\Request;
  */
 final class DeclinedMemoryStreamAgent extends StreamingRememberAgent
 {
+    /** @var array<string, mixed> The Remember arguments the scripted call uses; tests swap it per decline cause. */
+    public static array $arguments = ['key' => '', 'value' => 'x'];
+
     /**
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
@@ -39,7 +42,7 @@ final class DeclinedMemoryStreamAgent extends StreamingRememberAgent
 
         return new StreamableAgentResponse($invocationId, function () use ($invocationId): \Generator {
             $timestamp = 1_710_000_000;
-            $arguments = ['key' => '', 'value' => 'x'];
+            $arguments = self::$arguments;
             $callId = 'declined-remember-call-1';
             $toolInvocationId = 'declined-remember-invocation-1';
             $result = ParentInvocation::within(

@@ -524,13 +524,13 @@ Event::listen(SwarmChildFailed::class, function (SwarmChildFailed $event): void 
 
 ## Memory Events
 
-Swarm Memory dispatches events through Laravel's event system when memory operations occur. The events below are dispatched at the **store layer**: `MemoryWritten` / `MemoryRead` / `MemoryForgotten` fire from `DatabaseMemoryStore` and `CacheMemoryStore` directly (custom `MemoryStore` drivers must dispatch them from their own `put()`, `get()`, and `forget()` implementations to keep the listener contract uniform), `MemorySnapshotted` fires from the snapshot recorder, and the write-time redaction events `MemoryRedacted` / `MemoryWriteSkipped` fire from the `RedactingMemoryStore` decorator (v0.10.0+). The operator commands dispatch a separate set of events — see [Memory operator-command events](#memory-operator-command-events).
+Swarm Memory dispatches events through Laravel's event system when memory operations occur. `MemoryWritten` / `MemoryRead` / `MemoryForgotten` fire from `DatabaseMemoryStore` and `CacheMemoryStore` directly (custom `MemoryStore` drivers must dispatch them from their own `put()`, `get()`, and `forget()` implementations to keep the listener contract uniform), `MemorySnapshotted` fires from the snapshot recorder, and `MemoryRedacted` fires from the `RedactingMemoryStore` decorator (v0.10.0+). `MemoryWriteSkipped` fires at the capture-policy write boundary, including a frozen replay's in-memory Run-scope buffer, which bypasses the store decorator. The operator commands dispatch a separate set of events. See [Memory operator-command events](#memory-operator-command-events).
 
 | Event | Full class | When | Key properties |
 | --- | --- | --- | --- |
 | `MemoryWritten` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten` | After a successful `put()` | `scope`, `scopeId`, `key`, `metadata`, `bytes` |
 | `MemoryRedacted` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRedacted` | After a `MemoryCapturePolicy` `Redact` decision rewrites a write (v0.10.0+) | `scope`, `scopeId`, `key` (address only — no value) |
-| `MemoryWriteSkipped` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWriteSkipped` | After a `MemoryCapturePolicy` `Skip` decision drops a write (v0.10.0+) | `scope`, `scopeId`, `key` (address only — no value) |
+| `MemoryWriteSkipped` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWriteSkipped` | After a `MemoryCapturePolicy` `Skip` decision drops a write (v0.10.0+). From v0.28.1, it also fires for a skipped Run-scope write during a `frozen_view` retry. One logical write can therefore produce one event per attempt, and the event carries no attempt marker. | `scope`, `scopeId`, `key` (address only, no value) |
 | `MemoryRead` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRead` | After every `get()`, hit or miss | `scope`, `scopeId`, `key`, `hit` |
 | `MemoryForgotten` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemoryForgotten` | After every `forget()` | `scope`, `scopeId`, `key`, `existed` |
 | `MemorySnapshotted` | `BuiltByBerry\LaravelSwarm\Events\Memory\MemorySnapshotted` | After a per-step snapshot is captured | `runId`, `stepIndex`, `snapshotId`, `bytes`, `entryCount` |
