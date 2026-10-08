@@ -28,6 +28,8 @@ use BuiltByBerry\LaravelSwarm\Exceptions\SwarmStreamProviderException;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmTimeoutException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
+use BuiltByBerry\LaravelSwarm\Memory\ReplayBoundary;
+use BuiltByBerry\LaravelSwarm\Memory\ReplayMutationLog;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
 use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
@@ -583,7 +585,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 // override lands on the same frame the agent reads through.
                 // The node id is threaded in so every deliberation event the
                 // node streams (text/reasoning/tool deltas) carries its tag.
-                ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence, 'native_result' => $nativeResult] = yield from $this->streamAgentEvents(
+                ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence, 'native_result' => $nativeResult, 'replay_boundary' => $replayBoundary] = yield from $this->streamAgentEvents(
                     $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart, $node->id,
                 );
 
@@ -606,6 +608,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                     metadata: $stepMetadata,
                     nativeResult: $nativeResult,
                 );
+                $this->coordinator->commit($replayBoundary);
 
                 $nodeOutputs[$node->id] = $output;
                 $nodeCitations[$node->id] = $finalCitations = $step->citationEvidence;
@@ -743,7 +746,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                         // The snapshot is frozen (or replayed) inside
                         // streamAgentEvents, after the run frame is entered.
-                        ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence, 'native_result' => $nativeResult] = yield from $this->streamAgentEvents(
+                        ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence, 'native_result' => $nativeResult, 'replay_boundary' => $replayBoundary] = yield from $this->streamAgentEvents(
                             $agent, $input, $nextIndex, $context, $swarm, $state, $streamSequenceIndex, $streamTelemetryStart,
                         );
 
@@ -775,6 +778,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             storeContext: false,
                             nativeResult: $nativeResult,
                         );
+                        $this->coordinator->commit($replayBoundary);
 
                         $nodeOutputs[$branch->id] = $output;
                         $nodeCitations[$branch->id] = $finalCitations = $step->citationEvidence;
@@ -938,6 +942,12 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                                     'tool_calls' => SnapshotToolCallNormalizer::fromResponse($response),
                                     'native_settings_consumed' => $attempt->ids(),
                                     'native_result' => NativeStepResultProjector::fromResolvedLimits($nativeResultLimits)->fromResponse($response)->toArray(),
+                                    // Replay values cross this private child-to-parent
+                                    // channel raw. Redact is applied only when the
+                                    // parent persists them. Never copy these values
+                                    // into stream events, history, audit payloads,
+                                    // diagnostics, or other observable surfaces.
+                                    'memory_mutations' => $boundary?->memory?->mutations()->toArray() ?? [],
                                 ];
                             } finally {
                                 if ($coordinator !== null && $boundary !== null) {
@@ -950,7 +960,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                     $driver = $this->concurrency->driver();
                     $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-                    /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>, native_settings_consumed: list<string>, native_result: array<string, mixed>}> $results */
+                    /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>, native_settings_consumed: list<string>, native_result: array<string, mixed>, memory_mutations: array<int, array{op: 'put', scope_id: string, key: string, value: mixed, metadata: array<string, mixed>}|array{op: 'forget', scope_id: string, key: string}>}> $results */
                     $results = $this->outcomes->validateConcurrentResults($results);
 
                     foreach ($results as $row) {
@@ -1029,6 +1039,10 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             citationEvidence: CitationEvidence::fromArray($row['citation_evidence'])->withNodeId($branch->id),
                             nativeResult: NativeStepResult::fromArray($row['native_result']),
                         );
+                        // Results are consumed in branch declaration order, so
+                        // same-key replay writes are saved in declaration order
+                        // and the last declared branch wins.
+                        $this->coordinator->apply(ReplayMutationLog::fromArray($row['memory_mutations']));
 
                         $mergedUsage = $this->mergeUsageReport($mergedUsage, $row['usage']);
                         $nodeOutputs[$branch->id] = $step->output;
@@ -1109,7 +1123,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
      * Returns the accumulated text output and step usage so the caller can record the step,
      * run guardrails, and emit SwarmStepEnd without duplicating the inner event loop.
      *
-     * @return \Generator<int, SwarmStreamEvent, null, array{output: string, citation_evidence: CitationEvidence, usage: array<string, int|null>, native_result: NativeStepResult}>
+     * @return \Generator<int, SwarmStreamEvent, null, array{output: string, citation_evidence: CitationEvidence, usage: array<string, int|null>, native_result: NativeStepResult, replay_boundary: ReplayBoundary}>
      */
     protected function streamAgentEvents(
         Agent $agent,
@@ -1317,7 +1331,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                 $nativeResult = $this->stepsRecorder->nativeResult($response);
             });
 
-            return ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence, 'native_result' => $nativeResult];
+            return ['output' => $output, 'usage' => $stepUsage, 'citation_evidence' => $citationEvidence, 'native_result' => $nativeResult, 'replay_boundary' => $boundary];
         } catch (Throwable $exception) {
             $nativeStreamFailure = $exception;
             throw $exception;

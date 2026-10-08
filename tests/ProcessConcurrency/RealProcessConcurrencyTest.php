@@ -2,6 +2,11 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
+use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
@@ -11,11 +16,15 @@ use BuiltByBerry\LaravelSwarm\Support\NativeInputRecipient;
 use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\MemoryRecallAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RichSerializationBoundaryAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchOne;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchTwo;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksStepWhenIndex;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\NativeSettingsSerializationParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ProcessReplayWriteOrderStaticHierarchicalSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ProcessReplayWriteStaticHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RichSerializationBoundaryParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryHierarchicalParallelSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\SerializationBoundaryParallelSwarm;
@@ -30,6 +39,87 @@ use Laravel\Ai\Messages\UserMessage;
 use Laravel\SerializableClosure\SerializableClosure;
 
 pest()->group('process-concurrency');
+
+/**
+ * @return Closure(): void
+ */
+function configureReplayProcessDatabase(): Closure
+{
+    $database = sys_get_temp_dir().'/laravel-swarm-replay-process-'.getmypid().'-'.bin2hex(random_bytes(4)).'.sqlite';
+    touch($database);
+    $key = (string) config('app.key');
+    $testbenchWorkingPath = dirname(__DIR__, 2);
+    $names = [
+        'APP_KEY' => $key,
+        'DB_CONNECTION' => 'sqlite',
+        'DB_DATABASE' => $database,
+        'SWARM_PERSISTENCE_DRIVER' => 'database',
+        'SWARM_HISTORY_DRIVER' => 'database',
+        'SWARM_ENCRYPT_AT_REST' => 'false',
+        'SWARM_MEMORY_REPLAY_MODE' => ReplayMode::FrozenView->value,
+        'TESTBENCH_WORKING_PATH' => $testbenchWorkingPath,
+    ];
+    $original = [];
+
+    foreach ($names as $name => $value) {
+        $original[$name] = getenv($name);
+        putenv($name.'='.$value);
+        $_ENV[$name] = $_SERVER[$name] = $value;
+    }
+
+    SerializableClosure::setSecretKey(base64_decode(substr($key, strlen('base64:')), true));
+
+    config()->set('database.connections.testing.database', $database);
+    DB::purge('testing');
+    DB::setDefaultConnection('testing');
+    Artisan::call('migrate:fresh', ['--database' => 'testing', '--force' => true]);
+    config()->set('swarm.persistence.driver', 'database');
+    config()->set('swarm.history.driver', 'database');
+    config()->set('swarm.persistence.encrypt_at_rest', false);
+    config()->set('swarm.memory.replay_mode', ReplayMode::FrozenView->value);
+    config()->set('swarm.streaming.parallel.enabled', true);
+    MemoryRecallAgent::reset();
+
+    return static function () use ($database, $original): void {
+        SerializableClosure::setSecretKey(null);
+        DB::disconnect('testing');
+        @unlink($database);
+
+        foreach ($original as $name => $value) {
+            if ($value === false) {
+                putenv($name);
+                unset($_ENV[$name], $_SERVER[$name]);
+
+                continue;
+            }
+
+            putenv($name.'='.$value);
+            $_ENV[$name] = $_SERVER[$name] = $value;
+        }
+    };
+}
+
+function seedReplayProcessRun(string $runId): void
+{
+    $now = now('UTC');
+    DB::table('swarm_run_histories')->insert([
+        'run_id' => $runId,
+        'swarm_class' => ProcessReplayWriteStaticHierarchicalSwarm::class,
+        'topology' => 'static_hierarchical',
+        'status' => 'running',
+        'context' => json_encode([]),
+        'metadata' => json_encode([]),
+        'steps' => json_encode([]),
+        'output' => null,
+        'usage' => json_encode([]),
+        'error' => null,
+        'artifacts' => json_encode([]),
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    app(SnapshotsMemory::class)->snapshot($runId, 0, []);
+    app(SnapshotsMemory::class)->snapshot($runId, 1, []);
+}
 
 test('parallel swarm crosses the real process concurrency driver without agent instance state', function () {
     $direct = (new RichSerializationBoundaryAgent)->prompt('shared-task');
@@ -336,4 +426,58 @@ test('static hierarchical parallel stream() crosses the real process concurrency
     $agentClasses = array_map(fn ($e) => $e->agentClass, $stepEndEvents);
     expect($agentClasses)->toContain(SerializationBoundaryParallelBranchOne::class);
     expect($agentClasses)->toContain(SerializationBoundaryParallelBranchTwo::class);
+});
+
+test('a replayed process branch saves its Remember write before a downstream static node reads it', function () {
+    $cleanup = configureReplayProcessDatabase();
+    $runId = 'process-replay-write-success';
+
+    try {
+        seedReplayProcessRun($runId);
+
+        iterator_to_array(ProcessReplayWriteStaticHierarchicalSwarm::make()->stream(
+            RunContext::from('process-replay', $runId),
+        ), false);
+
+        expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBe('retry-value')
+            ->and(MemoryRecallAgent::$seen)->toContain('retry-write: retry-value');
+    } finally {
+        $cleanup();
+    }
+});
+
+test('a replayed process branch rejected by the parent guardrail leaves live memory unchanged', function () {
+    $cleanup = configureReplayProcessDatabase();
+    $runId = 'process-replay-write-guardrail';
+
+    try {
+        seedReplayProcessRun($runId);
+        config()->set('swarm.guardrails.step', [new BlocksStepWhenIndex(0)]);
+
+        expect(fn () => iterator_to_array(ProcessReplayWriteStaticHierarchicalSwarm::make()->stream(
+            RunContext::from('process-replay', $runId),
+        ), false))->toThrow(GuardrailViolation::class);
+
+        expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
+    } finally {
+        $cleanup();
+    }
+});
+
+test('replayed process branches save same-key writes in declaration order', function () {
+    $cleanup = configureReplayProcessDatabase();
+    $runId = 'process-replay-write-order';
+
+    try {
+        seedReplayProcessRun($runId);
+
+        iterator_to_array(ProcessReplayWriteOrderStaticHierarchicalSwarm::make()->stream(
+            RunContext::from('process-replay-order', $runId),
+        ), false);
+
+        expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBe('second')
+            ->and(MemoryRecallAgent::$seen)->toContain('retry-write: second');
+    } finally {
+        $cleanup();
+    }
 });

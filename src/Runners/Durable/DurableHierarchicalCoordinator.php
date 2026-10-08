@@ -58,7 +58,12 @@ class DurableHierarchicalCoordinator
             $state->swarm::class,
             $state->context->runId,
             $expectedStepIndex,
-            fn (?MemorySnapshot $existing) => $this->hierarchical->runDurableStep($state, $expectedStepIndex, $run),
+            function (?MemorySnapshot $existing) use ($state, $expectedStepIndex, $run): DurableHierarchicalStepResult {
+                $result = $this->hierarchical->runDurableStep($state, $expectedStepIndex, $run);
+                $this->coordinator->commitCurrent();
+
+                return $result;
+            },
             $state->context,
         );
     }

@@ -251,6 +251,7 @@ class DurableBranchAdvancer
                             citationEvidence: $citationEvidence,
                             nativeResult: $nativeResult,
                         );
+                        $this->coordinator->commitCurrent();
 
                         $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step, $context, $state): void {
                             $evidence = $this->capture->citationEvidence($step->citationEvidence, $context);

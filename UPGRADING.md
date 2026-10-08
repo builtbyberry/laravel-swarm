@@ -1,5 +1,21 @@
 # Upgrading Laravel Swarm
 
+## Upgrading to v0.28.1
+
+### Frozen-view retry memory writes
+
+The default `frozen_view` replay mode now saves a retry's Run-scope memory
+writes and forgets after the retried step's invocation, guardrails, and step
+recording succeed. There is no compatibility switch. Failed retries still save
+nothing, and the frozen snapshot remains the record of what the original
+invocation saw.
+
+Applications that relied on retry writes being discarded should move those
+writes behind an application-level policy or make the tool operation
+idempotent before upgrading. Existing capture policies still apply when the
+retry saves a write. A write accepted during the retry but skipped at save time
+now fails the step instead of completing with an unsaved value.
+
 ## Upgrading to v0.28.0
 
 Use the explicit `0.27-to-0.28` upgrade-assistant recipe. Preview first, select

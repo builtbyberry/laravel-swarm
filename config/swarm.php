@@ -353,9 +353,10 @@ return [
          * Controls how a durable swarm re-executes after a crash-resume.
          *
          * 'frozen_view'     — agents re-execute against the memory snapshot frozen
-         *                     at the original invocation. Live writes are buffered
-         *                     and never reach the backing store, preserving the
-         *                     canonical audit record. Recommended for reproducible runs.
+         *                     at the original invocation. Run-scope writes and forgets
+         *                     are buffered, then saved after the retried step passes
+         *                     invocation, guardrails, and recording. Recommended for
+         *                     reproducible runs.
          *
          * 'fresh_execution' — agents re-execute against live memory with no snapshot
          *                     guard. Use only when idempotency is guaranteed externally.

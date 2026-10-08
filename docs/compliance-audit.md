@@ -95,9 +95,11 @@ memory driver (via `$app->extend(MemoryStore::class, …)`), so it is the
 chokepoint every persisted write passes through, including writes to a custom
 or companion store a deployment binds itself (bind it, don't
 `Container::instance()` it). A frozen replay's Run-scope buffer consults the
-policy itself for `Skip` only. It deliberately does not apply `Redact` because
-buffered values are never persisted. Critically, the agent-visible propagation
-view and the frozen `MemorySnapshot` read back through the store, so PII
+policy for `Skip` when accepting a write. After the retry's success gates pass,
+accepted writes are saved through the decorator, where the current policy is
+evaluated again and `Redact` is applied. A newly skipped write fails the step.
+Critically, the agent-visible propagation view and the frozen `MemorySnapshot`
+read back through the store, so PII
 redacted at write **never reaches a snapshot**, and the audit-replay record is
 clean by construction rather than by a separate scrubbing pass. A policy never
 sees the value it is deciding on (only the scope and key), so the policy code
@@ -183,13 +185,16 @@ itself auditable (failed reads do not dispatch).
 
 ### Replay determinism is the evidence
 
-When a durable agent retries after a crash, `MemoryReplayCoordinator` swaps the
-live store for a frozen, read-only view of the snapshot recorded at the original
-invocation (`ReplayMode::FrozenView`, the default). The agent re-runs against the
-exact `Run`-scoped state it saw before — regardless of any writes that happened
-between the failed attempt and the retry. This is what makes a run *reproducible*
-for an auditor: the inspector shows the snapshot, and a replay is guaranteed to
-reconstruct from that same snapshot.
+When an agent retries after a crash, `MemoryReplayCoordinator` installs a frozen
+view of the snapshot recorded at the original invocation
+(`ReplayMode::FrozenView`, the default). The agent re-runs against the exact
+`Run`-scoped state it saw before, regardless of writes that happened between the
+failed attempt and the retry. Its own buffered writes are visible within that
+invocation. Once invocation, guardrails, and step recording succeed, those
+mutations are saved through the live store in order without changing the
+snapshot entries. This is what makes a run reproducible for an auditor: the
+inspector shows what the original invocation saw, and memory events show what a
+successful retry later saved.
 
 That guarantee is backed by a regression suite, not just a design claim. The
 crash-resume replay-determinism tests (#118, `tests/Feature/Memory/ReplayDeterminismTest.php`)

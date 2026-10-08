@@ -431,9 +431,11 @@ class SwarmServiceProvider extends ServiceProvider
         // consumer/companion driver re-bound later, in the redaction decorator,
         // so the capture policy governs every persisted write at one boundary
         // that cannot be bypassed by rebinding the store. A frozen replay's
-        // Run-scope buffer separately consults the policy for Skip only because
-        // buffered values are never persisted. Reads pass through, so the
-        // propagation view and frozen snapshots inherit persisted redaction.
+        // Run-scope buffer separately consults the policy for Skip so Remember
+        // can report the put-time decision. Successful retries save accepted
+        // mutations through this decorator, where Redact and the current Skip
+        // decision apply. Reads pass through, so the propagation view and frozen
+        // snapshots inherit persisted redaction.
         // (A store registered via Container::instance() bypasses extenders; bind
         // custom drivers, don't instance() them — see UPGRADING.md.)
         $this->app->extend(MemoryStore::class, fn (MemoryStore $store, Application $app): MemoryStore => new RedactingMemoryStore(

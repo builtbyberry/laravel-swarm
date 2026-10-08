@@ -72,7 +72,12 @@ class DurableSequentialStepAdvancer
             $state->swarm::class,
             $runId,
             $expectedStepIndex,
-            fn (?MemorySnapshot $existing) => $this->sequential->streamSingleStep($state, $expectedStepIndex, $sink),
+            function (?MemorySnapshot $existing) use ($state, $expectedStepIndex, $sink): SwarmStep {
+                $step = $this->sequential->streamSingleStep($state, $expectedStepIndex, $sink);
+                $this->coordinator->commitCurrent();
+
+                return $step;
+            },
             $state->context,
         );
     }
@@ -84,7 +89,12 @@ class DurableSequentialStepAdvancer
             $state->swarm::class,
             $state->context->runId,
             $expectedStepIndex,
-            fn (?MemorySnapshot $existing) => $this->sequential->runSingleStep($state, $expectedStepIndex),
+            function (?MemorySnapshot $existing) use ($state, $expectedStepIndex): SwarmStep {
+                $step = $this->sequential->runSingleStep($state, $expectedStepIndex);
+                $this->coordinator->commitCurrent();
+
+                return $step;
+            },
             $state->context,
         );
     }

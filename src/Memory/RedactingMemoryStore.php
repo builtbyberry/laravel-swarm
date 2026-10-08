@@ -24,12 +24,14 @@ use Illuminate\Contracts\Events\Dispatcher;
  * This is the persistence write-time chokepoint for memory redaction. Every
  * persisted memory write, whether through the {@see SwarmMemory} facade,
  * {@see RunContext}, or a direct store resolution, flows through the bound
- * `MemoryStore`. A frozen replay's Run-scope buffer does not persist values and
- * consults the policy itself only to enforce `Skip`; it deliberately does not
- * apply `Redact` to values that remain in memory. Reads (`get`/`all`) return the
- * already-redacted persisted values, so the propagation view and the frozen
- * {@see MemorySnapshot} inherit redaction structurally with no separate
- * pre-snapshot pass.
+ * `MemoryStore`. A frozen replay's Run-scope buffer first consults the policy
+ * for `Skip` so the agent receives an immediate truthful result. Accepted
+ * mutations are evaluated again here when the successful retry saves them.
+ * `Redact` is applied at that save boundary. A write accepted during replay but
+ * skipped here causes the replay commit, and therefore the step, to fail. Reads
+ * (`get`/`all`) return already-redacted persisted values, so the propagation
+ * view and frozen {@see MemorySnapshot} inherit redaction structurally with no
+ * separate pre-snapshot pass.
  *
  * On a `Full` decision the inner driver dispatches {@see MemoryWritten} as
  * usual and the decorator adds nothing — so the default no-op policy's event

@@ -7,12 +7,16 @@ use BuiltByBerry\LaravelSwarm\Contracts\StreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
+use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\NullStreamStepCheckpointStore;
 use BuiltByBerry\LaravelSwarm\Memory\StreamStepCheckpoint;
 use BuiltByBerry\LaravelSwarm\Responses\StreamableSwarmResponse;
+use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmReasoningEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepStart;
@@ -27,11 +31,14 @@ use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\CountingPrimerAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\MemoryWritingFlakyStreamAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RememberingPrimerAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksStepWhenIndex;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\CountingStepGuardrail;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\CountingEchoSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\CountingEchoThreeStepSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeRichStreamingSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ReplayWriteSequentialFinalStreamingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingConversationRecallSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRecallOnlySwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\StreamingRecallSwarm;
@@ -107,6 +114,7 @@ beforeEach(function () {
     // #202 multi-step resume tests count provider invocations + side effects.
     CountingPrimerAgent::reset();
     CountingStepGuardrail::$validations = 0;
+    MemoryWritingFlakyStreamAgent::reset();
 
     // No frame should leak between tests (the override travels on the frame).
     ActiveRunContext::flush();
@@ -315,11 +323,11 @@ test('a single-step streamed run replays the frozen value, not drifted live memo
 });
 
 // ---------------------------------------------------------------------------
-// F1 — write chokepoint: a streamed Remember mid-replay writes to the frozen
-// view buffer, never the live store.
+// F1 — write chokepoint: a streamed Remember mid-replay stays buffered until
+// the retried terminal step has passed validation and recording.
 // ---------------------------------------------------------------------------
 
-test('a streamed Remember mid-replay writes to the frozen buffer, not live memory', function () {
+test('a successful streamed retry commits Remember writes to live memory', function () {
     $runId = 'write-path-replay-run-id';
     seedCrashReplayRunHistory($runId);
 
@@ -331,23 +339,70 @@ test('a streamed Remember mid-replay writes to the frozen buffer, not live memor
         new MemoryEntry(MemoryScope::Run, $runId, 'finding', 'frozen-seed'),
     ]);
 
-    // Drift live memory so we can prove the streamed write did not land here.
+    // Drift live memory so the retry must overwrite a value from outside the
+    // frozen view when its success gate commits.
     app(SwarmMemory::class)->put(MemoryScope::Run, $runId, 'finding', 'live-untouched');
 
     // Resume: the StreamingRememberAgent writes finding='streamed-answer' via the
-    // real Remember tool mid-stream. Under the frozen-view override that write is
-    // buffered in the ReplaySwarmMemory, never the live DefaultSwarmMemory.
+    // real Remember tool mid-stream. The replay view buffers the write until the
+    // terminal step has passed guardrails and step recording.
     $resumed = StreamingRememberSwarm::make()->stream(RunContext::from('remember-task', $runId));
     iterator_to_array($resumed);
 
-    // The live store is the real DefaultSwarmMemory and was NOT touched by the
-    // replayed write — it still holds the drifted value.
+    // The completed retry commits through the real live store.
     expect(app(SwarmMemory::class))->toBeInstanceOf(DefaultSwarmMemory::class);
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'finding'))->toBe('live-untouched');
+    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'finding'))->toBe('streamed-answer');
 
     // No frame or override residue after the stream completes.
     expect(ActiveRunContext::current())->toBeNull();
     expect(ActiveRunContext::currentMemory())->toBeNull();
+});
+
+function seedSequentialFinalReplayWriterSnapshot(string $runId): void
+{
+    seedCrashReplayRunHistory($runId);
+    app(SnapshotsMemory::class)->snapshot($runId, 0, []);
+    MemoryWritingFlakyStreamAgent::$attempts = 1;
+}
+
+test('a final streamed retry that throws after writing leaves live memory unchanged', function () {
+    $runId = 'final-stream-retry-write-throws';
+    seedSequentialFinalReplayWriterSnapshot($runId);
+    MemoryWritingFlakyStreamAgent::$failAfterWrite = true;
+
+    expect(fn () => iterator_to_array(ReplayWriteSequentialFinalStreamingSwarm::make()->stream(
+        RunContext::from('retry-write', $runId),
+    )))->toThrow(RuntimeException::class, 'memory-write-stream-failed-after-write');
+
+    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
+});
+
+test('a final streamed retry blocked by a guardrail after writing leaves live memory unchanged', function () {
+    $runId = 'final-stream-retry-write-guardrail';
+    seedSequentialFinalReplayWriterSnapshot($runId);
+    config()->set('swarm.guardrails.step', [new BlocksStepWhenIndex(0)]);
+
+    expect(fn () => iterator_to_array(ReplayWriteSequentialFinalStreamingSwarm::make()->stream(
+        RunContext::from('retry-write', $runId),
+    )))->toThrow(GuardrailViolation::class);
+
+    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
+});
+
+test('a final streamed retry whose step recording fails after writing leaves live memory unchanged', function () {
+    $runId = 'final-stream-retry-write-recording';
+    seedSequentialFinalReplayWriterSnapshot($runId);
+    $recorder = Mockery::mock(app(SwarmStepRecorder::class))->makePartial();
+    $recorder->shouldReceive('completed')->once()->andThrow(new RuntimeException('final-step-recording-failed'));
+    app()->instance(SwarmStepRecorder::class, $recorder);
+    app()->forgetInstance(SequentialRunner::class);
+    app()->forgetInstance(SwarmRunner::class);
+
+    expect(fn () => iterator_to_array(ReplayWriteSequentialFinalStreamingSwarm::make()->stream(
+        RunContext::from('retry-write', $runId),
+    )))->toThrow(RuntimeException::class, 'final-step-recording-failed');
+
+    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
 });
 
 test('a capture-policy skipped Remember during frozen-view replay is unsuccessful', function () {

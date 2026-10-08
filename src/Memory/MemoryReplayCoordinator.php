@@ -8,7 +8,9 @@ use BuiltByBerry\LaravelSwarm\Attributes\MemoryReplay;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
+use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tools\Remember;
@@ -18,7 +20,7 @@ use Illuminate\Contracts\Foundation\Application;
 use ReflectionClass;
 
 /**
- * Wraps a durable agent invocation with the snapshot-backed memory lifecycle.
+ * Wraps a retried agent invocation with the snapshot-backed memory lifecycle.
  *
  * For each call to {@see during()}, the coordinator:
  *
@@ -35,7 +37,10 @@ use ReflectionClass;
  *      snapshot so callers that manage their own snapshot lifecycle (e.g.
  *      `DurableBranchAdvancer`) can skip the redundant `find()` and decide
  *      between `resetToolCalls()` vs `snapshot()`.
- *   4. Clears the override in a `finally` block regardless of whether the
+ *   4. The runner commits accepted mutations explicitly after invocation,
+ *      guardrails, and step recording succeed. Teardown never commits
+ *      implicitly.
+ *   5. Clears the override in a `finally` block regardless of whether the
  *      callback throws.
  *
  * The override is scoped to the run's `ActiveRunContext` frame — process-local,
@@ -60,11 +65,11 @@ final class MemoryReplayCoordinator
 
     /**
      * Execute `$callback` inside a snapshot-backed memory context for the given
-     * run step, restoring the original binding in `finally`.
+     * run step, clearing the frame override in `finally`.
      *
      * The callback receives `?MemorySnapshot`: `null` means fresh execution
-     * (no prior crashed attempt found), non-null means replay (the binding has
-     * been swapped and the snapshot is available for tool-call lifecycle).
+     * (no prior crashed attempt found), non-null means replay (the frame override
+     * is installed and the snapshot is available for tool-call lifecycle).
      *
      * The durable advancers enter their own {@see ActiveRunContext} frame
      * *inside* `$callback` (for the agent invocation), so at this point there is
@@ -167,14 +172,77 @@ final class MemoryReplayCoordinator
         /** @var SwarmMemory $live */
         $live = $this->application->make(DefaultSwarmMemory::class);
 
-        ActiveRunContext::withMemoryOverride(new ReplaySwarmMemory(
+        $replay = new ReplaySwarmMemory(
             live: $live,
             snapshot: $existing,
             events: $this->events,
             policy: $this->application->make(MemoryCapturePolicy::class),
-        ));
+        );
 
-        return ReplayBoundary::replay($existing);
+        ActiveRunContext::withMemoryOverride($replay);
+
+        return ReplayBoundary::replay($existing, $replay);
+    }
+
+    /** Commit mutations retained by a generator-based replay boundary. */
+    public function commit(ReplayBoundary $boundary): void
+    {
+        if ($boundary->memory === null) {
+            return;
+        }
+
+        $this->apply($boundary->memory->mutations());
+    }
+
+    /** Commit mutations from the replay override on the current run frame. */
+    public function commitCurrent(): void
+    {
+        $memory = ActiveRunContext::currentMemory();
+
+        if (! $memory instanceof ReplaySwarmMemory) {
+            return;
+        }
+
+        $this->apply($memory->mutations());
+    }
+
+    /**
+     * Apply an ordered replay mutation log through the configured live store.
+     *
+     * This is intentionally not transactional. A later mutation failure leaves
+     * earlier writes saved, and the log remains unapplied so a retry can apply
+     * its complete ordered mutations again.
+     */
+    public function apply(ReplayMutationLog $log): void
+    {
+        if ($log->isApplied()) {
+            return;
+        }
+
+        /** @var SwarmMemory $live */
+        $live = $this->application->make(DefaultSwarmMemory::class);
+
+        foreach ($log->toArray() as $mutation) {
+            if ($mutation['op'] === 'forget') {
+                $live->forget(MemoryScope::Run, $mutation['scope_id'], $mutation['key']);
+
+                continue;
+            }
+
+            $entry = $live->put(
+                MemoryScope::Run,
+                $mutation['scope_id'],
+                $mutation['key'],
+                $mutation['value'],
+                $mutation['metadata'],
+            );
+
+            if (MemoryWriteOutcome::wasSkipped($entry)) {
+                throw new SwarmException("Replay memory commit skipped an accepted write [{$mutation['key']}].");
+            }
+        }
+
+        $log->markApplied();
     }
 
     /**

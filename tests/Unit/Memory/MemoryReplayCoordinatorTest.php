@@ -378,6 +378,54 @@ test('begin installs the override and returns a replay boundary when a snapshot 
     ActiveRunContext::exit();
 });
 
+test('commit saves replay mutations retained by a boundary after end', function () {
+    $store = new InMemoryMemoryStore;
+    $live = new DefaultSwarmMemory($store);
+    app()->instance(DefaultSwarmMemory::class, $live);
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'run-1', 0);
+    $coordinator = makeCoordinator($snapshots);
+    ActiveRunContext::enter('run-1', 'stdClass', new RunContext('run-1', 'task'));
+
+    $boundary = $coordinator->begin('stdClass', 'run-1', 0);
+    effectiveMemory()->put(MemoryScope::Run, 'run-1', 'finding', 'retry-value');
+    $coordinator->end($boundary);
+    $coordinator->commit($boundary);
+
+    expect($store->get(MemoryScope::Run, 'run-1', 'finding')?->value)->toBe('retry-value');
+    ActiveRunContext::exit();
+});
+
+test('commitCurrent saves replay mutations inside during', function () {
+    $store = new InMemoryMemoryStore;
+    $live = new DefaultSwarmMemory($store);
+    app()->instance(DefaultSwarmMemory::class, $live);
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'run-1', 0);
+    $coordinator = makeCoordinator($snapshots);
+
+    $coordinator->during('stdClass', 'run-1', 0, function () use ($coordinator): void {
+        effectiveMemory()->put(MemoryScope::Run, 'run-1', 'finding', 'retry-value');
+        $coordinator->commitCurrent();
+    }, new RunContext('run-1', 'task'));
+
+    expect($store->get(MemoryScope::Run, 'run-1', 'finding')?->value)->toBe('retry-value');
+});
+
+test('commit and commitCurrent are no-ops on fresh execution', function () {
+    $store = new InMemoryMemoryStore;
+    app()->instance(DefaultSwarmMemory::class, new DefaultSwarmMemory($store));
+    $coordinator = makeCoordinator(new RecordingSnapshotsMemory);
+    ActiveRunContext::enter('run-1', 'stdClass', new RunContext('run-1', 'task'));
+
+    $boundary = $coordinator->begin('stdClass', 'run-1', 0);
+    $coordinator->commitCurrent();
+    $coordinator->commit($boundary);
+
+    expect($store->all(MemoryScope::Run, 'run-1'))->toBeEmpty();
+    ActiveRunContext::exit();
+});
+
 test('begin honours fresh_execution mode and never installs an override', function () {
     config(['swarm.memory.replay_mode' => ReplayMode::FreshExecution->value]);
 
