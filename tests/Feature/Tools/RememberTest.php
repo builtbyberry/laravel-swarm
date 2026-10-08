@@ -3,10 +3,9 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
-use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
-use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryWriteOutcome;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -39,13 +38,6 @@ function remember(array $arguments): string
 function enterRememberRun(string $runId, string $swarmClass): void
 {
     ActiveRunContext::enter($runId, $swarmClass, RunContext::fake(['run_id' => $runId, 'input' => 'go']));
-}
-
-function bindMemoryCapturePolicy(MemoryCapturePolicy $policy): void
-{
-    app()->instance(MemoryCapturePolicy::class, $policy);
-    app()->forgetInstance(MemoryStore::class);
-    app()->forgetInstance(SwarmMemory::class);
 }
 
 test('it implements the Laravel AI Tool contract', function () {
@@ -150,7 +142,7 @@ test('it honours a capture-policy skip decision', function () {
 
     $result = remember(['key' => 'secret', 'value' => 'do-not-store']);
 
-    expect($result)->toBe('The entry [secret] was not stored.')
+    expect($result)->toBe('The entry [secret] was not stored. Do not retry this write.')
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBeNull();
 });
 
@@ -163,16 +155,16 @@ test('a capture-policy skip leaves a pre-existing entry unchanged and reports th
     $result = remember(['key' => 'secret', 'value' => 'replacement']);
 
     expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBe('existing')
-        ->and($result)->toBe('The entry [secret] was not stored.');
+        ->and($result)->toBe('The entry [secret] was not stored. Do not retry this write.');
 });
 
-test('a full write return carries no reserved capture-policy outcome metadata', function () {
+test('a stored entry carries no write-outcome marker', function () {
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 
     remember(['key' => 'topic', 'value' => 'launch plan']);
 
     expect(app(SwarmMemory::class)->entry(MemoryScope::Run, 'run-1', 'topic')?->metadata)
-        ->not->toHaveKey('swarm:write_outcome');
+        ->not->toHaveKey(MemoryWriteOutcome::KEY);
 });
 
 test('it rejects reserved swarm: keys', function () {

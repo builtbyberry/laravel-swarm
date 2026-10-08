@@ -3,8 +3,6 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Attributes\MemoryReplay;
-use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
-use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
@@ -400,9 +398,7 @@ test('begin honours fresh_execution mode and never installs an override', functi
 
 test('during wires the bound capture policy into replayed Remember writes', function () {
     Event::fake([MemoryWriteSkipped::class, MemoryWritten::class]);
-    app()->instance(MemoryCapturePolicy::class, new SkippingMemoryCapturePolicy(['secret']));
-    app()->forgetInstance(MemoryStore::class);
-    app()->forgetInstance(SwarmMemory::class);
+    bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
     $snapshots = new RecordingSnapshotsMemory;
     preloadSnapshot($snapshots, 'run-1', 0, [
         ['scope' => 'run', 'scope_id' => 'run-1', 'key' => 'secret', 'value' => 'frozen', 'metadata' => []],
@@ -421,7 +417,7 @@ test('during wires the bound capture policy into replayed Remember writes', func
         new RunContext('run-1', 'task'),
     );
 
-    expect($result)->toBe('The entry [secret] was not stored.')
+    expect($result)->toBe('The entry [secret] was not stored. Do not retry this write.')
         ->and($visible)->toBe('frozen');
     Event::assertDispatched(MemoryWriteSkipped::class, fn (MemoryWriteSkipped $event): bool => $event->key === 'secret');
     Event::assertNotDispatched(MemoryWritten::class);
@@ -429,9 +425,7 @@ test('during wires the bound capture policy into replayed Remember writes', func
 
 test('begin wires the bound capture policy into replayed Remember writes', function () {
     Event::fake([MemoryWriteSkipped::class, MemoryWritten::class]);
-    app()->instance(MemoryCapturePolicy::class, new SkippingMemoryCapturePolicy(['secret']));
-    app()->forgetInstance(MemoryStore::class);
-    app()->forgetInstance(SwarmMemory::class);
+    bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
     $snapshots = new RecordingSnapshotsMemory;
     preloadSnapshot($snapshots, 'run-1', 0, [
         ['scope' => 'run', 'scope_id' => 'run-1', 'key' => 'secret', 'value' => 'frozen', 'metadata' => []],
@@ -450,7 +444,7 @@ test('begin wires the bound capture policy into replayed Remember writes', funct
         ActiveRunContext::exit();
     }
 
-    expect($result)->toBe('The entry [secret] was not stored.')
+    expect($result)->toBe('The entry [secret] was not stored. Do not retry this write.')
         ->and($visible)->toBe('frozen');
     Event::assertDispatched(MemoryWriteSkipped::class, fn (MemoryWriteSkipped $event): bool => $event->key === 'secret');
     Event::assertNotDispatched(MemoryWritten::class);

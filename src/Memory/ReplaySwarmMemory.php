@@ -23,6 +23,8 @@ use Illuminate\Contracts\Events\Dispatcher;
  *   {@see MemorySnapshot}; writes and forgets are buffered in-memory and
  *   never touch the wrapped store. Capture-policy Skip decisions dispatch
  *   {@see MemoryWriteSkipped} and leave the buffer and forget masks unchanged.
+ *   Redact is deliberately not applied because buffered values are never
+ *   persisted.
  *   The buffer overlays the snapshot for subsequent reads within the same
  *   invocation so an agent that writes-then-reads-its-own-write sees the
  *   buffered value, matching live-store semantics.

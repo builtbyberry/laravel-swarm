@@ -58,10 +58,11 @@ interface MemoryCapturePolicy
      *
      * The decision is keyed on `$scope` and `$key`. `$context` and `$actor` are
      * reserved for richer rules and are passed only when a caller invokes the
-     * policy with them; the bundled write-time chokepoint (the
-     * {@see RedactingMemoryStore} decorator) operates one entry at a time and
-     * has no live {@see RunContext} or {@see Actor} handle, so it passes null
-     * for both. Policies keying on either must tolerate null.
+     * policy with them. The bundled write-time callers, the
+     * {@see RedactingMemoryStore} decorator and the frozen replay Run-scope
+     * buffer, operate one entry at a time and have no live {@see RunContext} or
+     * {@see Actor} handle, so both pass null for those arguments. Policies
+     * keying on either must tolerate null.
      */
     public function memory(
         MemoryScope $scope,

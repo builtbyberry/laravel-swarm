@@ -151,7 +151,7 @@ class Remember implements Tool
         );
 
         if (MemoryWriteOutcome::wasSkipped($entry)) {
-            return $this->declined($request, 'The entry ['.$key.'] was not stored.');
+            return $this->declined($request, 'The entry ['.$key.'] was not stored. Do not retry this write.');
         }
 
         return 'Stored ['.$key.'] in '.$scope->value.' memory.';
