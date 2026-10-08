@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Memory;
 
+use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryScopeOutOfSnapshot;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWriteSkipped;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Events\Dispatcher;
 
@@ -18,9 +21,11 @@ use Illuminate\Contracts\Events\Dispatcher;
  *
  * - **Run scope of the replayed run** — reads come from the frozen
  *   {@see MemorySnapshot}; writes and forgets are buffered in-memory and
- *   never touch the wrapped store. The buffer overlays the snapshot for
- *   subsequent reads within the same invocation so an agent that writes-then-
- *   reads-its-own-write sees the buffered value, matching live-store semantics.
+ *   never touch the wrapped store. Capture-policy Skip decisions dispatch
+ *   {@see MemoryWriteSkipped} and leave the buffer and forget masks unchanged.
+ *   The buffer overlays the snapshot for subsequent reads within the same
+ *   invocation so an agent that writes-then-reads-its-own-write sees the
+ *   buffered value, matching live-store semantics.
  * - **Any other scope** — reads and writes pass through to the wrapped
  *   {@see SwarmMemory} live, with a {@see MemoryScopeOutOfSnapshot} event
  *   dispatched per access so compliance audits can see where determinism
@@ -46,6 +51,7 @@ final class ReplaySwarmMemory implements SwarmMemory
         private readonly SwarmMemory $live,
         private readonly MemorySnapshot $snapshot,
         private readonly Dispatcher $events,
+        private readonly MemoryCapturePolicy $policy,
     ) {}
 
     public function get(MemoryScope $scope, string $scopeId, string $key): mixed
@@ -95,10 +101,8 @@ final class ReplaySwarmMemory implements SwarmMemory
             return $this->live->put($scope, $scopeId, $key, $value, $metadata);
         }
 
-        $bufferKey = $this->bufferKey($scope, $scopeId, $key);
-        unset($this->forgetBuffer[$bufferKey]);
-
         $now = CarbonImmutable::now('UTC');
+        $bufferKey = $this->bufferKey($scope, $scopeId, $key);
         $existing = $this->writeBuffer[$bufferKey] ?? $this->snapshotEntry($scope, $scopeId, $key);
         $createdAt = $existing !== null ? ($existing->createdAt ?? $now) : $now;
 
@@ -111,6 +115,18 @@ final class ReplaySwarmMemory implements SwarmMemory
             createdAt: $createdAt,
             updatedAt: $now,
         );
+
+        if ($this->policy->memory($scope, $key) === CaptureDecision::Skip) {
+            $this->events->dispatch(new MemoryWriteSkipped(
+                scope: $scope,
+                scopeId: $scopeId,
+                key: $key,
+            ));
+
+            return MemoryWriteOutcome::skipped($entry);
+        }
+
+        unset($this->forgetBuffer[$bufferKey]);
 
         $this->writeBuffer[$bufferKey] = $entry;
 

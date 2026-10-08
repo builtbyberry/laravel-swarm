@@ -2,15 +2,31 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelStreamBranchWorker;
 use BuiltByBerry\LaravelSwarm\Runners\ParallelStreamBranchWorkerSocketHarness;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\DeclinedMemoryStreamAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DeclinedMemoryLiveParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingMemoryCapturePolicy;
 
 require_once __DIR__.'/../../Fixtures/ParallelStreamBranchWorkerSocketHarness.php';
 
-test('parallel live stream branch worker reports a declined memory write as unsuccessful', function (): void {
+afterEach(function (): void {
+    DeclinedMemoryStreamAgent::$arguments = ['key' => '', 'value' => 'x'];
+});
+
+test('parallel live stream branch worker reports a declined memory write as unsuccessful', function (bool $skip, array $arguments, string $message): void {
+    if ($skip) {
+        app()->instance(MemoryCapturePolicy::class, new SkippingMemoryCapturePolicy(['secret']));
+        app()->forgetInstance(MemoryStore::class);
+        app()->forgetInstance(SwarmMemory::class);
+    }
+
+    DeclinedMemoryStreamAgent::$arguments = $arguments;
+
     $runId = 'declined-memory-worker-run';
     $context = RunContext::fake(['run_id' => $runId, 'input' => 'remember']);
     ParallelStreamBranchWorkerSocketHarness::open();
@@ -51,6 +67,9 @@ test('parallel live stream branch worker reports a declined memory write as unsu
 
     expect($result)->toBe(['branch_id' => 'parallel:0', 'terminal_sent' => true])
         ->and($toolResult['payload']['successful'])->toBeFalse()
-        ->and($toolResult['payload']['error'])->toBe('A memory key is required.')
+        ->and($toolResult['payload']['error'])->toBe($message)
         ->and($terminal['payload']['native_result']['tools'][0]['status'])->toBe('failed');
-});
+})->with([
+    'empty key' => [false, ['key' => '', 'value' => 'x'], 'A memory key is required.'],
+    'capture-policy skip' => [true, ['key' => 'secret', 'value' => 'x'], 'The entry [secret] was not stored.'],
+]);

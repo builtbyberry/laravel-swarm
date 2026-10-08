@@ -126,8 +126,9 @@ final class RedactingMemoryStore implements MemoryStore
      * no row, so the inner driver dispatches no {@see MemoryWritten}. Dispatch
      * {@see MemoryWriteSkipped} instead so the dropped write stays observable.
      * Skip suppresses this write only — any pre-existing entry at the address is
-     * left untouched. The entry is returned with prospective timestamps to
-     * satisfy the {@see MemoryStore::put()} contract, but it was never written.
+     * left untouched. A marked entry with prospective timestamps is returned
+     * so the immediate caller can distinguish this outcome, but it was never
+     * written.
      */
     protected function skip(MemoryEntry $entry): MemoryEntry
     {
@@ -139,6 +140,8 @@ final class RedactingMemoryStore implements MemoryStore
 
         $now = CarbonImmutable::now('UTC');
 
-        return $entry->withTimestamps($entry->createdAt ?? $now, $now);
+        return MemoryWriteOutcome::skipped(
+            $entry->withTimestamps($entry->createdAt ?? $now, $now),
+        );
     }
 }

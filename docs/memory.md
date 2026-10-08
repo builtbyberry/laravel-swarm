@@ -440,8 +440,10 @@ Neither tool bypasses Swarm's memory policies:
 - **`Remember` respects the capture policy.** Writes go through
   `SwarmMemory::put()`, which is decorated by the `RedactingMemoryStore`, so the
   `MemoryCapturePolicy` redacts (`[redacted]`) or drops (`Skip`) the entry at the
-  write boundary — the same enforcement any other write gets. PII an agent tries
-  to persist never enters memory if your policy redacts it.
+  write boundary. PII an agent tries to persist never enters memory if your
+  policy redacts or skips it. A redacted write is still reported as stored. A
+  skipped write is reported to the model as not stored, without exposing the
+  policy's reason.
 
 `Remember` also rejects the package-reserved `swarm:` key prefix, so an agent
 cannot overwrite framework-owned entries such as step outputs.
@@ -457,11 +459,13 @@ available" string, so an agent wired with the tools still works standalone.
 ### Declined writes
 
 `Remember` declines an empty key, a key using the reserved `swarm:` prefix, an
-unknown scope, or a scope the active run cannot address. Swarm reports that call
-as `failed` in the step's `nativeResult->tools` projection. Stream consumers
-receive an unsuccessful `SwarmToolResult` whose `error` is the same decline
-message. The run continues, and the model still receives that message so it can
-correct the arguments and retry.
+unknown scope, a scope the active run cannot address, or a write the
+`MemoryCapturePolicy` skips. A skipped write returns `The entry [key] was not
+stored.` Redacted writes are still reported as stored. Swarm reports a declined
+call as `failed` in the step's `nativeResult->tools` projection. Stream
+consumers receive an unsuccessful `SwarmToolResult` whose `error` is the same
+decline message. The run continues, and the model still receives that message
+so it can correct the arguments and retry.
 
 This failure marking belongs to Swarm's result surfaces. Laravel AI still sends
 the ordinary string tool result back to the provider, stores it as an ordinary
@@ -606,7 +610,7 @@ Where the propagation policy decides what an agent *reads*, the **capture policy
 
 - **`Full`** — persist the value unchanged (the default for every write).
 - **`Redact`** — persist the entry with scalar values replaced by the `SwarmCapture::REDACTED` sentinel (`'[redacted]'`), preserving array structure and keys so the entry stays addressable. This is the same sentinel the audit capture path uses.
-- **`Skip`** — drop the entry entirely: no row is written and no `MemoryWritten` event fires. Skip suppresses *this* write only — any pre-existing entry at the address is left untouched (it is not deleted).
+- **`Skip`**: drop the entry entirely. No row is written and no `MemoryWritten` event fires. Skip suppresses *this* write only. Any pre-existing entry at the address is left untouched (it is not deleted). When the write comes from `Remember`, the model is told `The entry [key] was not stored.` without receiving the policy reason.
 
 This is the write-side counterpart to the audit `CapturePolicy` (`swarm.capture.*`): redacting here keeps PII out of memory in the first place, so it never reaches a frozen `MemorySnapshot`. Like the audit policy, a capture policy **never receives the value** — only the scope and key — so a decision cannot couple to payload shape or leak unredacted data.
 

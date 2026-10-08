@@ -524,7 +524,7 @@ Event::listen(SwarmChildFailed::class, function (SwarmChildFailed $event): void 
 
 ## Memory Events
 
-Swarm Memory dispatches events through Laravel's event system when memory operations occur. The events below are dispatched at the **store layer**: `MemoryWritten` / `MemoryRead` / `MemoryForgotten` fire from `DatabaseMemoryStore` and `CacheMemoryStore` directly (custom `MemoryStore` drivers must dispatch them from their own `put()`, `get()`, and `forget()` implementations to keep the listener contract uniform), `MemorySnapshotted` fires from the snapshot recorder, and the write-time redaction events `MemoryRedacted` / `MemoryWriteSkipped` fire from the `RedactingMemoryStore` decorator (v0.10.0+). The operator commands dispatch a separate set of events — see [Memory operator-command events](#memory-operator-command-events).
+Swarm Memory dispatches events through Laravel's event system when memory operations occur. `MemoryWritten` / `MemoryRead` / `MemoryForgotten` fire from `DatabaseMemoryStore` and `CacheMemoryStore` directly (custom `MemoryStore` drivers must dispatch them from their own `put()`, `get()`, and `forget()` implementations to keep the listener contract uniform), `MemorySnapshotted` fires from the snapshot recorder, and `MemoryRedacted` fires from the `RedactingMemoryStore` decorator (v0.10.0+). `MemoryWriteSkipped` fires at the capture-policy write boundary, including a frozen replay's in-memory Run-scope buffer, which bypasses the store decorator. The operator commands dispatch a separate set of events. See [Memory operator-command events](#memory-operator-command-events).
 
 | Event | Full class | When | Key properties |
 | --- | --- | --- | --- |

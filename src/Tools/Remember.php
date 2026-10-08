@@ -9,6 +9,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryToolScopeResolver;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryWriteOutcome;
 use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 use BuiltByBerry\LaravelSwarm\Memory\SwarmMemoryKeys;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
@@ -32,7 +33,8 @@ use Stringable;
  * {@see RedactingMemoryStore}, so the
  * {@see MemoryCapturePolicy} redacts or
  * drops the entry at the write boundary exactly as it would for any other
- * write — the tool never bypasses capture.
+ * write. The tool never bypasses capture. A policy-skipped write is declined
+ * so the model and Swarm result both report that nothing was stored.
  *
  * The scope id is never accepted from the model; it is resolved from the
  * ambient {@see ActiveRunContext} via
@@ -77,7 +79,8 @@ class Remember implements Tool
         Save a value to shared memory so later agents in this run can read it
         with the recall tool. Provide a `key` and a `value`. `scope` defaults to
         "run" (memory for the current task); use "swarm" to share across the
-        whole swarm. Values may be redacted by the application's capture policy.
+        whole swarm. Values may be redacted, or the write may be declined, by
+        the application's capture policy.
         TEXT;
 
         if ($this->agent() !== null) {
@@ -139,13 +142,17 @@ class Remember implements Tool
             return $this->declined($request, 'The ['.$scope->value.'] scope is not addressable in this run.');
         }
 
-        $this->memory()->put(
+        $entry = $this->memory()->put(
             $resolved->scope,
             $resolved->scopeId,
             $key,
             $request->has('value') ? $request['value'] : null,
             $this->writeMetadata(),
         );
+
+        if (MemoryWriteOutcome::wasSkipped($entry)) {
+            return $this->declined($request, 'The entry ['.$key.'] was not stored.');
+        }
 
         return 'Stored ['.$key.'] in '.$scope->value.' memory.';
     }

@@ -3,9 +3,14 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Attributes\MemoryReplay;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWriteSkipped;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
@@ -14,7 +19,11 @@ use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Support\InMemoryMemoryStore;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingMemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Illuminate\Events\Dispatcher;
+use Illuminate\Support\Facades\Event;
+use Laravel\Ai\Tools\Request;
 
 /**
  * Unit tests for {@see MemoryReplayCoordinator}.
@@ -387,4 +396,62 @@ test('begin honours fresh_execution mode and never installs an override', functi
     expect(ActiveRunContext::currentMemory())->toBeNull();
 
     ActiveRunContext::exit();
+});
+
+test('during wires the bound capture policy into replayed Remember writes', function () {
+    Event::fake([MemoryWriteSkipped::class, MemoryWritten::class]);
+    app()->instance(MemoryCapturePolicy::class, new SkippingMemoryCapturePolicy(['secret']));
+    app()->forgetInstance(MemoryStore::class);
+    app()->forgetInstance(SwarmMemory::class);
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'run-1', 0, [
+        ['scope' => 'run', 'scope_id' => 'run-1', 'key' => 'secret', 'value' => 'frozen', 'metadata' => []],
+    ]);
+    app()->instance(SnapshotsMemory::class, $snapshots);
+    $coordinator = app(MemoryReplayCoordinator::class);
+
+    [$result, $visible] = $coordinator->during(
+        'stdClass',
+        'run-1',
+        0,
+        fn (): array => [
+            app(Remember::class)->handle(new Request(['key' => 'secret', 'value' => 'replacement'], 'call-1')),
+            effectiveMemory()->get(MemoryScope::Run, 'run-1', 'secret'),
+        ],
+        new RunContext('run-1', 'task'),
+    );
+
+    expect($result)->toBe('The entry [secret] was not stored.')
+        ->and($visible)->toBe('frozen');
+    Event::assertDispatched(MemoryWriteSkipped::class, fn (MemoryWriteSkipped $event): bool => $event->key === 'secret');
+    Event::assertNotDispatched(MemoryWritten::class);
+});
+
+test('begin wires the bound capture policy into replayed Remember writes', function () {
+    Event::fake([MemoryWriteSkipped::class, MemoryWritten::class]);
+    app()->instance(MemoryCapturePolicy::class, new SkippingMemoryCapturePolicy(['secret']));
+    app()->forgetInstance(MemoryStore::class);
+    app()->forgetInstance(SwarmMemory::class);
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'run-1', 0, [
+        ['scope' => 'run', 'scope_id' => 'run-1', 'key' => 'secret', 'value' => 'frozen', 'metadata' => []],
+    ]);
+    app()->instance(SnapshotsMemory::class, $snapshots);
+    $coordinator = app(MemoryReplayCoordinator::class);
+    ActiveRunContext::enter('run-1', 'stdClass', new RunContext('run-1', 'task'));
+
+    $boundary = $coordinator->begin('stdClass', 'run-1', 0);
+
+    try {
+        $result = app(Remember::class)->handle(new Request(['key' => 'secret', 'value' => 'replacement'], 'call-1'));
+        $visible = effectiveMemory()->get(MemoryScope::Run, 'run-1', 'secret');
+    } finally {
+        $coordinator->end($boundary);
+        ActiveRunContext::exit();
+    }
+
+    expect($result)->toBe('The entry [secret] was not stored.')
+        ->and($visible)->toBe('frozen');
+    Event::assertDispatched(MemoryWriteSkipped::class, fn (MemoryWriteSkipped $event): bool => $event->key === 'secret');
+    Event::assertNotDispatched(MemoryWritten::class);
 });

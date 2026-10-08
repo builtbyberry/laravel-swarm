@@ -138,18 +138,41 @@ test('it applies capture-policy redaction at the write boundary', function () {
     bindMemoryCapturePolicy(new RedactingMemoryCapturePolicy(['ssn']));
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 
-    remember(['key' => 'ssn', 'value' => '123-45-6789']);
+    $result = remember(['key' => 'ssn', 'value' => '123-45-6789']);
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'ssn'))->toBe(SwarmCapture::REDACTED);
+    expect($result)->toBe('Stored [ssn] in run memory.')
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'ssn'))->toBe(SwarmCapture::REDACTED);
 });
 
 test('it honours a capture-policy skip decision', function () {
     bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 
-    remember(['key' => 'secret', 'value' => 'do-not-store']);
+    $result = remember(['key' => 'secret', 'value' => 'do-not-store']);
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBeNull();
+    expect($result)->toBe('The entry [secret] was not stored.')
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBeNull();
+});
+
+test('a capture-policy skip leaves a pre-existing entry unchanged and reports the write was not stored', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+    remember(['key' => 'secret', 'value' => 'existing']);
+
+    bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+
+    $result = remember(['key' => 'secret', 'value' => 'replacement']);
+
+    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBe('existing')
+        ->and($result)->toBe('The entry [secret] was not stored.');
+});
+
+test('a full write return carries no reserved capture-policy outcome metadata', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    remember(['key' => 'topic', 'value' => 'launch plan']);
+
+    expect(app(SwarmMemory::class)->entry(MemoryScope::Run, 'run-1', 'topic')?->metadata)
+        ->not->toHaveKey('swarm:write_outcome');
 });
 
 test('it rejects reserved swarm: keys', function () {

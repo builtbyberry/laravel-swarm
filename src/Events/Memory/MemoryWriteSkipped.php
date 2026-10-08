@@ -7,17 +7,15 @@ namespace BuiltByBerry\LaravelSwarm\Events\Memory;
 use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
-use BuiltByBerry\LaravelSwarm\Memory\RedactingMemoryStore;
 
 /**
  * Fired when the {@see MemoryCapturePolicy} drops a memory write entirely.
  *
- * Dispatched by {@see RedactingMemoryStore} when a policy returns
- * {@see CaptureDecision::Skip}. Because a
- * skipped write never reaches the underlying store, no {@see MemoryWritten}
- * event fires for it — this event is the only signal that a write was
- * intentionally dropped, so audit listeners can record the decision rather
- * than inferring it from the absence of a write.
+ * Dispatched at the write boundary when a policy returns
+ * {@see CaptureDecision::Skip}. Because a skipped write is neither persisted
+ * nor buffered, no {@see MemoryWritten} event fires for it. This event is the
+ * positive signal that a write was intentionally dropped, so audit listeners
+ * do not need to infer the decision from the absence of a write.
  *
  * Carries only the entry address (`scope`, `scopeId`, `key`) — never the value
  * that was dropped — preserving the capture policy's no-payload invariant. Skip
