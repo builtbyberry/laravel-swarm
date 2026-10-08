@@ -467,8 +467,9 @@ projection. Stream consumers receive an unsuccessful `SwarmToolResult` whose
 `error` is the same decline message. The run continues. For argument and scope
 declines, the model can correct the arguments and retry. For a capture-policy
 skip, retrying the same key is skipped again, so the message tells the model not
-to retry. An operator can find the cause through the `MemoryWriteSkipped` event,
-which carries the scope, scope id, and key without the value.
+to retry. An operator can identify the skipped write through the
+`MemoryWriteSkipped` event, which carries the scope, scope id, and key without
+the value or the policy's reason.
 
 This failure marking belongs to Swarm's result surfaces. Laravel AI still sends
 the ordinary string tool result back to the provider, stores it as an ordinary
