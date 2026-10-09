@@ -319,9 +319,12 @@ Agent B: recall(key: "ssn")
 The policy **never receives the value** — only the scope and key — so a decision
 cannot couple to payload shape or leak the unredacted data. Redaction covers the
 entry **value** only: keys stay intact (they are addressing) and so does
-`metadata`, so don't put PII in either. Because the snapshot freezes the
-already-redacted view, the PII never reaches a frozen `MemorySnapshot` or a
-`swarm:memory:dump` export.
+`metadata`, so don't put PII in either. The snapshot's stored entries freeze the
+already-redacted view, and a skipped write adds no entry. Current limitation:
+its `tool_calls` column records each memory-tool call's raw input and result
+without applying the capture policy, so a redacted or skipped value can still
+appear there and in a
+`swarm:memory:dump --include-snapshots` export.
 
 **When to use.** Any regulated workload where agents may write free-form values
 you can't fully trust to be PII-free. See
@@ -346,7 +349,10 @@ addressable when the tool knows which agent it acts as. Bind a custom tool with
 (`SWARM_MEMORY_TOOLS_AGENT_SCOPE`) to true; while that key is off a `forAgent()`
 binding has no effect. For the stock `Recall` and `Remember`,
 `HasSwarmMemoryTools` binds them when the agent calls
-`swarmMemoryTools(agentScope: true)`.
+`swarmMemoryTools(agentScope: true)`. Recall also needs a propagation policy
+whose `scopes()` includes `MemoryScope::Agent`; otherwise the bound tool returns
+nothing from Agent scope. This is the same policy prerequisite described in
+[Per-user scoped recall](#per-user-scoped-recall).
 
 Scaffold both halves with the generator:
 

@@ -471,6 +471,10 @@ to retry. An operator can identify the skipped write through the
 `MemoryWriteSkipped` event, which carries the scope, scope id, and key without
 the value or the policy's reason.
 
+A decline can be marked failed only when the tool call carries both a provider
+tool-call id and an invocation id. Without both ids, it still reads as
+succeeded.
+
 This failure marking belongs to Swarm's result surfaces. Laravel AI still sends
 the ordinary string tool result back to the provider, stores it as an ordinary
 tool result in its own conversation store, and exposes an ordinary result on a
@@ -614,7 +618,7 @@ Where the propagation policy decides what an agent *reads*, the **capture policy
 
 - **`Full`** — persist the value unchanged (the default for every write).
 - **`Redact`** — persist the entry with scalar values replaced by the `SwarmCapture::REDACTED` sentinel (`'[redacted]'`), preserving array structure and keys so the entry stays addressable. This is the same sentinel the audit capture path uses.
-- **`Skip`**: drop the entry entirely. No row is written and no `MemoryWritten` event fires. Skip suppresses *this* write only. Any pre-existing entry at the address is left untouched (it is not deleted). When the write comes from `Remember`, the model is told `The entry [key] was not stored. Do not retry this write.` without receiving the policy reason.
+- **`Skip`**: drop the entry entirely. No row is written and no `MemoryWritten` event fires. Skip suppresses *this* write only. Any pre-existing entry at the address is left untouched (it is not deleted). `SwarmMemory::put()` and `MemoryStore::put()` return an entry that was not persisted. That entry carries internal outcome metadata that applications must not rely on; `MemoryWriteSkipped` is the supported application signal. When the write comes from `Remember`, the model is told `The entry [key] was not stored. Do not retry this write.` without receiving the policy reason.
 
 This is the write-side counterpart to the audit `CapturePolicy` (`swarm.capture.*`): redacting here keeps PII out of memory in the first place, so it never reaches a frozen `MemorySnapshot`. Like the audit policy, a capture policy **never receives the value** — only the scope and key — so a decision cannot couple to payload shape or leak unredacted data.
 
@@ -937,7 +941,16 @@ The agent re-executes against the `MemoryScope::Run` entries frozen in the snaps
 
 The runner saves those mutations in their original order only after the retried step's agent invocation, guardrails, and step recording have succeeded. At that point step history has been written and `SwarmStepCompleted` has been dispatched. A save failure therefore leaves a step recorded as completed and then fails or retries the run path. Durable paths save before the durable checkpoint. A retry that fails before the save begins saves nothing. The frozen snapshot's `entries` remain unchanged by the save. Within one retry, the last mutation at an address wins, including over a value the original attempt wrote before crashing.
 
-The save is not atomic. If applying the mutation log fails part-way through, earlier mutations remain saved. If a durable checkpoint fails after the save, all saved mutations remain in place. The next retry applies its complete mutation sequence again, overwriting those addresses as needed. There is no transaction added to the `SwarmMemory` contract.
+The save is not atomic. If applying the mutation log fails part-way through,
+earlier mutations remain saved. If a durable checkpoint fails after the save,
+all saved mutations remain in place. When either failure leads to another
+retry, that retry applies its complete mutation sequence again, overwriting
+those addresses as needed. The save is not fenced by the durable lease: a
+retry worker that loses its lease after step recording and before the
+checkpoint still saves its mutations, and they are not rolled back. That
+lost worker exits without scheduling another retry. If the replacement worker
+has already checkpointed the step, no further retry re-saves those mutations.
+There is no transaction added to the `SwarmMemory` contract.
 
 The capture policy is checked when the retry buffers a put and again when the live store saves it. A put-time `Skip` is declined immediately, is not buffered, and emits `MemoryWriteSkipped`. `Redact` is applied at save time. If a write accepted during the retry becomes `Skip` at save time, `MemoryWriteSkipped` fires and `BuiltByBerry\LaravelSwarm\Exceptions\SwarmException` fails the step after its completion was recorded. Its message is `Memory capture policy skipped, at save time, write [<key>] for run [<run-id>] after accepting it during the retry. The retried step was already recorded as completed.`
 
@@ -1055,6 +1068,9 @@ signals operators tune retention and capture policy against:
 - **Average bytes per write** — approximate JSON byte size of the persisted `value` + `metadata`, averaged per scope.
 - **Recall hit rate** — `MemoryRead` hits divided by total reads, per scope. Sustained low hit rates often indicate a propagation policy or scope mismatch.
 - **Snapshot footprint** — total snapshot count, average bytes per persisted snapshot row, and average entries per snapshot. Ballooning snapshot sizes are an early warning that capture policy is letting too much payload through.
+
+The entries-written count includes a retry's saved writes once per attempt that
+reaches the save.
 
 The card is registered automatically by `php artisan swarm:install:pulse` (re-run with `--force` after upgrading to pick up the new card and recorder), or you can wire it manually:
 
