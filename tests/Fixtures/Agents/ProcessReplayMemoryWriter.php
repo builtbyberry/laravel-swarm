@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 
+use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Tools\Remember;
+use Illuminate\Support\Facades\DB;
 use Laravel\Ai\Approvals\Decisions;
 use Laravel\Ai\Contracts\AgentInput;
 use Laravel\Ai\Enums\Lab;
@@ -22,6 +24,13 @@ use Laravel\Ai\Tools\Request;
  */
 class ProcessReplayMemoryWriter extends SerializationBoundaryAgent
 {
+    public static int $writeAttempts = 0;
+
+    public static function reset(): void
+    {
+        static::$writeAttempts = 0;
+    }
+
     /**
      * @param  LaravelAiAgentAttachments  $attachments
      * @param  LaravelAiAgentProvider  $provider
@@ -33,6 +42,12 @@ class ProcessReplayMemoryWriter extends SerializationBoundaryAgent
             : (is_string($prompt) && str_starts_with($prompt, 'write:')
                 ? substr($prompt, strlen('write:'))
                 : 'retry-value');
+
+        static::$writeAttempts++;
+        DB::table('process_replay_write_attempts')->insert([
+            'run_id' => ActiveRunContext::current()->runId,
+            'agent_class' => static::class,
+        ]);
 
         app(Remember::class)->handle(new Request([
             'key' => 'retry-write',

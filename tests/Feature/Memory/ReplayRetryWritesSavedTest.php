@@ -247,6 +247,7 @@ test('a durable branch retry that writes and then throws does not commit on its 
     (new AdvanceDurableBranch($response->runId, $writer['branch_id']))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -261,6 +262,7 @@ test('a retry that writes and then throws leaves live memory unchanged', functio
     (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -275,6 +277,7 @@ test('a guardrail failure after a retry write leaves live memory unchanged', fun
     (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -295,6 +298,7 @@ test('a step-recording failure after a retry write leaves live memory unchanged'
     (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -308,6 +312,7 @@ test('a durable sequential streaming retry blocked by a guardrail leaves live me
     (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
 
     expect(MemoryWritingFlakyStreamAgent::$attempts)->toBe(2)
+        ->and(MemoryWritingFlakyStreamAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -321,6 +326,7 @@ test('a durable sequential streaming retry whose step recording fails leaves liv
     (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
 
     expect(MemoryWritingFlakyStreamAgent::$attempts)->toBe(2)
+        ->and(MemoryWritingFlakyStreamAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -336,6 +342,7 @@ test('a durable hierarchical dynamic retry blocked by a guardrail leaves live me
     (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -351,6 +358,7 @@ test('a durable hierarchical dynamic retry whose step recording fails leaves liv
     (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -365,6 +373,7 @@ test('a durable hierarchical static retry blocked by a guardrail leaves live mem
     (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -379,6 +388,7 @@ test('a durable hierarchical static retry whose step recording fails leaves live
     (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -397,6 +407,7 @@ test('a durable branch retry blocked by a guardrail leaves live memory unchanged
     (new AdvanceDurableBranch($response->runId, $writer['branch_id']))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -416,6 +427,7 @@ test('a durable branch retry whose step recording fails leaves live memory uncha
     (new AdvanceDurableBranch($response->runId, $writer['branch_id']))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull();
 });
 
@@ -453,6 +465,7 @@ test('runner-level save-time Skip fails the completed retry without advancing th
     (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull()
         ->and($manager->find($response->runId)['next_step_index'])->toBe(0);
 });

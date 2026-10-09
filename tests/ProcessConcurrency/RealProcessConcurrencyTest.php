@@ -83,6 +83,8 @@ function configureReplayProcessDatabase(): Closure
     config()->set('swarm.persistence.encrypt_at_rest', false);
     config()->set('swarm.memory.replay_mode', ReplayMode::FrozenView->value);
     config()->set('swarm.streaming.parallel.enabled', true);
+    DB::statement('CREATE TABLE process_replay_write_attempts (run_id VARCHAR(255) NOT NULL, agent_class VARCHAR(255) NOT NULL)');
+    ProcessReplayMemoryWriterA::reset();
     MemoryRecallAgent::reset();
 
     return static function () use ($database, $original): void {
@@ -463,7 +465,8 @@ test('a replayed process branch rejected by the parent guardrail leaves live mem
             RunContext::from('process-replay', $runId),
         ), false))->toThrow(GuardrailViolation::class);
 
-        expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
+        expect(DB::table('process_replay_write_attempts')->where('run_id', $runId)->where('agent_class', ProcessReplayMemoryWriterA::class)->count())->toBe(1)
+            ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
     } finally {
         $cleanup();
     }
@@ -493,7 +496,8 @@ test('a replayed process branch whose parent-side step recording fails leaves li
             RunContext::from('process-replay', $runId),
         ), false))->toThrow(RuntimeException::class, 'process-step-recording-failed');
 
-        expect($seenAtRecording)->toBeNull()
+        expect(DB::table('process_replay_write_attempts')->where('run_id', $runId)->where('agent_class', ProcessReplayMemoryWriterA::class)->count())->toBe(1)
+            ->and($seenAtRecording)->toBeNull()
             ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
     } finally {
         app()->forgetInstance(SwarmStepRecorder::class);

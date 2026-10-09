@@ -375,6 +375,7 @@ test('a final streamed retry that throws after writing leaves live memory unchan
     )))->toThrow(RuntimeException::class, 'memory-write-stream-failed-after-write');
 
     expect(MemoryWritingFlakyStreamAgent::$attempts)->toBe(2)
+        ->and(MemoryWritingFlakyStreamAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
 });
 
@@ -388,6 +389,7 @@ test('a final streamed retry blocked by a guardrail after writing leaves live me
     )))->toThrow(GuardrailViolation::class);
 
     expect(MemoryWritingFlakyStreamAgent::$attempts)->toBe(2)
+        ->and(MemoryWritingFlakyStreamAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
 });
 
@@ -405,6 +407,7 @@ test('a final streamed retry whose step recording fails after writing leaves liv
     )))->toThrow(RuntimeException::class, 'final-step-recording-failed');
 
     expect(MemoryWritingFlakyStreamAgent::$attempts)->toBe(2)
+        ->and(MemoryWritingFlakyStreamAgent::$writeAttempts)->toBe(1)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
 });
 

@@ -38,10 +38,13 @@ class MemoryWritingFlakyStreamAgent implements Agent
 
     public static bool $failAfterWrite = false;
 
+    public static int $writeAttempts = 0;
+
     public static function reset(): void
     {
         self::$attempts = 0;
         self::$failAfterWrite = false;
+        self::$writeAttempts = 0;
     }
 
     public function instructions(): Stringable|string
@@ -73,6 +76,7 @@ class MemoryWritingFlakyStreamAgent implements Agent
                 throw new RuntimeException('memory-write-stream-crash-first-attempt');
             }
 
+            self::$writeAttempts++;
             app(Remember::class)->handle(new Request([
                 'key' => 'retry-write',
                 'value' => 'retry-value',

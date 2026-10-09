@@ -31,9 +31,10 @@ recorded as completed. The message is `Memory capture policy skipped, at save
 time, write [<key>] for run [<run-id>] after accepting it during the retry. The
 retried step was already recorded as completed.`
 
-If retry writes must still be discarded, use a `MemoryCapturePolicy` that
-returns `Skip` for those keys, or make the tool's writes idempotent. There is no
-option that restores the old discard behavior.
+There is no option that restores the old discard behavior. A
+`MemoryCapturePolicy` that returns `Skip` for a key does stop a retry from
+saving it, but the policy sees only the scope and key, so it also drops
+first-attempt writes to that key and `Remember` reports them as not stored.
 
 ## Upgrading to v0.28.0
 

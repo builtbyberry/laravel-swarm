@@ -48,6 +48,8 @@ class MemorySpyFlakyAgent implements Agent
 
     public static bool $writeOnRetry = false;
 
+    public static int $writeAttempts = 0;
+
     public static function reset(?string $runId = null): void
     {
         self::$attempts = 0;
@@ -55,6 +57,7 @@ class MemorySpyFlakyAgent implements Agent
         self::$runId = $runId;
         self::$failAfterWrite = false;
         self::$writeOnRetry = false;
+        self::$writeAttempts = 0;
     }
 
     public function instructions(): Stringable|string
@@ -84,6 +87,7 @@ class MemorySpyFlakyAgent implements Agent
         }
 
         if (self::$writeOnRetry) {
+            self::$writeAttempts++;
             app(Remember::class)->forAgent($this)->handle(new Request([
                 'key' => 'retry-write',
                 'value' => 'retry-value',
