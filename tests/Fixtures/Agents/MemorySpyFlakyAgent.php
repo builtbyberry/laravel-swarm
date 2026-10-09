@@ -87,12 +87,17 @@ class MemorySpyFlakyAgent implements Agent
         }
 
         if (self::$writeOnRetry) {
-            self::$writeAttempts++;
-            app(Remember::class)->forAgent($this)->handle(new Request([
+            $result = app(Remember::class)->forAgent($this)->handle(new Request([
                 'key' => 'retry-write',
                 'value' => 'retry-value',
                 'scope' => 'run',
             ]));
+
+            // Count only a write the tool accepted, so a test asserting on the
+            // counter proves the retry buffered a write, not merely ran.
+            if (str_starts_with($result, 'Stored ')) {
+                self::$writeAttempts++;
+            }
         }
 
         if (self::$failAfterWrite) {

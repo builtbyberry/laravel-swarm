@@ -43,17 +43,21 @@ class ProcessReplayMemoryWriter extends SerializationBoundaryAgent
                 ? substr($prompt, strlen('write:'))
                 : 'retry-value');
 
-        static::$writeAttempts++;
-        DB::table('process_replay_write_attempts')->insert([
-            'run_id' => ActiveRunContext::current()->runId,
-            'agent_class' => static::class,
-        ]);
-
-        app(Remember::class)->handle(new Request([
+        $result = app(Remember::class)->handle(new Request([
             'key' => 'retry-write',
             'value' => $value,
             'scope' => 'run',
         ]));
+
+        // Record only a write the tool accepted, so a test asserting on this
+        // evidence proves the retry buffered a write, not merely ran.
+        if (str_starts_with($result, 'Stored ')) {
+            static::$writeAttempts++;
+            DB::table('process_replay_write_attempts')->insert([
+                'run_id' => ActiveRunContext::current()->runId,
+                'agent_class' => static::class,
+            ]);
+        }
 
         return new AgentResponse('process-replay-writer', is_string($value) ? 'wrote:'.$value : 'wrote:nested', new TextUsage, new Meta('fake', 'test'));
     }

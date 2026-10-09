@@ -76,12 +76,17 @@ class MemoryWritingFlakyStreamAgent implements Agent
                 throw new RuntimeException('memory-write-stream-crash-first-attempt');
             }
 
-            self::$writeAttempts++;
-            app(Remember::class)->handle(new Request([
+            $result = app(Remember::class)->handle(new Request([
                 'key' => 'retry-write',
                 'value' => 'retry-value',
                 'scope' => 'run',
             ]));
+
+            // Count only a write the tool accepted, so a test asserting on the
+            // counter proves the retry buffered a write, not merely ran.
+            if (str_starts_with($result, 'Stored ')) {
+                self::$writeAttempts++;
+            }
 
             if (self::$failAfterWrite) {
                 throw new RuntimeException('memory-write-stream-failed-after-write');
