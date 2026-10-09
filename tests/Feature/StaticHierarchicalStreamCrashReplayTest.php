@@ -56,109 +56,65 @@ function seedStaticReplayWriterSnapshot(string $runId): void
     MemoryWritingFlakyStreamAgent::$attempts = 1;
 }
 
-test('a sequentially streamed static parallel branch retry saves its write before a downstream static node reads it', function () {
-    $runId = 'static-stream-retry-write-success';
-    seedStaticReplayWriterSnapshot($runId);
-
-    iterator_to_array(ReplayWriteStaticHierarchicalStreamingSwarm::make()->stream(
-        RunContext::from('retry-write', $runId),
-    ));
-
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBe('retry-value')
-        ->and(MemoryRecallAgent::$seen)->toContain('retry-write: retry-value');
-});
-
-test('a sequentially streamed static parallel branch retry that throws after writing leaves live memory unchanged', function () {
-    $runId = 'static-stream-retry-write-throws';
-    seedStaticReplayWriterSnapshot($runId);
-    MemoryWritingFlakyStreamAgent::$failAfterWrite = true;
-
-    expect(fn () => iterator_to_array(ReplayWriteStaticHierarchicalStreamingSwarm::make()->stream(
-        RunContext::from('retry-write', $runId),
-    )))->toThrow(RuntimeException::class, 'memory-write-stream-failed-after-write');
-
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
-});
-
-test('a sequentially streamed static parallel branch retry blocked by a guardrail leaves live memory unchanged', function () {
-    $runId = 'static-stream-retry-write-guardrail';
-    seedStaticReplayWriterSnapshot($runId);
-    config()->set('swarm.guardrails.step', [new BlocksStepWhenIndex(0)]);
-
-    expect(fn () => iterator_to_array(ReplayWriteStaticHierarchicalStreamingSwarm::make()->stream(
-        RunContext::from('retry-write', $runId),
-    )))->toThrow(GuardrailViolation::class);
-
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
-});
-
-test('a sequentially streamed static parallel branch retry whose step recording fails leaves live memory unchanged', function () {
-    $runId = 'static-stream-retry-write-recording';
-    seedStaticReplayWriterSnapshot($runId);
+function failStaticReplayStepRecording(): void
+{
     $recorder = Mockery::mock(app(SwarmStepRecorder::class))->makePartial();
     $recorder->shouldReceive('completed')->once()->andThrow(new RuntimeException('static-step-recording-failed'));
     app()->instance(SwarmStepRecorder::class, $recorder);
     app()->forgetInstance(StaticHierarchicalStreamRunner::class);
     app()->forgetInstance(SwarmRunner::class);
+}
 
-    expect(fn () => iterator_to_array(ReplayWriteStaticHierarchicalStreamingSwarm::make()->stream(
-        RunContext::from('retry-write', $runId),
-    )))->toThrow(RuntimeException::class, 'static-step-recording-failed');
+dataset('static replay writer swarms', [
+    'parallel branch' => ReplayWriteStaticHierarchicalStreamingSwarm::class,
+    'plain worker' => ReplayWriteSequentialStaticHierarchicalStreamingSwarm::class,
+]);
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
-});
-
-test('a retried plain static worker saves its write before a downstream static worker reads it', function () {
-    $runId = 'static-stream-sequential-retry-write-success';
+test('a retried static stream worker saves its write before the downstream node', function (string $swarmClass) {
+    $runId = 'static-stream-retry-write-success-'.class_basename($swarmClass);
     seedStaticReplayWriterSnapshot($runId);
 
-    iterator_to_array(ReplayWriteSequentialStaticHierarchicalStreamingSwarm::make()->stream(
-        RunContext::from('retry-write', $runId),
-    ));
+    iterator_to_array($swarmClass::make()->stream(RunContext::from('retry-write', $runId)));
 
     expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBe('retry-value')
         ->and(MemoryRecallAgent::$seen)->toContain('retry-write: retry-value');
-});
+})->with('static replay writer swarms');
 
-test('a retried plain static worker that throws after writing leaves live memory unchanged', function () {
-    $runId = 'static-stream-sequential-retry-write-throws';
+test('a retried static stream worker that throws after writing leaves live memory unchanged', function (string $swarmClass) {
+    $runId = 'static-stream-retry-write-throws-'.class_basename($swarmClass);
     seedStaticReplayWriterSnapshot($runId);
     MemoryWritingFlakyStreamAgent::$failAfterWrite = true;
 
-    expect(fn () => iterator_to_array(ReplayWriteSequentialStaticHierarchicalStreamingSwarm::make()->stream(
-        RunContext::from('retry-write', $runId),
-    )))->toThrow(RuntimeException::class, 'memory-write-stream-failed-after-write');
+    expect(fn () => iterator_to_array($swarmClass::make()->stream(RunContext::from('retry-write', $runId))))
+        ->toThrow(RuntimeException::class, 'memory-write-stream-failed-after-write');
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
-});
+    expect(MemoryWritingFlakyStreamAgent::$attempts)->toBe(2)
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
+})->with('static replay writer swarms');
 
-test('a retried plain static worker blocked by a guardrail leaves live memory unchanged', function () {
-    $runId = 'static-stream-sequential-retry-write-guardrail';
+test('a retried static stream worker blocked by a guardrail leaves live memory unchanged', function (string $swarmClass) {
+    $runId = 'static-stream-retry-write-guardrail-'.class_basename($swarmClass);
     seedStaticReplayWriterSnapshot($runId);
     config()->set('swarm.guardrails.step', [new BlocksStepWhenIndex(0)]);
 
-    expect(fn () => iterator_to_array(ReplayWriteSequentialStaticHierarchicalStreamingSwarm::make()->stream(
-        RunContext::from('retry-write', $runId),
-    )))->toThrow(GuardrailViolation::class);
+    expect(fn () => iterator_to_array($swarmClass::make()->stream(RunContext::from('retry-write', $runId))))
+        ->toThrow(GuardrailViolation::class);
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
-});
+    expect(MemoryWritingFlakyStreamAgent::$attempts)->toBe(2)
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
+})->with('static replay writer swarms');
 
-test('a retried plain static worker whose step recording fails leaves live memory unchanged', function () {
-    $runId = 'static-stream-sequential-retry-write-recording';
+test('a retried static stream worker whose step recording fails leaves live memory unchanged', function (string $swarmClass) {
+    $runId = 'static-stream-retry-write-recording-'.class_basename($swarmClass);
     seedStaticReplayWriterSnapshot($runId);
-    $recorder = Mockery::mock(app(SwarmStepRecorder::class))->makePartial();
-    $recorder->shouldReceive('completed')->once()->andThrow(new RuntimeException('static-step-recording-failed'));
-    app()->instance(SwarmStepRecorder::class, $recorder);
-    app()->forgetInstance(StaticHierarchicalStreamRunner::class);
-    app()->forgetInstance(SwarmRunner::class);
+    failStaticReplayStepRecording();
 
-    expect(fn () => iterator_to_array(ReplayWriteSequentialStaticHierarchicalStreamingSwarm::make()->stream(
-        RunContext::from('retry-write', $runId),
-    )))->toThrow(RuntimeException::class, 'static-step-recording-failed');
+    expect(fn () => iterator_to_array($swarmClass::make()->stream(RunContext::from('retry-write', $runId))))
+        ->toThrow(RuntimeException::class, 'static-step-recording-failed');
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
-});
+    expect(MemoryWritingFlakyStreamAgent::$attempts)->toBe(2)
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
+})->with('static replay writer swarms');
 
 function seedStaticReplayRunHistory(string $runId): void
 {

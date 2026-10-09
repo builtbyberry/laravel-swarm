@@ -97,7 +97,9 @@ or companion store a deployment binds itself (bind it, don't
 `Container::instance()` it). A frozen replay's Run-scope buffer consults the
 policy for `Skip` when accepting a write. After the retry's success gates pass,
 accepted writes are saved through the decorator, where the current policy is
-evaluated again and `Redact` is applied. A newly skipped write fails the step.
+evaluated again and `Redact` is applied. The replay buffer does not apply
+`Redact`, so the agent can read its own accepted buffered value unredacted
+during the retry. A newly skipped write fails the step.
 Critically, the agent-visible propagation view and the frozen `MemorySnapshot`
 read back through the store, so PII
 redacted at write **never reaches a snapshot**, and the audit-replay record is
@@ -192,9 +194,12 @@ view of the snapshot recorded at the original invocation
 failed attempt and the retry. Its own buffered writes are visible within that
 invocation. Once invocation, guardrails, and step recording succeed, those
 mutations are saved through the live store in order without changing the
-snapshot entries. This is what makes a run reproducible for an auditor: the
-inspector shows what the original invocation saw, and memory events show what a
-successful retry later saved.
+snapshot entries. Those saves emit the ordinary memory events, but the events
+carry no attempt, step, or replay identifier. The same events fire for writes
+saved before a part-way save failure and for a save followed by a durable
+checkpoint failure. Events alone therefore cannot distinguish a value saved by
+a retry from one saved by the first attempt. The frozen snapshot remains the
+record of what the original invocation saw.
 
 That guarantee is backed by a regression suite, not just a design claim. The
 crash-resume replay-determinism tests (#118, `tests/Feature/Memory/ReplayDeterminismTest.php`)

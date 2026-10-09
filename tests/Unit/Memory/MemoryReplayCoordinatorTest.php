@@ -396,7 +396,7 @@ test('commit saves replay mutations retained by a boundary after end', function 
     ActiveRunContext::exit();
 });
 
-test('commitCurrent saves replay mutations inside during', function () {
+test('commitMemory saves mutations from the replay installed by during', function () {
     $store = new InMemoryMemoryStore;
     $live = new DefaultSwarmMemory($store);
     app()->instance(DefaultSwarmMemory::class, $live);
@@ -404,22 +404,47 @@ test('commitCurrent saves replay mutations inside during', function () {
     preloadSnapshot($snapshots, 'run-1', 0);
     $coordinator = makeCoordinator($snapshots);
 
-    $coordinator->during('stdClass', 'run-1', 0, function () use ($coordinator): void {
+    $coordinator->during('stdClass', 'run-1', 0, function (?MemorySnapshot $snapshot, ?ReplaySwarmMemory $replay) use ($coordinator): void {
         effectiveMemory()->put(MemoryScope::Run, 'run-1', 'finding', 'retry-value');
-        $coordinator->commitCurrent();
+        $coordinator->commitMemory($replay, 'run-1');
     }, new RunContext('run-1', 'task'));
 
     expect($store->get(MemoryScope::Run, 'run-1', 'finding')?->value)->toBe('retry-value');
 });
 
-test('commit and commitCurrent are no-ops on fresh execution', function () {
+test('a nested fresh execution cannot commit its parent replay buffer', function () {
+    $store = new InMemoryMemoryStore;
+    $live = new DefaultSwarmMemory($store);
+    app()->instance(DefaultSwarmMemory::class, $live);
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'outer-run', 0);
+    $coordinator = makeCoordinator($snapshots);
+
+    try {
+        $coordinator->during('stdClass', 'outer-run', 0, function () use ($coordinator): void {
+            effectiveMemory()->put(MemoryScope::Run, 'outer-run', 'finding', 'outer-retry-value');
+
+            $coordinator->during('stdClass', 'inner-run', 0, function (?MemorySnapshot $snapshot, ?ReplaySwarmMemory $replay) use ($coordinator): void {
+                $coordinator->commitMemory($replay, 'inner-run');
+            }, new RunContext('inner-run', 'nested-task'));
+
+            throw new RuntimeException('outer-invocation-failed');
+        }, new RunContext('outer-run', 'outer-task'));
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toBe('outer-invocation-failed');
+    }
+
+    expect($store->get(MemoryScope::Run, 'outer-run', 'finding'))->toBeNull();
+});
+
+test('commit and commitMemory are no-ops on fresh execution', function () {
     $store = new InMemoryMemoryStore;
     app()->instance(DefaultSwarmMemory::class, new DefaultSwarmMemory($store));
     $coordinator = makeCoordinator(new RecordingSnapshotsMemory);
     ActiveRunContext::enter('run-1', 'stdClass', new RunContext('run-1', 'task'));
 
     $boundary = $coordinator->begin('stdClass', 'run-1', 0);
-    $coordinator->commitCurrent();
+    $coordinator->commitMemory(null, 'run-1');
     $coordinator->commit($boundary);
 
     expect($store->all(MemoryScope::Run, 'run-1'))->toBeEmpty();

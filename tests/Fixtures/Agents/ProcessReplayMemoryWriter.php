@@ -28,9 +28,11 @@ class ProcessReplayMemoryWriter extends SerializationBoundaryAgent
      */
     public function prompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
-        $value = is_string($prompt) && str_starts_with($prompt, 'write:')
-            ? substr($prompt, strlen('write:'))
-            : 'retry-value';
+        $value = $prompt === 'write:nested'
+            ? ['nested' => ['answer' => 42], 'items' => ['one', 'two']]
+            : (is_string($prompt) && str_starts_with($prompt, 'write:')
+                ? substr($prompt, strlen('write:'))
+                : 'retry-value');
 
         app(Remember::class)->handle(new Request([
             'key' => 'retry-write',
@@ -38,6 +40,6 @@ class ProcessReplayMemoryWriter extends SerializationBoundaryAgent
             'scope' => 'run',
         ]));
 
-        return new AgentResponse('process-replay-writer', 'wrote:'.$value, new TextUsage, new Meta('fake', 'test'));
+        return new AgentResponse('process-replay-writer', is_string($value) ? 'wrote:'.$value : 'wrote:nested', new TextUsage, new Meta('fake', 'test'));
     }
 }

@@ -13,6 +13,7 @@ use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Memory\ReplaySwarmMemory;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Runners\DurableHierarchicalStepResult;
 use BuiltByBerry\LaravelSwarm\Runners\HierarchicalRunner;
@@ -58,9 +59,9 @@ class DurableHierarchicalCoordinator
             $state->swarm::class,
             $state->context->runId,
             $expectedStepIndex,
-            function (?MemorySnapshot $existing) use ($state, $expectedStepIndex, $run): DurableHierarchicalStepResult {
+            function (?MemorySnapshot $existing, ?ReplaySwarmMemory $replay) use ($state, $expectedStepIndex, $run): DurableHierarchicalStepResult {
                 $result = $this->hierarchical->runDurableStep($state, $expectedStepIndex, $run);
-                $this->coordinator->commitCurrent();
+                $this->coordinator->commitMemory($replay, $state->context->runId);
 
                 return $result;
             },

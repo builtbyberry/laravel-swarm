@@ -5,16 +5,35 @@
 ### Frozen-view retry memory writes
 
 The default `frozen_view` replay mode now saves a retry's Run-scope memory
-writes and forgets after the retried step's invocation, guardrails, and step
-recording succeed. There is no compatibility switch. Failed retries still save
-nothing, and the frozen snapshot remains the record of what the original
-invocation saw.
+writes and forgets once the retried step's invocation, guardrails, and step
+recording succeed. Previously those mutations were discarded. There is no
+compatibility switch.
 
-Applications that relied on retry writes being discarded should move those
-writes behind an application-level policy or make the tool operation
-idempotent before upgrading. Existing capture policies still apply when the
-retry saves a write. A write accepted during the retry but skipped at save time
-now fails the step instead of completing with an unsaved value.
+A retry that fails before that point saves nothing. The save itself is not
+atomic: if it fails part-way through, mutations already saved remain in place.
+A durable checkpoint failure after the save also leaves the saved mutations in
+place. In both cases, the next retry saves its complete mutation sequence again.
+
+A successful retry now emits the ordinary `MemoryWritten`, `MemoryRedacted`,
+and `MemoryForgotten` events when it saves applicable mutations; previously it
+emitted none for the buffered mutations. One logical write can emit these
+events once per attempt that reaches the save. The events carry no attempt or
+replay marker.
+
+During a mixed-version rollout, a run that crashed on v0.28.0 and is retried by
+a v0.28.1 worker saves its retry writes. Rolling back this change is a plain
+code revert with no schema or configuration change.
+
+The capture policy is evaluated again at save time. If it returns `Skip` for a
+write accepted during the retry, the step throws
+`BuiltByBerry\LaravelSwarm\Exceptions\SwarmException` after it was already
+recorded as completed. The message is `Memory capture policy skipped, at save
+time, write [<key>] for run [<run-id>] after accepting it during the retry. The
+retried step was already recorded as completed.`
+
+If retry writes must still be discarded, use a `MemoryCapturePolicy` that
+returns `Skip` for those keys, or make the tool's writes idempotent. There is no
+option that restores the old discard behavior.
 
 ## Upgrading to v0.28.0
 

@@ -23,7 +23,8 @@ use RuntimeException;
 use Stringable;
 
 /**
- * A test fixture that spies on what SwarmMemory returns during each invocation.
+ * A shared read-spy fixture that records what SwarmMemory returns during each
+ * invocation. Tests focused on replayed writes may opt in to its Remember call.
  *
  * On its first attempt it throws so the durable runner schedules a retry.
  * After the retry, callers can inspect `self::$seenValues` to verify that the
@@ -45,12 +46,15 @@ class MemorySpyFlakyAgent implements Agent
 
     public static bool $failAfterWrite = false;
 
+    public static bool $writeOnRetry = false;
+
     public static function reset(?string $runId = null): void
     {
         self::$attempts = 0;
         self::$seenValues = [];
         self::$runId = $runId;
         self::$failAfterWrite = false;
+        self::$writeOnRetry = false;
     }
 
     public function instructions(): Stringable|string
@@ -79,11 +83,13 @@ class MemorySpyFlakyAgent implements Agent
             throw new RuntimeException('memory-spy-crash-first-attempt');
         }
 
-        app(Remember::class)->handle(new Request([
-            'key' => 'retry-write',
-            'value' => 'retry-value',
-            'scope' => 'run',
-        ]));
+        if (self::$writeOnRetry) {
+            app(Remember::class)->forAgent($this)->handle(new Request([
+                'key' => 'retry-write',
+                'value' => 'retry-value',
+                'scope' => 'run',
+            ]));
+        }
 
         if (self::$failAfterWrite) {
             throw new RuntimeException('memory-spy-failed-after-write');

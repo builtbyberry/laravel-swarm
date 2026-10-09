@@ -27,7 +27,10 @@ use Illuminate\Contracts\Events\Dispatcher;
  *   log after the step succeeds.
  *   The buffer overlays the snapshot for subsequent reads within the same
  *   invocation so an agent that writes-then-reads-its-own-write sees the
- *   buffered value, matching live-store semantics.
+ *   buffered value, matching live-store semantics. The buffer does not apply a
+ *   capture-policy Redact decision, so that read returns the accepted value
+ *   unredacted during the retry; Redact is applied when the live store saves
+ *   the mutation.
  * - **Any other scope** — reads and writes pass through to the wrapped
  *   {@see SwarmMemory} live, with a {@see MemoryScopeOutOfSnapshot} event
  *   dispatched per access so compliance audits can see where determinism

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Memory\ReplayMutationLog;
 
 test('replay mutations preserve operation order', function () {
@@ -41,3 +42,17 @@ test('a new replay mutation log is empty and unapplied', function () {
     expect($log->isEmpty())->toBeTrue()
         ->and($log->isApplied())->toBeFalse();
 });
+
+test('deserializing a malformed replay mutation fails loud', function (mixed $row) {
+    expect(fn () => ReplayMutationLog::fromArray([$row]))
+        ->toThrow(SwarmException::class, 'Invalid replay memory mutation');
+})->with([
+    'non-array row' => ['invalid'],
+    'unknown op' => [['op' => 'replace', 'scope_id' => 'run-1', 'key' => 'finding']],
+    'empty scope' => [['op' => 'forget', 'scope_id' => '', 'key' => 'finding']],
+    'non-string scope' => [['op' => 'forget', 'scope_id' => 123, 'key' => 'finding']],
+    'empty key' => [['op' => 'forget', 'scope_id' => 'run-1', 'key' => '']],
+    'non-string key' => [['op' => 'forget', 'scope_id' => 'run-1', 'key' => false]],
+    'put missing value' => [['op' => 'put', 'scope_id' => 'run-1', 'key' => 'finding', 'metadata' => []]],
+    'put metadata is not an array' => [['op' => 'put', 'scope_id' => 'run-1', 'key' => 'finding', 'value' => 'value', 'metadata' => 'invalid']],
+]);

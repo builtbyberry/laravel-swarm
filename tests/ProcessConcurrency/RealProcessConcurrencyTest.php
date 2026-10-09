@@ -8,7 +8,10 @@ use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
 use BuiltByBerry\LaravelSwarm\Exceptions\GuardrailViolation;
 use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
+use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
+use BuiltByBerry\LaravelSwarm\Runners\StaticHierarchicalStreamRunner;
 use BuiltByBerry\LaravelSwarm\Runners\SwarmRunner;
+use BuiltByBerry\LaravelSwarm\Runners\SwarmStepRecorder;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStepEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentToolReference;
@@ -17,12 +20,14 @@ use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\MemoryRecallAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\ProcessReplayMemoryWriterA;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\RichSerializationBoundaryAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchOne;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\SerializationBoundaryParallelBranchTwo;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\UnresolvableParallelAgent;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Guardrails\BlocksStepWhenIndex;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\NativeSettingsSerializationParallelSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ProcessReplayStructuredWriteStaticHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ProcessReplayWriteOrderStaticHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ProcessReplayWriteStaticHierarchicalSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\RichSerializationBoundaryParallelSwarm;
@@ -459,6 +464,60 @@ test('a replayed process branch rejected by the parent guardrail leaves live mem
         ), false))->toThrow(GuardrailViolation::class);
 
         expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
+    } finally {
+        $cleanup();
+    }
+});
+
+test('a replayed process branch whose parent-side step recording fails leaves live memory unchanged', function () {
+    $cleanup = configureReplayProcessDatabase();
+    $runId = 'process-replay-write-recording';
+
+    try {
+        seedReplayProcessRun($runId);
+        $seenAtRecording = 'not-called';
+        $recorder = Mockery::mock(app(SwarmStepRecorder::class))->makePartial();
+        $recorder->shouldReceive('completed')
+            ->withArgs(fn ($state, int $index, string $agentClass): bool => $agentClass === ProcessReplayMemoryWriterA::class)
+            ->once()
+            ->andReturnUsing(function () use (&$seenAtRecording, $runId): never {
+                $seenAtRecording = app(DefaultSwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write');
+
+                throw new RuntimeException('process-step-recording-failed');
+            });
+        app()->instance(SwarmStepRecorder::class, $recorder);
+        app()->forgetInstance(StaticHierarchicalStreamRunner::class);
+        app()->forgetInstance(SwarmRunner::class);
+
+        expect(fn () => iterator_to_array(ProcessReplayWriteStaticHierarchicalSwarm::make()->stream(
+            RunContext::from('process-replay', $runId),
+        ), false))->toThrow(RuntimeException::class, 'process-step-recording-failed');
+
+        expect($seenAtRecording)->toBeNull()
+            ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBeNull();
+    } finally {
+        app()->forgetInstance(SwarmStepRecorder::class);
+        app()->forgetInstance(StaticHierarchicalStreamRunner::class);
+        app()->forgetInstance(SwarmRunner::class);
+        $cleanup();
+    }
+});
+
+test('a replayed process branch preserves a nested array through the child-to-parent channel', function () {
+    $cleanup = configureReplayProcessDatabase();
+    $runId = 'process-replay-write-structured';
+
+    try {
+        seedReplayProcessRun($runId);
+
+        iterator_to_array(ProcessReplayStructuredWriteStaticHierarchicalSwarm::make()->stream(
+            RunContext::from('process-replay', $runId),
+        ), false);
+
+        expect(app(SwarmMemory::class)->get(MemoryScope::Run, $runId, 'retry-write'))->toBe([
+            'nested' => ['answer' => 42],
+            'items' => ['one', 'two'],
+        ]);
     } finally {
         $cleanup();
     }

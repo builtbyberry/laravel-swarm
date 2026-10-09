@@ -121,6 +121,7 @@ use Throwable;
  * optimisation is Sequential-only.
  *
  * @phpstan-import-type SwarmTaskInput from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
+ * @phpstan-import-type ReplayMutation from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  *
  * @internal
  */
@@ -899,10 +900,10 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                             // in any process and reconstructs this branch's own
                             // ReplaySwarmMemory as the frame override. The parent
                             // persisted this branch's snapshot before dispatch
-                            // (above), so find() sees it. We use begin() only for
-                            // the read override — the parent owns the tool-call
-                            // append from the returned payload — so the returned
-                            // boundary's snapshot is intentionally unused here.
+                            // (above), so find() sees it. The child returns the
+                            // boundary's mutation log for the parent to apply
+                            // after guardrails and step recording succeed. The
+                            // parent also owns the tool-call append.
                             // This is correct-by-construction across fork/process
                             // branches because F1 removed the shared-container
                             // mutation that made begin() unsafe inside a child.
@@ -960,7 +961,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
 
                     $driver = $this->concurrency->driver();
                     $results = $driver->run(ConcurrentAgentResult::wrapCallbacks($driver, $callbacks));
-                    /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>, native_settings_consumed: list<string>, native_result: array<string, mixed>, memory_mutations: array<int, array{op: 'put', scope_id: string, key: string, value: mixed, metadata: array<string, mixed>}|array{op: 'forget', scope_id: string, key: string}>}> $results */
+                    /** @var array<int, array{output: string, citation_evidence: array<string, mixed>, usage: array<string, int|null>, duration_ms: int, tool_calls: list<array{name: string, arguments: array<string, mixed>, result: mixed, id: string|null, result_id: string|null}>, native_settings_consumed: list<string>, native_result: array<string, mixed>, memory_mutations: list<ReplayMutation>}> $results */
                     $results = $this->outcomes->validateConcurrentResults($results);
 
                     foreach ($results as $row) {
@@ -1042,7 +1043,7 @@ class StaticHierarchicalStreamRunner extends SequentialStreamRunner
                         // Results are consumed in branch declaration order, so
                         // same-key replay writes are saved in declaration order
                         // and the last declared branch wins.
-                        $this->coordinator->apply(ReplayMutationLog::fromArray($row['memory_mutations']));
+                        $this->coordinator->apply(ReplayMutationLog::fromArray($row['memory_mutations']), $context->runId);
 
                         $mergedUsage = $this->mergeUsageReport($mergedUsage, $row['usage']);
                         $nodeOutputs[$branch->id] = $step->output;

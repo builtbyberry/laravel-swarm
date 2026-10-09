@@ -15,6 +15,7 @@ namespace BuiltByBerry\LaravelSwarm\Support;
  * @phpstan-type SwarmStructuredSubset array<string, mixed>
  * @phpstan-type LaravelAiAgentAttachments list<array<string, mixed>>
  * @phpstan-type LaravelAiAgentProvider \Laravel\Ai\Enums\Lab|array<string, mixed>|string|null
+ * @phpstan-type ReplayMutation array{op: 'put', scope_id: string, key: string, value: mixed, metadata: array<string, mixed>}|array{op: 'forget', scope_id: string, key: string}
  *
  * @internal
  */
