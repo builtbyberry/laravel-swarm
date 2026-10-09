@@ -23,6 +23,7 @@ use BuiltByBerry\LaravelSwarm\Exceptions\UnsupportedNativeApprovalException;
 use BuiltByBerry\LaravelSwarm\Memory\AgentVisibleMemoryView;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Memory\ReplaySwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\SnapshotToolCallNormalizer;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Responses\CitationEvidence;
@@ -158,7 +159,7 @@ class DurableBranchAdvancer
                 $run['swarm_class'],
                 $runId,
                 (int) $branch['step_index'],
-                function (?MemorySnapshot $existing) use ($run, $branch, $runId, $branchId, $token, $context, $swarm, $stepLeaseSeconds, $durableStreaming, $branchEpoch, $branchNodeId, &$unsupportedOutcome): bool {
+                function (?MemorySnapshot $existing, ?ReplaySwarmMemory $replay) use ($run, $branch, $runId, $branchId, $token, $context, $swarm, $stepLeaseSeconds, $durableStreaming, $branchEpoch, $branchNodeId, &$unsupportedOutcome): bool {
                     $agent = $this->application->make($branch['agent_class']);
 
                     if (! $agent instanceof Agent) {
@@ -251,6 +252,7 @@ class DurableBranchAdvancer
                             citationEvidence: $citationEvidence,
                             nativeResult: $nativeResult,
                         );
+                        $this->coordinator->commitMemory($replay, $runId);
 
                         $this->connection->transaction(function () use ($runId, $branch, $branchId, $token, $output, $usage, $durationMs, $step, $context, $state): void {
                             $evidence = $this->capture->citationEvidence($step->citationEvidence, $context);

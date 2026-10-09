@@ -270,6 +270,7 @@ class SequentialRunner
                         citationEvidence: $citationEvidence,
                         nativeResult: $accumulator->nativeResult,
                     );
+                    $this->coordinator->commit($boundary);
                 } else {
                     // Non-final, fresh execution: freeze the agent-visible view
                     // (always a new snapshot — only the final step ever replays a

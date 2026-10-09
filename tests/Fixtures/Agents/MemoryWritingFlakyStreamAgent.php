@@ -5,9 +5,8 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
-use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
-use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Tools\Remember;
+use Generator;
 use Illuminate\Broadcasting\Channel;
 use Laravel\Ai\Approvals\Decisions;
 use Laravel\Ai\Contracts\AgentInput;
@@ -18,51 +17,39 @@ use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\QueuedAgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
+use Laravel\Ai\Streaming\Events\StreamEnd;
+use Laravel\Ai\Streaming\Events\TextDelta;
+use Laravel\Ai\Streaming\Events\TextEnd;
 use Laravel\Ai\Tools\Request;
 use RuntimeException;
 use Stringable;
 
 /**
- * A shared read-spy fixture that records what SwarmMemory returns during each
- * invocation. Tests focused on replayed writes may opt in to its Remember call.
- *
- * On its first attempt it throws so the durable runner schedules a retry.
- * After the retry, callers can inspect `self::$seenValues` to verify that the
- * replay coordinator served the frozen snapshot value rather than any value
- * written to memory after the first crash.
+ * Durable streaming retry fixture whose first attempt crashes before writing
+ * and whose successful retry writes through the real Remember tool.
  *
  * @phpstan-import-type LaravelAiAgentAttachments from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  * @phpstan-import-type LaravelAiAgentProvider from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  * @phpstan-import-type SwarmBroadcastChannels from \BuiltByBerry\LaravelSwarm\Support\PhpStanTypeAliases
  */
-class MemorySpyFlakyAgent implements Agent
+class MemoryWritingFlakyStreamAgent implements Agent
 {
     public static int $attempts = 0;
 
-    /** @var array<int, mixed> keyed by attempt number (1 = first attempt, 2 = first retry, …) */
-    public static array $seenValues = [];
-
-    public static ?string $runId = null;
-
     public static bool $failAfterWrite = false;
-
-    public static bool $writeOnRetry = false;
 
     public static int $writeAttempts = 0;
 
-    public static function reset(?string $runId = null): void
+    public static function reset(): void
     {
         self::$attempts = 0;
-        self::$seenValues = [];
-        self::$runId = $runId;
         self::$failAfterWrite = false;
-        self::$writeOnRetry = false;
         self::$writeAttempts = 0;
     }
 
     public function instructions(): Stringable|string
     {
-        return 'You are a memory spy for replay-determinism tests.';
+        return 'Write retry memory after recovering from a stream crash.';
     }
 
     /**
@@ -71,23 +58,25 @@ class MemorySpyFlakyAgent implements Agent
      */
     public function prompt(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): AgentResponse
     {
-        self::$attempts++;
+        throw new RuntimeException('Blocking is not supported in this test fixture.');
+    }
 
-        /** @var SwarmMemory $memory */
-        $memory = app(SwarmMemory::class);
+    /**
+     * @param  LaravelAiAgentAttachments  $attachments
+     * @param  LaravelAiAgentProvider  $provider
+     */
+    public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
+    {
+        $attempt = ++self::$attempts;
 
-        self::$seenValues[self::$attempts] = $memory->get(
-            MemoryScope::Run,
-            self::$runId ?? '',
-            'probe-key',
-        );
+        return new StreamableAgentResponse('memory-write-stream-'.$attempt, function () use ($attempt): Generator {
+            if ($attempt === 1) {
+                yield new TextDelta('memory-write-partial', 'memory-write-message-1', 'partial', 1_710_000_000);
 
-        if (self::$attempts === 1) {
-            throw new RuntimeException('memory-spy-crash-first-attempt');
-        }
+                throw new RuntimeException('memory-write-stream-crash-first-attempt');
+            }
 
-        if (self::$writeOnRetry) {
-            $result = app(Remember::class)->forAgent($this)->handle(new Request([
+            $result = app(Remember::class)->handle(new Request([
                 'key' => 'retry-write',
                 'value' => 'retry-value',
                 'scope' => 'run',
@@ -98,22 +87,16 @@ class MemorySpyFlakyAgent implements Agent
             if (str_starts_with($result, 'Stored ')) {
                 self::$writeAttempts++;
             }
-        }
 
-        if (self::$failAfterWrite) {
-            throw new RuntimeException('memory-spy-failed-after-write');
-        }
+            if (self::$failAfterWrite) {
+                throw new RuntimeException('memory-write-stream-failed-after-write');
+            }
 
-        return new AgentResponse('memory-spy', 'spy-success', new TextUsage, new Meta);
-    }
-
-    /**
-     * @param  LaravelAiAgentAttachments  $attachments
-     * @param  LaravelAiAgentProvider  $provider
-     */
-    public function stream(AgentInput|UserMessage|Decisions|string $prompt, array $attachments = [], Lab|array|string|null $provider = null, ?string $model = null, ?int $timeout = null): StreamableAgentResponse
-    {
-        throw new RuntimeException('Streaming is not supported in this test fixture.');
+            $timestamp = 1_710_000_000;
+            yield new TextDelta('memory-write-clean', 'memory-write-message-2', 'saved', $timestamp);
+            yield new TextEnd('memory-write-end', 'memory-write-message-2', $timestamp);
+            yield new StreamEnd('memory-write-stream-end', 'stop', new TextUsage(inputTokens: 1, outputTokens: 1), $timestamp);
+        }, new Meta('fake', 'test'));
     }
 
     /**

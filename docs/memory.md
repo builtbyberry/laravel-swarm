@@ -618,7 +618,7 @@ Where the propagation policy decides what an agent *reads*, the **capture policy
 
 This is the write-side counterpart to the audit `CapturePolicy` (`swarm.capture.*`): redacting here keeps PII out of memory in the first place, so it never reaches a frozen `MemorySnapshot`. Like the audit policy, a capture policy **never receives the value** — only the scope and key — so a decision cannot couple to payload shape or leak unredacted data.
 
-Enforcement for persisted writes lives in the `RedactingMemoryStore` decorator the container wraps around your memory driver (via `$app->extend(MemoryStore::class, …)`), so every persisted write flows through that chokepoint, including writes to a custom or companion driver you bind yourself. (Bind it with `bind()`/`singleton()`, not `Container::instance()`, so the decorator still wraps it.) A frozen replay's Run-scope buffer consults the policy itself for `Skip` only. It deliberately does not apply `Redact` because buffered values are never persisted. Reads return already-redacted persisted values, so the propagation view and frozen snapshots inherit redaction with no extra work.
+Enforcement for persisted writes lives in the `RedactingMemoryStore` decorator the container wraps around your memory driver (via `$app->extend(MemoryStore::class, …)`), so every persisted write flows through that chokepoint, including writes to a custom or companion driver you bind yourself. (Bind it with `bind()`/`singleton()`, not `Container::instance()`, so the decorator still wraps it.) A frozen replay's Run-scope buffer first consults the policy for `Skip`, allowing `Remember` to report the put-time decision immediately. The replay buffer does not apply `Redact`, so the agent reads its own accepted buffered write back unredacted during the retry. Accepted writes are evaluated again when a successful retry saves them through the live store, and `Redact` is applied at that save boundary. If the policy accepted a write during the retry but returns `Skip` when it is saved, `MemoryWriteSkipped` fires and the step fails instead of reporting a successful retry whose write was dropped. Reads from the persisted store return already-redacted values, so the propagation view and frozen snapshots inherit persisted redaction with no extra work.
 
 > **Scope.** Redaction applies at the persistence boundary and covers the entry **value** only — not the entry **`metadata`** (which carries functional annotations like `source`/`usage`) and not the **key** (keys are addressing; redacting them would break `get`/`all`). Don't put PII in memory metadata or keys. A run's own in-process `RunContext` also still holds the raw value it just wrote until the run ends; the policy governs what is *persisted*, snapshotted, and visible to other agents.
 
@@ -929,11 +929,25 @@ The snapshot captures only `MemoryScope::Run` entries. Conversation, Agent, and 
 
 ## Replay semantics
 
-When a durable run crashes mid-step and is retried, the runner needs to decide what memory the agent sees on the second attempt. Two modes are available, controlled by `swarm.memory.replay_mode`.
+When a durable step or a non-durable streamed step runs again after an interruption, the runner needs to decide what memory the agent sees on the next attempt. Two modes are available, controlled by `swarm.memory.replay_mode`.
 
 ### `frozen_view` (default)
 
-The agent re-executes against the `MemoryScope::Run` entries frozen in the snapshot captured at the original invocation. During the retry, a Run-scope write the capture policy skips is not buffered and dispatches `MemoryWriteSkipped`. Other live Run-scope writes are buffered and never reach the backing store, preserving the canonical audit record. A `Redact` decision is deliberately not applied to the replay buffer because buffered values are never persisted. This is the recommended mode for reproducible, audit-friendly runs.
+The agent re-executes against the `MemoryScope::Run` entries frozen in the snapshot captured at the original invocation. Run-scope writes and forgets are buffered during the retry. Reads continue to use the frozen snapshot with the retry's own buffered writes and forget masks overlaid, so an agent can read its own changes without seeing unrelated live drift. The replay buffer does not apply a capture-policy `Redact` decision. During the retry, the agent reads its own accepted buffered write back unredacted; the value is redacted when the live store saves it.
+
+The runner saves those mutations in their original order only after the retried step's agent invocation, guardrails, and step recording have succeeded. At that point step history has been written and `SwarmStepCompleted` has been dispatched. A save failure therefore leaves a step recorded as completed and then fails or retries the run path. Durable paths save before the durable checkpoint. A retry that fails before the save begins saves nothing. The frozen snapshot's `entries` remain unchanged by the save. Within one retry, the last mutation at an address wins, including over a value the original attempt wrote before crashing.
+
+The save is not atomic. If applying the mutation log fails part-way through, earlier mutations remain saved. If a durable checkpoint fails after the save, all saved mutations remain in place. The next retry applies its complete mutation sequence again, overwriting those addresses as needed. There is no transaction added to the `SwarmMemory` contract.
+
+The capture policy is checked when the retry buffers a put and again when the live store saves it. A put-time `Skip` is declined immediately, is not buffered, and emits `MemoryWriteSkipped`. `Redact` is applied at save time. If a write accepted during the retry becomes `Skip` at save time, `MemoryWriteSkipped` fires and `BuiltByBerry\LaravelSwarm\Exceptions\SwarmException` fails the step after its completion was recorded. Its message is `Memory capture policy skipped, at save time, write [<key>] for run [<run-id>] after accepting it during the retry. The retried step was already recorded as completed.`
+
+If an earlier retry saves a write after a later step's snapshot was frozen, a retry of that later step still reads its own frozen snapshot. It does not see the earlier retry's saved write. On a streamed static-hierarchical resume, every re-executed node that finds its snapshot installs its own frozen view and saves its mutation log again after that node passes guardrails and step recording.
+
+In concurrent static-parallel streaming, the parent persists each branch's snapshot before dispatch. A process-isolated child runs under the frozen view when it can resolve `MemoryReplayCoordinator` and read that snapshot from the configured snapshot store. Its Run-scope reads then come from the snapshot and its own buffer, not the live memory store. Non-Run reads and writes still fall through to the live store, so those operations need a backing store visible across processes if they must observe shared state. Each child returns its mutation log to the parent without saving it. After that branch passes its parent-side guardrail and step recording, the parent saves the log. Branch logs are saved in branch declaration order, so the last declared branch wins when replayed branches write the same key. The internal child-to-parent mutation payload can contain raw values; it is not a stream, history, audit, or diagnostic payload, and applications should not copy it into those surfaces.
+
+A commit saves only the mutation log from the replay boundary that the caller opened. A nested run cannot commit an outer run's buffered writes.
+
+Saved retry mutations emit the ordinary `MemoryWritten`, `MemoryRedacted`, and `MemoryForgotten` events, but those events carry no attempt, step, or replay identifier. The same events fire for mutations saved before a part-way save failure and for a save followed by a durable checkpoint failure. Events alone therefore cannot distinguish retry-saved values from first-attempt values. The frozen snapshot remains the record of what the original invocation saw.
 
 ### `fresh_execution`
 
@@ -977,11 +991,9 @@ class MyIdempotentSwarm extends Swarm
 
 When the attribute is absent the global `swarm.memory.replay_mode` config applies.
 
-### Binding-restore constraint
+### Per-invocation replay boundary
 
-`MemoryReplayCoordinator::during()` implements the frozen-view swap by resolving the original `SwarmMemory` binding via `app()->make(SwarmMemory::class)`, installing a `ReplaySwarmMemory` decorator via `app()->instance(SwarmMemory::class, $replay)` for the duration of the callback, then restoring the original binding via `app()->instance(SwarmMemory::class, $original)` in a `finally` block.
-
-**Known constraint:** the restore step uses `instance()`, which always registers a singleton. If your application binds `SwarmMemory` as a factory (a non-singleton closure or a transient binding), the restore step silently converts it to singleton behavior for subsequent resolutions. The default binding is a singleton (`DefaultSwarmMemory`), so this does not affect standard setups. If you have customized the `SwarmMemory` binding to be non-singleton, document this trade-off in your service provider and verify the behavior under replay.
+`MemoryReplayCoordinator` installs `ReplaySwarmMemory` on the active run's `ActiveRunContext` frame, not as a container-global binding. Nested invocation frames inherit that override, and teardown clears it in `finally`. Concurrent in-process runs therefore keep separate frozen views. Generator-based runners retain a `ReplayBoundary` after teardown so they can save its mutations only after the caller's guardrail and recording gates pass.
 
 ---
 

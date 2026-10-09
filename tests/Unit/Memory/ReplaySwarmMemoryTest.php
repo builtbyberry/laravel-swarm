@@ -7,6 +7,8 @@ use BuiltByBerry\LaravelSwarm\Audit\CaptureDecision;
 use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryForgotten;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryRedacted;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryScopeOutOfSnapshot;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWriteSkipped;
 use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
@@ -28,14 +30,16 @@ use Illuminate\Support\Facades\Event;
  *
  * 1. Reads against the replayed Run scope come from the frozen snapshot —
  *    not from whatever the live store currently holds.
- * 2. Writes against the replayed Run scope are buffered and never reach the
- *    wrapped store, but are visible to subsequent reads in the same
- *    invocation (write-after-read locality).
+ * 2. Writes against the replayed Run scope are buffered before commit and are
+ *    visible to subsequent reads in the same invocation (write-after-read
+ *    locality). Their ordered mutations can be committed after the step's
+ *    success gate.
  * 3. Reads/writes against any other scope read-through to the live store
  *    and dispatch {@see MemoryScopeOutOfSnapshot} so cross-scope drift is
  *    visible in the audit trail.
- * 4. `forget()` on the replayed Run scope clears the buffered value and
- *    masks the snapshot entry without touching the live store.
+ * 4. `forget()` on the replayed Run scope clears the buffered value and masks
+ *    the snapshot entry before commit; its mutation is committed in order with
+ *    writes after the step succeeds.
  */
 function makeSnapshot(string $runId, array $entries = []): MemorySnapshot
 {
@@ -66,7 +70,7 @@ function makeReplay(MemorySnapshot $snapshot, ?SwarmMemory $live = null): Replay
 beforeEach(function () {
     // The replay decorator dispatches events through the container; reset the
     // fake on every test so cross-test assertions don't leak.
-    Event::fake([MemoryScopeOutOfSnapshot::class, MemoryWriteSkipped::class, MemoryWritten::class]);
+    Event::fake([MemoryForgotten::class, MemoryRedacted::class, MemoryScopeOutOfSnapshot::class, MemoryWriteSkipped::class, MemoryWritten::class]);
 });
 
 test('reads against the replayed Run scope return the frozen snapshot value, not the live store', function () {
@@ -104,7 +108,7 @@ test('reads for keys missing from the snapshot return null without touching the 
     expect(makeReplay($snapshot, $live)->get(MemoryScope::Run, 'run-1', 'leaked'))->toBeNull();
 });
 
-test('writes against the replayed Run scope buffer in memory and never reach the live store', function () {
+test('writes against the replayed Run scope do not reach the live store before commit', function () {
     $store = new InMemoryMemoryStore;
     $live = new DefaultSwarmMemory($store);
     $snapshot = makeSnapshot('run-1');
@@ -178,7 +182,7 @@ test('a skipped replay write does not clear a prior forget mask', function () {
         ->and(MemoryWriteOutcome::wasSkipped($returned))->toBeTrue();
 });
 
-test('forget on a replayed Run-scope key masks the snapshot row and leaves the live store untouched', function () {
+test('forget on a replayed Run-scope key leaves the live store untouched before commit', function () {
     $store = new InMemoryMemoryStore;
     $live = new DefaultSwarmMemory($store);
     $live->put(MemoryScope::Run, 'run-1', 'k', 'live-value');
@@ -192,6 +196,30 @@ test('forget on a replayed Run-scope key masks the snapshot row and leaves the l
     expect($replay->forget(MemoryScope::Run, 'run-1', 'k'))->toBeTrue();
     expect($replay->get(MemoryScope::Run, 'run-1', 'k'))->toBeNull();
     expect($store->get(MemoryScope::Run, 'run-1', 'k')?->value)->toBe('live-value');
+});
+
+test('replayed puts and forgets are exposed in operation order for commit', function () {
+    $replay = makeReplay(makeSnapshot('run-1'));
+
+    $replay->put(MemoryScope::Run, 'run-1', 'finding', 'first', ['source' => 'retry']);
+    $replay->forget(MemoryScope::Run, 'run-1', 'finding');
+    $replay->put(MemoryScope::Run, 'run-1', 'finding', 'second');
+
+    expect($replay->mutations()->toArray())->toBe([
+        ['op' => 'put', 'scope_id' => 'run-1', 'key' => 'finding', 'value' => 'first', 'metadata' => ['source' => 'retry']],
+        ['op' => 'forget', 'scope_id' => 'run-1', 'key' => 'finding'],
+        ['op' => 'put', 'scope_id' => 'run-1', 'key' => 'finding', 'value' => 'second', 'metadata' => []],
+    ]);
+});
+
+test('a put-time Skip is never logged for commit', function () {
+    app()->instance(MemoryCapturePolicy::class, new SkippingMemoryCapturePolicy(['secret']));
+    $replay = makeReplay(makeSnapshot('run-1'));
+
+    $entry = $replay->put(MemoryScope::Run, 'run-1', 'secret', 'raw');
+
+    expect(MemoryWriteOutcome::wasSkipped($entry))->toBeTrue()
+        ->and($replay->mutations()->isEmpty())->toBeTrue();
 });
 
 test('forget returns false when neither the snapshot nor the buffer holds the key', function () {

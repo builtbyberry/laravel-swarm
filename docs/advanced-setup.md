@@ -324,13 +324,13 @@ You can re-run `swarm:install:memory` at any time — it is idempotent.
 
 ### Configure the replay mode
 
-The replay mode controls what memory an agent sees when a durable run is
-retried after a crash:
+The replay mode controls what memory an agent sees when a durable step or a
+non-durable streamed step is retried after an interruption:
 
 | Mode | Behaviour | When to use |
 |---|---|---|
-| `frozen_view` (default) | Agent reads the snapshot captured at the start of the failed step — deterministic, same tool calls replayed from the same context | Most workloads |
-| `fresh_execution` | Agent reads live memory at retry time — non-deterministic, may produce different tool calls | Only when idempotency is guaranteed externally |
+| `frozen_view` (default) | Agent reads the snapshot captured at the original invocation. Run-scope writes and forgets are buffered, then saved after invocation, guardrails, and step recording succeed. | Most workloads |
+| `fresh_execution` | Agent reads and writes live memory during the retry. It may produce different tool calls. | Only when idempotency is guaranteed externally |
 
 Set via `.env`:
 
