@@ -2,17 +2,70 @@
 
 ## Upgrading to v0.28.1
 
+This patch deliberately departs from the additive-only patch policy stated
+under [Semver pre-1.0](#semver-pre-10): it changes reported tool-call outcomes
+and the persistence of retry memory mutations to correct false success reports
+and discarded writes.
+
+### `RoutePlanSchema::worker()` schema
+
+`RoutePlanSchema::worker()` now requires `with_outputs`, which may be an empty
+list, and requires `next`, whose type is now string-or-null. Callers that
+snapshot-test this schema or hand-validate model route plans must accept the
+new required fields and the nullable `next`. PHP-authored plans need no change.
+
+### Agent-scoped memory tools
+
+`Recall::forAgent()` and `Remember::forAgent()` bind a tool to an agent. The
+binding takes effect only when `swarm.memory.tools.agent_scope`
+(`SWARM_MEMORY_TOOLS_AGENT_SCOPE`, default `false`) is enabled. A bound
+`Recall` also needs a propagation policy whose scopes include `agent` before it
+can return agent-scoped entries.
+
+A tool generated before v0.28.1 may still contain a null-returning `agent()`
+placeholder, and an application-published `stubs/swarm.memory-tool.stub` or
+`stubs/swarm.memory-tool.vector.stub` may still generate it. That override wins
+over a `forAgent()` binding. Remove it from an existing generated class. For a
+published stub, remove it or republish the package stubs with
+`php artisan vendor:publish --tag=swarm-stubs --force` before generating again.
+
+Subclass authors should also check for these new member-name collisions:
+
+- `Recall`: `protected ?Agent $boundAgent = null`, `public function forAgent(Agent $agent): static`, and `protected function agentScopeEnabled(): bool`.
+- `Remember`: `protected ?Agent $boundAgent = null`, `public function forAgent(Agent $agent): static`, `protected function declined(Request $request, string $message): string`, and `protected function agentScopeEnabled(): bool`.
+
+### Memory writes that store nothing now read as failed
+
+A `Remember` call that stored nothing is now reported as failed in
+`nativeResult->tools` and as an unsuccessful `SwarmToolResult` event, where it
+previously read as succeeded. This covers a write the tool declines (empty
+key, reserved `swarm:` prefix, unknown scope, or a scope the run cannot
+address) and a write your `MemoryCapturePolicy` skips. Nothing more or less is
+stored than before; only the reported outcome changes.
+
+If your application counts failed tool calls, alerts on them, or branches on
+`SwarmToolResult`, expect these calls to move from succeeded to failed after
+upgrading. This applies in particular to an application whose capture policy
+returns `Skip`. The run itself continues.
+
 ### Frozen-view retry memory writes
 
-The default `frozen_view` replay mode now saves a retry's Run-scope memory
-writes and forgets once the retried step's invocation, guardrails, and step
-recording succeed. Previously those mutations were discarded. There is no
-compatibility switch.
+The default `frozen_view` replay mode now saves any Run-scope `SwarmMemory` put
+or forget made through the retry's replay view, including a `Remember` write,
+once the retried step's invocation, guardrails, and step recording succeed.
+Previously those mutations were discarded. There is no compatibility switch.
 
 A retry that fails before that point saves nothing. The save itself is not
 atomic: if it fails part-way through, mutations already saved remain in place.
 A durable checkpoint failure after the save also leaves the saved mutations in
-place. In both cases, the next retry saves its complete mutation sequence again.
+place. When either failure leads to another retry, that retry saves its complete
+mutation sequence again.
+
+The save is not fenced by the durable lease. A retry worker that loses its
+lease after step recording and before the checkpoint still saves its mutations,
+and those writes are not rolled back. The lost worker exits without scheduling
+another retry. If the replacement worker has already checkpointed the step, no
+further retry re-saves those mutations.
 
 A successful retry now emits the ordinary `MemoryWritten`, `MemoryRedacted`,
 and `MemoryForgotten` events when it saves applicable mutations; previously it
@@ -2001,8 +2054,8 @@ Override per-swarm with the `#[MemoryReplay]` attribute when the global default
 does not fit a particular swarm's retry contract:
 
 ```php
-use BuiltByBerry\LaravelSwarm\Memory\Attributes\MemoryReplay;
-use BuiltByBerry\LaravelSwarm\Memory\Enums\ReplayMode;
+use BuiltByBerry\LaravelSwarm\Attributes\MemoryReplay;
+use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
 
 #[MemoryReplay(mode: ReplayMode::FreshExecution)]
 class MySpecialSwarm implements Swarm { ... }

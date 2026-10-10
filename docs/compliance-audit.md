@@ -99,13 +99,16 @@ policy for `Skip` when accepting a write. After the retry's success gates pass,
 accepted writes are saved through the decorator, where the current policy is
 evaluated again and `Redact` is applied. The replay buffer does not apply
 `Redact`, so the agent can read its own accepted buffered value unredacted
-during the retry. A newly skipped write fails the step.
-Critically, the agent-visible propagation view and the frozen `MemorySnapshot`
-read back through the store, so PII
-redacted at write **never reaches a snapshot**, and the audit-replay record is
-clean by construction rather than by a separate scrubbing pass. A policy never
-sees the value it is deciding on (only the scope and key), so the policy code
-itself cannot become a leak path.
+during the retry. A newly skipped write fails the step. The agent-visible
+propagation view and the frozen `MemorySnapshot` entries read back through the
+store, so stored values inherit `Redact` and a `Skip` write adds no entry.
+Current limitation: the snapshot's `tool_calls` column records each memory-tool
+call's raw input and result without applying the capture policy. A value
+redacted or skipped in the stored entries can therefore still appear in
+`tool_calls` and in
+`swarm:memory:dump --include-snapshots`. A policy never sees the value it is
+deciding on (only the scope and key), so the policy code itself cannot become a
+leak path.
 
 **Scope.** Redaction covers the entry **value** only. The entry's `metadata`
 (functional annotations such as `source`/`usage`) and the entry **key** are
@@ -114,9 +117,9 @@ deliberate boundary, not an oversight: metadata and keys drive functional
 behavior (indexing, filtering, routing), so structurally redacting them would
 break lookups and ordering — and, as with the audit `CapturePolicy`, the policy
 never receives the value, so it cannot couple to payload shape. Keep PII in the
-entry value, where the policy can redact it; the value is also what flows into
-the propagation view, frozen snapshots, and `swarm:memory:dump`, so redacting it
-covers every downstream surface at once.
+entry value, where the policy can redact it; that redacted value flows into the
+propagation view and the snapshot's stored entries. The separate `tool_calls`
+limitation above still applies to snapshot exports.
 
 **Audit evidence.** Each capture decision is observable: a `Redact` write
 dispatches a `MemoryRedacted` event and a `Skip` dispatches `MemoryWriteSkipped`

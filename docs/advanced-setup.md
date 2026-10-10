@@ -341,8 +341,8 @@ SWARM_MEMORY_REPLAY_MODE=frozen_view
 Or override per-swarm class:
 
 ```php
-use BuiltByBerry\LaravelSwarm\Memory\ReplayMode;
-use BuiltByBerry\LaravelSwarm\Memory\Attributes\MemoryReplay;
+use BuiltByBerry\LaravelSwarm\Attributes\MemoryReplay;
+use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
 
 #[MemoryReplay(mode: ReplayMode::FreshExecution)]
 class MySwarm extends Swarm { ... }
