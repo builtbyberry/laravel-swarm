@@ -36,6 +36,16 @@ nothing.
   emits the ordinary memory events, and a write the capture policy skips at
   save time fails the step. See
   [UPGRADING.md](UPGRADING.md#upgrading-to-v0281) before upgrading.
+- **Regression coverage for the `frozen_view` retry save (#585).** New
+  runner-level tests drive the recovery described in UPGRADING.md: after a
+  durable checkpoint failure that follows the save, and after a save-time
+  capture-policy `Skip` on the durable sequential and branch paths, the next
+  retry saves its complete mutation sequence again and the downstream step
+  reads the value. A structural test pins, per runner, how many replay
+  boundaries are opened and how many are saved, so a runner path that opens
+  one without saving fails the suite, and a second pins the streamed
+  tool-result handlers to marking declined calls first. Test-only change — no
+  `src/` behavior change.
 
 ### Fixed
 
