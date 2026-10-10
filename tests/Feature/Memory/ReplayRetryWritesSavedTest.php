@@ -12,6 +12,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Exceptions\SwarmException;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
 use BuiltByBerry\LaravelSwarm\Runners\DurableSwarmManager;
@@ -33,6 +34,8 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ReplayWriteStaticHierarchica
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RedactingMemoryCapturePolicy;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
+use Psr\Log\LoggerInterface;
 use RuntimeException;
 
 function configureReplayRetryWritesRuntime(): void
@@ -59,6 +62,17 @@ function configureReplayRetryWritesRuntime(): void
 function recoverReplayRetry(): void
 {
     test()->travel(61)->seconds();
+    Artisan::call('swarm:recover');
+}
+
+function recoverCrashedReplayStep(string $runId): void
+{
+    DB::table((string) config('swarm.tables.durable', 'swarm_durable_runs'))
+        ->where('run_id', $runId)
+        ->update([
+            'leased_until' => now()->subSecond(),
+            'updated_at' => now()->subSeconds(301),
+        ]);
     Artisan::call('swarm:recover');
 }
 
@@ -445,17 +459,23 @@ test('runner-level replay commit applies Redact through the container-wired stor
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBe('[redacted]');
 });
 
-test('runner-level save-time Skip fails the completed retry without advancing the durable cursor', function () {
+test('runner-level save-time Skip retries its complete mutation sequence and reaches the downstream reader', function () {
     $policy = new class implements MemoryCapturePolicy
     {
         public int $calls = 0;
 
         public function memory(MemoryScope $scope, string $key, ?RunContext $context = null, ?Actor $actor = null): CaptureDecision
         {
-            return ++$this->calls === 1 ? CaptureDecision::Full : CaptureDecision::Skip;
+            if ($key !== 'retry-write') {
+                return CaptureDecision::Full;
+            }
+
+            return ++$this->calls === 2 ? CaptureDecision::Skip : CaptureDecision::Full;
         }
     };
     bindReplayRetryCapturePolicy($policy);
+    $logger = Mockery::spy(LoggerInterface::class);
+    app()->instance(LoggerInterface::class, $logger);
     $response = ReplayWriteSequentialSwarm::make()->dispatchDurable('retry-write');
     $manager = app(DurableSwarmManager::class);
     resetMemorySpyForReplayWrites($response->runId);
@@ -466,8 +486,93 @@ test('runner-level save-time Skip fails the completed retry without advancing th
 
     expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
         ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
+        ->and($policy->calls)->toBe(2)
         ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull()
         ->and($manager->find($response->runId)['next_step_index'])->toBe(0);
+
+    $expectedFailure = "Memory capture policy skipped, at save time, write [retry-write] for run [{$response->runId}] after accepting it during the retry. The retried step was already recorded as completed.";
+    $logger->shouldHaveReceived('warning')->withArgs(
+        fn (string $message, array $context): bool => $message === 'Durable swarm step failed — scheduling retry.'
+            && $context['exception'] === SwarmException::class
+            && $context['message'] === $expectedFailure,
+    )->once();
+
+    recoverReplayRetry();
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    expect(MemorySpyFlakyAgent::$attempts)->toBe(3)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(2)
+        ->and($manager->find($response->runId)['next_step_index'])->toBe(1);
+
+    (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
+    expectRetryWriteSavedAndRead($response->runId);
+});
+
+test('durable branch save-time Skip retries its complete mutation sequence and reaches the downstream reader', function () {
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('parallel', [
+            'parallel' => ['type' => 'parallel', 'branches' => ['writer', 'stable'], 'next' => 'reader'],
+            'writer' => ['type' => 'worker', 'agent' => MemorySpyFlakyAgent::class, 'prompt' => 'write-on-retry'],
+            'stable' => ['type' => 'worker', 'agent' => FakeResearcher::class, 'prompt' => 'stable'],
+            'reader' => ['type' => 'worker', 'agent' => MemoryRecallAgent::class, 'prompt' => 'read-retry-write', 'next' => 'finish'],
+            'finish' => ['type' => 'finish', 'output_from' => 'reader'],
+        ]),
+    ]);
+    $policy = new class implements MemoryCapturePolicy
+    {
+        public int $calls = 0;
+
+        public function memory(MemoryScope $scope, string $key, ?RunContext $context = null, ?Actor $actor = null): CaptureDecision
+        {
+            if ($key !== 'retry-write') {
+                return CaptureDecision::Full;
+            }
+
+            return ++$this->calls === 2 ? CaptureDecision::Skip : CaptureDecision::Full;
+        }
+    };
+    bindReplayRetryCapturePolicy($policy);
+    $logger = Mockery::spy(LoggerInterface::class);
+    app()->instance(LoggerInterface::class, $logger);
+    $response = ReplayWriteHierarchicalSwarm::make()->dispatchDurable('retry-write');
+    $manager = app(DurableSwarmManager::class);
+    resetMemorySpyForReplayWrites($response->runId);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+    (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
+    $branches = app(DurableRunStore::class)->branchesFor($response->runId, 'parallel');
+    $writer = collect($branches)->firstWhere('agent_class', MemorySpyFlakyAgent::class);
+    $stable = collect($branches)->firstWhere('agent_class', FakeResearcher::class);
+    (new AdvanceDurableBranch($response->runId, $stable['branch_id']))->handle($manager);
+    (new AdvanceDurableBranch($response->runId, $writer['branch_id']))->handle($manager);
+    recoverReplayRetry();
+    (new AdvanceDurableBranch($response->runId, $writer['branch_id']))->handle($manager);
+
+    expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
+        ->and($policy->calls)->toBe(2)
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBeNull()
+        ->and(app(DurableRunStore::class)->findBranch($response->runId, $writer['branch_id'])['status'])->toBe('pending');
+
+    $expectedFailure = "Memory capture policy skipped, at save time, write [retry-write] for run [{$response->runId}] after accepting it during the retry. The retried step was already recorded as completed.";
+    $logger->shouldHaveReceived('warning')->withArgs(
+        fn (string $message, array $context): bool => $message === 'Durable swarm branch failed — scheduling retry.'
+            && $context['exception'] === SwarmException::class
+            && $context['message'] === $expectedFailure,
+    )->once();
+
+    recoverReplayRetry();
+    (new AdvanceDurableBranch($response->runId, $writer['branch_id']))->handle($manager);
+
+    expect(MemorySpyFlakyAgent::$attempts)->toBe(3)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(2)
+        ->and(app(DurableRunStore::class)->findBranch($response->runId, $writer['branch_id'])['status'])->toBe('completed');
+
+    $joinStep = $manager->find($response->runId)['next_step_index'];
+    (new AdvanceDurableSwarm($response->runId, $joinStep))->handle($manager);
+    $readerStep = $manager->find($response->runId)['next_step_index'];
+    (new AdvanceDurableSwarm($response->runId, $readerStep))->handle($manager);
+    expectRetryWriteSavedAndRead($response->runId);
 });
 
 test('a Remember write saved from retry keeps its tool attribution metadata', function () {
@@ -500,4 +605,39 @@ test('a durable checkpoint failure after commit leaves the retry write saved', f
         ->toThrow(RuntimeException::class, 'checkpoint-failed-after-commit');
 
     expect(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBe('retry-value');
+});
+
+test('a durable checkpoint failure after commit recovers by saving the complete mutation sequence again', function () {
+    $response = ReplayWriteSequentialSwarm::make()->dispatchDurable('retry-write');
+    $manager = app(DurableSwarmManager::class);
+    resetMemorySpyForReplayWrites($response->runId);
+    MemorySpyFlakyAgent::$readKey = 'retry-write';
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+    recoverReplayRetry();
+    $manager->beforeStepCheckpointForTesting(fn () => throw new RuntimeException('checkpoint-failed-after-commit'));
+
+    expect(fn () => (new AdvanceDurableSwarm($response->runId, 0))->handle($manager))
+        ->toThrow(RuntimeException::class, 'checkpoint-failed-after-commit');
+
+    expect(MemorySpyFlakyAgent::$attempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(1)
+        ->and($manager->find($response->runId)['next_step_index'])->toBe(0)
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, $response->runId, 'retry-write'))->toBe('retry-value');
+
+    $manager->beforeStepCheckpointForTesting(null);
+    $recoveryCount = $manager->find($response->runId)['recovery_count'];
+    recoverCrashedReplayStep($response->runId);
+
+    expect($manager->find($response->runId)['recovery_count'])->toBe($recoveryCount + 1);
+
+    (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+
+    expect(MemorySpyFlakyAgent::$attempts)->toBe(3)
+        ->and(MemorySpyFlakyAgent::$writeAttempts)->toBe(2)
+        ->and(MemorySpyFlakyAgent::$seenValues[3])->toBeNull()
+        ->and($manager->find($response->runId)['next_step_index'])->toBe(1);
+
+    (new AdvanceDurableSwarm($response->runId, 1))->handle($manager);
+    expectRetryWriteSavedAndRead($response->runId);
 });
