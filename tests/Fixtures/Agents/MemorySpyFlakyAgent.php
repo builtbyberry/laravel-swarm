@@ -42,6 +42,8 @@ class MemorySpyFlakyAgent implements Agent
     /** @var array<int, mixed> keyed by attempt number (1 = first attempt, 2 = first retry, …) */
     public static array $seenValues = [];
 
+    public static string $readKey = 'probe-key';
+
     public static ?string $runId = null;
 
     public static bool $failAfterWrite = false;
@@ -54,6 +56,7 @@ class MemorySpyFlakyAgent implements Agent
     {
         self::$attempts = 0;
         self::$seenValues = [];
+        self::$readKey = 'probe-key';
         self::$runId = $runId;
         self::$failAfterWrite = false;
         self::$writeOnRetry = false;
@@ -79,7 +82,7 @@ class MemorySpyFlakyAgent implements Agent
         self::$seenValues[self::$attempts] = $memory->get(
             MemoryScope::Run,
             self::$runId ?? '',
-            'probe-key',
+            self::$readKey,
         );
 
         if (self::$attempts === 1) {
