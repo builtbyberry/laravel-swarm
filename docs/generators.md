@@ -173,6 +173,22 @@ Drop the generated tool into any `laravel/ai` agent's `tools()` array, or
 expose it through the `HasSwarmMemoryTools` trait by binding your subclass
 in the container.
 
+For `--scope=agent`, the command prints a warning because three conditions are
+required: bind the tool with `(new YourTool)->forAgent($this)` from the agent's
+`tools()` method, set `swarm.memory.tools.agent_scope` to true, and configure a
+propagation policy that includes Agent scope when Recall must return those
+entries. A `forAgent()` binding has no effect while the key is off, and Recall
+returns nothing from a scope the propagation policy does not include. See the
+policy prerequisite in [Per-user scoped recall](memory-recipes.md#per-user-scoped-recall).
+
+Generated stubs no longer include an `agent()` placeholder, but a generated
+class from before v0.28.1 still has a null-returning override that wins over
+`forAgent()`, so delete that method or return the agent from it. An older
+published `stubs/swarm.memory-tool.stub` or
+`stubs/swarm.memory-tool.vector.stub` also wins over the package stub; remove
+its placeholder or republish with
+`php artisan vendor:publish --tag=swarm-stubs --force` before generating again.
+
 ### Options
 
 | Option | Values | Default | Effect |

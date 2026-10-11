@@ -3,10 +3,9 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
-use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
-use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Memory\MemoryWriteOutcome;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -18,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Illuminate\JsonSchema\JsonSchemaTypeFactory;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Ai\Contracts\Tool;
+use Laravel\Ai\Gateway\ParentInvocation;
 use Laravel\Ai\Tools\Request;
 
 /**
@@ -38,13 +38,6 @@ function remember(array $arguments): string
 function enterRememberRun(string $runId, string $swarmClass): void
 {
     ActiveRunContext::enter($runId, $swarmClass, RunContext::fake(['run_id' => $runId, 'input' => 'go']));
-}
-
-function bindMemoryCapturePolicy(MemoryCapturePolicy $policy): void
-{
-    app()->instance(MemoryCapturePolicy::class, $policy);
-    app()->forgetInstance(MemoryStore::class);
-    app()->forgetInstance(SwarmMemory::class);
 }
 
 test('it implements the Laravel AI Tool contract', function () {
@@ -137,18 +130,41 @@ test('it applies capture-policy redaction at the write boundary', function () {
     bindMemoryCapturePolicy(new RedactingMemoryCapturePolicy(['ssn']));
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 
-    remember(['key' => 'ssn', 'value' => '123-45-6789']);
+    $result = remember(['key' => 'ssn', 'value' => '123-45-6789']);
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'ssn'))->toBe(SwarmCapture::REDACTED);
+    expect($result)->toBe('Stored [ssn] in run memory.')
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'ssn'))->toBe(SwarmCapture::REDACTED);
 });
 
 test('it honours a capture-policy skip decision', function () {
     bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
     enterRememberRun('run-1', FakeSequentialSwarm::class);
 
-    remember(['key' => 'secret', 'value' => 'do-not-store']);
+    $result = remember(['key' => 'secret', 'value' => 'do-not-store']);
 
-    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBeNull();
+    expect($result)->toBe('The entry [secret] was not stored. Do not retry this write.')
+        ->and(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBeNull();
+});
+
+test('a capture-policy skip leaves a pre-existing entry unchanged and reports the write was not stored', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+    remember(['key' => 'secret', 'value' => 'existing']);
+
+    bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+
+    $result = remember(['key' => 'secret', 'value' => 'replacement']);
+
+    expect(app(SwarmMemory::class)->get(MemoryScope::Run, 'run-1', 'secret'))->toBe('existing')
+        ->and($result)->toBe('The entry [secret] was not stored. Do not retry this write.');
+});
+
+test('a stored entry carries no write-outcome marker', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    remember(['key' => 'topic', 'value' => 'launch plan']);
+
+    expect(app(SwarmMemory::class)->entry(MemoryScope::Run, 'run-1', 'topic')?->metadata)
+        ->not->toHaveKey(MemoryWriteOutcome::KEY);
 });
 
 test('it rejects reserved swarm: keys', function () {
@@ -199,4 +215,59 @@ test('it writes to conversation scope when the run is bound to a conversation', 
 
     expect($result)->toBe('Stored [topic] in conversation memory.');
     expect(app(SwarmMemory::class)->get(MemoryScope::Conversation, 'conv-5', 'topic'))->toBe('launch plan');
+});
+
+test('it records declined writes against the exact invocation and tool call', function (array $arguments, string $message) {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    $result = ParentInvocation::within('inv-1', 'tool-inv-1', fn (): string => app(Remember::class)->handle(
+        new Request($arguments, 'call-x'),
+    ));
+
+    expect($result)->toBe($message)
+        ->and(ActiveRunContext::consumeDeclinedToolCall('other-invocation', 'call-x', $message))->toBeFalse()
+        ->and(ActiveRunContext::consumeDeclinedToolCall(null, 'call-x', $message))->toBeFalse()
+        ->and(ActiveRunContext::consumeDeclinedToolCall('inv-1', 'call-x', $message))->toBeTrue()
+        ->and(ActiveRunContext::consumeDeclinedToolCall('inv-1', 'call-x', $message))->toBeFalse();
+})->with([
+    'empty key' => [
+        ['key' => '', 'value' => 'x'],
+        'A memory key is required.',
+    ],
+    'reserved key' => [
+        ['key' => 'swarm:owned', 'value' => 'x'],
+        'Keys starting with [swarm:] are reserved and cannot be written.',
+    ],
+    'unknown scope' => [
+        ['key' => 'k', 'value' => 'v', 'scope' => 'bogus'],
+        'Unknown memory scope. Use one of: run, swarm, agent, conversation.',
+    ],
+    'unbound agent scope' => [
+        ['key' => 'k', 'value' => 'v', 'scope' => 'agent'],
+        'The [agent] scope is not addressable in this run.',
+    ],
+    'unbound conversation scope' => [
+        ['key' => 'k', 'value' => 'v', 'scope' => 'conversation'],
+        'The [conversation] scope is not addressable in this run.',
+    ],
+]);
+
+test('it records no declined marker for a stored write', function () {
+    enterRememberRun('run-1', FakeSequentialSwarm::class);
+
+    $message = ParentInvocation::within('inv-1', 'tool-inv-1', fn (): string => app(Remember::class)->handle(
+        new Request(['key' => 'topic', 'value' => 'launch plan'], 'call-x'),
+    ));
+
+    expect($message)->toBe('Stored [topic] in run memory.')
+        ->and(ActiveRunContext::consumeDeclinedToolCall('inv-1', 'call-x', $message))->toBeFalse();
+});
+
+test('outside a run a declined-looking message stays an unmarked graceful result', function () {
+    $message = ParentInvocation::within('inv-1', 'tool-inv-1', fn (): string => app(Remember::class)->handle(
+        new Request(['key' => 'topic', 'value' => 'x'], 'call-x'),
+    ));
+
+    expect($message)->toBe('Memory is not available outside an active swarm run.')
+        ->and(ActiveRunContext::consumeDeclinedToolCall('inv-1', 'call-x', $message))->toBeFalse();
 });

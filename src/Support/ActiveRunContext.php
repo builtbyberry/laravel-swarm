@@ -72,6 +72,68 @@ final class ActiveRunContext
     }
 
     /**
+     * Note on the top frame that a tool call stored nothing. Keyed by the
+     * Laravel AI invocation that made the call, so a nested agent's decline
+     * can never be attributed to its parent. A no-op without a frame or
+     * without both ids.
+     */
+    public static function declineToolCall(?string $invocationId, ?string $toolCallId, string $message): void
+    {
+        $top = self::current();
+
+        if ($top === null || $invocationId === null || $invocationId === '' || $toolCallId === null || $toolCallId === '') {
+            return;
+        }
+
+        $top->declinedToolCalls[] = [
+            'invocation' => $invocationId,
+            'id' => $toolCallId,
+            'message' => $message,
+        ];
+    }
+
+    /**
+     * Take one matching declined call off the top frame. The result text must
+     * equal the decline message, so a later call reusing the same id is not
+     * mistaken for the declined one.
+     */
+    public static function consumeDeclinedToolCall(?string $invocationId, string $toolCallId, string $resultText): bool
+    {
+        $top = self::current();
+
+        if ($top === null || $invocationId === null) {
+            return false;
+        }
+
+        foreach ($top->declinedToolCalls as $index => $declined) {
+            if ($declined['invocation'] !== $invocationId
+                || $declined['id'] !== $toolCallId
+                || $declined['message'] !== $resultText) {
+                continue;
+            }
+
+            array_splice($top->declinedToolCalls, $index, 1);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Forget the top frame's declined calls. Called around each agent
+     * invocation so one step's declines never outlive it on a long-lived frame.
+     */
+    public static function resetDeclinedToolCalls(): void
+    {
+        $top = self::current();
+
+        if ($top !== null) {
+            $top->declinedToolCalls = [];
+        }
+    }
+
+    /**
      * Set the per-invocation frozen-memory override on the top frame. Used by
      * {@see MemoryReplayCoordinator} to scope a crash-resume replay's
      * {@see ReplaySwarmMemory} to this run only, rather than rebinding the

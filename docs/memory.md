@@ -98,7 +98,7 @@ $tone = app(SwarmMemory::class)->get(
 
 ### `MemoryEntry`
 
-`MemoryEntry` is the immutable value object returned by `put()`, `entry()`, and `all()`. It carries the full address plus the persisted value and metadata.
+`MemoryEntry` is the immutable value object returned by `put()`, `entry()`, and `all()`. It carries the full address plus the persisted value and metadata. When a capture policy skips a `put()`, that call instead returns a prospective entry that was not persisted.
 
 | Property | Type | Description |
 | --- | --- | --- |
@@ -402,8 +402,8 @@ id:
 | -------------- | ------------------------------------ |
 | `run` (default) | the active run id                   |
 | `swarm`        | the active swarm class               |
-| `agent`        | only when the tool is bound to a specific agent (see below) |
-| `conversation` | the run's bound conversation id, when set (see [Conversation-scoped memory](#conversation-scoped-memory)); otherwise declined gracefully |
+| `agent`        | the bound agent's class, when the tool is bound with `forAgent()` (by your code or by `HasSwarmMemoryTools`) and `swarm.memory.tools.agent_scope` is on (see [Optional default-on registration](#optional-default-on-registration)); otherwise unaddressable |
+| `conversation` | the run's bound conversation id, when set (see [Conversation-scoped memory](#conversation-scoped-memory)); otherwise unaddressable |
 
 `run` is the safe default: memory scoped to the current task, cleared with it.
 Use `swarm` for state shared across the whole swarm class.
@@ -416,6 +416,16 @@ Use `swarm` for state shared across the whole swarm class.
 > *which* tenant or agent may write it. If you enable `remember` in a
 > multi-tenant app, either keep agents to `run` scope, partition tenants into
 > distinct swarm classes, or enforce the boundary in your capture policy.
+
+The same boundary applies to `agent` scope. Its id is the agent class, so a
+bound tool shares that memory across every run and every tenant that uses the
+same agent class, and nothing clears it when a run ends. That is why the stock
+tools are unbound by default. Writing and reading are separate decisions: a
+bound `Remember` stores an `agent` write whatever the propagation policy is,
+while a bound `Recall` returns agent entries only when the swarm's propagation
+policy includes `MemoryScope::Agent` (the default policy is Run-only). In a
+multi-tenant application, use distinct agent classes per tenant or enforce
+tenant isolation in the memory policy and store design.
 
 ### Policy interaction
 
@@ -430,8 +440,10 @@ Neither tool bypasses Swarm's memory policies:
 - **`Remember` respects the capture policy.** Writes go through
   `SwarmMemory::put()`, which is decorated by the `RedactingMemoryStore`, so the
   `MemoryCapturePolicy` redacts (`[redacted]`) or drops (`Skip`) the entry at the
-  write boundary — the same enforcement any other write gets. PII an agent tries
-  to persist never enters memory if your policy redacts it.
+  write boundary. PII an agent tries to persist never enters memory if your
+  policy redacts or skips it. A redacted write is still reported as stored. A
+  skipped write is reported to the model as not stored, without exposing the
+  policy's reason.
 
 `Remember` also rejects the package-reserved `swarm:` key prefix, so an agent
 cannot overwrite framework-owned entries such as step outputs.
@@ -444,18 +456,46 @@ addresses its own scope. Invoked **outside** a swarm run (no active run), they
 degrade gracefully: instead of throwing, they return a short "memory is not
 available" string, so an agent wired with the tools still works standalone.
 
+### Declined writes
+
+`Remember` declines an empty key, a key using the reserved `swarm:` prefix, an
+unknown scope, a scope the active run cannot address, or a write the
+`MemoryCapturePolicy` skips. A skipped write returns `The entry [key] was not
+stored. Do not retry this write.` Redacted writes are still reported as stored.
+Swarm reports a declined call as `failed` in the step's `nativeResult->tools`
+projection. Stream consumers receive an unsuccessful `SwarmToolResult` whose
+`error` is the same decline message. The run continues. For argument and scope
+declines, the model can correct the arguments and retry. For a capture-policy
+skip, retrying the same key is skipped again, so the message tells the model not
+to retry. An operator can identify the skipped write through the
+`MemoryWriteSkipped` event, which carries the scope, scope id, and key without
+the value or the policy's reason.
+
+A decline can be marked failed only when the tool call carries both a provider
+tool-call id and an invocation id. Without both ids, it still reads as
+succeeded.
+
+This failure marking belongs to Swarm's result surfaces. Laravel AI still sends
+the ordinary string tool result back to the provider, stores it as an ordinary
+tool result in its own conversation store, and exposes an ordinary result on a
+nested agent-as-tool child's Laravel AI response. Invocation identity prevents
+a child's decline from marking its parent's agent-tool call as failed. Outside
+an active swarm run there is no run frame to mark, so the tools keep their
+graceful plain-string result.
+
 ### Memory tools with streaming
 
 `Recall` and `Remember` work transparently inside `$agent->stream(...)`. Because
-both implement `Laravel\Ai\Contracts\Tool`, `laravel/ai` already handles their
-invocation during a streamed turn — the package adds no streaming-specific tool
-code. When the model calls a memory tool mid-stream:
+both implement `Laravel\Ai\Contracts\Tool`, `laravel/ai` handles their
+invocation during a streamed turn. Swarm only adjusts the declined-write result
+before projecting, capturing, or replaying it. When the model calls a memory
+tool mid-stream:
 
 - The tool call and its result appear in the `StreamableSwarmResponse` as
-  ordinary `swarm_tool_call` / `swarm_tool_result` events, in order, exactly as
-  any other `laravel/ai` tool would surface. The memory side-effect (a
-  `Remember` write, a `Recall` read) happens at the point of the call, before
-  the result event is yielded.
+  ordinary `swarm_tool_call` / `swarm_tool_result` events, in order. Swarm marks
+  a declined write unsuccessful before capture and replay. The memory
+  side-effect (a `Remember` write, a `Recall` read) happens at the point of the
+  call, before the result event is yielded.
 - The sequential stream runner publishes the active run *before* it invokes the
   final agent's `stream()`, so a memory tool resolves its scope id from the
   ambient run identically to a `prompt()` run. A streamed `Recall` therefore
@@ -512,17 +552,59 @@ true, so adding the trait is inert until you opt in app-wide:
 // policies first.
 'memory' => [
     'tools' => [
-        'enabled'  => env('SWARM_MEMORY_TOOLS_ENABLED', false),
-        'recall'   => env('SWARM_MEMORY_TOOLS_RECALL', true),
-        'remember' => env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+        'enabled'     => env('SWARM_MEMORY_TOOLS_ENABLED', false),
+        'recall'      => env('SWARM_MEMORY_TOOLS_RECALL', true),
+        'remember'    => env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+        'agent_scope' => env('SWARM_MEMORY_TOOLS_AGENT_SCOPE', false),
     ],
 ],
 ```
 
 The `recall` / `remember` toggles enable each tool individually. The tool
-classes are resolved from the container, so you can bind a subclass — for
-example to override a tool's `description()`, or to bind it to a specific agent
-so the `agent` scope resolves to that agent's class.
+classes are resolved from the container, so you can bind a subclass, for
+example to override a tool's `description()`.
+
+#### Agent scope
+
+By default the memory tools are not bound to an agent, so `agent` scope is
+unaddressable: `Remember` declines an `agent` write and `Recall` finds nothing
+there. Two things, both required, turn it on:
+
+1. `swarm.memory.tools.agent_scope` (`SWARM_MEMORY_TOOLS_AGENT_SCOPE`) is true.
+   This is the app-wide switch and is off by default. While it is off, a
+   `forAgent()` binding has no effect, whoever made it.
+2. The tool is bound to its agent with `forAgent()`. With the trait, the agent
+   asks for that:
+
+```php
+public function tools(): iterable
+{
+    return [...$this->swarmMemoryTools(agentScope: true), new MyOtherTool];
+}
+```
+
+   For a custom or generated tool, bind it yourself:
+   `(new ProfileRemember)->forAgent($this)`.
+
+With both in place, `agent` scope resolves to that agent's class without
+subclassing. With either one missing the tool behaves as unbound.
+
+The one way around the key is deliberate: a subclass that overrides the
+protected `agent()` hook names its agent itself, as it could before
+`forAgent()` existed, and is not governed by `agent_scope`.
+
+Agent memory is shared across every run and every tenant of that agent class.
+These switches only decide whether the tools can address it. What agents are
+*shown* is a separate decision made by the swarm's propagation policy: a bound
+`Remember` stores the entry under any policy, and a bound `Recall` returns it
+only under a policy that includes `MemoryScope::Agent` (the default is
+Run-only). An application can therefore let an agent save notes that only its
+own code reads back, through `SwarmMemory`, without widening what any agent
+sees.
+
+A native per-run `withTools` configuration replaces the agent's tool list.
+Those substituted tool instances did not come from `swarmMemoryTools()` and
+remain unbound unless the application calls `forAgent()` itself.
 
 For worked, copy-paste patterns built on these hooks — per-user and tenant-scoped
 recall, a policy-enforced custom `Recall`, recall + redact, and sub-agent memory
@@ -536,11 +618,11 @@ Where the propagation policy decides what an agent *reads*, the **capture policy
 
 - **`Full`** — persist the value unchanged (the default for every write).
 - **`Redact`** — persist the entry with scalar values replaced by the `SwarmCapture::REDACTED` sentinel (`'[redacted]'`), preserving array structure and keys so the entry stays addressable. This is the same sentinel the audit capture path uses.
-- **`Skip`** — drop the entry entirely: no row is written and no `MemoryWritten` event fires. Skip suppresses *this* write only — any pre-existing entry at the address is left untouched (it is not deleted).
+- **`Skip`**: drop the entry entirely. No row is written and no `MemoryWritten` event fires. Skip suppresses *this* write only. Any pre-existing entry at the address is left untouched (it is not deleted). `SwarmMemory::put()` and `MemoryStore::put()` return an entry that was not persisted. That entry carries internal outcome metadata that applications must not rely on; `MemoryWriteSkipped` is the supported application signal. When the write comes from `Remember`, the model is told `The entry [key] was not stored. Do not retry this write.` without receiving the policy reason.
 
 This is the write-side counterpart to the audit `CapturePolicy` (`swarm.capture.*`): redacting here keeps PII out of memory in the first place, so it never reaches a frozen `MemorySnapshot`. Like the audit policy, a capture policy **never receives the value** — only the scope and key — so a decision cannot couple to payload shape or leak unredacted data.
 
-Enforcement lives in the `RedactingMemoryStore` decorator the container wraps around your memory driver (via `$app->extend(MemoryStore::class, …)`), so **every** write flows through one chokepoint — including a custom or companion driver you bind yourself. (Bind it with `bind()`/`singleton()`, not `Container::instance()`, so the decorator still wraps it.) Reads return already-redacted values, so the propagation view and frozen snapshots inherit redaction with no extra work.
+Enforcement for persisted writes lives in the `RedactingMemoryStore` decorator the container wraps around your memory driver (via `$app->extend(MemoryStore::class, …)`), so every persisted write flows through that chokepoint, including writes to a custom or companion driver you bind yourself. (Bind it with `bind()`/`singleton()`, not `Container::instance()`, so the decorator still wraps it.) A frozen replay's Run-scope buffer first consults the policy for `Skip`, allowing `Remember` to report the put-time decision immediately. The replay buffer does not apply `Redact`, so the agent reads its own accepted buffered write back unredacted during the retry. Accepted writes are evaluated again when a successful retry saves them through the live store, and `Redact` is applied at that save boundary. If the policy accepted a write during the retry but returns `Skip` when it is saved, `MemoryWriteSkipped` fires and the step fails instead of reporting a successful retry whose write was dropped. Reads from the persisted store return already-redacted values, so the propagation view and frozen snapshots inherit persisted redaction with no extra work.
 
 > **Scope.** Redaction applies at the persistence boundary and covers the entry **value** only — not the entry **`metadata`** (which carries functional annotations like `source`/`usage`) and not the **key** (keys are addressing; redacting them would break `get`/`all`). Don't put PII in memory metadata or keys. A run's own in-process `RunContext` also still holds the raw value it just wrote until the run ends; the policy governs what is *persisted*, snapshotted, and visible to other agents.
 
@@ -851,11 +933,34 @@ The snapshot captures only `MemoryScope::Run` entries. Conversation, Agent, and 
 
 ## Replay semantics
 
-When a durable run crashes mid-step and is retried, the runner needs to decide what memory the agent sees on the second attempt. Two modes are available, controlled by `swarm.memory.replay_mode`.
+When a durable step or a non-durable streamed step runs again after an interruption, the runner needs to decide what memory the agent sees on the next attempt. Two modes are available, controlled by `swarm.memory.replay_mode`.
 
 ### `frozen_view` (default)
 
-The agent re-executes against the `MemoryScope::Run` entries frozen in the snapshot captured at the original invocation. Live writes to Run scope during the retry are buffered and never reach the backing store, preserving the canonical audit record. This is the recommended mode for reproducible, audit-friendly runs.
+The agent re-executes against the `MemoryScope::Run` entries frozen in the snapshot captured at the original invocation. Run-scope writes and forgets are buffered during the retry. Reads continue to use the frozen snapshot with the retry's own buffered writes and forget masks overlaid, so an agent can read its own changes without seeing unrelated live drift. The replay buffer does not apply a capture-policy `Redact` decision. During the retry, the agent reads its own accepted buffered write back unredacted; the value is redacted when the live store saves it.
+
+The runner saves those mutations in their original order only after the retried step's agent invocation, guardrails, and step recording have succeeded. At that point step history has been written and `SwarmStepCompleted` has been dispatched. A save failure therefore leaves a step recorded as completed and then fails or retries the run path. Durable paths save before the durable checkpoint. A retry that fails before the save begins saves nothing. The frozen snapshot's `entries` remain unchanged by the save. Within one retry, the last mutation at an address wins, including over a value the original attempt wrote before crashing.
+
+The save is not atomic. If applying the mutation log fails part-way through,
+earlier mutations remain saved. If a durable checkpoint fails after the save,
+all saved mutations remain in place. When either failure leads to another
+retry, that retry applies its complete mutation sequence again, overwriting
+those addresses as needed. The save is not fenced by the durable lease: a
+retry worker that loses its lease after step recording and before the
+checkpoint still saves its mutations, and they are not rolled back. That
+lost worker exits without scheduling another retry. If the replacement worker
+has already checkpointed the step, no further retry re-saves those mutations.
+There is no transaction added to the `SwarmMemory` contract.
+
+The capture policy is checked when the retry buffers a put and again when the live store saves it. A put-time `Skip` is declined immediately, is not buffered, and emits `MemoryWriteSkipped`. `Redact` is applied at save time. If a write accepted during the retry becomes `Skip` at save time, `MemoryWriteSkipped` fires and `BuiltByBerry\LaravelSwarm\Exceptions\SwarmException` fails the step after its completion was recorded. Its message is `Memory capture policy skipped, at save time, write [<key>] for run [<run-id>] after accepting it during the retry. The retried step was already recorded as completed.`
+
+If an earlier retry saves a write after a later step's snapshot was frozen, a retry of that later step still reads its own frozen snapshot. It does not see the earlier retry's saved write. On a streamed static-hierarchical resume, every re-executed node that finds its snapshot installs its own frozen view and saves its mutation log again after that node passes guardrails and step recording.
+
+In concurrent static-parallel streaming, the parent persists each branch's snapshot before dispatch. A process-isolated child runs under the frozen view when it can resolve `MemoryReplayCoordinator` and read that snapshot from the configured snapshot store. Its Run-scope reads then come from the snapshot and its own buffer, not the live memory store. Non-Run reads and writes still fall through to the live store, so those operations need a backing store visible across processes if they must observe shared state. Each child returns its mutation log to the parent without saving it. After that branch passes its parent-side guardrail and step recording, the parent saves the log. Branch logs are saved in branch declaration order, so the last declared branch wins when replayed branches write the same key. The internal child-to-parent mutation payload can contain raw values; it is not a stream, history, audit, or diagnostic payload, and applications should not copy it into those surfaces.
+
+A commit saves only the mutation log from the replay boundary that the caller opened. A nested run cannot commit an outer run's buffered writes.
+
+Saved retry mutations emit the ordinary `MemoryWritten`, `MemoryRedacted`, and `MemoryForgotten` events, but those events carry no attempt, step, or replay identifier. The same events fire for mutations saved before a part-way save failure and for a save followed by a durable checkpoint failure. Events alone therefore cannot distinguish retry-saved values from first-attempt values. The frozen snapshot remains the record of what the original invocation saw.
 
 ### `fresh_execution`
 
@@ -899,11 +1004,9 @@ class MyIdempotentSwarm extends Swarm
 
 When the attribute is absent the global `swarm.memory.replay_mode` config applies.
 
-### Binding-restore constraint
+### Per-invocation replay boundary
 
-`MemoryReplayCoordinator::during()` implements the frozen-view swap by resolving the original `SwarmMemory` binding via `app()->make(SwarmMemory::class)`, installing a `ReplaySwarmMemory` decorator via `app()->instance(SwarmMemory::class, $replay)` for the duration of the callback, then restoring the original binding via `app()->instance(SwarmMemory::class, $original)` in a `finally` block.
-
-**Known constraint:** the restore step uses `instance()`, which always registers a singleton. If your application binds `SwarmMemory` as a factory (a non-singleton closure or a transient binding), the restore step silently converts it to singleton behavior for subsequent resolutions. The default binding is a singleton (`DefaultSwarmMemory`), so this does not affect standard setups. If you have customized the `SwarmMemory` binding to be non-singleton, document this trade-off in your service provider and verify the behavior under replay.
+`MemoryReplayCoordinator` installs `ReplaySwarmMemory` on the active run's `ActiveRunContext` frame, not as a container-global binding. Nested invocation frames inherit that override, and teardown clears it in `finally`. Concurrent in-process runs therefore keep separate frozen views. Generator-based runners retain a `ReplayBoundary` after teardown so they can save its mutations only after the caller's guardrail and recording gates pass.
 
 ---
 
@@ -965,6 +1068,9 @@ signals operators tune retention and capture policy against:
 - **Average bytes per write** — approximate JSON byte size of the persisted `value` + `metadata`, averaged per scope.
 - **Recall hit rate** — `MemoryRead` hits divided by total reads, per scope. Sustained low hit rates often indicate a propagation policy or scope mismatch.
 - **Snapshot footprint** — total snapshot count, average bytes per persisted snapshot row, and average entries per snapshot. Ballooning snapshot sizes are an early warning that capture policy is letting too much payload through.
+
+The entries-written count includes a retry's saved writes once per attempt that
+reaches the save.
 
 The card is registered automatically by `php artisan swarm:install:pulse` (re-run with `--force` after upgrading to pick up the new card and recorder), or you can wire it manually:
 

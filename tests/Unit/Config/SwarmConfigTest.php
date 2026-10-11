@@ -149,3 +149,17 @@ test('terminal callback documentation states the bounded delivery and shutdown g
         ->and($config)->toContain('one indexed existence check')
         ->and($config)->toContain('A delivery already past the kill-switch check may complete');
 });
+
+test('memory tools agent scope is off by default and reads its own environment variable', function (?string $value, bool $expected) {
+    $config = withEnvironment([
+        'SWARM_MEMORY_TOOLS_AGENT_SCOPE' => $value,
+    ], fn (): array => require __DIR__.'/../../../config/swarm.php');
+
+    expect($config['memory']['tools']['agent_scope'])->toBe($expected);
+})->with([
+    'unset' => [null, false],
+    'false' => ['false', false],
+    'zero' => ['0', false],
+    'true' => ['true', true],
+    'one' => ['1', true],
+]);

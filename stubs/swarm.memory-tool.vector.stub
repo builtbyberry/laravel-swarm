@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace {{ namespace }};
 
-use Laravel\Ai\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Tools\Recall;
 use Laravel\Ai\Tools\Request;
@@ -26,9 +25,14 @@ use Stringable;
  * withholds from this agent.
  *
  * This subclass defaults to the `{{ scopeCase }}` scope. Override the protected
- * hooks below to specialise it.
+ * hooks below to specialise it. To make the `agent` scope addressable, return
+ * `(new {{ class }})->forAgent($this)` from the agent's `tools()` method and
+ * set `swarm.memory.tools.agent_scope` to true; the binding has no effect
+ * while that key is off. For reads, the active propagation policy must also
+ * include Agent scope or the bound tool returns no Agent entries.
  *
  * See: docs/generators.md, docs/memory.md#recall-and-remember-tools,
+ * docs/memory-recipes.md#per-user-scoped-recall,
  * https://github.com/builtbyberry/laravel-swarm-memory-vector
  */
 class {{ class }} extends Recall
@@ -53,7 +57,7 @@ class {{ class }} extends Recall
     public function description(): Stringable|string
     {
         return <<<'TEXT'
-        Search this run's shared memory by meaning. Pass a natural-language
+        Search {{ scopeDescription }} by meaning. Pass a natural-language
         `query` to retrieve the most relevant entries by semantic similarity,
         or a `key`/`prefix` for an exact lookup. Only memory the active
         visibility policy permits this agent to see is returned.
@@ -115,14 +119,5 @@ class {{ class }} extends Recall
         }
 
         return MemoryScope::tryFrom($scope);
-    }
-
-    /**
-     * The agent this tool acts as. Return a concrete agent to make the `agent`
-     * scope addressable; leave null for a scope-driven tool.
-     */
-    protected function agent(): ?Agent
-    {
-        return null;
     }
 }

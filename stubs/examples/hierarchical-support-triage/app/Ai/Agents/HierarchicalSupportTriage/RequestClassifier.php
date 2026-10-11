@@ -80,6 +80,7 @@ class RequestClassifier extends ScriptedAgent implements HasStructuredOutput
                     'type' => 'worker',
                     'agent' => $agent,
                     'prompt' => $prompt,
+                    'with_outputs' => [],
                     'metadata' => ['category' => $category],
                     'next' => 'done',
                 ],

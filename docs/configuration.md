@@ -456,7 +456,8 @@ Controls the memory subsystem introduced in v0.9.0. Memory stores scoped values 
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
-| `swarm.memory.replay_mode` | string | `frozen_view` | `SWARM_MEMORY_REPLAY_MODE` | Controls what memory a durable agent sees when a step is retried after a crash. `frozen_view` — the agent re-executes against the `MemoryScope::Run` entries frozen in the snapshot taken at the original invocation; live writes during the retry are buffered and never reach the backing store. `fresh_execution` — the agent re-executes against live memory with no snapshot guard; use only when idempotency is guaranteed externally. Override per swarm class with the `#[MemoryReplay]` attribute. |
+| `swarm.memory.replay_mode` | string | `frozen_view` | `SWARM_MEMORY_REPLAY_MODE` | Controls what memory an agent sees when a step is retried after a crash. `frozen_view`: the agent re-executes against the `MemoryScope::Run` entries frozen at the original invocation, with its own buffered writes overlaid. After invocation, guardrails, and step recording succeed, buffered writes and forgets are saved through the live store in order. `fresh_execution`: the agent re-executes against live memory with no snapshot guard; use only when idempotency is guaranteed externally. Override per swarm class with the `#[MemoryReplay]` attribute. |
+| `swarm.memory.tools.agent_scope` | bool | `false` | `SWARM_MEMORY_TOOLS_AGENT_SCOPE` | Gates agent bindings made by `Recall::forAgent()`, `Remember::forAgent()`, or `swarmMemoryTools(agentScope: true)`. While false, those bindings do not make Agent scope addressable. A subclass that overrides `agent()` is not governed by this key, and Recall visibility still depends on the propagation policy. |
 
 ```env
 # .env — override the global default

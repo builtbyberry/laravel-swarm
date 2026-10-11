@@ -91,14 +91,24 @@ written as-is (`Full`), structurally redacted (`Redact`), or dropped entirely
 (`Skip`).
 
 Redaction is enforced by the `RedactingMemoryStore` decorator that wraps the
-memory driver (via `$app->extend(MemoryStore::class, …)`), so it is the single
-chokepoint every write passes through — including a custom or companion store a
-deployment binds itself (bind it, don't `Container::instance()` it). Critically,
-the agent-visible propagation view and the frozen `MemorySnapshot` read back
-through that same store — so PII redacted at write **never reaches a snapshot**,
-and the audit-replay record is clean by construction rather than by a separate
-scrubbing pass. A policy never sees the value it is deciding on (only the scope
-and key), so the policy code itself cannot become a leak path.
+memory driver (via `$app->extend(MemoryStore::class, …)`), so it is the
+chokepoint every persisted write passes through, including writes to a custom
+or companion store a deployment binds itself (bind it, don't
+`Container::instance()` it). A frozen replay's Run-scope buffer consults the
+policy for `Skip` when accepting a write. After the retry's success gates pass,
+accepted writes are saved through the decorator, where the current policy is
+evaluated again and `Redact` is applied. The replay buffer does not apply
+`Redact`, so the agent can read its own accepted buffered value unredacted
+during the retry. A newly skipped write fails the step. The agent-visible
+propagation view and the frozen `MemorySnapshot` entries read back through the
+store, so stored values inherit `Redact` and a `Skip` write adds no entry.
+Current limitation: the snapshot's `tool_calls` column records each memory-tool
+call's raw input and result without applying the capture policy. A value
+redacted or skipped in the stored entries can therefore still appear in
+`tool_calls` and in
+`swarm:memory:dump --include-snapshots`. A policy never sees the value it is
+deciding on (only the scope and key), so the policy code itself cannot become a
+leak path.
 
 **Scope.** Redaction covers the entry **value** only. The entry's `metadata`
 (functional annotations such as `source`/`usage`) and the entry **key** are
@@ -107,9 +117,9 @@ deliberate boundary, not an oversight: metadata and keys drive functional
 behavior (indexing, filtering, routing), so structurally redacting them would
 break lookups and ordering — and, as with the audit `CapturePolicy`, the policy
 never receives the value, so it cannot couple to payload shape. Keep PII in the
-entry value, where the policy can redact it; the value is also what flows into
-the propagation view, frozen snapshots, and `swarm:memory:dump`, so redacting it
-covers every downstream surface at once.
+entry value, where the policy can redact it; that redacted value flows into the
+propagation view and the snapshot's stored entries. The separate `tool_calls`
+limitation above still applies to snapshot exports.
 
 **Audit evidence.** Each capture decision is observable: a `Redact` write
 dispatches a `MemoryRedacted` event and a `Skip` dispatches `MemoryWriteSkipped`
@@ -180,13 +190,19 @@ itself auditable (failed reads do not dispatch).
 
 ### Replay determinism is the evidence
 
-When a durable agent retries after a crash, `MemoryReplayCoordinator` swaps the
-live store for a frozen, read-only view of the snapshot recorded at the original
-invocation (`ReplayMode::FrozenView`, the default). The agent re-runs against the
-exact `Run`-scoped state it saw before — regardless of any writes that happened
-between the failed attempt and the retry. This is what makes a run *reproducible*
-for an auditor: the inspector shows the snapshot, and a replay is guaranteed to
-reconstruct from that same snapshot.
+When an agent retries after a crash, `MemoryReplayCoordinator` installs a frozen
+view of the snapshot recorded at the original invocation
+(`ReplayMode::FrozenView`, the default). The agent re-runs against the exact
+`Run`-scoped state it saw before, regardless of writes that happened between the
+failed attempt and the retry. Its own buffered writes are visible within that
+invocation. Once invocation, guardrails, and step recording succeed, those
+mutations are saved through the live store in order without changing the
+snapshot entries. Those saves emit the ordinary memory events, but the events
+carry no attempt, step, or replay identifier. The same events fire for writes
+saved before a part-way save failure and for a save followed by a durable
+checkpoint failure. Events alone therefore cannot distinguish a value saved by
+a retry from one saved by the first attempt. The frozen snapshot remains the
+record of what the original invocation saw.
 
 That guarantee is backed by a regression suite, not just a design claim. The
 crash-resume replay-determinism tests (#118, `tests/Feature/Memory/ReplayDeterminismTest.php`)
@@ -591,7 +607,10 @@ artifacts. Each is produced by a command or config already covered above.
 - [ ] **Capture-policy configuration** — the `MemoryCapturePolicy`
   implementation and its binding (`swarm.memory.capture_policy`), proving which
   fields were redacted or skipped at write, backed by the `MemoryRedacted` /
-  `MemoryWriteSkipped` events your audit listener recorded.
+  `MemoryWriteSkipped` events your audit listener recorded. From v0.28.1, a
+  skipped Run-scope write during a `frozen_view` retry fires the event again, so
+  one logical write can produce one event per attempt and the event carries no
+  attempt marker.
 - [ ] **Retention proof** — the configured `swarm.memory.retention.days`
   windows and the `MemoryPurged` events (with `criteria.dry_run === false`)
   showing the schedule was enforced; or, under legal hold, the

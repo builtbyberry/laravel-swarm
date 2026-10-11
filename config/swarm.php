@@ -353,9 +353,10 @@ return [
          * Controls how a durable swarm re-executes after a crash-resume.
          *
          * 'frozen_view'     — agents re-execute against the memory snapshot frozen
-         *                     at the original invocation. Live writes are buffered
-         *                     and never reach the backing store, preserving the
-         *                     canonical audit record. Recommended for reproducible runs.
+         *                     at the original invocation. Run-scope writes and forgets
+         *                     are buffered, then saved after the retried step passes
+         *                     invocation, guardrails, and recording. Recommended for
+         *                     reproducible runs.
          *
          * 'fresh_execution' — agents re-execute against live memory with no snapshot
          *                     guard. Use only when idempotency is guaranteed externally.
@@ -478,8 +479,19 @@ return [
          *
          * 'recall' / 'remember' toggle each tool individually (both default on
          * once 'enabled' is true). The class names are resolved from the
-         * container, so bind a subclass to customise a tool's description or
-         * bind it to a specific agent for Agent-scope addressing.
+         * container, so bind a subclass to customise a tool's description.
+         *
+         * 'agent_scope' lets a memory tool act as a specific agent, which
+         * makes the agent scope addressable under that agent's class.
+         * **Disabled by default**: that scope is shared across every run and
+         * every tenant of the agent class, and nothing clears it when a run
+         * ends. While it is off, binding a tool with forAgent() has no
+         * effect, whether the HasSwarmMemoryTools trait does it or your own
+         * code does. With it on, an agent using the trait must still ask
+         * with swarmMemoryTools(agentScope: true). A subclass that overrides
+         * agent() names its agent itself and is not governed by this key.
+         * Which agents are shown agent-scope entries is decided separately,
+         * by the swarm's propagation policy.
          */
         'tools' => [
             'enabled' => filter_var(
@@ -492,6 +504,10 @@ return [
             ),
             'remember' => filter_var(
                 env('SWARM_MEMORY_TOOLS_REMEMBER', true),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+            'agent_scope' => filter_var(
+                env('SWARM_MEMORY_TOOLS_AGENT_SCOPE', false),
                 FILTER_VALIDATE_BOOLEAN,
             ),
         ],

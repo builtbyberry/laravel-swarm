@@ -522,9 +522,13 @@ providers and tools again.
   result during generator teardown. A hard process death or failed persistence
   is not a guaranteed flush or a receipt for an external effect.
 - **FrozenView:** when a prior snapshot is available, selected memory reads use
-  that frozen view. The final streamed agent is still invoked again; identical
-  memory does not guarantee identical provider output, event IDs or external
-  effects. FreshExecution opts out of frozen replay.
+  that frozen view. Run-scope writes and forgets are buffered and saved after
+  the re-executed step's invocation, guardrails, and step recording succeed. A
+  failure before that save discards the buffer; a part-way save failure leaves
+  mutations already saved in place. The final streamed agent is still invoked
+  again, and a later attempt can save the same mutations again. Identical memory
+  does not guarantee identical provider output, event IDs, or external effects.
+  FreshExecution opts out of frozen replay.
 - **Completed sequential steps:** a non-final step can be skipped only when its
   checkpoint was successfully written and remains readable. Its output/usage
   are rehydrated into the next step. Checkpoint writes are best-effort; missing

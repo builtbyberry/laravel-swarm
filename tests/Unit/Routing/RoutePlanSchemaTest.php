@@ -9,9 +9,9 @@ use Illuminate\JsonSchema\Types\Type;
 use Laravel\Ai\Schema\SchemaNormalizer;
 
 /**
- * Serialize a coordinator's schema() the way laravel/ai does before dispatch:
- * wrap the property map in an object type, render to a raw JSON Schema array,
- * then run it through laravel/ai's SchemaNormalizer.
+ * Serialize a coordinator's schema() through SchemaNormalizer. This checks the
+ * union support independently of the real ObjectSchema dispatch wire shape,
+ * which is guarded in RoutePlanSchemaWithOutputsTest.
  *
  * @param  array<string, Type>  $properties
  * @return array<string, mixed>
@@ -22,8 +22,8 @@ function normalizeCoordinatorSchema(JsonSchemaTypeFactory $factory, array $prope
 }
 
 /**
- * The example coordinator's schema, serialized + normalized the way laravel/ai
- * does before dispatch — the fixture the assertions below all read from.
+ * The example coordinator's schema serialized through SchemaNormalizer — the
+ * fixture the assertions below all read from.
  *
  * @return array<string, mixed>
  */
@@ -72,17 +72,27 @@ test('the finish union expresses exactly-one-of output / output_from', function 
 test('the node union locks each variant\'s required shape structurally', function () {
     $normalized = normalizedRoutePlanSchema();
 
+    $branches = $normalized['properties']['nodes']['properties']['respond']['anyOf'];
+
     $requiredSets = array_map(
         fn (array $branch): array => $branch['required'] ?? [],
-        $normalized['properties']['nodes']['properties']['respond']['anyOf'],
+        $branches,
+    );
+
+    $rollup = collect($branches)->first(
+        fn (array $branch): bool => ($branch['properties']['type']['enum'] ?? null) === ['rollup'],
+    );
+
+    $worker = collect($branches)->first(
+        fn (array $branch): bool => ($branch['properties']['type']['enum'] ?? null) === ['worker'],
     );
 
     // Assert the exact required-set of every branch — not just that the type
     // discriminators appear in the JSON. A regression dropping a required field
     // from worker/rollup/parallel (e.g. `branches`, `with_outputs`, `next`)
     // fails here, where a substring check on the 'type' enum would not.
-    expect($requiredSets)->toContain(['type', 'agent', 'prompt', 'next']);                   // worker
-    expect($requiredSets)->toContain(['type', 'agent', 'prompt', 'with_outputs', 'next']);   // rollup
+    expect($worker['required'])->toBe(['type', 'agent', 'prompt', 'with_outputs', 'next']);  // worker
+    expect($rollup['required'])->toBe(['type', 'agent', 'prompt', 'with_outputs', 'next']);  // rollup
     expect($requiredSets)->toContain(['type', 'branches', 'next']);                          // parallel
     expect($requiredSets)->toContain(['type', 'output']);                                    // finish (literal)
     expect($requiredSets)->toContain(['type', 'output_from']);                               // finish (from node)

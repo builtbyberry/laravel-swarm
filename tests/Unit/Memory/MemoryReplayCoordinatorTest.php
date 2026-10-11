@@ -3,9 +3,12 @@
 declare(strict_types=1);
 
 use BuiltByBerry\LaravelSwarm\Attributes\MemoryReplay;
+use BuiltByBerry\LaravelSwarm\Contracts\SnapshotsMemory;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Enums\ReplayMode;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWriteSkipped;
+use BuiltByBerry\LaravelSwarm\Events\Memory\MemoryWritten;
 use BuiltByBerry\LaravelSwarm\Memory\DefaultSwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
@@ -14,7 +17,11 @@ use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Tests\Support\InMemoryMemoryStore;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
+use BuiltByBerry\LaravelSwarm\Tests\Support\SkippingMemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Illuminate\Events\Dispatcher;
+use Illuminate\Support\Facades\Event;
+use Laravel\Ai\Tools\Request;
 
 /**
  * Unit tests for {@see MemoryReplayCoordinator}.
@@ -371,6 +378,79 @@ test('begin installs the override and returns a replay boundary when a snapshot 
     ActiveRunContext::exit();
 });
 
+test('commit saves replay mutations retained by a boundary after end', function () {
+    $store = new InMemoryMemoryStore;
+    $live = new DefaultSwarmMemory($store);
+    app()->instance(DefaultSwarmMemory::class, $live);
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'run-1', 0);
+    $coordinator = makeCoordinator($snapshots);
+    ActiveRunContext::enter('run-1', 'stdClass', new RunContext('run-1', 'task'));
+
+    $boundary = $coordinator->begin('stdClass', 'run-1', 0);
+    effectiveMemory()->put(MemoryScope::Run, 'run-1', 'finding', 'retry-value');
+    $coordinator->end($boundary);
+    $coordinator->commit($boundary);
+
+    expect($store->get(MemoryScope::Run, 'run-1', 'finding')?->value)->toBe('retry-value');
+    ActiveRunContext::exit();
+});
+
+test('commitMemory saves mutations from the replay installed by during', function () {
+    $store = new InMemoryMemoryStore;
+    $live = new DefaultSwarmMemory($store);
+    app()->instance(DefaultSwarmMemory::class, $live);
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'run-1', 0);
+    $coordinator = makeCoordinator($snapshots);
+
+    $coordinator->during('stdClass', 'run-1', 0, function (?MemorySnapshot $snapshot, ?ReplaySwarmMemory $replay) use ($coordinator): void {
+        effectiveMemory()->put(MemoryScope::Run, 'run-1', 'finding', 'retry-value');
+        $coordinator->commitMemory($replay, 'run-1');
+    }, new RunContext('run-1', 'task'));
+
+    expect($store->get(MemoryScope::Run, 'run-1', 'finding')?->value)->toBe('retry-value');
+});
+
+test('a nested fresh execution cannot commit its parent replay buffer', function () {
+    $store = new InMemoryMemoryStore;
+    $live = new DefaultSwarmMemory($store);
+    app()->instance(DefaultSwarmMemory::class, $live);
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'outer-run', 0);
+    $coordinator = makeCoordinator($snapshots);
+
+    try {
+        $coordinator->during('stdClass', 'outer-run', 0, function () use ($coordinator): void {
+            effectiveMemory()->put(MemoryScope::Run, 'outer-run', 'finding', 'outer-retry-value');
+
+            $coordinator->during('stdClass', 'inner-run', 0, function (?MemorySnapshot $snapshot, ?ReplaySwarmMemory $replay) use ($coordinator): void {
+                $coordinator->commitMemory($replay, 'inner-run');
+            }, new RunContext('inner-run', 'nested-task'));
+
+            throw new RuntimeException('outer-invocation-failed');
+        }, new RunContext('outer-run', 'outer-task'));
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toBe('outer-invocation-failed');
+    }
+
+    expect($store->get(MemoryScope::Run, 'outer-run', 'finding'))->toBeNull();
+});
+
+test('commit and commitMemory are no-ops on fresh execution', function () {
+    $store = new InMemoryMemoryStore;
+    app()->instance(DefaultSwarmMemory::class, new DefaultSwarmMemory($store));
+    $coordinator = makeCoordinator(new RecordingSnapshotsMemory);
+    ActiveRunContext::enter('run-1', 'stdClass', new RunContext('run-1', 'task'));
+
+    $boundary = $coordinator->begin('stdClass', 'run-1', 0);
+    $coordinator->commitMemory(null, 'run-1');
+    $coordinator->commit($boundary);
+
+    expect($store->all(MemoryScope::Run, 'run-1'))->toBeEmpty();
+    ActiveRunContext::exit();
+});
+
 test('begin honours fresh_execution mode and never installs an override', function () {
     config(['swarm.memory.replay_mode' => ReplayMode::FreshExecution->value]);
 
@@ -387,4 +467,58 @@ test('begin honours fresh_execution mode and never installs an override', functi
     expect(ActiveRunContext::currentMemory())->toBeNull();
 
     ActiveRunContext::exit();
+});
+
+test('during wires the bound capture policy into replayed Remember writes', function () {
+    Event::fake([MemoryWriteSkipped::class, MemoryWritten::class]);
+    bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'run-1', 0, [
+        ['scope' => 'run', 'scope_id' => 'run-1', 'key' => 'secret', 'value' => 'frozen', 'metadata' => []],
+    ]);
+    app()->instance(SnapshotsMemory::class, $snapshots);
+    $coordinator = app(MemoryReplayCoordinator::class);
+
+    [$result, $visible] = $coordinator->during(
+        'stdClass',
+        'run-1',
+        0,
+        fn (): array => [
+            app(Remember::class)->handle(new Request(['key' => 'secret', 'value' => 'replacement'], 'call-1')),
+            effectiveMemory()->get(MemoryScope::Run, 'run-1', 'secret'),
+        ],
+        new RunContext('run-1', 'task'),
+    );
+
+    expect($result)->toBe('The entry [secret] was not stored. Do not retry this write.')
+        ->and($visible)->toBe('frozen');
+    Event::assertDispatched(MemoryWriteSkipped::class, fn (MemoryWriteSkipped $event): bool => $event->key === 'secret');
+    Event::assertNotDispatched(MemoryWritten::class);
+});
+
+test('begin wires the bound capture policy into replayed Remember writes', function () {
+    Event::fake([MemoryWriteSkipped::class, MemoryWritten::class]);
+    bindMemoryCapturePolicy(new SkippingMemoryCapturePolicy(['secret']));
+    $snapshots = new RecordingSnapshotsMemory;
+    preloadSnapshot($snapshots, 'run-1', 0, [
+        ['scope' => 'run', 'scope_id' => 'run-1', 'key' => 'secret', 'value' => 'frozen', 'metadata' => []],
+    ]);
+    app()->instance(SnapshotsMemory::class, $snapshots);
+    $coordinator = app(MemoryReplayCoordinator::class);
+    ActiveRunContext::enter('run-1', 'stdClass', new RunContext('run-1', 'task'));
+
+    $boundary = $coordinator->begin('stdClass', 'run-1', 0);
+
+    try {
+        $result = app(Remember::class)->handle(new Request(['key' => 'secret', 'value' => 'replacement'], 'call-1'));
+        $visible = effectiveMemory()->get(MemoryScope::Run, 'run-1', 'secret');
+    } finally {
+        $coordinator->end($boundary);
+        ActiveRunContext::exit();
+    }
+
+    expect($result)->toBe('The entry [secret] was not stored. Do not retry this write.')
+        ->and($visible)->toBe('frozen');
+    Event::assertDispatched(MemoryWriteSkipped::class, fn (MemoryWriteSkipped $event): bool => $event->key === 'secret');
+    Event::assertNotDispatched(MemoryWritten::class);
 });

@@ -7,6 +7,7 @@ namespace BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents;
 use BuiltByBerry\LaravelSwarm\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
+use BuiltByBerry\LaravelSwarm\Tools\Remember;
 use Illuminate\Broadcasting\Channel;
 use Laravel\Ai\Approvals\Decisions;
 use Laravel\Ai\Contracts\AgentInput;
@@ -17,11 +18,13 @@ use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\Data\TextUsage;
 use Laravel\Ai\Responses\QueuedAgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
+use Laravel\Ai\Tools\Request;
 use RuntimeException;
 use Stringable;
 
 /**
- * A test fixture that spies on what SwarmMemory returns during each invocation.
+ * A shared read-spy fixture that records what SwarmMemory returns during each
+ * invocation. Tests focused on replayed writes may opt in to its Remember call.
  *
  * On its first attempt it throws so the durable runner schedules a retry.
  * After the retry, callers can inspect `self::$seenValues` to verify that the
@@ -39,13 +42,25 @@ class MemorySpyFlakyAgent implements Agent
     /** @var array<int, mixed> keyed by attempt number (1 = first attempt, 2 = first retry, …) */
     public static array $seenValues = [];
 
+    public static string $readKey = 'probe-key';
+
     public static ?string $runId = null;
+
+    public static bool $failAfterWrite = false;
+
+    public static bool $writeOnRetry = false;
+
+    public static int $writeAttempts = 0;
 
     public static function reset(?string $runId = null): void
     {
         self::$attempts = 0;
         self::$seenValues = [];
+        self::$readKey = 'probe-key';
         self::$runId = $runId;
+        self::$failAfterWrite = false;
+        self::$writeOnRetry = false;
+        self::$writeAttempts = 0;
     }
 
     public function instructions(): Stringable|string
@@ -67,11 +82,29 @@ class MemorySpyFlakyAgent implements Agent
         self::$seenValues[self::$attempts] = $memory->get(
             MemoryScope::Run,
             self::$runId ?? '',
-            'probe-key',
+            self::$readKey,
         );
 
         if (self::$attempts === 1) {
             throw new RuntimeException('memory-spy-crash-first-attempt');
+        }
+
+        if (self::$writeOnRetry) {
+            $result = app(Remember::class)->forAgent($this)->handle(new Request([
+                'key' => 'retry-write',
+                'value' => 'retry-value',
+                'scope' => 'run',
+            ]));
+
+            // Count only a write the tool accepted, so a test asserting on the
+            // counter proves the retry buffered a write, not merely ran.
+            if (str_starts_with($result, 'Stored ')) {
+                self::$writeAttempts++;
+            }
+        }
+
+        if (self::$failAfterWrite) {
+            throw new RuntimeException('memory-spy-failed-after-write');
         }
 
         return new AgentResponse('memory-spy', 'spy-success', new TextUsage, new Meta);

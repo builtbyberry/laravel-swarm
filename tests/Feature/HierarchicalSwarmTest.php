@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeEditor;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\ParallelBranchesRoutePlanCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalCoordinatorOnlySwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalDuplicateWorkerSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalEmptySwarm;
@@ -23,6 +24,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalLimitedSwarm
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMissingStructuredCoordinatorSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalMultiRouteSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalSingleRouteSwarm;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ParallelBranchesRoutePlanSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Support\HierarchicalTestPlan;
 use Carbon\CarbonInterval;
 use Illuminate\Concurrency\ConcurrencyManager;
@@ -44,6 +46,48 @@ beforeEach(function () {
     FakeWriter::fake(['writer-out']);
     FakeEditor::fake(['editor-out']);
 });
+
+/**
+ * @return array{start_at: string, nodes: array<string, array<string, mixed>>}
+ */
+function helperTypedParallelRoutePlan(?string $branchNext): array
+{
+    return [
+        'start_at' => 'fan',
+        'nodes' => [
+            'fan' => [
+                'type' => 'parallel',
+                'branches' => ['research', 'draft'],
+                'next' => 'join',
+            ],
+            'research' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'research-branch',
+                'with_outputs' => [],
+                'next' => $branchNext,
+            ],
+            'draft' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'draft-branch',
+                'with_outputs' => [],
+                'next' => $branchNext,
+            ],
+            'join' => [
+                'type' => 'worker',
+                'agent' => FakeResearcher::class,
+                'prompt' => 'combine-branches',
+                'with_outputs' => ['research', 'draft'],
+                'next' => 'done',
+            ],
+            'done' => [
+                'type' => 'finish',
+                'output_from' => 'join',
+            ],
+        ],
+    ];
+}
 
 test('hierarchical swarm executes a valid single-worker plan', function () {
     $response = FakeHierarchicalSingleRouteSwarm::make()->run('hierarchical-task');
@@ -759,6 +803,58 @@ editor-out
 PROMPT);
 });
 
+test('helper-typed parallel branches feed their outputs to the join in run mode', function (?string $branchNext) {
+    ParallelBranchesRoutePlanCoordinator::fake([
+        helperTypedParallelRoutePlan($branchNext),
+    ]);
+
+    $response = ParallelBranchesRoutePlanSwarm::make()->run('hierarchical-task');
+
+    expect($response->output)->toBe('research-out');
+    FakeWriter::assertPrompted('research-branch');
+    FakeEditor::assertPrompted('draft-branch');
+    FakeResearcher::assertPrompted(<<<'PROMPT'
+combine-branches
+
+Named outputs:
+[research]
+writer-out
+
+[draft]
+editor-out
+PROMPT);
+})->with([
+    'explicit null branch successors' => null,
+    'redundant join branch successors' => 'join',
+]);
+
+test('helper-typed parallel branches feed their outputs to the join in queue mode', function (?string $branchNext, string $runId) {
+    ParallelBranchesRoutePlanCoordinator::fake([
+        helperTypedParallelRoutePlan($branchNext),
+    ]);
+
+    $context = RunContext::from('queued-hierarchical-task', $runId);
+    $job = new InvokeSwarm(ParallelBranchesRoutePlanSwarm::class, $context->toQueuePayload());
+
+    $job->handle(app(SwarmRunner::class));
+
+    FakeWriter::assertPrompted('research-branch');
+    FakeEditor::assertPrompted('draft-branch');
+    FakeResearcher::assertPrompted(<<<'PROMPT'
+combine-branches
+
+Named outputs:
+[research]
+writer-out
+
+[draft]
+editor-out
+PROMPT);
+})->with([
+    'explicit null branch successors' => [null, 'queued-helper-parallel-null-run-id'],
+    'redundant join branch successors' => ['join', 'queued-helper-parallel-join-run-id'],
+]);
+
 test('workers after parallel groups can reference all branch outputs in queue mode', function () {
     FakeHierarchicalCoordinator::fake([
         HierarchicalTestPlan::make('parallel_node', [
@@ -837,6 +933,64 @@ Named outputs:
 writer-out
 
 [draft_copy]
+writer-out
+PROMPT);
+});
+
+test('hierarchical worker nodes resolve list-form upstream outputs using node ids as aliases', function () {
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'editor_node',
+            ],
+            'editor_node' => [
+                'type' => 'worker',
+                'agent' => FakeEditor::class,
+                'prompt' => 'editor-task',
+                'with_outputs' => ['writer_node'],
+            ],
+        ]),
+    ]);
+
+    FakeHierarchicalMultiRouteSwarm::make()->run('hierarchical-task');
+
+    FakeEditor::assertPrompted(<<<'PROMPT'
+editor-task
+
+Named outputs:
+[writer_node]
+writer-out
+PROMPT);
+});
+
+test('hierarchical rollup nodes resolve list-form upstream outputs using node ids as aliases', function () {
+    FakeHierarchicalCoordinator::fake([
+        HierarchicalTestPlan::make('writer_node', [
+            'writer_node' => [
+                'type' => 'worker',
+                'agent' => FakeWriter::class,
+                'prompt' => 'writer-task',
+                'next' => 'rollup_node',
+            ],
+            'rollup_node' => [
+                'type' => 'rollup',
+                'agent' => FakeEditor::class,
+                'prompt' => 'rollup-task',
+                'with_outputs' => ['writer_node'],
+            ],
+        ]),
+    ]);
+
+    FakeHierarchicalMultiRouteSwarm::make()->run('hierarchical-task');
+
+    FakeEditor::assertPrompted(<<<'PROMPT'
+rollup-task
+
+Named outputs:
+[writer_node]
 writer-out
 PROMPT);
 });

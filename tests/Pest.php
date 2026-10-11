@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryCapturePolicy;
+use BuiltByBerry\LaravelSwarm\Contracts\MemoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmMemory;
 use BuiltByBerry\LaravelSwarm\Memory\MemoryEntry;
 use BuiltByBerry\LaravelSwarm\Tests\ProcessConcurrencyTestCase;
 use BuiltByBerry\LaravelSwarm\Tests\Support\RecordingSnapshotsMemory;
@@ -13,6 +16,26 @@ pest()->extend(ProcessConcurrencyTestCase::class)->in('ProcessConcurrency');
 // Installer tests bind their own base case via `uses(SwarmInstallerTestCase::class)`
 // inside each file so each test gets an isolated host-app skeleton — see
 // tests/Installer/README.md.
+
+function bindMemoryCapturePolicy(MemoryCapturePolicy $policy): void
+{
+    app()->instance(MemoryCapturePolicy::class, $policy);
+    app()->forgetInstance(MemoryStore::class);
+    app()->forgetInstance(SwarmMemory::class);
+}
+
+dataset('decline causes', [
+    'empty key' => [[
+        'skip' => false,
+        'arguments' => ['key' => '', 'value' => 'x'],
+        'message' => 'A memory key is required.',
+    ]],
+    'capture-policy skip' => [[
+        'skip' => true,
+        'arguments' => ['key' => 'secret', 'value' => 'x'],
+        'message' => 'The entry [secret] was not stored. Do not retry this write.',
+    ]],
+]);
 
 /**
  * Flatten every MemoryEntry the runners handed to the recorder across all

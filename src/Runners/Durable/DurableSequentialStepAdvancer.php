@@ -6,6 +6,7 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Memory\MemoryReplayCoordinator;
 use BuiltByBerry\LaravelSwarm\Memory\MemorySnapshot;
+use BuiltByBerry\LaravelSwarm\Memory\ReplaySwarmMemory;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmStep;
 use BuiltByBerry\LaravelSwarm\Runners\SequentialRunner;
 use BuiltByBerry\LaravelSwarm\Support\SwarmExecutionState;
@@ -72,7 +73,12 @@ class DurableSequentialStepAdvancer
             $state->swarm::class,
             $runId,
             $expectedStepIndex,
-            fn (?MemorySnapshot $existing) => $this->sequential->streamSingleStep($state, $expectedStepIndex, $sink),
+            function (?MemorySnapshot $existing, ?ReplaySwarmMemory $replay) use ($state, $expectedStepIndex, $sink, $runId): SwarmStep {
+                $step = $this->sequential->streamSingleStep($state, $expectedStepIndex, $sink);
+                $this->coordinator->commitMemory($replay, $runId);
+
+                return $step;
+            },
             $state->context,
         );
     }
@@ -84,7 +90,12 @@ class DurableSequentialStepAdvancer
             $state->swarm::class,
             $state->context->runId,
             $expectedStepIndex,
-            fn (?MemorySnapshot $existing) => $this->sequential->runSingleStep($state, $expectedStepIndex),
+            function (?MemorySnapshot $existing, ?ReplaySwarmMemory $replay) use ($state, $expectedStepIndex): SwarmStep {
+                $step = $this->sequential->runSingleStep($state, $expectedStepIndex);
+                $this->coordinator->commitMemory($replay, $state->context->runId);
+
+                return $step;
+            },
             $state->context,
         );
     }

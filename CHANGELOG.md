@@ -1,5 +1,97 @@
 # Changelog
 
+## v0.28.1 - 2026-10-10
+
+Post-ship fixes for v0.28.0 found against a live model: make the
+`RoutePlanSchema` helpers emit route plans the hierarchical planner accepts, and
+stop the stock memory tools reporting success for a write that stored
+nothing.
+
+### Added
+
+- **`HasSwarmMemoryTools` can reach the `agent` scope without subclassing
+  (#569).** `Recall` and `Remember` gain `forAgent()`, and the trait can bind
+  them to the using agent. This is off by default and needs two things: the new
+  `swarm.memory.tools.agent_scope` key (`SWARM_MEMORY_TOOLS_AGENT_SCOPE`,
+  default `false`), without which no `forAgent()` binding takes effect, and
+  `swarmMemoryTools(agentScope: true)` in the agent (or your own `forAgent()`
+  call on a custom tool). With either left off, the tools behave as in v0.28.0,
+  apart from the decline now reading as failed. A subclass that overrides
+  `agent()` is not governed by the key, and an `agent()` override wins over a
+  `forAgent()` binding. Agent memory is keyed by agent class, so it is shared
+  across runs and tenants of that class. Writing and reading are separate: a
+  bound `Remember` stores the entry under any propagation policy, and a bound
+  `Recall` returns it only under a policy that includes the `agent` scope.
+
+### Changed
+
+- **Behavior change: a `frozen_view` retry's memory writes are now saved
+  (#575).** Under the default replay mode, a Run-scope `SwarmMemory` put or
+  forget made through the replay view, including a `Remember` write, was held
+  in memory and discarded, yet read as stored. Those mutations are now saved
+  once the retried step's invocation, guardrails, and step recording succeed,
+  before the durable checkpoint, and later steps can read them. A retry that
+  fails before that point saves nothing. This changes documented default
+  behaviour and has no switch: the save is not atomic, a successful retry now
+  emits the ordinary memory events, and a write the capture policy skips at
+  save time fails the step. See
+  [UPGRADING.md](UPGRADING.md#upgrading-to-v0281) before upgrading.
+- **Regression coverage for the `frozen_view` retry save (#585).** New
+  runner-level tests drive the recovery described in UPGRADING.md: after a
+  durable checkpoint failure that follows the save, and after a save-time
+  capture-policy `Skip` on the durable sequential and branch paths, the next
+  retry saves its complete mutation sequence again and the downstream step
+  reads the value. A structural test pins, per runner, how many replay
+  boundaries are opened and how many are saved, so a runner path that opens
+  one without saving fails the suite, and a second pins the streamed
+  tool-result handlers to marking declined calls first. Test-only change — no
+  `src/` behavior change.
+
+### Fixed
+
+- **Declined `Remember` writes now read as failed (#569).** A write that stored
+  nothing (empty key, reserved `swarm:` prefix, unknown scope, or a scope the
+  run cannot address) is reported as failed in `nativeResult->tools` and as an
+  unsuccessful `SwarmToolResult` event, with the decline message as `error`.
+  These existing calls previously read as succeeded; their reported outcome
+  changes to failed. The run continues and the model can retry.
+- **A `Remember` write the capture policy skips now reads as failed (#574).**
+  When a `MemoryCapturePolicy` returns `Skip`, the tool tells the model `The
+  entry [key] was not stored. Do not retry this write.` and the call is
+  reported as failed in `nativeResult->tools` and as an unsuccessful
+  `SwarmToolResult` event. It previously answered `Stored [key] ...` and read
+  as succeeded while storing nothing; the reported outcome of that existing
+  call changes to failed. The policy's reason is not shown to the model. An
+  application whose policy skips writes will see those tool calls move from
+  succeeded to failed in its tool results, events, and any metrics built on
+  them; nothing more or less is stored than before. A direct
+  `SwarmMemory::put()` or `MemoryStore::put()` returns a prospective entry that
+  was not persisted. Its outcome metadata is internal and applications must not
+  rely on it; `MemoryWriteSkipped` is the supported application signal.
+- **`make:memory-tool --scope=agent` no longer generates an unaddressable tool
+  (#569).** The command now warns that the generated tool needs a `forAgent()`
+  binding and the `agent_scope` key, and new stubs no longer generate an
+  `agent()` override. Existing generated classes that override `agent()` keep
+  working; remove the `null`-returning placeholder from a previously generated
+  tool before binding it with `forAgent()`.
+- **Route plans following `RoutePlanSchema::rollup()` / `node()` now validate
+  (#568).** The planner accepts `with_outputs` as a list of node ids (alias =
+  node id) alongside the existing alias map, and `RoutePlanSchema::worker()`
+  now declares `with_outputs` as required (it may be empty). A provider
+  following a `worker()` / `node()` schema therefore emits `with_outputs` on
+  worker nodes (`[]` when none), and the worker schema's `required` set gains
+  that field. The planner still accepts a worker node that omits it, so
+  scripted coordinators and PHP-authored plans need no change; alias maps
+  validate as before, and static plans may also use the list form.
+- **Helper-typed parallel fan-outs and terminal workers now validate (#572).**
+  `RoutePlanSchema::worker()` declares `next` as required but nullable, and the
+  planner treats a plain worker branch's `next` as redundant when it names the
+  join of every parallel group that owns it. The worker schema's `next` type
+  changes from string to string-or-null for callers snapshot-testing it.
+  Existing valid PHP-authored plans keep validating unchanged; a static plan
+  whose plain branch names its group's join now validates instead of throwing,
+  and a model constrained by `worker()` may now return `next: null`.
+
 ## v0.28.0 - 2026-10-06
 
 Native feature access through Laravel Swarm workflows.

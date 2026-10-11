@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace {{ namespace }};
 
-use Laravel\Ai\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Tools\{{ baseTool }};
 
@@ -18,11 +17,15 @@ use BuiltByBerry\LaravelSwarm\Tools\{{ baseTool }};
  * run's, conversation's, agent's, or swarm's memory.
  *
  * This subclass defaults the tool to the `{{ scopeCase }}` scope. Override the
- * protected hooks below to specialise it — for example, tenant-scope a read,
- * add validation to a write, or bind the tool to a specific agent so the
- * `agent` scope becomes addressable.
+ * protected hooks below to specialise it, for example tenant-scope a read or
+ * add validation to a write. To make the `agent` scope addressable, return
+ * `(new {{ class }})->forAgent($this)` from the agent's `tools()` method and
+ * set `swarm.memory.tools.agent_scope` to true; the binding has no effect
+ * while that key is off. For reads, the active propagation policy must also
+ * include Agent scope or the bound tool returns no Agent entries.
  *
- * See: docs/generators.md, docs/memory.md#recall-and-remember-tools
+ * See: docs/generators.md, docs/memory.md#recall-and-remember-tools,
+ * docs/memory-recipes.md#per-user-scoped-recall
  */
 class {{ class }} extends {{ baseTool }}
 {
@@ -55,18 +58,5 @@ class {{ class }} extends {{ baseTool }}
         }
 
         return MemoryScope::tryFrom($scope);
-    }
-
-    /**
-     * The agent this tool acts as. Return a concrete agent to make the `agent`
-     * scope addressable (per-agent-class memory); leave null for a
-     * scope-driven, agent-agnostic tool.
-     *
-     * TODO: return an agent instance here if this tool should read/write the
-     * `agent` scope, e.g. `return new \App\Ai\Agents\Researcher;`.
-     */
-    protected function agent(): ?Agent
-    {
-        return null;
     }
 }

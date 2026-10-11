@@ -34,9 +34,10 @@ use Throwable;
  *
  * The scope id is never accepted from the model. It is resolved from the
  * ambient {@see ActiveRunContext} (Run → run id, Swarm → swarm class,
- * Conversation → the run's bound conversation id when present), so an agent
- * cannot read another run's, swarm's, or conversation's memory by guessing an
- * id.
+ * Agent → a tool bound with {@see forAgent()} while
+ * `swarm.memory.tools.agent_scope` is on, Conversation → the run's bound
+ * conversation id when present), so an agent cannot read another run's,
+ * swarm's, agent's, or conversation's memory by guessing an id.
  *
  * Outside a swarm run (no active context) the tool degrades gracefully: it
  * returns a short "memory is not available" string instead of throwing, so an
@@ -44,6 +45,8 @@ use Throwable;
  */
 class Recall implements Tool
 {
+    protected ?Agent $boundAgent = null;
+
     public function __construct(
         protected readonly ?string $description = null,
     ) {}
@@ -61,13 +64,39 @@ class Recall implements Tool
      */
     public function description(): Stringable|string
     {
-        return $this->description ?? <<<'TEXT'
+        if ($this->description !== null) {
+            return $this->description;
+        }
+
+        $description = <<<'TEXT'
         Read shared memory accumulated during this run. Pass a `key` to read one
         value, a `prefix` to read every key starting with it, or neither to list
         the whole `scope`. `scope` defaults to "run" (memory for the current
         task); use "swarm" for state shared across the whole swarm. Only memory
         the active visibility policy permits this agent to see is returned.
         TEXT;
+
+        if ($this->agent() !== null) {
+            $description .= ' '.<<<'TEXT'
+            Use "agent" to read this agent's own memory from earlier runs; it is
+            returned only when the swarm's propagation policy includes the agent scope.
+            TEXT;
+        }
+
+        return $description;
+    }
+
+    /**
+     * Get a copy of the tool bound to the given agent, so the Agent scope is
+     * gathered under that agent's class. The binding takes effect only
+     * while `swarm.memory.tools.agent_scope` is on.
+     */
+    public function forAgent(Agent $agent): static
+    {
+        $tool = clone $this;
+        $tool->boundAgent = $agent;
+
+        return $tool;
     }
 
     /**
@@ -172,12 +201,26 @@ class Recall implements Tool
     }
 
     /**
-     * The agent the tool reads as, when the propagation policy keys on agent
-     * identity. Null by default; {@see Recall} is scope-driven, not agent-bound.
+     * The agent the tool reads as when the propagation policy keys on agent
+     * identity: the one bound with {@see forAgent()}, while
+     * `swarm.memory.tools.agent_scope` is on. A subclass that overrides this
+     * hook names its agent itself and is not subject to that key.
      */
     protected function agent(): ?Agent
     {
-        return null;
+        return $this->agentScopeEnabled() ? $this->boundAgent : null;
+    }
+
+    /**
+     * Whether `swarm.memory.tools.agent_scope` allows a {@see forAgent()}
+     * binding to take effect. Off, or unreadable, leaves the tool unbound.
+     */
+    protected function agentScopeEnabled(): bool
+    {
+        $container = Container::getInstance();
+
+        return $container->bound('config')
+            && (bool) $container->make('config')->get('swarm.memory.tools.agent_scope', false);
     }
 
     /**

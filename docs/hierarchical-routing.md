@@ -63,6 +63,7 @@ The normalized payload contract is:
 Node definitions use a `type` discriminator:
 
 - `worker`
+- `rollup`
 - `parallel`
 - `finish`
 
@@ -96,6 +97,17 @@ public function schema(JsonSchema $schema): array
 exactly-one-of `output` / `output_from` union), and `node()` (the full
 discriminated union of all four). Each returns a first-class `Type`, so you can
 compose them anywhere a schema property is expected.
+
+The `worker()` and `rollup()` helpers declare `with_outputs` as a list of node
+ids; each injected output is labelled by that same node id. `worker()` requires
+the field but permits `[]` when there are no prior outputs, while `rollup()`
+requires at least one id. A list is necessary because `laravel/ai` closes every
+object at dispatch, so a free-form alias map in the schema cannot carry keys.
+The `worker()` helper also requires `next`, but its value may be `null` when the
+worker is a parallel branch or the last node in the run. For a plain branch
+worker, the planner also accepts `next` naming the join of every parallel group
+that owns it and drops that redundant edge, provided the worker is not also
+`start_at`, another node's `next`, or a loop target.
 
 Two boundaries to keep in mind:
 
@@ -135,10 +147,31 @@ Fields:
 
 - `agent`: a worker agent class returned from `agents()`
 - `prompt`: the literal base prompt for that worker
-- `with_outputs`: optional alias-to-node-id map
+- `with_outputs`: optional alias-to-node-id map, or a list of node ids where each
+  alias equals its node id
 - `metadata`: optional step metadata
-- `next`: optional next node id
+- `next`: next node id; omit it or set it to `null` when the worker is a parallel
+  branch or the last node of the run (the run then returns that worker's output)
 - `loop`: optional bounded loop back-edge (see [Bounded Loops](#bounded-loops))
+
+The list form is concise when the node id is also the desired label:
+
+```json
+{
+  "with_outputs": ["classify_node"]
+}
+```
+
+PHP-authored plans may keep using the alias-map form shown in the full worker
+example above.
+
+### Rollup Nodes
+
+Rollup nodes are worker-shaped nodes (`agent`, `prompt`, `with_outputs`, `next`)
+that digest the outputs named by `with_outputs`. `with_outputs` must name at
+least one node, in either form, and a rollup cannot define a `loop`. See
+[Rollup Nodes](streaming-substrate-author-guide.md#rollup-nodes) for what a
+rollup seals and how later nodes may reference it.
 
 ### Parallel Nodes
 
@@ -156,7 +189,12 @@ Rules:
 
 - `branches` may only reference worker nodes
 - `next` is required in v1; every parallel group must join into a subsequent node before the workflow can finish
-- worker nodes used as branches may not define their own `next`
+- a branch has no successor of its own — omit `next` or set it to `null`
+- a plain worker branch may instead name the join of every parallel group that
+  owns it, and the planner drops that redundant edge, provided the branch is not
+  also `start_at`, another node's `next`, or a loop target
+- any other `next` on a branch, and any `next` on a rollup branch, is rejected;
+  see [Bounded Loops](#bounded-loops) for the separate branch-loop rule
 - branch workers cannot depend on sibling branch outputs
 - in `prompt()`, branches execute concurrently
 - in `queue()`, with `swarm.queue.hierarchical_parallel.coordination` set to `in_process` (the default), branches execute sequentially in declaration order in v1
@@ -413,7 +451,13 @@ The plan must satisfy all of these:
 - finish nodes may not define `next`
 - parallel branches may only reference worker nodes
 - parallel nodes must define `next` in v1
-- worker nodes used as parallel branches may not define `next`
+- a parallel branch has no successor of its own, so it omits `next` or sets it
+  to `null`
+- a plain worker branch may instead name the join of every parallel group that
+  owns it; the planner drops that redundant edge when the branch is not also
+  `start_at`, another node's `next`, or a loop target
+- any other `next` on a branch, and any `next` on a rollup branch, is rejected;
+  see [Bounded Loops](#bounded-loops) for the separate branch-loop rule
 - named outputs may only reference previously completed nodes
 - finish `output_from` may only reference a previously completed node
 - a `loop` back-edge must be bounded by a positive `max_iterations` and target

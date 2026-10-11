@@ -24,6 +24,9 @@ use BuiltByBerry\LaravelSwarm\Memory\ReplaySwarmMemory;
  */
 final class ActiveRunRecord
 {
+    /** @var list<array{invocation: string, id: string, message: string}> */
+    public array $declinedToolCalls = [];
+
     public function __construct(
         public readonly string $runId,
         public readonly string $swarmClass,

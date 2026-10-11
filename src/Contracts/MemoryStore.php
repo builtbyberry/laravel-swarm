@@ -30,6 +30,8 @@ interface MemoryStore
      * Persist an entry, inserting or updating by `(scope, scope_id, key)`.
      *
      * Returns the persisted entry with `createdAt` and `updatedAt` populated.
+     * When the capture policy skips the write, returns a prospective entry
+     * that was not persisted.
      */
     public function put(MemoryEntry $entry): MemoryEntry;
 

@@ -20,6 +20,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextDelta;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmTextEnd;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolCall;
 use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmToolResult;
+use BuiltByBerry\LaravelSwarm\Support\DeclinedToolResults;
 use BuiltByBerry\LaravelSwarm\Support\NativeStepResultProjector;
 use BuiltByBerry\LaravelSwarm\Support\RunContext;
 use BuiltByBerry\LaravelSwarm\Support\SwarmCapture;
@@ -182,6 +183,8 @@ class StreamEventMapper
         }
 
         if ($event instanceof ToolResult) {
+            DeclinedToolResults::applyToStreamEvent($event);
+
             $matchedCallId = $event->toolResult->id;
             $matchedCall = $accumulator->pendingToolCalls[$matchedCallId] ?? null;
 

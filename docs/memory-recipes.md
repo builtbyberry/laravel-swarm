@@ -319,9 +319,12 @@ Agent B: recall(key: "ssn")
 The policy **never receives the value** — only the scope and key — so a decision
 cannot couple to payload shape or leak the unredacted data. Redaction covers the
 entry **value** only: keys stay intact (they are addressing) and so does
-`metadata`, so don't put PII in either. Because the snapshot freezes the
-already-redacted view, the PII never reaches a frozen `MemorySnapshot` or a
-`swarm:memory:dump` export.
+`metadata`, so don't put PII in either. The snapshot's stored entries freeze the
+already-redacted view, and a skipped write adds no entry. Current limitation:
+its `tool_calls` column records each memory-tool call's raw input and result
+without applying the capture policy, so a redacted or skipped value can still
+appear there and in a
+`swarm:memory:dump --include-snapshots` export.
 
 **When to use.** Any regulated workload where agents may write free-form values
 you can't fully trust to be PII-free. See
@@ -334,16 +337,22 @@ for worked HIPAA-/SOX-aware configurations.
 
 ## Sub-agent with memory continuity
 
-**Problem.** You have a reusable sub-agent — a classifier, a researcher, a
-profile-builder — that should accumulate state *across* invocations and runs, not
+**Problem.** You have a reusable sub-agent, such as a classifier, researcher, or
+profile-builder, that should accumulate state *across* invocations and runs, not
 start cold every time. Run scope is wrong (it's cleared with the run); you want
 memory keyed to the agent itself.
 
-**Solution.** That is exactly the `agent` scope — memory addressed by the agent
+**Solution.** That is exactly the `agent` scope, memory addressed by the agent
 *class*, so it persists for that agent across every run. But `agent` scope is only
-addressable when the tool knows which agent it acts as: the shipped `Recall` and
-`Remember` are scope-driven and return `null` from `agent()` by default, so they
-can't resolve it. Bind the tool to a concrete agent by overriding `agent()`.
+addressable when the tool knows which agent it acts as. Bind a custom tool with
+`forAgent()` and set `swarm.memory.tools.agent_scope`
+(`SWARM_MEMORY_TOOLS_AGENT_SCOPE`) to true; while that key is off a `forAgent()`
+binding has no effect. For the stock `Recall` and `Remember`,
+`HasSwarmMemoryTools` binds them when the agent calls
+`swarmMemoryTools(agentScope: true)`. Recall also needs a propagation policy
+whose `scopes()` includes `MemoryScope::Agent`; otherwise the bound tool returns
+nothing from Agent scope. This is the same policy prerequisite described in
+[Per-user scoped recall](#per-user-scoped-recall).
 
 Scaffold both halves with the generator:
 
@@ -352,13 +361,12 @@ php artisan make:memory-tool ProfileRecall --scope=agent
 php artisan make:memory-tool ProfileRemember --base=remember --scope=agent
 ```
 
-Then fill in the `agent()` hook the stub leaves as a `TODO`:
+The command warns that an agent-scoped tool must be bound. Keep the generated
+scope and name, then bind both tools from the agent:
 
 ```php
 namespace App\Ai\Tools;
 
-use App\Ai\Agents\ProfileBuilder;
-use Laravel\Ai\Contracts\Agent;
 use BuiltByBerry\LaravelSwarm\Enums\MemoryScope;
 use BuiltByBerry\LaravelSwarm\Tools\Remember;
 
@@ -370,21 +378,35 @@ class ProfileRemember extends Remember
     {
         return 'profile_remember';
     }
+}
+```
 
-    /**
-     * Bind the tool to ProfileBuilder, so the `agent` scope resolves to that
-     * agent's class — its memory persists across every run the agent runs in.
-     */
-    protected function agent(): ?Agent
+```php
+namespace App\Ai\Agents;
+
+use App\Ai\Tools\ProfileRecall;
+use App\Ai\Tools\ProfileRemember;
+use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\HasTools;
+
+class ProfileBuilder implements Agent, HasTools
+{
+    public function tools(): iterable
     {
-        return new ProfileBuilder;
+        return [
+            (new ProfileRecall)->forAgent($this),
+            (new ProfileRemember)->forAgent($this),
+        ];
     }
 }
 ```
 
+Overriding the protected `agent()` hook remains supported when a custom tool
+needs a fixed identity instead of the agent instance that registered it.
+
 Now when `ProfileBuilder` calls `profile_remember`, the write is addressed to
-`ProfileBuilder::class`; the next time the agent runs — in this swarm or any
-other — its `ProfileRecall` reads the same entries back. Writes are tagged with
+`ProfileBuilder::class`; the next time the agent runs, in this swarm or any
+other, its `ProfileRecall` reads the same entries back. Writes are tagged with
 the agent class in their metadata, so `MemoryWritten` audit listeners can
 attribute them.
 
