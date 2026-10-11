@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.28.1 - unreleased
+## v0.28.1 - 2026-10-10
 
 Post-ship fixes for v0.28.0 found against a live model: make the
 `RoutePlanSchema` helpers emit route plans the hierarchical planner accepts, and
