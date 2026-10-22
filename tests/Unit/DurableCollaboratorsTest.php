@@ -207,20 +207,26 @@ test('queued hierarchical durable coordinator creates coordination run and dispa
     {
         public function __construct(private readonly DurableJobDispatcher $jobs) {}
 
-        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void
+        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue, bool $directDispatch = false): int
         {
             $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue);
+
+            return 0;
         }
 
-        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void
+        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue, bool $directDispatch = false): int
         {
             $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue);
+
+            return 0;
         }
 
         public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void
         {
             $this->jobs->dispatchQueuedResumeById($runId, $connection, $queue);
         }
+
+        public function settle(int $entryId, ?string $runId = null): void {}
 
         public function drain(array $types = [], int $limit = 100): DrainResult
         {

@@ -61,12 +61,12 @@ class DurableJobDispatcher
         unset($dispatch);
     }
 
-    public function makeStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null): AdvanceDurableSwarm
+    public function makeStepJob(string $runId, int $stepIndex, ?string $connection = null, ?string $queue = null, ?int $outboxEntryId = null): AdvanceDurableSwarm
     {
         $job = match ($this->nativeInputVersion($runId)) {
-            NativeInputManifest::SETTINGS_VERSION => new AdvanceNativeAgentSettingsDurableSwarm($runId, $stepIndex),
-            NativeInputManifest::VERSION => new AdvanceNativeInputDurableSwarm($runId, $stepIndex),
-            default => new AdvanceDurableSwarm($runId, $stepIndex),
+            NativeInputManifest::SETTINGS_VERSION => new AdvanceNativeAgentSettingsDurableSwarm($runId, $stepIndex, outboxEntryId: $outboxEntryId),
+            NativeInputManifest::VERSION => new AdvanceNativeInputDurableSwarm($runId, $stepIndex, outboxEntryId: $outboxEntryId),
+            default => new AdvanceDurableSwarm($runId, $stepIndex, outboxEntryId: $outboxEntryId),
         };
 
         if ($job instanceof AdvanceNativeInputDurableSwarm || $job instanceof AdvanceNativeAgentSettingsDurableSwarm) {
@@ -84,12 +84,12 @@ class DurableJobDispatcher
         return $job;
     }
 
-    public function makeBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null): AdvanceDurableBranch
+    public function makeBranchJob(string $runId, string $branchId, ?string $connection = null, ?string $queue = null, ?int $outboxEntryId = null): AdvanceDurableBranch
     {
         $job = match ($this->nativeInputVersion($runId)) {
-            NativeInputManifest::SETTINGS_VERSION => new AdvanceNativeAgentSettingsDurableBranch($runId, $branchId),
-            NativeInputManifest::VERSION => new AdvanceNativeInputDurableBranch($runId, $branchId),
-            default => new AdvanceDurableBranch($runId, $branchId),
+            NativeInputManifest::SETTINGS_VERSION => new AdvanceNativeAgentSettingsDurableBranch($runId, $branchId, outboxEntryId: $outboxEntryId),
+            NativeInputManifest::VERSION => new AdvanceNativeInputDurableBranch($runId, $branchId, outboxEntryId: $outboxEntryId),
+            default => new AdvanceDurableBranch($runId, $branchId, outboxEntryId: $outboxEntryId),
         };
 
         if ($job instanceof AdvanceNativeInputDurableBranch || $job instanceof AdvanceNativeAgentSettingsDurableBranch) {

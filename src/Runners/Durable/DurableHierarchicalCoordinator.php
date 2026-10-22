@@ -40,6 +40,7 @@ class DurableHierarchicalCoordinator
         protected DurableBranchCoordinator $branches,
         protected HierarchicalRunner $hierarchical,
         protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
         protected MemoryReplayCoordinator $coordinator,
     ) {}
 
@@ -127,9 +128,11 @@ class DurableHierarchicalCoordinator
                 $updated = $this->runs->requireRun($run['run_id']);
 
                 if (($run['coordination_profile'] ?? CoordinationProfile::StepDurable->value) === CoordinationProfile::QueueHierarchicalParallel->value) {
+                    // Queued-hierarchical resume stays relay-driven; only its branches are eager.
                     $this->outbox->enqueueQueuedResume($run['run_id'], $updated['queue_connection'], $updated['queue_name']);
                 } else {
-                    $this->outbox->enqueueStep($run['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                    $nextStepIndex = (int) $updated['next_step_index'];
+                    $this->eager->enqueueStep($run['run_id'], $nextStepIndex, $updated['queue_connection'], $updated['queue_name']);
                 }
             });
 
@@ -145,12 +148,9 @@ class DurableHierarchicalCoordinator
                 continue;
             }
 
-            $this->outbox->enqueueBranch(
-                $run['run_id'],
-                (string) $branch['branch_id'],
-                $branch['queue_connection'] ?? $run['queue_connection'],
-                $branch['queue_name'] ?? $run['queue_name'],
-            );
+            $connection = $branch['queue_connection'] ?? $run['queue_connection'];
+            $queue = $branch['queue_name'] ?? $run['queue_name'];
+            $this->eager->enqueueBranch($run['run_id'], (string) $branch['branch_id'], $connection, $queue);
         }
     }
 

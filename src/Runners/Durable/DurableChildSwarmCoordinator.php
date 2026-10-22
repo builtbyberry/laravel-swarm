@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Events\SwarmChildCompleted;
@@ -46,7 +45,7 @@ class DurableChildSwarmCoordinator
         protected Application $application,
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
-        protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
         protected ConfigRepository $config,
         protected LoggerInterface $logger,
         protected SwarmAuditDispatcher $audit,
@@ -366,7 +365,7 @@ class DurableChildSwarmCoordinator
                 }
 
                 $updated = $this->runs->requireRun($parent['run_id']);
-                $this->outbox->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                $this->eager->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
 
                 return true;
             });

@@ -1,5 +1,48 @@
 # Changelog
 
+## realtime-dispatch - unreleased
+
+Durable real-time dispatch and relay cost — a durable step reaches the queue the moment it commits, instead of waiting for the next swarm:relay tick, and the relay costs less when it does run.
+
+### Added
+
+- **Eager durable dispatch on commit.** New `swarm.durable.eager_dispatch` key
+  (`SWARM_DURABLE_EAGER_DISPATCH`, default `false`). With it on, the next durable
+  step or branch job, and each `queue()` `multi_worker` hierarchical branch job,
+  is pushed as soon as the swarm transaction that wrote its outbox row commits,
+  instead of waiting for the next `swarm:relay` run. The job deletes its own
+  outbox row once it holds its lease, so the relay never pushes it a second time;
+  a lost push is recovered by the relay's existing stale-reclaim after
+  `swarm.durable.relay.reservation_timeout_seconds`, and a duplicate push is a
+  no-op. Keep `swarm:relay` scheduled `everyMinute()` as the recovery sweep
+  rather than shortening its interval for latency. When a step enters a declared
+  wait or dispatches a child swarm, the next step is not pushed until the wait or
+  child releases it. The queued hierarchical resume job stays relay-driven, so
+  `queue()` `multi_worker` runs still wait up to one relay interval at the join.
+  Nothing is pushed eagerly on the `sync` queue driver. With the flag off,
+  dispatch is exactly as before for the bundled outbox (a custom `DurableOutbox`
+  must be updated either way; see Changed). Rolling back is safe: jobs queued by
+  the new code that run under the old code simply never delete their row, and
+  the relay reclaims it after the reservation timeout and dispatches a duplicate
+  that does nothing. No data is lost and there is no schema change. See
+  [Durable Eager Dispatch](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/configuration.md#durable-eager-dispatch).
+
+### Changed
+
+- **BREAKING for custom `DurableOutbox` implementations.**
+  `enqueueStep()` and `enqueueBranch()` now take a trailing
+  `bool $directDispatch = false` and return the id of the row they write, and
+  the contract gains `settle(int $entryId, ?string $runId = null): void`. This applies on upgrade
+  whether or not `swarm.durable.eager_dispatch` is on: PHP rejects the old
+  signatures when the class loads. The bundled `DatabaseDurableOutbox` is
+  updated; code that only injects the contract is unaffected. See [UPGRADING.md](UPGRADING.md#custom-durableoutbox-implementations).
+- `DrainResult::$reclaimed` (and the `command.relay` audit event's
+  `reclaimed_count`) now also counts eager-dispatch rows whose pushed job did not
+  settle them before the reservation went stale, not only rows a relay claimed
+  and abandoned. Those are also reported on their own as the new
+  `DrainResult::$reclaimedDirect` and `direct_reclaimed_count`, so
+  `reclaimed_count` minus `direct_reclaimed_count` stays the relay-health signal.
+
 ## v0.28.1 - 2026-10-10
 
 Post-ship fixes for v0.28.0 found against a live model: make the

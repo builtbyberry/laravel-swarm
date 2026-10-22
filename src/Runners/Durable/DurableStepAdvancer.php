@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
+use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
 use BuiltByBerry\LaravelSwarm\Exceptions\LostDurableLeaseException;
@@ -30,6 +31,7 @@ class DurableStepAdvancer
         protected DurableStepExecutionBuilder $executionBuilder,
         protected DurableSequentialStepAdvancer $sequential,
         protected DurableStepCheckpointCoordinator $checkpoints,
+        protected DurableOutbox $outbox,
     ) {}
 
     public function afterStepCheckpointForTesting(?callable $hook): void
@@ -42,7 +44,7 @@ class DurableStepAdvancer
         $this->checkpoints->beforeStepCheckpointForTesting($hook);
     }
 
-    public function advance(string $runId, int $expectedStepIndex, callable $enterDurableBoundary): void
+    public function advance(string $runId, int $expectedStepIndex, callable $enterDurableBoundary, ?int $outboxEntryId = null): void
     {
         $run = $this->runs->requireRun($runId);
         $stepLeaseSeconds = $this->runs->validateStepTimeoutSeconds((int) $run['step_timeout_seconds']);
@@ -50,6 +52,12 @@ class DurableStepAdvancer
 
         if ($token === null) {
             return;
+        }
+
+        // A job pushed directly on commit settles its own outbox entry the moment it
+        // holds the lease — before any work — so the relay never redispatches it.
+        if ($outboxEntryId !== null) {
+            $this->outbox->settle($outboxEntryId, $runId);
         }
 
         $run = $this->runs->requireRun($runId);
