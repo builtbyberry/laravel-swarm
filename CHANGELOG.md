@@ -32,7 +32,7 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 - **BREAKING for custom `DurableOutbox` implementations.**
   `enqueueStep()` and `enqueueBranch()` now take a trailing
   `bool $directDispatch = false` and return the id of the row they write, and
-  the contract gains `settle(int $entryId): void`. This applies on upgrade
+  the contract gains `settle(int $entryId, ?string $runId = null): void`. This applies on upgrade
   whether or not `swarm.durable.eager_dispatch` is on: PHP rejects the old
   signatures when the class loads. The bundled `DatabaseDurableOutbox` is
   updated; code that only injects the contract is unaffected. See [UPGRADING.md](UPGRADING.md#custom-durableoutbox-implementations).

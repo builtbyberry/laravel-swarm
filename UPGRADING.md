@@ -17,8 +17,9 @@ signatures when the class loads.
   written. When `$directDispatch` is `true`, write the row already reserved
   (`reserved_at` set to now) so your relay leaves it alone until the reservation
   goes stale.
-- Add `settle(int $entryId): void`, which deletes the row with that id. It must
-  not throw: a failed settle should be reported and swallowed.
+- Add `settle(int $entryId, ?string $runId = null): void`, which deletes the row
+  with that id. `$runId` is context for reporting a failure only. It must not
+  throw: a failed settle should be reported and swallowed.
 
 `enqueueQueuedResume()` is unchanged.
 
