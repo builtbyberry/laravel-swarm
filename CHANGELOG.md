@@ -6,11 +6,35 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
 
 ### Added
 
-_To be filled in during release wrap-up._
+- **Eager durable dispatch on commit.** New `swarm.durable.eager_dispatch` key
+  (`SWARM_DURABLE_EAGER_DISPATCH`, default `false`). With it on, the next durable
+  step or branch job, and each `queue()` `multi_worker` hierarchical branch job,
+  is pushed as soon as the swarm transaction that wrote its outbox row commits,
+  instead of waiting for the next `swarm:relay` run. The job deletes its own
+  outbox row once it holds its lease, so the relay never pushes it a second time;
+  a lost push is recovered by the relay's existing stale-reclaim after
+  `swarm.durable.relay.reservation_timeout_seconds`, and a duplicate push is a
+  no-op. Keep `swarm:relay` scheduled `everyMinute()` as the recovery sweep
+  rather than shortening its interval for latency. When a step enters a declared
+  wait or dispatches a child swarm, the next step is not pushed until the wait or
+  child releases it. The queued hierarchical resume job stays relay-driven. With
+  the flag off, dispatch is exactly as before. Rolling back is safe: jobs queued
+  by the new code that run under the old code simply never delete their row, and
+  the relay removes it after the reservation timeout. No data is lost and there
+  is no schema change. See
+  [Durable Eager Dispatch](docs/configuration.md#durable-eager-dispatch).
 
 ### Changed
 
-_To be filled in during release wrap-up._
+- **BREAKING for custom `DurableOutbox` implementations.**
+  `enqueueStep()` and `enqueueBranch()` now take a trailing
+  `bool $directDispatch = false` and return the id of the row they write, and
+  the contract gains `settle(int $entryId): void`. The bundled
+  `DatabaseDurableOutbox` is updated; code that only injects the contract is
+  unaffected. See [UPGRADING.md](UPGRADING.md#custom-durableoutbox-implementations).
+- `DrainResult::$reclaimed` (and the `swarm:relay` reclaimed count) now also
+  counts eager-dispatch rows whose pushed job did not settle them before the
+  reservation went stale, not only rows a relay claimed and abandoned.
 
 ## v0.28.1 - 2026-10-10
 

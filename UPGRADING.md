@@ -1,5 +1,25 @@
 # Upgrading Laravel Swarm
 
+## Upgrading to realtime-dispatch
+
+### Custom `DurableOutbox` implementations
+
+The `DurableOutbox` contract changed to support eager durable dispatch
+(`swarm.durable.eager_dispatch`). The bundled `DatabaseDurableOutbox` is updated
+for you; applications that only *inject* `DurableOutbox` need no changes.
+
+If your application binds its **own `DurableOutbox` implementation**, update it:
+
+- `enqueueStep()` and `enqueueBranch()` take a trailing
+  `bool $directDispatch = false` parameter and return `int`, the id of the row
+  written. When `$directDispatch` is `true`, write the row already reserved
+  (`reserved_at` set to now) so your relay leaves it alone until the reservation
+  goes stale.
+- Add `settle(int $entryId): void`, which deletes the row with that id. It must
+  not throw: a failed settle should be reported and swallowed.
+
+`enqueueQueuedResume()` is unchanged.
+
 ## Upgrading to v0.28.1
 
 This patch deliberately departs from the additive-only patch policy stated

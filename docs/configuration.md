@@ -382,6 +382,43 @@ Without the relay, durable runs stall permanently after the first step completes
 | `swarm.durable.relay.limit` | int | `100` | `SWARM_DURABLE_RELAY_LIMIT` | Maximum outbox entries drained per relay invocation. The `--limit` option on `swarm:relay` overrides this at runtime, capped at 10,000. |
 | `swarm.durable.relay.stale_warning_threshold_seconds` | int | `0` | `SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS` | How old an unclaimed outbox row must be before `swarm:health` reports a warning — applies to both the durable outbox (`swarm:health --durable`) and the audit outbox (checked on bare `swarm:health`). `0` uses `2 × reservation_timeout_seconds` as the threshold. |
 
+### Durable Eager Dispatch
+
+By default a durable step or branch reaches the queue only when `swarm:relay`
+drains its outbox row, so the time between one step finishing and the next one
+starting is bounded by the relay schedule. Do not schedule the relay every
+second to shorten that: turn on eager dispatch instead and keep the relay on
+`everyMinute()`.
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `swarm.durable.eager_dispatch` | bool | `false` | `SWARM_DURABLE_EAGER_DISPATCH` | Push the next advance job as soon as the transaction that wrote its outbox row commits, instead of waiting for the relay. Covers durable steps and branches and `queue()` `multi_worker` hierarchical branches; the queued hierarchical resume job stays relay-driven. |
+
+With the flag on:
+
+- The outbox row is still written in the same transaction as the checkpoint, but
+  already reserved, so the relay leaves it alone. The pushed job deletes the row
+  as soon as it holds its lease.
+- The relay becomes the recovery sweep. If a push is lost (a process killed
+  between commit and push, a queue outage), the row's reservation goes stale and
+  the next relay run reclaims and dispatches it. Recovery therefore takes
+  `reservation_timeout_seconds` plus up to one relay interval. Keep `swarm:relay`
+  scheduled.
+- The reservation clock starts when the row is written, not when the job is
+  pushed. A job that waits in the queue longer than `reservation_timeout_seconds`
+  is pushed a second time by the relay; the duplicate is a safe no-op. Raising the
+  timeout means fewer duplicates under a queue backlog, but slower recovery of a
+  lost push and slower health detection.
+- `swarm:relay`'s reclaimed count includes eager pushes that did not settle in
+  time, not only relay runs that died mid-claim.
+- `swarm:health --durable` reports a reserved row as pending only once its latest
+  reservation is older than twice `reservation_timeout_seconds`, so a lost eager
+  push shows up there after up to 2× the timeout. A relay attempt that fails
+  renews the reservation and restarts that window.
+- After a deploy or rollback, restart queue workers as usual. Jobs queued by the
+  new code and run by old workers simply never delete their row; the relay
+  reclaims it after the timeout. No data is lost and there is no schema change.
+
 ### Durable Webhooks
 
 Webhook support for durable runs allows external systems to deliver signals and results via HTTP. See [durable-webhooks.md](durable-webhooks.md) for full webhook configuration and signing.
