@@ -1,5 +1,17 @@
 # Changelog
 
+## realtime-dispatch - unreleased
+
+Durable real-time dispatch and relay cost — a durable step reaches the queue the moment it commits, instead of waiting for the next swarm:relay tick, and the relay costs less when it does run.
+
+### Added
+
+_To be filled in during release wrap-up._
+
+### Changed
+
+_To be filled in during release wrap-up._
+
 ## v0.28.1 - 2026-10-10
 
 Post-ship fixes for v0.28.0 found against a live model: make the
