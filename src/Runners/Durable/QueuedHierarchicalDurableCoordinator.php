@@ -38,6 +38,7 @@ class QueuedHierarchicalDurableCoordinator
         protected DurableBranchCoordinator $branches,
         protected DurableJobDispatcher $jobs,
         protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
         protected Connection $connection,
         protected SwarmAttributeResolver $resolver,
         protected NativeInputManager $nativeInputs,
@@ -131,7 +132,9 @@ class QueuedHierarchicalDurableCoordinator
                 'queue_hierarchical_waiting_parallel' => true,
             ]);
 
-        $this->connection->transaction(function () use ($runId, $token, $context, $boundary, $branches, $state): void {
+        $direct = $this->eager->enabled();
+
+        $this->connection->transaction(function () use ($runId, $token, $context, $boundary, $branches, $state, $direct): void {
             $this->durableRuns->waitForBranches($runId, new BranchWaitPayload(
                 executionToken: $token,
                 nextStepIndex: $boundary->nextStepIndexAfterJoin,
@@ -171,12 +174,13 @@ class QueuedHierarchicalDurableCoordinator
             $run = $this->runs->requireRun($runId);
 
             foreach ($this->durableRuns->branchesFor($runId, $boundary->parentParallelNodeId) as $branch) {
-                $this->outbox->enqueueBranch(
-                    $runId,
-                    (string) $branch['branch_id'],
-                    $branch['queue_connection'] ?? $run['queue_connection'],
-                    $branch['queue_name'] ?? $run['queue_name'],
-                );
+                $connection = $branch['queue_connection'] ?? $run['queue_connection'];
+                $queue = $branch['queue_name'] ?? $run['queue_name'];
+                $entryId = $this->outbox->enqueueBranch($runId, (string) $branch['branch_id'], $connection, $queue, $direct);
+
+                if ($direct) {
+                    $this->eager->branch($entryId, $runId, (string) $branch['branch_id'], $connection, $queue);
+                }
             }
         });
     }

@@ -47,6 +47,7 @@ class DurableChildSwarmCoordinator
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
         protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
         protected ConfigRepository $config,
         protected LoggerInterface $logger,
         protected SwarmAuditDispatcher $audit,
@@ -342,7 +343,8 @@ class DurableChildSwarmCoordinator
                 continue;
             }
 
-            $released = $this->connection->transaction(function () use ($parent, $child, $waitName): bool {
+            $direct = $this->eager->enabled();
+            $released = $this->connection->transaction(function () use ($parent, $child, $waitName, $direct): bool {
                 if (! $this->durableRuns->releaseWaitWithOutcome($parent['run_id'], $waitName, 'child_'.$child['status'], [
                     'status' => $child['status'],
                     'child_run_id' => $child['child_run_id'],
@@ -366,7 +368,11 @@ class DurableChildSwarmCoordinator
                 }
 
                 $updated = $this->runs->requireRun($parent['run_id']);
-                $this->outbox->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                $entryId = $this->outbox->enqueueStep($parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name'], $direct);
+
+                if ($direct) {
+                    $this->eager->step($entryId, $parent['run_id'], (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                }
 
                 return true;
             });

@@ -17,8 +17,10 @@ namespace BuiltByBerry\LaravelSwarm\Responses;
  *               timeout. Each is reported via report() so the outage appears in the error tracker.
  * - claimed:    total rows atomically reserved in phase 1 of this drain call.
  * - reclaimed:  subset of claimed rows whose reserved_at was already set (non-null) before being
- *               overwritten — indicates the relay previously claimed but did not complete these
- *               entries (e.g. the relay process was killed or timed out mid-run).
+ *               overwritten — either the relay previously claimed but did not complete these
+ *               entries (e.g. the relay process was killed or timed out mid-run), or the entries
+ *               were written for direct dispatch and the pushed job did not settle them before
+ *               the reservation went stale (a lost push, or a queue wait longer than the timeout).
  *
  * total() returns dispatched + skipped (entries removed from the outbox). It does not include
  * failed, because failed entries remain in the outbox and are not "done".

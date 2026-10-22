@@ -165,22 +165,28 @@ function synchronousDurableOutbox(DurableJobDispatcher $jobs): DurableOutbox
     {
         public function __construct(private readonly DurableJobDispatcher $jobs) {}
 
-        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void
+        public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue, bool $directDispatch = false): int
         {
             $dispatch = $this->jobs->dispatchStep($runId, $stepIndex, $connection, $queue);
             unset($dispatch);
+
+            return 0;
         }
 
-        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void
+        public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue, bool $directDispatch = false): int
         {
             $dispatch = $this->jobs->dispatchBranch($runId, $branchId, $connection, $queue);
             unset($dispatch);
+
+            return 0;
         }
 
         public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void
         {
             $this->jobs->dispatchQueuedResumeById($runId, $connection, $queue);
         }
+
+        public function settle(int $entryId): void {}
 
         public function drain(array $types = [], int $limit = 100): DrainResult
         {

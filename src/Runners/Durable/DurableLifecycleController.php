@@ -38,6 +38,7 @@ class DurableLifecycleController
         protected DurableChildSwarmCoordinator $children,
         protected SwarmAuditDispatcher $audit,
         protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
     ) {}
 
     public function pause(string $runId): DurablePauseResult
@@ -110,7 +111,8 @@ class DurableLifecycleController
         $context = null;
         $updated = null;
 
-        $resumed = $this->connection->transaction(function () use ($runId, $run, &$context, &$updated): bool {
+        $direct = $this->eager->enabled();
+        $resumed = $this->connection->transaction(function () use ($runId, $run, $direct, &$context, &$updated): bool {
             if (! $this->durableRuns->resume($runId)) {
                 return false;
             }
@@ -124,12 +126,12 @@ class DurableLifecycleController
             }
 
             if (! $this->runs->isQueueHierarchicalParallel($updated)) {
-                $this->outbox->enqueueStep(
-                    $runId,
-                    (int) ($updated['next_step_index'] ?? $run['next_step_index']),
-                    $updated['queue_connection'],
-                    $updated['queue_name'],
-                );
+                $nextStepIndex = (int) ($updated['next_step_index'] ?? $run['next_step_index']);
+                $entryId = $this->outbox->enqueueStep($runId, $nextStepIndex, $updated['queue_connection'], $updated['queue_name'], $direct);
+
+                if ($direct) {
+                    $this->eager->step($entryId, $runId, $nextStepIndex, $updated['queue_connection'], $updated['queue_name']);
+                }
             }
 
             return true;

@@ -32,6 +32,7 @@ class DurableSignalHandler
         protected SwarmAuditDispatcher $audit,
         protected DurableOutbox $outbox,
         protected Connection $connection,
+        protected DurableEagerDispatcher $eager,
     ) {}
 
     public function signal(string $runId, string $name, mixed $payload = null, ?string $idempotencyKey = null): DurableSignalResult
@@ -42,7 +43,8 @@ class DurableSignalHandler
         $accepted = false;
 
         if (($signal['duplicate'] ?? false) !== true && $run['status'] === 'waiting') {
-            $accepted = $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload): bool {
+            $direct = $this->eager->enabled();
+            $accepted = $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload, $direct): bool {
                 if (! $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id'])) {
                     return false;
                 }
@@ -61,7 +63,11 @@ class DurableSignalHandler
 
                 $updated = $this->runs->requireRun($runId);
                 if ($updated['status'] === 'pending') {
-                    $this->outbox->enqueueStep($runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                    $entryId = $this->outbox->enqueueStep($runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name'], $direct);
+
+                    if ($direct) {
+                        $this->eager->step($entryId, $runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
+                    }
                 }
 
                 return true;

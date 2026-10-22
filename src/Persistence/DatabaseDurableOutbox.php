@@ -30,19 +30,31 @@ class DatabaseDurableOutbox implements DurableOutbox
         protected DurableJobDispatcher $jobs,
     ) {}
 
-    public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue): void
+    public function enqueueStep(string $runId, int $stepIndex, ?string $connection, ?string $queue, bool $directDispatch = false): int
     {
-        $this->insert(DurableDispatchType::Step, $runId, ['step_index' => $stepIndex], $connection, $queue);
+        return $this->insert(DurableDispatchType::Step, $runId, ['step_index' => $stepIndex], $connection, $queue, $directDispatch);
     }
 
-    public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue): void
+    public function enqueueBranch(string $runId, string $branchId, ?string $connection, ?string $queue, bool $directDispatch = false): int
     {
-        $this->insert(DurableDispatchType::Branch, $runId, ['branch_id' => $branchId], $connection, $queue);
+        return $this->insert(DurableDispatchType::Branch, $runId, ['branch_id' => $branchId], $connection, $queue, $directDispatch);
     }
 
     public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void
     {
-        $this->insert(DurableDispatchType::QueuedResume, $runId, [], $connection, $queue);
+        $this->insert(DurableDispatchType::QueuedResume, $runId, [], $connection, $queue, false);
+    }
+
+    public function settle(int $entryId): void
+    {
+        try {
+            $this->table()->where('id', $entryId)->delete();
+        } catch (Throwable $e) {
+            // A failed settle leaves the row reserved; the relay reclaims it once the
+            // reservation goes stale and dispatches a duplicate that acquireLease()
+            // turns into a no-op. Never fail the step for it.
+            $this->safeReport($e);
+        }
     }
 
     /**
@@ -287,20 +299,25 @@ class DatabaseDurableOutbox implements DurableOutbox
     }
 
     /**
+     * A direct-dispatch row is born reserved: drain()'s claim predicate skips it
+     * until the reservation is older than reservation_timeout_seconds, which is
+     * exactly the existing stale-reclaim path a relay-claimed row takes when its
+     * relay dies mid-run.
+     *
      * @param  array<string, mixed>  $payload
      */
-    protected function insert(DurableDispatchType $type, string $runId, array $payload, ?string $connection, ?string $queue): void
+    protected function insert(DurableDispatchType $type, string $runId, array $payload, ?string $connection, ?string $queue, bool $directDispatch): int
     {
         $now = Carbon::now('UTC');
 
-        $this->table()->insert([
+        return (int) $this->table()->insertGetId([
             'run_id' => $runId,
             'dispatch_type' => $type->value,
             'payload' => json_encode($payload),
             'queue_connection' => $connection,
             'queue_name' => $queue,
             'available_at' => $now,
-            'reserved_at' => null,
+            'reserved_at' => $directDispatch ? $now : null,
             'created_at' => $now,
         ]);
     }

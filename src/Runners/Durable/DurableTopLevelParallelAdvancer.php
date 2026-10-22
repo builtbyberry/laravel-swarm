@@ -28,6 +28,7 @@ class DurableTopLevelParallelAdvancer
         protected DurableBranchCoordinator $branches,
         protected DurableRunTerminalHandler $terminal,
         protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
     ) {}
 
     /**
@@ -66,7 +67,9 @@ class DurableTopLevelParallelAdvancer
             $branches[] = $this->branches->withBranchRouting($state->swarm, $state->context, $branch, $run);
         }
 
-        $this->connection->transaction(function () use ($token, $state, $stepLeaseSeconds, $branches, $run): void {
+        $direct = $this->eager->enabled();
+
+        $this->connection->transaction(function () use ($token, $state, $stepLeaseSeconds, $branches, $run, $direct): void {
             $this->historyStore->syncDurableState($state->context->runId, 'running', $this->capture->context($state->context), $state->context->metadata, $this->runs->ttlSeconds(), false, $token, $stepLeaseSeconds);
             $this->durableRuns->waitForBranches($state->context->runId, new BranchWaitPayload(
                 executionToken: $token,
@@ -78,12 +81,13 @@ class DurableTopLevelParallelAdvancer
             ));
 
             foreach ($branches as $branch) {
-                $this->outbox->enqueueBranch(
-                    $state->context->runId,
-                    (string) $branch['branch_id'],
-                    $branch['queue_connection'] ?? $run['queue_connection'],
-                    $branch['queue_name'] ?? $run['queue_name'],
-                );
+                $connection = $branch['queue_connection'] ?? $run['queue_connection'];
+                $queue = $branch['queue_name'] ?? $run['queue_name'];
+                $entryId = $this->outbox->enqueueBranch($state->context->runId, (string) $branch['branch_id'], $connection, $queue, $direct);
+
+                if ($direct) {
+                    $this->eager->branch($entryId, $state->context->runId, (string) $branch['branch_id'], $connection, $queue);
+                }
             }
         });
     }
