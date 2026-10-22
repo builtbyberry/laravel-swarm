@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Events\SwarmSignalled;
 use BuiltByBerry\LaravelSwarm\Events\SwarmWaiting;
@@ -30,7 +29,6 @@ class DurableSignalHandler
         protected DurableRunContext $runs,
         protected DurablePayloadCapture $payloads,
         protected SwarmAuditDispatcher $audit,
-        protected DurableOutbox $outbox,
         protected Connection $connection,
         protected DurableEagerDispatcher $eager,
     ) {}
@@ -43,8 +41,7 @@ class DurableSignalHandler
         $accepted = false;
 
         if (($signal['duplicate'] ?? false) !== true && $run['status'] === 'waiting') {
-            $direct = $this->eager->enabled();
-            $accepted = $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload, $direct): bool {
+            $accepted = $this->connection->transaction(function () use ($runId, $name, $signal, $capturedPayload): bool {
                 if (! $this->durableRuns->releaseWaitWithSignal($runId, $name, (int) $signal['id'])) {
                     return false;
                 }
@@ -63,11 +60,7 @@ class DurableSignalHandler
 
                 $updated = $this->runs->requireRun($runId);
                 if ($updated['status'] === 'pending') {
-                    $entryId = $this->outbox->enqueueStep($runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name'], $direct);
-
-                    if ($direct) {
-                        $this->eager->step($entryId, $runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
-                    }
+                    $this->eager->enqueueStep($runId, (int) $updated['next_step_index'], $updated['queue_connection'], $updated['queue_name']);
                 }
 
                 return true;

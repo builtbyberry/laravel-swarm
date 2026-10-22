@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Attributes\DurableRetry;
 use BuiltByBerry\LaravelSwarm\Contracts\ConfiguresDurableRetries;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\Swarm;
 use BuiltByBerry\LaravelSwarm\Enums\Topology;
@@ -35,7 +34,6 @@ class DurableRetryHandler
         protected Connection $connection,
         protected SwarmCapture $capture,
         protected DurableRunContext $runs,
-        protected DurableOutbox $outbox,
         protected DurableEagerDispatcher $eager,
         protected LoggerInterface $logger,
     ) {}
@@ -75,10 +73,8 @@ class DurableRetryHandler
             'message' => $exception->getMessage(),
         ]);
 
-        $direct = $this->eager->enabled();
-
         try {
-            $this->connection->transaction(function () use ($run, $token, $policy, $attempt, $nextRetryAt, $context, $stepLeaseSeconds, $isZeroDelay, $direct): void {
+            $this->connection->transaction(function () use ($run, $token, $policy, $attempt, $nextRetryAt, $context, $stepLeaseSeconds, $isZeroDelay): void {
                 $this->durableRuns->scheduleRetry($run['run_id'], $token, $policy->toArray(), $attempt, $nextRetryAt);
                 $this->historyStore->syncDurableState($run['run_id'], 'pending', $this->capture->context($context), array_merge($context->metadata, [
                     'durable_retry_attempt' => $attempt,
@@ -87,11 +83,7 @@ class DurableRetryHandler
                 // Zero-delay retries are enqueued inside the transaction so the
                 // outbox row and the retry state change are always atomic.
                 if ($isZeroDelay) {
-                    $entryId = $this->outbox->enqueueStep($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name'], $direct);
-
-                    if ($direct) {
-                        $this->eager->step($entryId, $run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
-                    }
+                    $this->eager->enqueueStep($run['run_id'], (int) $run['next_step_index'], $run['queue_connection'], $run['queue_name']);
                 }
             });
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {
@@ -142,19 +134,13 @@ class DurableRetryHandler
             'message' => $exception->getMessage(),
         ]);
 
-        $direct = $this->eager->enabled();
-
         try {
-            $this->connection->transaction(function () use ($run, $branch, $token, $policy, $attempt, $nextRetryAt, $isZeroDelay, $direct): void {
+            $this->connection->transaction(function () use ($run, $branch, $token, $policy, $attempt, $nextRetryAt, $isZeroDelay): void {
                 $this->durableRuns->scheduleBranchRetry($run['run_id'], (string) $branch['branch_id'], $token, $policy->toArray(), $attempt, $nextRetryAt);
                 if ($isZeroDelay) {
                     $connection = $branch['queue_connection'] ?? $run['queue_connection'];
                     $queue = $branch['queue_name'] ?? $run['queue_name'];
-                    $entryId = $this->outbox->enqueueBranch($run['run_id'], (string) $branch['branch_id'], $connection, $queue, $direct);
-
-                    if ($direct) {
-                        $this->eager->branch($entryId, $run['run_id'], (string) $branch['branch_id'], $connection, $queue);
-                    }
+                    $this->eager->enqueueBranch($run['run_id'], (string) $branch['branch_id'], $connection, $queue);
                 }
             });
         } catch (LostDurableLeaseException|LostSwarmLeaseException) {

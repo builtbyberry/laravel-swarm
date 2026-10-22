@@ -8,7 +8,9 @@ The `DurableOutbox` contract changed to support eager durable dispatch
 (`swarm.durable.eager_dispatch`). The bundled `DatabaseDurableOutbox` is updated
 for you; applications that only *inject* `DurableOutbox` need no changes.
 
-If your application binds its **own `DurableOutbox` implementation**, update it:
+If your application binds its **own `DurableOutbox` implementation**, update it
+before upgrading, whether or not you turn eager dispatch on: PHP rejects the old
+signatures when the class loads.
 
 - `enqueueStep()` and `enqueueBranch()` take a trailing
   `bool $directDispatch = false` parameter and return `int`, the id of the row

@@ -832,7 +832,10 @@ return [
          * row once its reservation is older than relay.reservation_timeout_seconds —
          * keep swarm:relay scheduled (everyMinute is enough) as the recovery sweep.
          * A job that waits in the queue longer than that timeout is pushed a second
-         * time by the relay; the duplicate is a safe no-op.
+         * time by the relay; the duplicate is a safe no-op. With the flag on,
+         * signal() / resume() include that push on the calling request's path, so
+         * give the queue connection a bounded timeout. Nothing is pushed eagerly on
+         * the sync driver.
          */
         'eager_dispatch' => (bool) env('SWARM_DURABLE_EAGER_DISPATCH', false),
 

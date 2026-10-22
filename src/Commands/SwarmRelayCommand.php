@@ -110,6 +110,7 @@ class SwarmRelayCommand extends Command
         $totalFailed = 0;
         $totalClaimed = 0;
         $totalReclaimed = 0;
+        $totalReclaimedDirect = 0;
         $totalAuditReplayed = 0;
         $totalAuditDeadLettered = 0;
         $totalCallbackDispatched = 0;
@@ -139,6 +140,7 @@ class SwarmRelayCommand extends Command
                     &$totalFailed,
                     &$totalClaimed,
                     &$totalReclaimed,
+                    &$totalReclaimedDirect,
                     &$totalAuditReplayed,
                     &$totalAuditDeadLettered,
                     &$totalCallbackDispatched,
@@ -164,6 +166,7 @@ class SwarmRelayCommand extends Command
                             $totalFailed += $durableResult->failed;
                             $totalClaimed += $durableResult->claimed;
                             $totalReclaimed += $durableResult->reclaimed;
+                            $totalReclaimedDirect += $durableResult->reclaimedDirect;
                             $lastDurableProgress = $durableResult->total();
                             $lastDurableTransient = $durableResult->failed;
                         }
@@ -217,6 +220,7 @@ class SwarmRelayCommand extends Command
                 'failed_count' => $totalFailed,
                 'claimed_count' => $totalClaimed,
                 'reclaimed_count' => $totalReclaimed,
+                'direct_reclaimed_count' => $totalReclaimedDirect,
                 'audit_replayed_count' => $totalAuditReplayed,
                 'audit_dead_lettered_count' => $totalAuditDeadLettered,
                 'callback_dispatched_count' => $totalCallbackDispatched,
@@ -241,6 +245,7 @@ class SwarmRelayCommand extends Command
                 'failed_count' => 0,
                 'claimed_count' => 0,
                 'reclaimed_count' => 0,
+                'direct_reclaimed_count' => 0,
                 'audit_replayed_count' => 0,
                 'audit_dead_lettered_count' => 0,
                 'callback_dispatched_count' => 0,
@@ -270,6 +275,7 @@ class SwarmRelayCommand extends Command
             'failed_count' => $totalFailed,
             'claimed_count' => $totalClaimed,
             'reclaimed_count' => $totalReclaimed,
+            'direct_reclaimed_count' => $totalReclaimedDirect,
             'audit_replayed_count' => $totalAuditReplayed,
             'audit_dead_lettered_count' => $totalAuditDeadLettered,
             'callback_dispatched_count' => $totalCallbackDispatched,

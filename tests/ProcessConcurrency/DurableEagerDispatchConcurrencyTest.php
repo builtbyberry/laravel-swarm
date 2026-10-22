@@ -28,8 +28,10 @@ use Laravel\Ai\AiServiceProvider;
  * their jobs together: one holds every eager job, the other every relay job.
  *
  * The invariant: each step's agent runs exactly once (counted in a table both
- * processes write to), each run's cursor advances exactly once, and no outbox
- * entry is left for the step that was raced.
+ * processes write to) and each run's cursor advances exactly once. The relay's
+ * delete-on-dispatch has already removed the raced entry before the workers run,
+ * so the final no-entry check only proves neither worker resurrected it; the
+ * settle path itself is covered in tests/Feature/DurableEagerDispatchTest.php.
  */
 // Tagged `skip-locked-real-db` so the CI lane (`test:process-concurrency:ci`)
 // excludes it under `--fail-on-skipped`: it requires a shared MySQL/Postgres
@@ -103,6 +105,10 @@ beforeEach(function (): void {
 
     config()->set('swarm.persistence.driver', 'database');
 
+    // The real-DB lane shares one database across tests and runs: start from an
+    // empty outbox so drain() only sees the rows this test writes.
+    DB::table('swarm_durable_outbox')->delete();
+
     Schema::dropIfExists('eager_race_executions');
     Schema::create('eager_race_executions', function (Blueprint $table): void {
         $table->id();
@@ -118,6 +124,8 @@ afterEach(function (): void {
 
 test('an eager push and a relay push consumed at once advance each step exactly once', function (): void {
     config()->set('swarm.durable.eager_dispatch', true);
+    // A non-sync connection: eager dispatch never applies to the sync driver.
+    config()->set('swarm.durable.queue.connection', 'durable-test');
     Queue::fake();
     FakeResearcher::fake(['research-out']);
 

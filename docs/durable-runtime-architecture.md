@@ -112,7 +112,7 @@ queues the continuation itself.
 The released migration that creates `swarm_durable_outbox` describes only the
 relay path in its docblock; this section is the description of both.
 
-If you need to **record or stub dispatches** in tests, bind `DurableJobDispatcher` in the container before resolving `DurableSwarmManager`. The package’s own feature tests use that pattern; see `tests/Feature/DurableSwarmTest.php` for a working example.
+If you need to **record or stub dispatches** in tests, bind `DurableJobDispatcher` in the container before resolving `DurableSwarmManager`. That double sees relay and recovery dispatches only: with eager dispatch on, pushes on commit build the job through `makeStepJob()` / `makeBranchJob()` and go straight to the queue, so observe them with `Queue::fake()`. The package’s own feature tests use that pattern; see `tests/Feature/DurableSwarmTest.php` for a working example.
 
 ## Collaborator responsibilities
 

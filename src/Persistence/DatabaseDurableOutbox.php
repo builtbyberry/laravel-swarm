@@ -14,6 +14,7 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
+use RuntimeException;
 use Throwable;
 use UnexpectedValueException;
 
@@ -53,7 +54,10 @@ class DatabaseDurableOutbox implements DurableOutbox
             // A failed settle leaves the row reserved; the relay reclaims it once the
             // reservation goes stale and dispatches a duplicate that acquireLease()
             // turns into a no-op. Never fail the step for it.
-            $this->safeReport($e);
+            $this->safeReport(new RuntimeException(
+                "Failed to settle durable outbox entry [{$entryId}]; swarm:relay will dispatch it again as a no-op once its reservation goes stale.",
+                previous: $e,
+            ));
         }
     }
 
@@ -121,6 +125,11 @@ class DatabaseDurableOutbox implements DurableOutbox
 
         $claimed = $entries->count();
         $reclaimed = $entries->filter(fn (object $e): bool => $e->reserved_at !== null)->count();
+        // A direct-dispatch row is written with reserved_at = created_at, and a relay claim
+        // overwrites reserved_at, so equality marks a direct row the relay reclaims first.
+        $reclaimedDirect = $entries->filter(
+            fn (object $e): bool => $e->reserved_at !== null && (string) $e->reserved_at === (string) $e->created_at,
+        )->count();
 
         // Phase 2: dispatch each entry individually, outside any transaction.
         //
@@ -163,7 +172,7 @@ class DatabaseDurableOutbox implements DurableOutbox
             $this->table()->whereIn('id', $dispatchedIds)->delete();
         }
 
-        return new DrainResult($dispatched, $skipped, $failed, $claimed, $reclaimed);
+        return new DrainResult($dispatched, $skipped, $failed, $claimed, $reclaimed, $reclaimedDirect);
     }
 
     /**

@@ -409,15 +409,32 @@ With the flag on:
   is pushed a second time by the relay; the duplicate is a safe no-op. Raising the
   timeout means fewer duplicates under a queue backlog, but slower recovery of a
   lost push and slower health detection.
-- `swarm:relay`'s reclaimed count includes eager pushes that did not settle in
-  time, not only relay runs that died mid-claim.
+- A pushed job deletes its row only once it holds its lease, so a job that finds
+  nothing to do (a cancelled, paused or already-advanced run, or a duplicate)
+  leaves its row for the relay to reclaim and dispatch once more as a no-op. The
+  `command.relay` audit event (see
+  [Audit Evidence Contract](audit-evidence-contract.md)) reports these, and lost
+  or late pushes, as `direct_reclaimed_count`, separately within
+  `reclaimed_count`: `reclaimed_count` minus `direct_reclaimed_count` is the
+  relay-health signal. The `swarm:relay` console output does not print either.
 - `swarm:health --durable` reports a reserved row as pending only once its latest
   reservation is older than twice `reservation_timeout_seconds`, so a lost eager
   push shows up there after up to 2× the timeout. A relay attempt that fails
   renews the reservation and restarts that window.
+- `signal()`, `resume()` and a finished child swarm's parent release now include a
+  queue push on the calling request's path, after its transaction commits. A push
+  that fails is reported and left to the relay, but a hung queue connection
+  blocks the caller until the driver times out, so give the queue connection a
+  bounded timeout (for example Redis `read_timeout`).
+- `queue()` `multi_worker` hierarchical runs get their branches pushed on commit,
+  but the job that resumes the run after the branches join is still delivered by
+  the relay, so those runs keep up to one relay interval at the join.
+- On the `sync` queue driver nothing is pushed eagerly (a push would run the
+  whole run inline, one step inside the next); those rows stay with the relay.
 - After a deploy or rollback, restart queue workers as usual. Jobs queued by the
   new code and run by old workers simply never delete their row; the relay
-  reclaims it after the timeout. No data is lost and there is no schema change.
+  reclaims it after the timeout and dispatches a duplicate that does nothing. No
+  data is lost and there is no schema change.
 
 ### Durable Webhooks
 

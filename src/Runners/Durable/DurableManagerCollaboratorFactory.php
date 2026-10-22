@@ -64,13 +64,14 @@ class DurableManagerCollaboratorFactory
         $jobs = $this->application->makeWith(DurableJobDispatcher::class, [
             'config' => $config,
         ]);
-        // The named db.transactions instance, never a fresh manager: eager dispatch
-        // must see the application's own pending transactions to wait for the commit.
+        // db.transactions is resolved per push, not here: the testing traits rebind
+        // it after the durable graph is built.
         $eager = $this->application->makeWith(DurableEagerDispatcher::class, [
             'connection' => $connection,
             'config' => $config,
             'jobs' => $jobs,
-            'transactions' => $this->application->bound('db.transactions') ? $this->application->make('db.transactions') : null,
+            'outbox' => $outbox,
+            'container' => $this->application,
         ]);
 
         $runContext = $this->application->makeWith(DurableRunContext::class, [
@@ -90,7 +91,6 @@ class DurableManagerCollaboratorFactory
             'capture' => $capture,
             'runs' => $runContext,
             'payloads' => $payloads,
-            'outbox' => $outbox,
             'connection' => $connection,
             'eager' => $eager,
         ]);
@@ -100,7 +100,6 @@ class DurableManagerCollaboratorFactory
             'connection' => $connection,
             'capture' => $capture,
             'runs' => $runContext,
-            'outbox' => $outbox,
             'eager' => $eager,
         ]);
         $inspector = $this->application->makeWith(DurableRunInspector::class, [
@@ -143,7 +142,6 @@ class DurableManagerCollaboratorFactory
             'application' => $application,
             'runs' => $runContext,
             'payloads' => $payloads,
-            'outbox' => $outbox,
             'eager' => $eager,
         ]);
         $queuedHierarchical = $this->application->makeWith(QueuedHierarchicalDurableCoordinator::class, [
@@ -155,7 +153,6 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'branches' => $branches,
             'jobs' => $jobs,
-            'outbox' => $outbox,
             'connection' => $connection,
             'eager' => $eager,
         ]);
@@ -175,7 +172,6 @@ class DurableManagerCollaboratorFactory
             'payloads' => $payloads,
             'jobs' => $jobs,
             'children' => $children,
-            'outbox' => $outbox,
             'eager' => $eager,
         ]);
         $recovery = $this->application->makeWith(DurableRecoveryCoordinator::class, [
@@ -237,7 +233,6 @@ class DurableManagerCollaboratorFactory
             'runs' => $runContext,
             'branches' => $branches,
             'terminal' => $terminal,
-            'outbox' => $outbox,
             'eager' => $eager,
         ]);
         $executionBuilder = $this->application->makeWith(DurableStepExecutionBuilder::class, [

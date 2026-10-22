@@ -20,7 +20,13 @@ namespace BuiltByBerry\LaravelSwarm\Responses;
  *               overwritten — either the relay previously claimed but did not complete these
  *               entries (e.g. the relay process was killed or timed out mid-run), or the entries
  *               were written for direct dispatch and the pushed job did not settle them before
- *               the reservation went stale (a lost push, or a queue wait longer than the timeout).
+ *               the reservation went stale.
+ * - reclaimedDirect: the part of reclaimed that are direct-dispatch entries reclaimed for the
+ *               first time (their reservation is still the one written with the row). A pushed
+ *               job settles its entry only once it holds the lease, so this counts lost pushes,
+ *               queue waits longer than the reservation timeout, and jobs that found nothing to
+ *               do (a cancelled, paused or already-advanced run, a duplicate). reclaimed minus
+ *               reclaimedDirect is the relay-health signal.
  *
  * total() returns dispatched + skipped (entries removed from the outbox). It does not include
  * failed, because failed entries remain in the outbox and are not "done".
@@ -33,6 +39,7 @@ final readonly class DrainResult
         public int $failed = 0,
         public int $claimed = 0,
         public int $reclaimed = 0,
+        public int $reclaimedDirect = 0,
     ) {}
 
     /**

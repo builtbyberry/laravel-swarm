@@ -83,10 +83,13 @@ class DurableStepCheckpointCoordinator
         // the dispatched job is a safe no-op.
         //
         // Crash edge case: if enterDurableBoundary throws after the checkpoint transaction
-        // commits, the run stays 'pending' with an outbox step pointing at it. The relay
-        // dispatches that job; acquireLease() accepts it and the run advances normally.
+        // commits, the run stays 'pending' with an outbox step pointing at it. That job is
+        // still dispatched — by the relay, or with eager dispatch on, by the push in the
+        // finally block below — and acquireLease() accepts it so the run advances normally.
         // The boundary state is not persisted until persistChildIntent() commits its own
-        // independent transaction, so this path is a safe retry with no data loss.
+        // independent transaction, so this path is a safe retry with no data loss. (A
+        // process killed outright leaves an eager entry reserved; the relay reclaims it
+        // once its reservation goes stale.)
         //
         // NOTE: branchesFor() is called INSIDE the closure (i.e., inside the checkpoint
         // transaction). For the initial branch-wait case, waitForBranches() creates the
@@ -95,15 +98,15 @@ class DurableStepCheckpointCoordinator
         // the branch list between the write and this read.
         //
         // Eager dispatch (swarm.durable.eager_dispatch): the entries are written for
-        // direct dispatch inside the transaction, but NOT pushed from it. They are
-        // collected here and pushed only after enterDurableBoundary() below has run:
-        // pushing at commit would let a fast worker lease the still-pending run and
-        // execute the next step before a declared wait or child dispatch is entered.
-        $direct = $this->eager->enabled();
+        // direct dispatch inside the transaction (directFor(), decided per entry), but
+        // NOT pushed from it. They are collected here and pushed only after
+        // enterDurableBoundary() below has run: pushing at commit would let a fast
+        // worker lease the still-pending run and execute the next step before a
+        // declared wait or child dispatch is entered.
         $stepEntries = [];
         $branchEntries = [];
 
-        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult, $context, $nativeSettingsAttempt, $direct, &$stepEntries, &$branchEntries): void {
+        $withTransaction = function () use ($run, $runId, $nextStepIndex, $hierarchicalResult, $context, $nativeSettingsAttempt, &$stepEntries, &$branchEntries): void {
             // Reset in case the surrounding transaction is retried.
             $stepEntries = [];
             $branchEntries = [];
@@ -118,15 +121,23 @@ class DurableStepCheckpointCoordinator
                     $branchId = (string) $branch['branch_id'];
                     $connection = $branch['queue_connection'] ?? $run['queue_connection'];
                     $queue = $branch['queue_name'] ?? $run['queue_name'];
+                    $direct = $this->eager->directFor($connection);
                     $entryId = $this->outbox->enqueueBranch($runId, $branchId, $connection, $queue, $direct);
-                    $branchEntries[] = [$entryId, $branchId, $connection, $queue];
+
+                    if ($direct) {
+                        $branchEntries[] = [$entryId, $branchId, $connection, $queue];
+                    }
                 }
 
                 return;
             }
 
+            $direct = $this->eager->directFor($run['queue_connection']);
             $entryId = $this->outbox->enqueueStep($runId, $nextStepIndex, $run['queue_connection'], $run['queue_name'], $direct);
-            $stepEntries[] = $entryId;
+
+            if ($direct) {
+                $stepEntries[] = $entryId;
+            }
         };
 
         if ($hierarchicalResult !== null) {
@@ -152,18 +163,31 @@ class DurableStepCheckpointCoordinator
         // inside the checkpoint transaction would cause a rollback of the boundary
         // writes if any subsequent code (e.g., afterChildIntentHook) throws, breaking
         // crash-recovery semantics.
-        $enteredBoundary = $enterDurableBoundary($run, $swarm, $context, $nextStepIndex);
+        $enteredBoundary = false;
 
-        if (! $direct) {
-            return;
+        try {
+            $enteredBoundary = $enterDurableBoundary($run, $swarm, $context, $nextStepIndex) === true;
+        } finally {
+            // Pushed even when the boundary throws: the run is still pending and its
+            // entries are born reserved, so without a push they would wait a full
+            // reservation timeout for the relay. Only direct entries are collected.
+            $this->pushCollected($runId, $nextStepIndex, $run, $enteredBoundary, $stepEntries, $branchEntries);
         }
+    }
 
+    /**
+     * @param  array<string, mixed>  $run
+     * @param  list<int>  $stepEntries
+     * @param  list<array{0: int, 1: string, 2: ?string, 3: ?string}>  $branchEntries
+     */
+    protected function pushCollected(string $runId, int $nextStepIndex, array $run, bool $enteredBoundary, array $stepEntries, array $branchEntries): void
+    {
         foreach ($branchEntries as [$entryId, $branchId, $connection, $queue]) {
             $this->eager->branch($entryId, $runId, $branchId, $connection, $queue);
         }
 
         foreach ($stepEntries as $entryId) {
-            if ($enteredBoundary === true) {
+            if ($enteredBoundary) {
                 // The run is now waiting: its step entry can only be a no-op, and every
                 // way out of the boundary dispatches the continuation itself (signal
                 // release and child reconciliation enqueue a fresh entry, a wait

@@ -8,6 +8,7 @@ use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\NativeInputStore;
 use BuiltByBerry\LaravelSwarm\Contracts\RunHistoryStore;
+use BuiltByBerry\LaravelSwarm\Contracts\SwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Enums\DurableDispatchType;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch;
 use BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm;
@@ -30,6 +31,7 @@ use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeHierarchicalCoordinator;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeResearcher;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FakeWriter;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Agents\FlakyDurableAgent;
+use BuiltByBerry\LaravelSwarm\Tests\Fixtures\RecordingSwarmAuditSink;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\ChildDispatchingSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\DurableWaitAttributeSwarm;
 use BuiltByBerry\LaravelSwarm\Tests\Fixtures\Swarms\FakeHierarchicalFullSwarm;
@@ -189,16 +191,42 @@ function eagerOutboxCount(string $runId): int
     return DB::table('swarm_durable_outbox')->where('run_id', $runId)->count();
 }
 
-function eagerDispatcher(?DatabaseTransactionsManager $transactions, ?DurableJobDispatcher $jobs = null): DurableEagerDispatcher
+function eagerDispatcher(?DurableJobDispatcher $jobs = null): DurableEagerDispatcher
 {
     return new DurableEagerDispatcher(
         DB::connection(),
         app(ConfigRepository::class),
         $jobs ?? app(DurableJobDispatcher::class),
         app(Dispatcher::class),
-        $transactions,
+        app(DurableOutbox::class),
+        app(),
     );
 }
+
+/**
+ * A two-branch hierarchical plan: parallel_node fans out writer_node and editor_node.
+ */
+function eagerFakeTwoBranchPlan(): void
+{
+    FakeHierarchicalCoordinator::fake([[
+        'start_at' => 'parallel_node',
+        'nodes' => [
+            'parallel_node' => ['type' => 'parallel', 'branches' => ['writer_node', 'editor_node'], 'next' => 'finish_node'],
+            'writer_node' => ['type' => 'worker', 'agent' => FakeWriter::class, 'prompt' => 'writer-branch'],
+            'editor_node' => ['type' => 'worker', 'agent' => FakeEditor::class, 'prompt' => 'editor-branch'],
+            'finish_node' => ['type' => 'finish', 'output_from' => 'editor_node'],
+        ],
+    ]]);
+}
+
+dataset('advance job variants', [
+    'step' => [AdvanceDurableSwarm::class, false],
+    'native input step' => [AdvanceNativeInputDurableSwarm::class, false],
+    'native settings step' => [AdvanceNativeAgentSettingsDurableSwarm::class, false],
+    'branch' => [AdvanceDurableBranch::class, true],
+    'native input branch' => [AdvanceNativeInputDurableBranch::class, true],
+    'native settings branch' => [AdvanceNativeAgentSettingsDurableBranch::class, true],
+]);
 
 function eagerNativeJobDispatcher(int $version): DurableJobDispatcher
 {
@@ -312,7 +340,8 @@ test('settle deletes exactly the given row and is contained when the delete fail
 
     config()->set('swarm.tables.durable_outbox', 'missing_swarm_durable_outbox');
     expect(fn () => app(DatabaseDurableOutbox::class)->settle($sibling))->not->toThrow(Exception::class);
-    Exceptions::assertReported(QueryException::class);
+    Exceptions::assertReported(fn (RuntimeException $e): bool => str_contains($e->getMessage(), "entry [{$sibling}]")
+        && $e->getPrevious() instanceof QueryException);
 });
 
 // ---------------------------------------------------------------------------
@@ -578,15 +607,7 @@ test('flag on: top-level parallel fan-out pushes every branch with its row', fun
 test('flag on: hierarchical branch-wait pushes its branches, and the join pushes the next step', function (): void {
     eagerOn();
     Queue::fake();
-    FakeHierarchicalCoordinator::fake([[
-        'start_at' => 'parallel_node',
-        'nodes' => [
-            'parallel_node' => ['type' => 'parallel', 'branches' => ['writer_node', 'editor_node'], 'next' => 'finish_node'],
-            'writer_node' => ['type' => 'worker', 'agent' => FakeWriter::class, 'prompt' => 'writer-branch'],
-            'editor_node' => ['type' => 'worker', 'agent' => FakeEditor::class, 'prompt' => 'editor-branch'],
-            'finish_node' => ['type' => 'finish', 'output_from' => 'editor_node'],
-        ],
-    ]]);
+    eagerFakeTwoBranchPlan();
     $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('hierarchical-task')->runId;
     $manager = app(DurableSwarmManager::class);
 
@@ -623,7 +644,8 @@ test('flag on: resuming a waiting run re-pushes its recoverable branches', funct
     $manager->resume($runId);
 
     $redispatched = array_slice(eagerDirectBranchJobs($runId), $before);
-    expect($redispatched)->not->toBe([]);
+    expect(array_map(fn (AdvanceDurableBranch $job): string => $job->branchId, $redispatched))
+        ->toBe(['parallel:0', 'parallel:1', 'parallel:2']);
 
     foreach ($redispatched as $job) {
         expect(eagerOutboxRow($job->outboxEntryId)->reserved_at)->not->toBeNull();
@@ -717,15 +739,8 @@ test('flag on: queue() multi_worker hierarchical branches are pushed eagerly', f
     eagerOn();
     Queue::fake();
     config()->set('swarm.queue.hierarchical_parallel.coordination', 'multi_worker');
-    FakeHierarchicalCoordinator::fake([[
-        'start_at' => 'parallel_node',
-        'nodes' => [
-            'parallel_node' => ['type' => 'parallel', 'branches' => ['writer_node', 'editor_node'], 'next' => 'finish_node'],
-            'writer_node' => ['type' => 'worker', 'agent' => FakeWriter::class, 'prompt' => 'writer-branch'],
-            'editor_node' => ['type' => 'worker', 'agent' => FakeEditor::class, 'prompt' => 'editor-branch'],
-            'finish_node' => ['type' => 'finish', 'output_from' => 'editor_node'],
-        ],
-    ]]);
+    config()->set('queue.default', 'durable-test');
+    eagerFakeTwoBranchPlan();
     $context = RunContext::from('queued-hierarchical-task', 'eager-qhpc-1');
 
     (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
@@ -766,14 +781,14 @@ test('consecutive runs through one manager each push only their own jobs', funct
 test('the push follows the decision captured when the row was written, not the live flag', function (): void {
     Queue::fake();
     $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
-    $eager = eagerDispatcher(app('db.transactions'));
+    $eager = eagerDispatcher();
 
     // Written direct, flag later switched off: the born-reserved row is still pushed.
     eagerOn();
     DB::transaction(function () use ($eager, $runId): void {
         $id = app(DurableOutbox::class)->enqueueStep($runId, 1, null, null, directDispatch: $eager->enabled());
         config()->set('swarm.durable.eager_dispatch', false);
-        $eager->step($id, $runId, 1, null, null);
+        $eager->step($id, $runId, 1, 'durable-test', null);
     });
 
     expect(eagerDirectStepJobs($runId))->toHaveCount(1);
@@ -799,10 +814,10 @@ test('a queued job carrying an entry still settles after the flag is switched of
 
 test('nested swarm transactions push only when the outermost commits', function (): void {
     Queue::fake();
-    $eager = eagerDispatcher(app('db.transactions'));
+    $eager = eagerDispatcher();
 
     DB::transaction(function () use ($eager): void {
-        DB::transaction(fn () => $eager->step(11, 'run-nested', 1, null, null));
+        DB::transaction(fn () => $eager->step(11, 'run-nested', 1, 'durable-test', null));
         expect(eagerDirectJobs())->toBe([]);
     });
 
@@ -811,12 +826,12 @@ test('nested swarm transactions push only when the outermost commits', function 
 
 test("another connection's commit inside the swarm transaction does not fire the push", function (): void {
     Queue::fake();
-    $eager = eagerDispatcher(app('db.transactions'));
+    $eager = eagerDispatcher();
     $other = DB::connection('eager-other');
 
     DB::beginTransaction();
     $other->beginTransaction();
-    $eager->step(12, 'run-cross', 1, null, null);
+    $eager->step(12, 'run-cross', 1, 'durable-test', null);
     $other->commit();
 
     expect(eagerDirectJobs())->toBe([]);
@@ -828,12 +843,12 @@ test("another connection's commit inside the swarm transaction does not fire the
 
 test('a swarm rollback drops the push even when another connection committed', function (): void {
     Queue::fake();
-    $eager = eagerDispatcher(app('db.transactions'));
+    $eager = eagerDispatcher();
     $other = DB::connection('eager-other');
 
     DB::beginTransaction();
     $other->beginTransaction();
-    $eager->step(13, 'run-rollback', 1, null, null);
+    $eager->step(13, 'run-rollback', 1, 'durable-test', null);
     $other->commit();
     DB::rollBack();
 
@@ -842,11 +857,11 @@ test('a swarm rollback drops the push even when another connection committed', f
 
 test('with the swarm work committed, the push is not held hostage by an open transaction elsewhere', function (): void {
     Queue::fake();
-    $eager = eagerDispatcher(app('db.transactions'));
+    $eager = eagerDispatcher();
     $other = DB::connection('eager-other');
 
     $other->beginTransaction();
-    $eager->step(14, 'run-outer-other', 1, null, null);
+    $eager->step(14, 'run-outer-other', 1, 'durable-test', null);
 
     expect(eagerDirectJobs())->toHaveCount(1);
 
@@ -857,11 +872,11 @@ test('with the swarm work committed, the push is not held hostage by an open tra
 
 test('rolling back the savepoint that registered the push drops it although the outer transaction commits', function (): void {
     Queue::fake();
-    $eager = eagerDispatcher(app('db.transactions'));
+    $eager = eagerDispatcher();
 
     DB::beginTransaction();
     DB::beginTransaction();
-    $eager->step(15, 'run-savepoint', 1, null, null);
+    $eager->step(15, 'run-savepoint', 1, 'durable-test', null);
     DB::rollBack();
     DB::commit();
 
@@ -870,12 +885,12 @@ test('rolling back the savepoint that registered the push drops it although the 
 
 test('a committed savepoint inside a rolled-back savepoint drops the push', function (): void {
     Queue::fake();
-    $eager = eagerDispatcher(app('db.transactions'));
+    $eager = eagerDispatcher();
 
     DB::beginTransaction();
     DB::beginTransaction();
     DB::beginTransaction();
-    $eager->step(16, 'run-descendant', 1, null, null);
+    $eager->step(16, 'run-descendant', 1, 'durable-test', null);
     DB::commit();
     DB::rollBack();
     DB::commit();
@@ -887,23 +902,30 @@ test("under the testing transaction manager the wrapper transaction is excluded,
     Queue::fake();
     $connection = DB::connection();
     $original = app('db.transactions');
+    $eager = eagerDispatcher(); // built before the swap, as the durable graph is
     $testing = new TestingTransactionsManager([$connection->getName()]);
+    app()->instance('db.transactions', $testing);
     $connection->setTransactionManager($testing);
 
     try {
-        $eager = eagerDispatcher($testing);
         $connection->beginTransaction(); // the RefreshDatabase-style wrapper
+
+        // Inside only the wrapper, the application's work counts as committed.
+        $eager->step(17, 'run-testing-manager', 1, 'durable-test', null);
+        expect(eagerDirectJobs())->toHaveCount(1);
+
         $connection->beginTransaction(); // the application's transaction
-        $eager->step(17, 'run-testing-manager', 1, null, null);
-
-        expect(eagerDirectJobs())->toBe([]);
-
-        $connection->commit();
+        $eager->step(18, 'run-testing-manager', 1, 'durable-test', null);
 
         expect(eagerDirectJobs())->toHaveCount(1);
 
+        $connection->commit();
+
+        expect(eagerDirectJobs())->toHaveCount(2);
+
         $connection->rollBack();
     } finally {
+        app()->instance('db.transactions', $original);
         $connection->setTransactionManager($original);
     }
 });
@@ -911,12 +933,21 @@ test("under the testing transaction manager the wrapper transaction is excluded,
 test('without a transactions manager the push is skipped inside a transaction and the relay recovers the row', function (): void {
     Queue::fake();
     $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
-    $eager = eagerDispatcher(null);
+    $eager = eagerDispatcher();
+    $connection = DB::connection();
+    $original = app('db.transactions');
+    app()->offsetUnset('db.transactions');
+    $connection->unsetTransactionManager();
 
-    DB::transaction(function () use ($eager, $runId): void {
-        $id = app(DurableOutbox::class)->enqueueStep($runId, 1, null, null, directDispatch: true);
-        $eager->step($id, $runId, 1, null, null);
-    });
+    try {
+        $connection->transaction(function () use ($eager, $runId): void {
+            $id = app(DurableOutbox::class)->enqueueStep($runId, 1, null, null, directDispatch: true);
+            $eager->step($id, $runId, 1, 'durable-test', null);
+        });
+    } finally {
+        app()->instance('db.transactions', $original);
+        $connection->setTransactionManager($original);
+    }
 
     expect(eagerDirectJobs())->toBe([]);
 
@@ -930,7 +961,7 @@ test('without a transactions manager the push is skipped inside a transaction an
 
 test('native jobs and after_commit queue connections push at the swarm commit, not at a later foreign commit', function (int $version, string $stepClass, string $branchClass, bool $connectionAfterCommit): void {
     eagerRegisterRecordingQueue('eager-recording', afterCommit: $connectionAfterCommit);
-    $eager = eagerDispatcher(app('db.transactions'), $version === 0 ? null : eagerNativeJobDispatcher($version));
+    $eager = eagerDispatcher($version === 0 ? null : eagerNativeJobDispatcher($version));
     $other = DB::connection('eager-other');
 
     $other->beginTransaction();
@@ -953,12 +984,13 @@ test('a push that throws at the queue is reported and contained', function (): v
     Exceptions::fake();
     eagerRegisterRecordingQueue('eager-recording', afterCommit: true);
     EagerRecordingQueue::$throw = true;
-    $eager = eagerDispatcher(app('db.transactions'));
+    $eager = eagerDispatcher();
 
     expect(fn () => DB::transaction(fn () => $eager->step(23, 'run-throw', 1, 'eager-recording', null)))
         ->not->toThrow(Exception::class);
 
-    Exceptions::assertReported(fn (RuntimeException $e): bool => $e->getMessage() === 'queue unavailable');
+    Exceptions::assertReported(fn (RuntimeException $e): bool => str_contains($e->getMessage(), 'entry [23] for run [run-throw] step [1]')
+        && $e->getPrevious()?->getMessage() === 'queue unavailable');
 });
 
 // ---------------------------------------------------------------------------
@@ -977,14 +1009,7 @@ test('every advance variant carries the entry id through serialization and into 
     expect($restored->outboxEntryId)->toBe(9);
 
     $restored->handle($manager);
-})->with([
-    'step' => [AdvanceDurableSwarm::class, false],
-    'native input step' => [AdvanceNativeInputDurableSwarm::class, false],
-    'native settings step' => [AdvanceNativeAgentSettingsDurableSwarm::class, false],
-    'branch' => [AdvanceDurableBranch::class, true],
-    'native input branch' => [AdvanceNativeInputDurableBranch::class, true],
-    'native settings branch' => [AdvanceNativeAgentSettingsDurableBranch::class, true],
-]);
+})->with('advance job variants');
 
 test('a payload without the entry id restores it as null and a payload with an unknown key ignores it', function (string $class, bool $isBranch): void {
     $job = $isBranch ? new $class('run-wire', 'parallel:0', outboxEntryId: 9) : new $class('run-wire', 3, outboxEntryId: 9);
@@ -995,14 +1020,7 @@ test('a payload without the entry id restores it as null and a payload with an u
     expect($withoutEntry->outboxEntryId)->toBeNull()
         ->and($withUnknown->outboxEntryId)->toBe(9)
         ->and(array_key_exists('unknownFuture', get_object_vars($withUnknown)))->toBeFalse();
-})->with([
-    'step' => [AdvanceDurableSwarm::class, false],
-    'native input step' => [AdvanceNativeInputDurableSwarm::class, false],
-    'native settings step' => [AdvanceNativeAgentSettingsDurableSwarm::class, false],
-    'branch' => [AdvanceDurableBranch::class, true],
-    'native input branch' => [AdvanceNativeInputDurableBranch::class, true],
-    'native settings branch' => [AdvanceNativeAgentSettingsDurableBranch::class, true],
-]);
+})->with('advance job variants');
 
 test('a job queued without an entry id advances normally and settles nothing', function (): void {
     $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
@@ -1013,4 +1031,208 @@ test('a job queued without an entry id advances normally and settles nothing', f
 
     expect(app(DurableSwarmManager::class)->find($runId)['next_step_index'])->toBe(1)
         ->and(eagerOutboxRow($unrelated))->not->toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// Review follow-ups
+// ---------------------------------------------------------------------------
+
+test('flag off: every enqueue site writes plain relay rows and pushes nothing directly', function (Closure $scenario): void {
+    Queue::fake();
+
+    $runIds = $scenario();
+    $rows = DB::table('swarm_durable_outbox')->whereIn('run_id', $runIds)->get();
+
+    expect(eagerDirectJobs())->toBe([])
+        ->and($rows)->not->toBeEmpty()
+        ->and($rows->whereNotNull('reserved_at'))->toHaveCount(0)
+        ->and(app(DurableOutbox::class)->drain([], 1000)->claimed)->toBe($rows->count());
+})->with([
+    'top-level parallel fan-out' => [function (): array {
+        $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-task')->runId;
+        (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class));
+
+        return [$runId];
+    }],
+    'hierarchical branch wait and join' => [function (): array {
+        eagerFakeTwoBranchPlan();
+        $runId = FakeHierarchicalFullSwarm::make()->dispatchDurable('hierarchical-task')->runId;
+        $manager = app(DurableSwarmManager::class);
+        (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+        (new AdvanceDurableSwarm($runId, 1))->handle($manager);
+
+        foreach (app(DurableRunStore::class)->branchesFor($runId, 'parallel_node') as $branch) {
+            (new AdvanceDurableBranch($runId, (string) $branch['branch_id']))->handle($manager);
+        }
+
+        return [$runId];
+    }],
+    'recoverable branch redispatch on resume' => [function (): array {
+        $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-task')->runId;
+        $manager = app(DurableSwarmManager::class);
+        (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+        $manager->pause($runId);
+        $manager->resume($runId);
+
+        return [$runId];
+    }],
+    'resume of a pending run' => [function (): array {
+        $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
+        app(DurableSwarmManager::class)->pause($runId);
+        app(DurableSwarmManager::class)->resume($runId);
+
+        return [$runId];
+    }],
+    'zero-delay step retry' => [function (): array {
+        FlakyDurableAgent::reset(failuresBeforeSuccess: 1);
+        $runId = ZeroDelayRetryDurableSwarm::make()->dispatchDurable('retry-task')->runId;
+        (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class));
+
+        return [$runId];
+    }],
+    'zero-delay branch retry' => [function (): array {
+        FlakyDurableAgent::reset(failuresBeforeSuccess: 1);
+        $runId = ZeroDelayRetryParallelDurableSwarm::make()->dispatchDurable('parallel-retry-task')->runId;
+        $manager = app(DurableSwarmManager::class);
+        (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+        (new AdvanceDurableBranch($runId, 'parallel:1'))->handle($manager);
+
+        return [$runId];
+    }],
+    'signal release' => [function (): array {
+        $response = DurableWaitAttributeSwarm::make()->dispatchDurable('wait-task');
+        (new AdvanceDurableSwarm($response->runId, 0))->handle(app(DurableSwarmManager::class));
+        $response->signal('approval_received', ['approved' => true], 'flag-off-signal');
+
+        return [$response->runId];
+    }],
+    'child completion' => [function (): array {
+        FakeResearcher::fake(['parent-step', 'child-research']);
+        FakeWriter::fake(['parent-final', 'child-writer']);
+        FakeEditor::fake(['child-output']);
+        $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+        $manager = app(DurableSwarmManager::class);
+        (new AdvanceDurableSwarm($response->runId, 0))->handle($manager);
+        $childRunId = $manager->inspect($response->runId)->children[0]['child_run_id'];
+
+        foreach ([0, 1, 2] as $step) {
+            (new AdvanceDurableSwarm($childRunId, $step))->handle($manager);
+        }
+
+        return [$response->runId, $childRunId];
+    }],
+    'queue() multi_worker branches' => [function (): array {
+        config()->set('swarm.queue.hierarchical_parallel.coordination', 'multi_worker');
+        config()->set('queue.default', 'durable-test');
+        eagerFakeTwoBranchPlan();
+        $context = RunContext::from('queued-hierarchical-task', 'eager-qhpc-off');
+        (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
+
+        return ['eager-qhpc-off'];
+    }],
+]);
+
+test('a branch job whose lease is rejected does not settle its row', function (): void {
+    eagerOn();
+    Queue::fake();
+    $runId = FakeParallelSwarm::make()->dispatchDurable('parallel-task')->runId;
+    $manager = app(DurableSwarmManager::class);
+    (new AdvanceDurableSwarm($runId, 0))->handle($manager);
+    $first = array_values(array_filter(eagerDirectBranchJobs($runId), fn (AdvanceDurableBranch $job): bool => $job->branchId === 'parallel:0'))[0];
+    $first->handle($manager);
+
+    // parallel:0 is now terminal; a second direct job for it cannot take the lease.
+    $stale = app(DurableOutbox::class)->enqueueBranch($runId, 'parallel:0', null, null, directDispatch: true);
+    (new AdvanceDurableBranch($runId, 'parallel:0', outboxEntryId: $stale))->handle($manager);
+
+    expect(eagerOutboxRow($stale))->not->toBeNull();
+});
+
+test('a connection whose transactions the manager cannot see never gets an early push', function (): void {
+    Queue::fake();
+    $eager = eagerDispatcher();
+    $connection = DB::connection();
+    $original = app('db.transactions');
+    // The connection reports to a manager the container does not hold.
+    $connection->setTransactionManager(new DatabaseTransactionsManager);
+
+    try {
+        $connection->transaction(function () use ($eager): void {
+            $eager->step(31, 'run-blind', 1, 'durable-test', null);
+
+            expect(eagerDirectJobs())->toBe([]);
+        });
+    } finally {
+        $connection->setTransactionManager($original);
+    }
+
+    // Left to the relay rather than pushed before the commit.
+    expect(eagerDirectJobs())->toBe([]);
+});
+
+test('flag on: a sync queue connection keeps plain relay rows and pushes nothing', function (): void {
+    eagerOn();
+    Queue::fake();
+    config()->set('queue.connections.eager-sync', ['driver' => 'sync']);
+    config()->set('swarm.durable.queue.connection', 'eager-sync');
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
+
+    (new AdvanceDurableSwarm($runId, 0))->handle(app(DurableSwarmManager::class));
+
+    $rows = DB::table('swarm_durable_outbox')->where('run_id', $runId)->get();
+
+    expect(eagerDirectJobs($runId))->toBe([])
+        ->and($rows)->toHaveCount(1)
+        ->and($rows[0]->reserved_at)->toBeNull();
+});
+
+test('flag on: a boundary that throws after the checkpoint still pushes the collected step', function (): void {
+    eagerOn();
+    Queue::fake();
+    FakeResearcher::fake(['parent-step', 'child-research']);
+    $response = ChildDispatchingSwarm::make()->dispatchDurable('parent-task');
+    $manager = app(DurableSwarmManager::class);
+    $manager->afterChildIntentForTesting(function (): void {
+        throw new RuntimeException('boundary crashed');
+    });
+
+    expect(fn () => (new AdvanceDurableSwarm($response->runId, 0))->handle($manager))
+        ->toThrow(RuntimeException::class, 'boundary crashed');
+
+    $jobs = eagerDirectStepJobs($response->runId);
+    expect($jobs)->toHaveCount(1)
+        ->and($jobs[0]->stepIndex)->toBe(1)
+        ->and(eagerOutboxRow($jobs[0]->outboxEntryId))->not->toBeNull();
+});
+
+test('drain reports first reclaims of direct rows separately from relay reclaims', function (): void {
+    $this->freezeTime();
+    $outbox = app(DurableOutbox::class);
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
+    $outbox->enqueueStep($runId, 1, null, null, directDispatch: true);
+    $relayRow = $outbox->enqueueStep($runId, 2, null, null);
+
+    // A relay claimed the second row and died before dispatching it.
+    DB::table('swarm_durable_outbox')->where('id', $relayRow)->update(['reserved_at' => now('UTC')->subSeconds(30)]);
+
+    $this->travel(61)->seconds();
+    $result = $outbox->drain([], 100);
+
+    expect($result->reclaimed)->toBe(2)
+        ->and($result->reclaimedDirect)->toBe(1);
+});
+
+test('swarm:relay reports direct reclaims in its audit event', function (): void {
+    $this->freezeTime();
+    $sink = new RecordingSwarmAuditSink;
+    app()->instance(SwarmAuditSink::class, $sink);
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
+    app(DurableOutbox::class)->enqueueStep($runId, 1, null, null, directDispatch: true);
+    $this->travel(61)->seconds();
+
+    Artisan::call('swarm:relay', ['--type' => ['step']]);
+
+    $record = $sink->recordsForCategory('command.relay')[0];
+    expect($record['reclaimed_count'])->toBe(1)
+        ->and($record['direct_reclaimed_count'])->toBe(1);
 });

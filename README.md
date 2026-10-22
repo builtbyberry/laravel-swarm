@@ -682,8 +682,10 @@ Use [Persistence And History](https://github.com/builtbyberry/laravel-swarm/blob
 - Set `SWARM_CAPTURE_ACTIVE_CONTEXT=true` for queued and durable swarms.
 - Size queue worker timeouts and queue `retry_after` above the longest expected provider call.
 - Schedule `swarm:relay` every minute for durable execution, the audit outbox,
-  and terminal workflow callbacks. One schedule covers all three lanes. Without
-  it, durable runs stall after the first step, queued audit failures accumulate
+  and terminal workflow callbacks. One schedule covers all three lanes; for
+  faster durable steps turn on eager dispatch rather than running it more often.
+  Without it, durable runs stall after the first step (with eager dispatch on,
+  only lost pushes and relay-driven work), queued audit failures accumulate
   without retry, and enabled terminal callbacks remain pending. Use
   `swarm:relay --type=audit` or `swarm:relay --type=callback` to drain one lane
   during focused recovery. See [Durable Execution](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/durable-execution.md),

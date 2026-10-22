@@ -245,10 +245,15 @@ multi-host deployments require a shared atomic store such as Redis, Memcached,
 DynamoDB, or database cache. Lock contention warns, records
 `status: skipped_overlap`, exits non-zero, and performs no sweep.
 
-`swarm:relay` must run at least as frequently as you want checkpointed steps to
-advance. The default limit is 100 rows per run; pass `--limit` to tune, or
-`--drain-until-empty` to clear a backlog in a single invocation. Without the
-relay scheduled, durable runs stall at the first step.
+By default `swarm:relay` must run at least as frequently as you want checkpointed
+steps to advance. Do not schedule it more often than every minute to make steps
+start sooner: turn on [eager dispatch](configuration.md#durable-eager-dispatch)
+instead, which queues each step as its checkpoint commits, and keep the relay on
+`everyMinute()` as the recovery sweep. The default limit is 100 rows per run;
+pass `--limit` to tune, or `--drain-until-empty` to clear a backlog in a single
+invocation. Without the relay scheduled, durable runs stall at the first step
+(with eager dispatch on, only lost pushes and relay-driven work stall, and
+`swarm:health --durable` reports them after twice the reservation timeout).
 
 The same `swarm:recover` loop redispatches **coordinated queue hierarchical parallel** joins (`coordination_profile = queue_hierarchical_parallel` on `swarm_durable_runs`): stale `waiting` parents with terminal branch rows release to `pending` and enqueue `ResumeQueuedHierarchicalSwarm`, and branch rows are recovered the same way as durable parallel branches.
 

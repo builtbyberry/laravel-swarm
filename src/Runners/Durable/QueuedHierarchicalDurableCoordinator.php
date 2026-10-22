@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Contracts\StoresDurableCitationEvidence;
 use BuiltByBerry\LaravelSwarm\Enums\CoordinationProfile;
@@ -37,7 +36,6 @@ class QueuedHierarchicalDurableCoordinator
         protected DurableRunContext $runs,
         protected DurableBranchCoordinator $branches,
         protected DurableJobDispatcher $jobs,
-        protected DurableOutbox $outbox,
         protected DurableEagerDispatcher $eager,
         protected Connection $connection,
         protected SwarmAttributeResolver $resolver,
@@ -132,9 +130,7 @@ class QueuedHierarchicalDurableCoordinator
                 'queue_hierarchical_waiting_parallel' => true,
             ]);
 
-        $direct = $this->eager->enabled();
-
-        $this->connection->transaction(function () use ($runId, $token, $context, $boundary, $branches, $state, $direct): void {
+        $this->connection->transaction(function () use ($runId, $token, $context, $boundary, $branches, $state): void {
             $this->durableRuns->waitForBranches($runId, new BranchWaitPayload(
                 executionToken: $token,
                 nextStepIndex: $boundary->nextStepIndexAfterJoin,
@@ -176,11 +172,7 @@ class QueuedHierarchicalDurableCoordinator
             foreach ($this->durableRuns->branchesFor($runId, $boundary->parentParallelNodeId) as $branch) {
                 $connection = $branch['queue_connection'] ?? $run['queue_connection'];
                 $queue = $branch['queue_name'] ?? $run['queue_name'];
-                $entryId = $this->outbox->enqueueBranch($runId, (string) $branch['branch_id'], $connection, $queue, $direct);
-
-                if ($direct) {
-                    $this->eager->branch($entryId, $runId, (string) $branch['branch_id'], $connection, $queue);
-                }
+                $this->eager->enqueueBranch($runId, (string) $branch['branch_id'], $connection, $queue);
             }
         });
     }

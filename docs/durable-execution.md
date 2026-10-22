@@ -857,6 +857,8 @@ See [Durable Eager Dispatch](configuration.md#durable-eager-dispatch) for the
 reservation-timeout trade-off, how lost pushes are recovered, and what
 `swarm:relay` and `swarm:health` report with the flag on.
 
+### Schedule recovery and pruning
+
 Schedule recovery so runs that were checkpointed but whose queue job was never
 dispatched are rediscovered and retried:
 
@@ -912,7 +914,11 @@ the default enterprise rollout path.
 
 Durable dispatch depends on the relay. If `swarm:relay` is not scheduled, durable
 runs stall permanently after the first checkpoint — the outbox row is written but
-never drained. Run `php artisan swarm:relay` once to unblock a stalled run, then
+never drained. With [eager dispatch](#eager-dispatch) on, runs keep moving without
+the relay, so a missing schedule is easy to miss: only a lost push, the queued
+hierarchical resume, and work no job settled stall, and `swarm:health --durable`
+reports them only once their reservation is older than twice the reservation
+timeout. Run `php artisan swarm:relay` once to unblock a stalled run, then
 add it to the scheduler for ongoing operation. `swarm:health --durable` warns when
 unclaimed outbox rows are stale, making it easy to detect a missing relay entry.
 
