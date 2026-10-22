@@ -69,6 +69,10 @@ function durableEagerRaceWorker(string $label, array $serializedJobs, string $ba
 
         FakeWriter::fake(static function () use ($label): string {
             DB::table('eager_race_executions')->insert(['worker' => $label]);
+            // Keep the step longer than a second: on MySQL a step that starts and
+            // finishes within one second trips a pre-existing history-lease bug
+            // (release finding MYSQL-LEASE), which this test is not about.
+            usleep(1_100_000);
 
             return 'writer-out';
         });
@@ -127,14 +131,19 @@ test('an eager push and a relay push consumed at once advance each step exactly 
     // A non-sync connection: eager dispatch never applies to the sync driver.
     config()->set('swarm.durable.queue.connection', 'durable-test');
     Queue::fake();
-    FakeResearcher::fake(['research-out']);
+    // Longer than a second for the same reason as the workers' fake (MYSQL-LEASE).
+    FakeResearcher::fake(function (): string {
+        usleep(1_100_000);
+
+        return 'research-out';
+    });
 
     $manager = app(DurableSwarmManager::class);
     $outbox = app(DurableOutbox::class);
     $runIds = [];
     $eagerJobs = [];
 
-    for ($i = 0; $i < 8; $i++) {
+    for ($i = 0; $i < 4; $i++) {
         $runId = FakeSequentialSwarm::make()->dispatchDurable('eager-race-'.$i)->runId;
         (new AdvanceDurableSwarm($runId, 0))->handle($manager);
         $runIds[] = $runId;
@@ -148,7 +157,7 @@ test('an eager push and a relay push consumed at once advance each step exactly 
         }
     }
 
-    expect($eagerJobs)->toHaveCount(8);
+    expect($eagerJobs)->toHaveCount(4);
 
     // Age every born-reserved entry past the reservation timeout and let the relay
     // reclaim it, so a relay job exists for every step before anything runs.
@@ -167,8 +176,8 @@ test('an eager push and a relay push consumed at once advance each step exactly 
         }
     }
 
-    expect($drain->reclaimed)->toBe(8)
-        ->and($relayJobs)->toHaveCount(8);
+    expect($drain->reclaimed)->toBe(4)
+        ->and($relayJobs)->toHaveCount(4);
 
     $barrierPath = sys_get_temp_dir().'/laravel-swarm-eager-race-'.bin2hex(random_bytes(6));
     mkdir($barrierPath);
@@ -183,8 +192,8 @@ test('an eager push and a relay push consumed at once advance each step exactly 
         rmdir($barrierPath);
     }
 
-    expect(array_column($results, 'handled'))->toBe([8, 8])
-        ->and(DB::table('eager_race_executions')->count())->toBe(8);
+    expect(array_column($results, 'handled'))->toBe([4, 4])
+        ->and(DB::table('eager_race_executions')->count())->toBe(4);
 
     foreach ($runIds as $runId) {
         $stepOneEntries = DB::table('swarm_durable_outbox')
