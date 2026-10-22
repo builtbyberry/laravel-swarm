@@ -819,6 +819,27 @@ return [
         'streaming_enabled' => (bool) env('SWARM_DURABLE_STREAMING_ENABLED', true),
 
         /*
+         * Eager dispatch on commit. Off (the default): a durable step or branch
+         * reaches the queue only when swarm:relay drains its outbox row, so per-step
+         * latency is bounded by the relay schedule. On: the advance job is pushed the
+         * moment the swarm transaction that wrote its outbox row commits, and the job
+         * deletes ("settles") that row as soon as it acquires its lease. Covers durable
+         * steps and branches and queue() multi_worker hierarchical branches; queued
+         * hierarchical resume jobs stay relay-driven.
+         *
+         * The row is written already reserved, so the relay leaves it alone while
+         * the pushed job is in flight. If the push is lost, the relay reclaims the
+         * row once its reservation is older than relay.reservation_timeout_seconds —
+         * keep swarm:relay scheduled (everyMinute is enough) as the recovery sweep.
+         * A job that waits in the queue longer than that timeout is pushed a second
+         * time by the relay; the duplicate is a safe no-op. With the flag on,
+         * signal() / resume() include that push on the calling request's path, so
+         * give the queue connection a bounded timeout. Nothing is pushed eagerly on
+         * the sync driver.
+         */
+        'eager_dispatch' => (bool) env('SWARM_DURABLE_EAGER_DISPATCH', false),
+
+        /*
          * AdvanceDurableSwarm / AdvanceDurableBranch queue settings.
          * Job timeout is step_timeout + timeout_margin_seconds (not a separate absolute cap).
          */

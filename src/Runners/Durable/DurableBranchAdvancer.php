@@ -89,7 +89,7 @@ class DurableBranchAdvancer
         protected NativeInputManager $nativeInputs,
     ) {}
 
-    public function advanceBranch(string $runId, string $branchId): void
+    public function advanceBranch(string $runId, string $branchId, ?int $outboxEntryId = null): void
     {
         $run = $this->runs->requireRun($runId);
         $branch = $this->durableRuns->findBranch($runId, $branchId);
@@ -113,6 +113,12 @@ class DurableBranchAdvancer
 
         if ($token === null) {
             return;
+        }
+
+        // Settle the directly pushed job's outbox entry as soon as the lease is held,
+        // before any work, so the relay never redispatches it.
+        if ($outboxEntryId !== null) {
+            $this->outbox->settle($outboxEntryId, $runId);
         }
 
         // Per-swarm durable-streaming opt-in, pinned on the run row at start (#310);

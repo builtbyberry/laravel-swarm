@@ -94,6 +94,10 @@ This is required — not optional. A durable run stalls permanently if the relay
 is not running. See [Timeouts And Database Requirements](#timeouts-and-database-requirements)
 for the full relay reference, including how to recover from a queue outage.
 
+By default each step waits for the next relay run before it is queued, so steps
+start at most once per relay interval. For real-time workflows, turn on
+[eager dispatch](#eager-dispatch) rather than scheduling the relay more often.
+
 ### 4. Schedule recovery
 
 The recovery command finds runs whose queue workers died after checkpointing but
@@ -834,6 +838,27 @@ php artisan swarm:relay --drain-until-empty --max-attempts=10
 `--max-attempts` iterations run consecutively with no sleep. Size N for a short
 recovery window rather than a large one-off number during a sustained outage.
 
+### Eager dispatch
+
+With `swarm.durable.eager_dispatch` (`SWARM_DURABLE_EAGER_DISPATCH`, default
+`false`) enabled, the next step or branch job is pushed the moment the checkpoint
+that wrote its outbox row commits, so a run no longer waits for the relay between
+steps. The job deletes its own outbox row once it acquires its lease, and the relay
+only picks up rows whose push was lost. Keep `swarm:relay` scheduled
+`everyMinute()`: it is the recovery path, not the delivery path. A second push of
+the same step (eager plus relay) is a no-op, because a step can be leased only
+once.
+
+When a step ends at a declared wait or a child-swarm dispatch, nothing is pushed
+for the next step: the run is waiting, and the signal, the child's completion, or
+the wait's timeout queues the continuation itself.
+
+See [Durable Eager Dispatch](configuration.md#durable-eager-dispatch) for the
+reservation-timeout trade-off, how lost pushes are recovered, and what
+`swarm:relay` and `swarm:health` report with the flag on.
+
+### Schedule recovery and pruning
+
 Schedule recovery so runs that were checkpointed but whose queue job was never
 dispatched are rediscovered and retried:
 
@@ -862,7 +887,8 @@ inspection boundary.
 - use database-backed persistence and run the package migrations
 - put durable swarms on a dedicated queue when the workflow is important or
   provider calls are slow
-- schedule `swarm:relay` every minute (required — dispatches jobs after checkpoint)
+- schedule `swarm:relay` every minute (required — dispatches jobs after checkpoint,
+  or recovers lost pushes when [eager dispatch](#eager-dispatch) is on)
 - schedule `swarm:recover` every few minutes
 - schedule `swarm:prune` daily, or more often if retention windows are short
 - keep the queue worker timeout above the longest expected durable step
@@ -888,7 +914,11 @@ the default enterprise rollout path.
 
 Durable dispatch depends on the relay. If `swarm:relay` is not scheduled, durable
 runs stall permanently after the first checkpoint — the outbox row is written but
-never drained. Run `php artisan swarm:relay` once to unblock a stalled run, then
+never drained. With [eager dispatch](#eager-dispatch) on, runs keep moving without
+the relay, so a missing schedule is easy to miss: only a lost push, the queued
+hierarchical resume, and work no job settled stall, and `swarm:health --durable`
+reports them only once their reservation is older than twice the reservation
+timeout. Run `php artisan swarm:relay` once to unblock a stalled run, then
 add it to the scheduler for ongoing operation. `swarm:health --durable` warns when
 unclaimed outbox rows are stale, making it easy to detect a missing relay entry.
 

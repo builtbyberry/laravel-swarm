@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableParallelFailurePolicy;
 use BuiltByBerry\LaravelSwarm\Persistence\DatabaseRunHistoryStore;
@@ -27,7 +26,7 @@ class DurableTopLevelParallelAdvancer
         protected DurableRunContext $runs,
         protected DurableBranchCoordinator $branches,
         protected DurableRunTerminalHandler $terminal,
-        protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
     ) {}
 
     /**
@@ -78,12 +77,9 @@ class DurableTopLevelParallelAdvancer
             ));
 
             foreach ($branches as $branch) {
-                $this->outbox->enqueueBranch(
-                    $state->context->runId,
-                    (string) $branch['branch_id'],
-                    $branch['queue_connection'] ?? $run['queue_connection'],
-                    $branch['queue_name'] ?? $run['queue_name'],
-                );
+                $connection = $branch['queue_connection'] ?? $run['queue_connection'];
+                $queue = $branch['queue_name'] ?? $run['queue_name'];
+                $this->eager->enqueueBranch($state->context->runId, (string) $branch['branch_id'], $connection, $queue);
             }
         });
     }

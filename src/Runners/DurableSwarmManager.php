@@ -280,18 +280,19 @@ class DurableSwarmManager
         $this->children->afterChildIntentForTesting($hook);
     }
 
-    public function advance(string $runId, int $expectedStepIndex): void
+    public function advance(string $runId, int $expectedStepIndex, ?int $outboxEntryId = null): void
     {
         $this->advancer->advance(
             $runId,
             $expectedStepIndex,
             fn (array $run, Swarm $swarm, RunContext $context, int $nextStepIndex): bool => $this->enterDeclaredDurableBoundary($run, $swarm, $context),
+            $outboxEntryId,
         );
     }
 
-    public function advanceBranch(string $runId, string $branchId): void
+    public function advanceBranch(string $runId, string $branchId, ?int $outboxEntryId = null): void
     {
-        $this->branchAdvancer->advanceBranch($runId, $branchId);
+        $this->branchAdvancer->advanceBranch($runId, $branchId, $outboxEntryId);
     }
 
     /**

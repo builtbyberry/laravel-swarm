@@ -6,7 +6,6 @@ namespace BuiltByBerry\LaravelSwarm\Runners\Durable;
 
 use BuiltByBerry\LaravelSwarm\Audit\SwarmAuditDispatcher;
 use BuiltByBerry\LaravelSwarm\Contracts\ContextStore;
-use BuiltByBerry\LaravelSwarm\Contracts\DurableOutbox;
 use BuiltByBerry\LaravelSwarm\Contracts\DurableRunStore;
 use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
 use BuiltByBerry\LaravelSwarm\Events\SwarmCancelled;
@@ -37,7 +36,7 @@ class DurableLifecycleController
         protected DurablePayloadCapture $payloads,
         protected DurableChildSwarmCoordinator $children,
         protected SwarmAuditDispatcher $audit,
-        protected DurableOutbox $outbox,
+        protected DurableEagerDispatcher $eager,
     ) {}
 
     public function pause(string $runId): DurablePauseResult
@@ -124,12 +123,8 @@ class DurableLifecycleController
             }
 
             if (! $this->runs->isQueueHierarchicalParallel($updated)) {
-                $this->outbox->enqueueStep(
-                    $runId,
-                    (int) ($updated['next_step_index'] ?? $run['next_step_index']),
-                    $updated['queue_connection'],
-                    $updated['queue_name'],
-                );
+                $nextStepIndex = (int) ($updated['next_step_index'] ?? $run['next_step_index']);
+                $this->eager->enqueueStep($runId, $nextStepIndex, $updated['queue_connection'], $updated['queue_name']);
             }
 
             return true;

@@ -75,12 +75,44 @@ Each durable step is processed by a normal Laravel queue job:
 
 | Job | Invokes |
 |-----|---------|
-| `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm` | `$manager->advance($runId, $stepIndex)` |
-| `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch` | `$manager->advanceBranch($runId, $branchId)` |
+| `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableSwarm` | `$manager->advance($runId, $stepIndex, $outboxEntryId)` |
+| `BuiltByBerry\LaravelSwarm\Jobs\AdvanceDurableBranch` | `$manager->advanceBranch($runId, $branchId, $outboxEntryId)` |
 
-**Dispatching** the next job (correct connection, queue, and job class) is centralized in `BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher`. Collaborators call into it when a checkpoint completes and another step or branch must run.
+**Building** the next job (correct connection, queue, and job class) is centralized in `BuiltByBerry\LaravelSwarm\Runners\Durable\DurableJobDispatcher`. `$outboxEntryId` is set only on a job pushed directly on commit (see below); relay and recovery pushes carry `null`.
 
-If you need to **record or stub dispatches** in tests, bind `DurableJobDispatcher` in the container before resolving `DurableSwarmManager`. The package’s own feature tests use that pattern; see `tests/Feature/DurableSwarmTest.php` for a working example.
+### From checkpoint to queue: the outbox, the relay, and eager dispatch
+
+Collaborators never push the next job from inside a checkpoint transaction: a
+queue cannot join a database transaction. Instead each checkpoint writes a row to
+`swarm_durable_outbox` (`DurableOutbox`) in the same transaction as the state
+change. There are two ways that row reaches the queue.
+
+**Relay path (default).** `swarm:relay` drains the outbox: it claims rows (setting
+`reserved_at`), dispatches a job for each through `DurableJobDispatcher`, and
+deletes the row on success. A row whose `reserved_at` is older than
+`swarm.durable.relay.reservation_timeout_seconds` is treated as abandoned and
+reclaimed by the next run. Per-step latency is bounded by the relay schedule.
+
+**Eager path (`swarm.durable.eager_dispatch`).** The checkpoint writes the row
+already reserved (`directDispatch`) and `DurableEagerDispatcher` pushes the job
+once the swarm connection's outermost transaction commits; a rollback drops the
+push. The job carries the row's id, and the advancer deletes (settles) the row
+immediately after the job acquires its lease, before any work. On the normal path
+the relay never sees the row; a lost push leaves it reserved until it goes stale,
+and the relay's ordinary reclaim then dispatches it. A duplicate push is a no-op
+because lease acquisition is a conditional update. Queued hierarchical resume rows
+stay on the relay path.
+
+The checkpoint coordinator holds eager step pushes until after it has entered any
+declared wait or child-swarm boundary: a step job pushed at commit could otherwise
+lease the still-pending run and run past the boundary. If a boundary was entered,
+it settles the step row instead of pushing, since every way out of the boundary
+queues the continuation itself.
+
+The released migration that creates `swarm_durable_outbox` describes only the
+relay path in its docblock; this section is the description of both.
+
+If you need to **record or stub dispatches** in tests, bind `DurableJobDispatcher` in the container before resolving `DurableSwarmManager`. That double sees relay and recovery dispatches only: with eager dispatch on, pushes on commit build the job through `makeStepJob()` / `makeBranchJob()` and go straight to the queue, so observe them with `Queue::fake()`. The package’s own feature tests use that pattern; see `tests/Feature/DurableSwarmTest.php` for a working example.
 
 ## Collaborator responsibilities
 
@@ -94,6 +126,7 @@ These classes live in `BuiltByBerry\LaravelSwarm\Runners\Durable\` unless noted.
 | `DurablePayloadCapture` | Capture/redaction helpers shared across handlers. |
 | `DurableSwarmStarter` | Run row creation and initial dispatch when a durable run starts. |
 | `DurableJobDispatcher` | Builds and returns `PendingDispatch` for step and branch jobs; dispatches queued hierarchical resume when configured. |
+| `DurableEagerDispatcher` | Pushes step and branch jobs on commit of the swarm transaction when `swarm.durable.eager_dispatch` is on; declares the DB-then-queue boundary. |
 | `DurableSignalHandler` | Signals, waits, and outcomes that release the run. |
 | `DurableRetryHandler` | Retry policy evaluation and scheduling metadata. |
 | `DurableRunInspector` | `find` / `inspect*` / labels / details / progress persistence. |
@@ -106,7 +139,7 @@ These classes live in `BuiltByBerry\LaravelSwarm\Runners\Durable\` unless noted.
 | `DurableStepExecutionBuilder` | Resolves the swarm, marks the run running, dispatches `SwarmStarted`, and builds the shared `SwarmExecutionState`. |
 | `DurableSequentialStepAdvancer` | Executes one sequential durable step through `SequentialRunner`. |
 | `DurableTopLevelParallelAdvancer` | Top-level parallel branch fan-out, branch-wait checkpointing, joins, partial-success policy, and terminal delegation. |
-| `DurableStepCheckpointCoordinator` | Successful post-step checkpointing, testing checkpoint hooks, durable boundary entry, and next step/branch dispatch. |
+| `DurableStepCheckpointCoordinator` | Successful post-step checkpointing, testing checkpoint hooks, durable boundary entry, and next step/branch dispatch (eager pushes are held until after boundary entry). |
 | `DurableRunTerminalHandler` | Durable timeout, cancel, pause, failure, branch-failure, completion, lifecycle event, and child-run terminal reconciliation paths. |
 | `DurableHierarchicalCoordinator` | Waiting parent / join dispatch at hierarchical boundaries. |
 | `QueuedHierarchicalDurableCoordinator` | Bridge for `multi_worker` queued hierarchical parallel coordination. |
