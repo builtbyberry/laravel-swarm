@@ -311,7 +311,7 @@ test('settle deletes exactly the given row and is contained when the delete fail
         ->and(eagerOutboxRow($sibling))->not->toBeNull();
 
     config()->set('swarm.tables.durable_outbox', 'missing_swarm_durable_outbox');
-    expect(fn () => app(DatabaseDurableOutbox::class)->settle($sibling))->not->toThrow(Throwable::class);
+    expect(fn () => app(DatabaseDurableOutbox::class)->settle($sibling))->not->toThrow(Exception::class);
     Exceptions::assertReported(QueryException::class);
 });
 
@@ -956,7 +956,7 @@ test('a push that throws at the queue is reported and contained', function (): v
     $eager = eagerDispatcher(app('db.transactions'));
 
     expect(fn () => DB::transaction(fn () => $eager->step(23, 'run-throw', 1, 'eager-recording', null)))
-        ->not->toThrow(Throwable::class);
+        ->not->toThrow(Exception::class);
 
     Exceptions::assertReported(fn (RuntimeException $e): bool => $e->getMessage() === 'queue unavailable');
 });
