@@ -22,7 +22,7 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   by the new code that run under the old code simply never delete their row, and
   the relay removes it after the reservation timeout. No data is lost and there
   is no schema change. See
-  [Durable Eager Dispatch](docs/configuration.md#durable-eager-dispatch).
+  [Durable Eager Dispatch](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/configuration.md#durable-eager-dispatch).
 
 ### Changed
 
