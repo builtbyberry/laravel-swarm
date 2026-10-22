@@ -118,7 +118,7 @@ class DurableBranchAdvancer
         // Settle the directly pushed job's outbox entry as soon as the lease is held,
         // before any work, so the relay never redispatches it.
         if ($outboxEntryId !== null) {
-            $this->outbox->settle($outboxEntryId);
+            $this->outbox->settle($outboxEntryId, $runId);
         }
 
         // Per-swarm durable-streaming opt-in, pinned on the run row at start (#310);

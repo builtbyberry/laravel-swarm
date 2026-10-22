@@ -226,7 +226,7 @@ test('queued hierarchical durable coordinator creates coordination run and dispa
             $this->jobs->dispatchQueuedResumeById($runId, $connection, $queue);
         }
 
-        public function settle(int $entryId): void {}
+        public function settle(int $entryId, ?string $runId = null): void {}
 
         public function drain(array $types = [], int $limit = 100): DrainResult
         {

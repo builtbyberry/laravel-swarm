@@ -119,7 +119,7 @@ test('command.relay error emit carries exception_class (#32)', function (): void
 
         public function enqueueQueuedResume(string $runId, ?string $connection, ?string $queue): void {}
 
-        public function settle(int $entryId): void {}
+        public function settle(int $entryId, ?string $runId = null): void {}
 
         public function drain(array $types = [], int $limit = 100): DrainResult
         {

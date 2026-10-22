@@ -37,15 +37,16 @@ interface DurableOutbox
     /**
      * Delete one entry by id once the job it describes has been delivered, so the
      * relay never dispatches it again. Deleting an entry that no longer exists is
-     * a no-op. Implementations must not throw: a missed settle only costs one
-     * duplicate, no-op dispatch once the entry's reservation goes stale.
+     * a no-op. $runId is context for reporting a failure only. Implementations must
+     * not throw: a missed settle only costs one duplicate, no-op dispatch once the
+     * entry's reservation goes stale.
      */
-    public function settle(int $entryId): void;
+    public function settle(int $entryId, ?string $runId = null): void;
 
     /**
      * Claim and dispatch pending outbox entries, then delete successfully dispatched rows.
      *
-     * Returns a DrainResult with five counters:
+     * Returns a DrainResult with six counters:
      *   - dispatched: entries sent to a queue driver and deleted from the outbox.
      *   - skipped:    entries permanently invalid (unknown dispatch_type, unknown
      *                 queue_connection, or malformed payload) and deleted without dispatch.
@@ -61,6 +62,10 @@ interface DurableOutbox
      *                 timed out mid-run), or they were written for direct dispatch and the
      *                 pushed job did not settle them before the reservation went stale.
      *                 A non-zero value signals a falling-behind relay or lost/slow direct pushes.
+     *   - reclaimedDirect: the part of reclaimed that are direct-dispatch entries reclaimed
+     *                 for the first time (a lost push, a queue wait longer than the
+     *                 reservation timeout, or a pushed job that found nothing to do).
+     *                 reclaimed minus reclaimedDirect is the relay-health signal.
      *
      * @param  array<DurableDispatchType>  $types  Restrict to these types; empty means all.
      * @param  int  $limit  Maximum rows to claim per call. Values < 1 return an empty DrainResult immediately.

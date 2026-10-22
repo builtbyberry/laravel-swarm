@@ -339,8 +339,8 @@ test('settle deletes exactly the given row and is contained when the delete fail
         ->and(eagerOutboxRow($sibling))->not->toBeNull();
 
     config()->set('swarm.tables.durable_outbox', 'missing_swarm_durable_outbox');
-    expect(fn () => app(DatabaseDurableOutbox::class)->settle($sibling))->not->toThrow(Exception::class);
-    Exceptions::assertReported(fn (RuntimeException $e): bool => str_contains($e->getMessage(), "entry [{$sibling}]")
+    expect(fn () => app(DatabaseDurableOutbox::class)->settle($sibling, $runId))->not->toThrow(Exception::class);
+    Exceptions::assertReported(fn (RuntimeException $e): bool => str_contains($e->getMessage(), "entry [{$sibling}] for run [{$runId}]")
         && $e->getPrevious() instanceof QueryException);
 });
 
@@ -1235,4 +1235,21 @@ test('swarm:relay reports direct reclaims in its audit event', function (): void
     $record = $sink->recordsForCategory('command.relay')[0];
     expect($record['reclaimed_count'])->toBe(1)
         ->and($record['direct_reclaimed_count'])->toBe(1);
+});
+
+test('a relay row claimed in its creation second and abandoned is not counted as a direct reclaim', function (): void {
+    $this->freezeTime();
+    $outbox = app(DurableOutbox::class);
+    $runId = FakeSequentialSwarm::make()->dispatchDurable('task')->runId;
+    $relayRow = $outbox->enqueueStep($runId, 1, null, null);
+
+    // A relay claims the row in the same second it was written, then dies.
+    $created = DB::table('swarm_durable_outbox')->where('id', $relayRow)->value('created_at');
+    DB::table('swarm_durable_outbox')->where('id', $relayRow)->update(['reserved_at' => $created]);
+
+    $this->travel(61)->seconds();
+    $result = $outbox->drain([], 100);
+
+    expect($result->reclaimed)->toBe(1)
+        ->and($result->reclaimedDirect)->toBe(0);
 });

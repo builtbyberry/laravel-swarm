@@ -57,7 +57,7 @@ class DurableStepAdvancer
         // A job pushed directly on commit settles its own outbox entry the moment it
         // holds the lease — before any work — so the relay never redispatches it.
         if ($outboxEntryId !== null) {
-            $this->outbox->settle($outboxEntryId);
+            $this->outbox->settle($outboxEntryId, $runId);
         }
 
         $run = $this->runs->requireRun($runId);

@@ -83,13 +83,17 @@ class DurableStepCheckpointCoordinator
         // the dispatched job is a safe no-op.
         //
         // Crash edge case: if enterDurableBoundary throws after the checkpoint transaction
-        // commits, the run stays 'pending' with an outbox step pointing at it. That job is
-        // still dispatched — by the relay, or with eager dispatch on, by the push in the
-        // finally block below — and acquireLease() accepts it so the run advances normally.
-        // The boundary state is not persisted until persistChildIntent() commits its own
-        // independent transaction, so this path is a safe retry with no data loss. (A
-        // process killed outright leaves an eager entry reserved; the relay reclaims it
-        // once its reservation goes stale.)
+        // commits, the outbox step pointing at the run is still dispatched — by the relay,
+        // or with eager dispatch on, by the push in the finally block below. What it then
+        // does depends on how far the boundary got before throwing:
+        //   - nothing persisted: the run is still 'pending', acquireLease() accepts the job
+        //     and the run advances normally (a safe retry with no data loss);
+        //   - the wait or child intent already committed (persistChildIntent() commits in
+        //     its own transaction before the hook that threw): the run is 'waiting', the
+        //     job's lease is rejected and it is a no-op, and the wait's own release path
+        //     (signal, child reconciliation, timeout recovery) owns progress.
+        // A process killed outright leaves an eager entry reserved; the relay reclaims it
+        // once its reservation goes stale.
         //
         // NOTE: branchesFor() is called INSIDE the closure (i.e., inside the checkpoint
         // transaction). For the initial branch-wait case, waitForBranches() creates the
@@ -168,9 +172,10 @@ class DurableStepCheckpointCoordinator
         try {
             $enteredBoundary = $enterDurableBoundary($run, $swarm, $context, $nextStepIndex) === true;
         } finally {
-            // Pushed even when the boundary throws: the run is still pending and its
-            // entries are born reserved, so without a push they would wait a full
-            // reservation timeout for the relay. Only direct entries are collected.
+            // Pushed even when the boundary throws: the entries are born reserved, so
+            // without a push they would wait a full reservation timeout for the relay.
+            // If the boundary persisted before throwing, the pushed step job is a no-op
+            // (see the crash edge case above). Only direct entries are collected.
             $this->pushCollected($runId, $nextStepIndex, $run, $enteredBoundary, $stepEntries, $branchEntries);
         }
     }
@@ -193,7 +198,7 @@ class DurableStepCheckpointCoordinator
                 // release and child reconciliation enqueue a fresh entry, a wait
                 // timeout dispatches directly). Settle it rather than leave it for the
                 // relay to reclaim and push as a no-op once its reservation goes stale.
-                $this->outbox->settle($entryId);
+                $this->outbox->settle($entryId, $runId);
 
                 continue;
             }
