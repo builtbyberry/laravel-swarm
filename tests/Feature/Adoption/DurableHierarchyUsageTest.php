@@ -24,7 +24,7 @@ use Illuminate\Support\Facades\DB;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\Data\TextUsage;
-use Laravel\Ai\Responses\StructuredAgentResponse;
+use Laravel\Ai\Responses\StructuredTextResponse;
 
 covers(HierarchicalRunner::class);
 
@@ -56,7 +56,7 @@ function startDurableUsageJoin(string $topology, bool $nextWorker): array
 {
     $plan = durableJoinUsagePlan($nextWorker);
     config()->set('tests.durable_usage.plan', $plan);
-    FakeHierarchicalCoordinator::fake([new StructuredAgentResponse('coordinator', $plan, json_encode($plan, JSON_THROW_ON_ERROR), new TextUsage(10, 3, 4, 0, 1), new Meta('fake', 'test'))]);
+    FakeHierarchicalCoordinator::fake([new StructuredTextResponse($plan, json_encode($plan, JSON_THROW_ON_ERROR), new TextUsage(10, 3, 4, 0, 1), new Meta('fake', 'test'))]);
     $swarm = $topology === 'static' ? new DurableUsageStaticSwarm : new FakeHierarchicalFullSwarm;
     $runId = $swarm->dispatchDurable('durable join usage')->runId;
     $manager = app(DurableSwarmManager::class);
