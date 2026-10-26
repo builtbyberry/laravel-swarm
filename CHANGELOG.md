@@ -43,6 +43,22 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   `DrainResult::$reclaimedDirect` and `direct_reclaimed_count`, so
   `reclaimed_count` minus `direct_reclaimed_count` stays the relay-health signal.
 
+### Fixed
+
+- **Structured-output agents keep their text when nothing decodes (#589).**
+  With `laravel/ai` 1.3, an agent that declares a schema always returns a
+  structured response, with an empty payload when its output was not valid
+  JSON, and that response reads as `"[]"`. Swarm recorded `"[]"` as the step's
+  output, so the model's text was lost from the step, the next agent's input and
+  history, and a hierarchical coordinator failed with "must define a non-empty
+  [start_at] node id" instead of "Hierarchical coordinator output must be valid
+  JSON". Swarm now records the text whenever the structured payload is empty
+  and the text is not. This also applies on `laravel/ai` 1.0, where a provider
+  whose structured output failed to decode already produced the empty payload,
+  so that output changes from `"[]"` to the model's text there too. A populated
+  payload is recorded exactly as before. The `laravel/ai` constraint stays
+  `^1.0`.
+
 ## v0.28.1 - 2026-10-10
 
 Post-ship fixes for v0.28.0 found against a live model: make the

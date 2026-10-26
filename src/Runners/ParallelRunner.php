@@ -17,6 +17,7 @@ use BuiltByBerry\LaravelSwarm\Responses\NativeStepResult;
 use BuiltByBerry\LaravelSwarm\Responses\SwarmResponse;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -95,7 +96,7 @@ class ParallelRunner
                     Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                     return [
-                        'output' => (string) $response,
+                        'output' => AgentResponseOutput::text($response),
                         'citation_evidence' => NativeCitationEvidence::forConcurrentWorker($citationLimits)->response($response, $runId, $index, $agentClass)->toArray(),
                         'usage' => $response->usage->toArray(),
                         'class' => $agentClass,

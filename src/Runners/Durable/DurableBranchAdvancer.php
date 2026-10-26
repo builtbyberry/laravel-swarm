@@ -38,6 +38,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\Events\SwarmStreamEvent;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -361,7 +362,7 @@ class DurableBranchAdvancer
             $snapshot = $this->snapshots->appendToolCall($snapshot, $toolCall);
         }
 
-        return [(string) $response, $response->usage->toArray(), $snapshot,
+        return [AgentResponseOutput::text($response), $response->usage->toArray(), $snapshot,
             $this->citations->response($response, $state->context->runId, (int) $branch['step_index'], $agent::class,
                 is_string($branch['node_id'] ?? null) ? $branch['node_id'] : (string) $branch['branch_id']),
             $this->stepsRecorder->nativeResult($response)];
