@@ -81,7 +81,10 @@ it('records the text of a schema branch on a streamed hierarchical parallel node
 
     StaticHierarchicalStructuredParallelSwarm::make()->stream($context)->each(static fn () => null);
 
-    expect(structuredFallbackStepOutputs($context->runId))->toContain(STRUCTURED_FALLBACK_TEXT);
+    $steps = collect(app(SwarmHistory::class)->find($context->runId)['steps'] ?? []);
+
+    expect($steps->firstWhere('agent_class', StructuredOutputWorker::class)['output'] ?? null)->toBe(STRUCTURED_FALLBACK_TEXT)
+        ->and($steps->firstWhere('agent_class', FakeWriter::class)['output'] ?? null)->toBe('writer-out');
 });
 
 it('reports invalid coordinator json and records the coordinator text', function () {
@@ -98,11 +101,18 @@ it('reports invalid coordinator json and records the coordinator text', function
         ->and($history['steps'][0]['output'])->toBe(STRUCTURED_FALLBACK_TEXT);
 });
 
-it('reports invalid coordinator json when the hierarchical swarm streams', function () {
+it('reports invalid coordinator json and records the coordinator text when the hierarchical swarm streams', function () {
     FakeHierarchicalCoordinator::fake([STRUCTURED_FALLBACK_TEXT]);
+    $context = RunContext::from('coordinator-stream-task');
 
-    expect(fn () => Swarm::hierarchical(new FakeHierarchicalCoordinator, [new FakeWriter])->stream('coordinator-stream-task')->each(static fn () => null))
+    expect(fn () => Swarm::hierarchical(new FakeHierarchicalCoordinator, [new FakeWriter])->stream($context)->each(static fn () => null))
         ->toThrow(SwarmException::class, 'Hierarchical coordinator output must be valid JSON matching the declared route-plan schema.');
+
+    $history = app(SwarmHistory::class)->find($context->runId);
+
+    expect($history['status'])->toBe('failed')
+        ->and($history['steps'][0]['agent_class'])->toBe(FakeHierarchicalCoordinator::class)
+        ->and($history['steps'][0]['output'])->toBe(STRUCTURED_FALLBACK_TEXT);
 });
 
 it('records the text of a durable schema branch', function () {

@@ -53,7 +53,8 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   history, and a hierarchical coordinator failed with "must define a non-empty
   [start_at] node id" instead of "Hierarchical coordinator output must be valid
   JSON". Swarm now records the text whenever the structured payload is empty
-  and the text is not. This also applies on `laravel/ai` 1.0, where a provider
+  and the text is not, and output guardrails see that same text, so a guardrail
+  that accepted `"[]"` now checks what the model actually said. This also applies on `laravel/ai` 1.0, where a provider
   whose structured output failed to decode already produced the empty payload,
   so that output changes from `"[]"` to the model's text there too. A populated
   payload is recorded exactly as before. The `laravel/ai` constraint stays
