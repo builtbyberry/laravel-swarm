@@ -29,7 +29,7 @@ use Illuminate\Support\Facades\DB;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\Data\TextUsage;
-use Laravel\Ai\Responses\StructuredAgentResponse;
+use Laravel\Ai\Responses\StructuredTextResponse;
 
 beforeEach(function () {
     config()->set('swarm.persistence.driver', 'database');
@@ -114,7 +114,7 @@ function usageHierarchyPlan(bool $workers): array
 
 it('keeps an empty hierarchy walk neutral and aggregates actual hierarchy workers', function (string $mode, bool $workers) {
     $nativeUsage = new TextUsage(10, 3, 4, 0, 1);
-    FakeHierarchicalCoordinator::fake([new StructuredAgentResponse('coordinator-id', usageHierarchyPlan($workers), json_encode(usageHierarchyPlan($workers), JSON_THROW_ON_ERROR), $nativeUsage, new Meta('fake', 'test'))]);
+    FakeHierarchicalCoordinator::fake([new StructuredTextResponse(usageHierarchyPlan($workers), json_encode(usageHierarchyPlan($workers), JSON_THROW_ON_ERROR), $nativeUsage, new Meta('fake', 'test'))]);
     $swarm = FakeHierarchicalFullSwarm::make();
     if (in_array($mode, ['stream', 'static-stream'], true)) {
         $stream = $swarm->stream('hierarchy usage');
@@ -138,7 +138,7 @@ it('keeps an empty hierarchy walk neutral and aggregates actual hierarchy worker
 it('retains conservative accounting through a persisted coordinated queue join', function (string $kind) {
     config()->set('swarm.queue.hierarchical_parallel.coordination', 'multi_worker');
     app()->forgetInstance(QueuedHierarchicalCoordinator::class);
-    FakeHierarchicalCoordinator::fake([new StructuredAgentResponse('coordinator-id', usageHierarchyPlan(true), json_encode(usageHierarchyPlan(true), JSON_THROW_ON_ERROR), new TextUsage(10, 3, 4, 0, 1), new Meta('fake', 'test'))]);
+    FakeHierarchicalCoordinator::fake([new StructuredTextResponse(usageHierarchyPlan(true), json_encode(usageHierarchyPlan(true), JSON_THROW_ON_ERROR), new TextUsage(10, 3, 4, 0, 1), new Meta('fake', 'test'))]);
     $context = RunContext::from('coordinated usage');
     (new InvokeSwarm(FakeHierarchicalFullSwarm::class, $context->toQueuePayload()))->handle(app(SwarmRunner::class));
     $store = app(DurableRunStore::class);

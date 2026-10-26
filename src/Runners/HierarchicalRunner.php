@@ -36,6 +36,7 @@ use BuiltByBerry\LaravelSwarm\Streaming\StreamEventMapper;
 use BuiltByBerry\LaravelSwarm\Streaming\StreamStepAccumulator;
 use BuiltByBerry\LaravelSwarm\Support\ActiveRunContext;
 use BuiltByBerry\LaravelSwarm\Support\AdHocSwarm;
+use BuiltByBerry\LaravelSwarm\Support\AgentResponseOutput;
 use BuiltByBerry\LaravelSwarm\Support\GuardrailStepContext;
 use BuiltByBerry\LaravelSwarm\Support\MonotonicTime;
 use BuiltByBerry\LaravelSwarm\Support\NativeAgentInvoker;
@@ -1054,7 +1055,7 @@ class HierarchicalRunner
                                 Container::getInstance()->make(NativeOutcomeValidator::class)->validateResponse($response);
 
                                 return [
-                                    'output' => (string) $response,
+                                    'output' => AgentResponseOutput::text($response),
                                     'citation_evidence' => NativeCitationEvidence::forConcurrentWorker($citationLimits)->response($response, $branchRunId, $branchIndex, $agentClass, $branchNodeId)->toArray(),
                                     'usage' => $response->usage->toArray(),
                                     'duration_ms' => MonotonicTime::elapsedMilliseconds($startedAt),
@@ -1682,7 +1683,7 @@ class HierarchicalRunner
         } finally {
             ActiveRunContext::exit();
         }
-        $output = (string) $response;
+        $output = AgentResponseOutput::text($response);
         $usage = $this->usageFromResponse($response);
 
         foreach (SnapshotToolCallNormalizer::fromResponse($response) as $toolCall) {
