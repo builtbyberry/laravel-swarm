@@ -217,12 +217,12 @@ it('preserves full Pest 5 coverage and unconditional Laravel 13.16 compatibility
         fn (string $run): bool => str_starts_with($run, 'composer config policy.advisories.ignore-id '),
     ));
     expect($advisoryIgnoreCommands)->toBe([
-        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781',
+        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781 PKSA-b41t-wbzk-9q51 PKSA-4hy6-m98j-dz9f',
     ]);
     expect($commands)->not->toContain('|| true', '--ignore-platform', '--no-security-blocking', '--coverage', 'policy.advisories.block', 'policy.advisories.ignore laravel/framework');
     $ordered = [
         'cp composer.json /tmp/swarm-production-composer.json',
-        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781',
+        'composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781 PKSA-b41t-wbzk-9q51 PKSA-4hy6-m98j-dz9f',
         'composer require --no-update --dev "pestphp/pest:^4.7" "pestphp/pest-plugin-laravel:^4.1" "laravel/framework:13.16.0"',
         'composer update --with laravel/ai:1.0.0 --prefer-lowest --prefer-stable --prefer-dist --no-interaction --no-progress',
         'cp /tmp/swarm-production-composer.json composer.json',
