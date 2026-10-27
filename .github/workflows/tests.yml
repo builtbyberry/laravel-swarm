@@ -111,10 +111,12 @@ jobs:
       - name: Preserve production manifest
         run: cp composer.json /tmp/swarm-production-composer.json
 
-      # This lane proves the declared Laravel 13.16 floor; this advisory was
-      # fixed only in 13.30.0. Ignore only its id in this temporary lane manifest.
-      - name: Allow the Laravel 13.16 compatibility advisory
-        run: composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781
+      # This lane proves the declared Laravel 13.16 floor, which these advisories
+      # affect: PKSA-d5tc-s1qs-h781 (fixed in 13.30.0), PKSA-b41t-wbzk-9q51
+      # (13.29.0) and PKSA-4hy6-m98j-dz9f (13.27.0). Ignore only their ids in
+      # this temporary lane manifest.
+      - name: Allow the Laravel 13.16 compatibility advisories
+        run: composer config policy.advisories.ignore-id PKSA-d5tc-s1qs-h781 PKSA-b41t-wbzk-9q51 PKSA-4hy6-m98j-dz9f
 
       - name: Select compatibility test toolchain
         run: composer require --no-update --dev "pestphp/pest:^4.7" "pestphp/pest-plugin-laravel:^4.1" "laravel/framework:13.16.0"

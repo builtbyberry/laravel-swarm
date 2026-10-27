@@ -59,6 +59,13 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   so that output changes from `"[]"` to the model's text there too. A populated
   payload is recorded exactly as before. The `laravel/ai` constraint stays
   `^1.0`.
+- The Laravel 13.16 compatibility lane also ignores advisories
+  `PKSA-b41t-wbzk-9q51` (CVE-2026-114509, fixed upstream in Laravel 13.29.0) and
+  `PKSA-4hy6-m98j-dz9f` (CVE-2026-114508, fixed in 13.27.0) in its temporary lane
+  manifest. Both were published on 2026-10-23 and stopped the lane from installing
+  the exact 13.16.0 release that proves the declared floor. The package's
+  requirements and advisory policy are unchanged, and any other advisory against
+  13.16.0 still fails the lane.
 
 ## v0.28.1 - 2026-10-10
 
