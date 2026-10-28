@@ -71,8 +71,9 @@ return [
     'commands' => [
         'overlap' => [
             /*
-             * Cache store used by the command-owned swarm:relay and swarm:recover
-             * leases. null uses cache.default. The store must support atomic locks;
+             * Cache store used by the command-owned swarm:recover lease and the
+             * per-lane swarm:relay leases (durable, audit, callback — each held
+             * only while that lane drains). null uses cache.default. The store must support atomic locks;
              * array, null, and failover stores are rejected because they cannot make
              * the package's cross-process guarantee. File locks cover one host only;
              * multi-host deployments must name a shared store such as Redis,
@@ -81,8 +82,9 @@ return [
             'store' => env('SWARM_COMMAND_OVERLAP_STORE'),
 
             /*
-             * Finite lease held by one command invocation. Size this above the
-             * application's worst-case relay/recovery duration. A hard-crashed
+             * Finite lease duration. swarm:recover holds its lease for the whole
+             * sweep; swarm:relay holds a lane's lease for one drain batch. Size this
+             * above the worst-case recovery sweep and single relay drain batch. A hard-crashed
              * process becomes startable after this window; an invocation that runs
              * longer than the lease is no longer protected from overlap.
              */

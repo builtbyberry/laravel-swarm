@@ -326,7 +326,7 @@ class SwarmHealthCommand extends Command
                 'driver' => $lease['driver'],
                 'store' => $lease['store'],
                 'status' => 'ok',
-                'details' => "Atomic command lease is available for {$lease['lease_seconds']} seconds",
+                'details' => "Atomic command leases (one per swarm:relay lane, plus swarm:recover) are available for {$lease['lease_seconds']} seconds",
             ];
         } catch (Throwable $exception) {
             $configuredStore = $config->get('swarm.commands.overlap.store');

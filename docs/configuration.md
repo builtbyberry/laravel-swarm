@@ -32,13 +32,18 @@ Top-level settings that apply to every swarm run regardless of topology or execu
 ## Scheduled Commands
 
 Controls the command-owned finite leases used by `swarm:relay` and
-`swarm:recover`. Scheduler examples derive their whole-minute mutex expiry from
-the same lease duration.
+`swarm:recover`. `swarm:recover` holds one lease for its whole sweep.
+`swarm:relay` holds one lease per outbox lane — `durable` (step, branch and
+queued_resume), `audit`, `callback` — and only while that lane drains a batch, so
+relays selecting different lanes never block each other (see
+[Command overlap leases](maintenance.md#command-overlap-leases) for the
+split-cadence schedule this allows). Scheduler examples derive their whole-minute
+mutex expiry from the same lease duration.
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.commands.overlap.store` | string\|null | `null` | `SWARM_COMMAND_OVERLAP_STORE` | Atomic cache-lock store for `swarm:relay` and `swarm:recover`; `null` uses `cache.default`. Array, null, failover, and non-lock-capable stores fail loud. File covers one host only; multi-host deployments require a shared store. |
-| `swarm.commands.overlap.lease_seconds` | int | `3600` | `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` | Finite command lease. Must be positive and longer than the worst-case invocation. Direct invocation becomes startable at exact expiry; recommended scheduler mutexes round the duration up to whole minutes. A command that outlives the lease is no longer protected. |
+| `swarm.commands.overlap.lease_seconds` | int | `3600` | `SWARM_COMMAND_OVERLAP_LEASE_SECONDS` | Finite command lease, applied to the `swarm:recover` lease and to each `swarm:relay` lane lease. Must be positive and longer than the worst-case recovery sweep and single relay drain batch. Direct invocation becomes startable at exact expiry; recommended scheduler mutexes round the duration up to whole minutes. A command that outlives the lease is no longer protected. |
 
 ---
 

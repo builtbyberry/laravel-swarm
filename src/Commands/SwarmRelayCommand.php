@@ -15,6 +15,7 @@ use BuiltByBerry\LaravelSwarm\Enums\RelayLane;
 use BuiltByBerry\LaravelSwarm\Responses\AuditDrainResult;
 use BuiltByBerry\LaravelSwarm\Responses\CallbackDrainResult;
 use BuiltByBerry\LaravelSwarm\Responses\DrainResult;
+use Closure;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Symfony\Component\Console\Attribute\AsCommand;
@@ -44,16 +45,35 @@ class SwarmRelayCommand extends Command
         audit evidence remains pending, and enabled terminal callbacks are not
         delivered. Use --drain-until-empty to clear backlogs in one invocation.
 
-        The command also owns a finite atomic lease. Configure its store and duration
-        with swarm.commands.overlap; the lease must exceed the worst-case drain time.
+        LANE LEASES
+          Each lane takes its own finite atomic lease: durable (step, branch and
+          queued_resume share one), audit, and callback. A lane's lease is held only
+          while that lane drains, so relays selecting different lanes run side by
+          side and a slow audit or callback drain never holds up another relay's
+          step dispatch. Two relays draining the same lane still exclude each other.
+          Within one invocation the selected lanes drain one after another. When
+          another invocation holds a selected lane, that lane's remaining batches
+          are skipped for this run, the other lanes still drain, and the command
+          exits 1. Configure the store and duration with swarm.commands.overlap; the
+          lease must exceed the worst-case single drain batch.
+
+          To keep step dispatch on a fast cadence and audit and callback work on a
+          slow one, schedule the lanes separately (queued_resume belongs with the
+          fast lane because eager dispatch never pushes it):
+
+            Schedule::command('swarm:relay --type=step --type=branch --type=queued_resume')
+                ->everyMinute()->withoutOverlapping(...);
+            Schedule::command('swarm:relay --type=audit --type=callback')
+                ->everyFiveMinutes()->withoutOverlapping(...);
 
         EXIT CODES
           0 (success)  All claimed entries were dispatched or permanently removed.
-          1 (failure)  Another invocation holds the command overlap lease, or one or more
-                       entries could not be dispatched due to a transient error. On
-                       contention, identify the competing process or resize the finite
-                       lease. On dispatch failure, entries remain reclaimable; check your
-                       error tracker and queue driver health.
+          1 (failure)  Another invocation holds the lease of a selected lane (that lane
+                       was skipped; other lanes still drained), or one or more entries
+                       could not be dispatched due to a transient error. On contention,
+                       identify the competing process or resize the finite lease. On
+                       dispatch failure, entries remain reclaimable; check your error
+                       tracker and queue driver health.
 
         --drain-until-empty
           Loops until the outbox is empty. Stops when a batch produces no dispatched or
@@ -121,92 +141,95 @@ class SwarmRelayCommand extends Command
         $callbackResult = new CallbackDrainResult(0, 0, 0, 0, 0);
         $actorMetadata = ['actor' => Actor::system('artisan')->toArray()];
 
+        // Each lane's lease is held only while that lane drains, so no relay lease
+        // is ever held while another lane drains. A lane another invocation holds
+        // is dropped for the rest of this run; the run exits non-zero.
+        $live = [
+            RelayLane::Durable->value => $shouldDrainDurable,
+            RelayLane::Audit->value => $shouldDrainAudit,
+            RelayLane::Callback->value => $shouldDrainCallback,
+        ];
+        /** @var array<string, true> $contended */
+        $contended = [];
+        $drained = false;
+
+        $drainLane = function (RelayLane $lane, Closure $drain) use ($overlap, &$live, &$contended, &$drained): void {
+            if (! $live[$lane->value]) {
+                return;
+            }
+
+            $result = $overlap->run($lane->leaseKey(), static function () use ($drain): int {
+                $drain();
+
+                return self::SUCCESS;
+            });
+
+            if ($result === null) {
+                $live[$lane->value] = false;
+                $contended[$lane->value] = true;
+                $this->components->warn("Another swarm:relay invocation holds the [{$lane->value}] lane's command overlap lease; skipping that lane's remaining batches this run. Run swarm:health --durable.");
+
+                return;
+            }
+
+            $drained = true;
+        };
+
         try {
-            $result = $overlap->run(
-                CommandOverlapGuard::RELAY_KEY,
-                function () use (
-                    $outbox,
-                    $auditOutbox,
-                    $callbackOutbox,
-                    $durableTypes,
-                    $limit,
-                    $drainUntilEmpty,
-                    $maxAttempts,
-                    $shouldDrainDurable,
-                    $shouldDrainAudit,
-                    $shouldDrainCallback,
-                    &$totalDispatched,
-                    &$totalSkipped,
-                    &$totalFailed,
-                    &$totalClaimed,
-                    &$totalReclaimed,
-                    &$totalReclaimedDirect,
-                    &$totalAuditReplayed,
-                    &$totalAuditDeadLettered,
-                    &$totalCallbackDispatched,
-                    &$totalCallbackDeadLettered,
-                    &$attempts,
-                    &$durableResult,
-                    &$auditResult,
-                    &$callbackResult,
-                ): int {
-                    do {
-                        $attempts++;
-                        $lastDurableProgress = 0;
-                        $lastDurableTransient = 0;
-                        $lastAuditProgress = 0;
-                        $lastAuditTransient = 0;
-                        $lastCallbackProgress = 0;
-                        $lastCallbackTransient = 0;
+            do {
+                $attempts++;
+                $lastDurableProgress = 0;
+                $lastDurableTransient = 0;
+                $lastAuditProgress = 0;
+                $lastAuditTransient = 0;
+                $lastCallbackProgress = 0;
+                $lastCallbackTransient = 0;
 
-                        if ($shouldDrainDurable) {
-                            $durableResult = $outbox->drain($durableTypes, $limit);
-                            $totalDispatched += $durableResult->dispatched;
-                            $totalSkipped += $durableResult->skipped;
-                            $totalFailed += $durableResult->failed;
-                            $totalClaimed += $durableResult->claimed;
-                            $totalReclaimed += $durableResult->reclaimed;
-                            $totalReclaimedDirect += $durableResult->reclaimedDirect;
-                            $lastDurableProgress = $durableResult->total();
-                            $lastDurableTransient = $durableResult->failed;
-                        }
+                $drainLane(RelayLane::Durable, function () use ($outbox, $durableTypes, $limit, &$durableResult, &$totalDispatched, &$totalSkipped, &$totalFailed, &$totalClaimed, &$totalReclaimed, &$totalReclaimedDirect, &$lastDurableProgress, &$lastDurableTransient): void {
+                    $durableResult = $outbox->drain($durableTypes, $limit);
+                    $totalDispatched += $durableResult->dispatched;
+                    $totalSkipped += $durableResult->skipped;
+                    $totalFailed += $durableResult->failed;
+                    $totalClaimed += $durableResult->claimed;
+                    $totalReclaimed += $durableResult->reclaimed;
+                    $totalReclaimedDirect += $durableResult->reclaimedDirect;
+                    $lastDurableProgress = $durableResult->total();
+                    $lastDurableTransient = $durableResult->failed;
+                });
 
-                        if ($shouldDrainAudit) {
-                            $auditResult = $auditOutbox->drain($limit);
-                            $totalAuditReplayed += $auditResult->replayed;
-                            $totalAuditDeadLettered += $auditResult->deadLettered;
-                            $totalFailed += $auditResult->failed;
-                            $totalClaimed += $auditResult->claimed;
-                            $totalReclaimed += $auditResult->reclaimed;
-                            $lastAuditProgress = $auditResult->total();
-                            $lastAuditTransient = $auditResult->failed;
-                        }
+                $drainLane(RelayLane::Audit, function () use ($auditOutbox, $limit, &$auditResult, &$totalAuditReplayed, &$totalAuditDeadLettered, &$totalFailed, &$totalClaimed, &$totalReclaimed, &$lastAuditProgress, &$lastAuditTransient): void {
+                    $auditResult = $auditOutbox->drain($limit);
+                    $totalAuditReplayed += $auditResult->replayed;
+                    $totalAuditDeadLettered += $auditResult->deadLettered;
+                    $totalFailed += $auditResult->failed;
+                    $totalClaimed += $auditResult->claimed;
+                    $totalReclaimed += $auditResult->reclaimed;
+                    $lastAuditProgress = $auditResult->total();
+                    $lastAuditTransient = $auditResult->failed;
+                });
 
-                        if ($shouldDrainCallback) {
-                            $callbackResult = $callbackOutbox->drain($limit);
-                            $totalCallbackDispatched += $callbackResult->dispatched;
-                            $totalCallbackDeadLettered += $callbackResult->deadLettered;
-                            $totalFailed += $callbackResult->failed;
-                            $totalClaimed += $callbackResult->claimed;
-                            $totalReclaimed += $callbackResult->reclaimed;
-                            $lastCallbackProgress = $callbackResult->total();
-                            $lastCallbackTransient = $callbackResult->failed;
-                        }
+                $drainLane(RelayLane::Callback, function () use ($callbackOutbox, $limit, &$callbackResult, &$totalCallbackDispatched, &$totalCallbackDeadLettered, &$totalFailed, &$totalClaimed, &$totalReclaimed, &$lastCallbackProgress, &$lastCallbackTransient): void {
+                    $callbackResult = $callbackOutbox->drain($limit);
+                    $totalCallbackDispatched += $callbackResult->dispatched;
+                    $totalCallbackDeadLettered += $callbackResult->deadLettered;
+                    $totalFailed += $callbackResult->failed;
+                    $totalClaimed += $callbackResult->claimed;
+                    $totalReclaimed += $callbackResult->reclaimed;
+                    $lastCallbackProgress = $callbackResult->total();
+                    $lastCallbackTransient = $callbackResult->failed;
+                });
 
-                        $madeProgress = ($lastDurableProgress + $lastAuditProgress + $lastCallbackProgress) > 0;
-                        $hasTransient = ($lastDurableTransient + $lastAuditTransient + $lastCallbackTransient) > 0;
+                $madeProgress = ($lastDurableProgress + $lastAuditProgress + $lastCallbackProgress) > 0;
+                $hasTransient = ($lastDurableTransient + $lastAuditTransient + $lastCallbackTransient) > 0;
+                $anyLaneLive = in_array(true, $live, true);
 
-                        // Only retry transient failures when --max-attempts gives a finite budget.
-                        // Without it the loop would spin forever during a sustained queue outage.
-                        $shouldRetryTransient = $hasTransient && $maxAttempts !== null && $attempts < $maxAttempts;
-                        $shouldContinueForProgress = $madeProgress
-                            && ($maxAttempts === null || $attempts < $maxAttempts);
+                // Only retry transient failures when --max-attempts gives a finite budget.
+                // Without it the loop would spin forever during a sustained queue outage.
+                $shouldRetryTransient = $hasTransient && $maxAttempts !== null && $attempts < $maxAttempts;
+                $shouldContinueForProgress = $madeProgress
+                    && ($maxAttempts === null || $attempts < $maxAttempts);
 
-                    } while ($drainUntilEmpty && ($shouldContinueForProgress || $shouldRetryTransient));
-
-                    return self::SUCCESS;
-                },
-            );
+            } while ($drainUntilEmpty && $anyLaneLive && ($shouldContinueForProgress || $shouldRetryTransient));
 
         } catch (Throwable $exception) {
             $audit->emit('command.relay', [
@@ -225,6 +248,7 @@ class SwarmRelayCommand extends Command
                 'audit_dead_lettered_count' => $totalAuditDeadLettered,
                 'callback_dispatched_count' => $totalCallbackDispatched,
                 'callback_dead_lettered_count' => $totalCallbackDeadLettered,
+                'contended_lanes' => $this->contendedLanes($contended),
                 'status' => 'error',
                 'exception_class' => $exception::class,
                 ...$audit->metadata($actorMetadata),
@@ -233,7 +257,7 @@ class SwarmRelayCommand extends Command
             throw $exception;
         }
 
-        if ($result === null) {
+        if (! $drained) {
             $audit->emit('command.relay', [
                 'types' => $selectedTypeValues,
                 'limit' => $limit,
@@ -250,6 +274,7 @@ class SwarmRelayCommand extends Command
                 'audit_dead_lettered_count' => 0,
                 'callback_dispatched_count' => 0,
                 'callback_dead_lettered_count' => 0,
+                'contended_lanes' => $this->contendedLanes($contended),
                 'status' => 'skipped_overlap',
                 ...$audit->metadata($actorMetadata),
             ]);
@@ -280,16 +305,18 @@ class SwarmRelayCommand extends Command
             'audit_dead_lettered_count' => $totalAuditDeadLettered,
             'callback_dispatched_count' => $totalCallbackDispatched,
             'callback_dead_lettered_count' => $totalCallbackDeadLettered,
+            'contended_lanes' => $this->contendedLanes($contended),
             'status' => $this->auditStatus($totalDispatched + $totalAuditReplayed + $totalCallbackDispatched, $totalSkipped + $totalAuditDeadLettered + $totalCallbackDeadLettered, $hasUnresolvedTransient),
             ...$audit->metadata($actorMetadata),
         ]);
 
+        $exitCode = $contended === [] ? self::SUCCESS : self::FAILURE;
         $totalRemoved = $totalDispatched + $totalSkipped + $totalAuditReplayed + $totalAuditDeadLettered + $totalCallbackDispatched + $totalCallbackDeadLettered;
 
         if ($totalRemoved === 0 && $totalFailed === 0) {
             $this->components->info('No pending outbox entries were found.');
 
-            return self::SUCCESS;
+            return $exitCode;
         }
 
         if ($totalDispatched > 0) {
@@ -340,7 +367,21 @@ class SwarmRelayCommand extends Command
             return self::FAILURE;
         }
 
-        return self::SUCCESS;
+        return $exitCode;
+    }
+
+    /**
+     * The lanes this run found held by another invocation, in lane order.
+     *
+     * @param  array<string, true>  $contended
+     * @return list<string>
+     */
+    protected function contendedLanes(array $contended): array
+    {
+        return array_values(array_filter(
+            array_column(RelayLane::cases(), 'value'),
+            static fn (string $lane): bool => isset($contended[$lane]),
+        ));
     }
 
     /**

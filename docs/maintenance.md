@@ -245,6 +245,60 @@ multi-host deployments require a shared atomic store such as Redis, Memcached,
 DynamoDB, or database cache. Lock contention warns, records
 `status: skipped_overlap`, exits non-zero, and performs no sweep.
 
+`swarm:relay` takes one lease per outbox lane rather than one for the whole
+command: `durable` (shared by `--type=step`, `branch` and `queued_resume`),
+`audit`, and `callback`. A lane's lease is held only while that lane drains one
+batch, so relays that select different lanes run side by side, and a slow audit
+or callback drain never holds up another relay's step dispatch. Two relays that
+select the same lane still exclude each other. Within one invocation the
+selected lanes still drain one after another: a bare `swarm:relay` waits for its
+own audit batch before its next durable batch, which is why a split schedule
+(below) is the way to keep step dispatch on its own cadence.
+
+When another invocation holds a lane this one selected, that lane's remaining
+batches are skipped for this run — the holder may not finish the backlog (its
+`--type` filter or `--limit` can differ), so the next scheduled run picks it up.
+The other selected lanes still drain. The command warns as soon as it sees the
+held lane, records the lane in the `contended_lanes` field of the
+`command.relay` audit event, and exits non-zero. Only when every selected lane
+is held does it record `status: skipped_overlap` and drain nothing.
+
+#### Split-cadence relay schedule
+
+To keep step dispatch fast and run audit and callback relay on a slower cadence,
+schedule the lanes as two entries instead of one bare `swarm:relay`:
+
+```php
+Schedule::command('swarm:relay --type=step --type=branch --type=queued_resume')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+Schedule::command('swarm:relay --type=audit --type=callback')->everyFiveMinutes()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
+```
+
+Keep `--type=queued_resume` in the fast entry. The queued hierarchical resume job
+is only ever dispatched by the relay — [eager dispatch](configuration.md#durable-eager-dispatch)
+does not push it — so leaving it out of the fast entry would leave
+`queue()` `multi_worker` joins waiting on the slow cadence, or on nothing at all.
+The scheduler mutex is keyed on the full command string, so the two entries do
+not share one. Do not also schedule a bare `swarm:relay` beside the pair: it
+selects every lane, contends with both entries, and exits non-zero.
+
+#### Rolling deploys
+
+During a rolling deploy, processes still on the previous release take the old
+single relay lease (`swarm:commands:relay`) while upgraded processes take the
+lane leases, so an old and a new relay can drain the same lane at the same time
+until the deploy completes. No flag is needed. With the bundled database outboxes
+on MySQL or PostgreSQL, each claim runs `FOR UPDATE SKIP LOCKED`, so the two
+relays claim disjoint batches. Delivery keeps the existing at-least-once
+contract: a reservation that goes stale while its batch is still being
+delivered can be reclaimed by the other relay, exactly as after a crashed relay.
+For durable rows that can queue a duplicate job, which the existing advance
+guards turn into a no-op. For terminal callbacks the claim token fences row
+ownership and settlement but cannot deduplicate what the callback does, so a
+callback may run more than once or overlap itself — callbacks must already be
+idempotent under the callback contract. Audit replay is likewise at-least-once
+to the sink. SQLite has no `SKIP LOCKED` and is single-host; do not rely on
+contention-free concurrent drains there.
+
 By default `swarm:relay` must run at least as frequently as you want checkpointed
 steps to advance. Do not schedule it more often than every minute to make steps
 start sooner: turn on [eager dispatch](configuration.md#durable-eager-dispatch)
@@ -339,7 +393,8 @@ through the same `swarm:relay` schedule that handles durable dispatches.
 ### Migration and scheduling
 
 On database persistence, run `php artisan migrate` to create the
-`swarm_audit_outbox` table. The existing relay schedule covers all three lanes:
+`swarm_audit_outbox` table. The existing relay schedule covers all three lanes
+(or split it per lane — see [Split-cadence relay schedule](#split-cadence-relay-schedule)):
 
 ```php
 Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int) ceil(config('swarm.commands.overlap.lease_seconds', 3600) / 60)));
