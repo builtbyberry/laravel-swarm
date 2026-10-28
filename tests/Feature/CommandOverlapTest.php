@@ -890,6 +890,7 @@ test('swarm relay help documents per-lane leases and the split schedule', functi
     $output = Artisan::output();
 
     expect($output)->toContain('LANE LEASES')
+        ->and($output)->toContain('Each lane takes its own finite atomic lease')
         ->and($output)->toContain('held only')
         ->and($output)->toContain('swarm:relay --type=step --type=branch --type=queued_resume')
         ->and($output)->toContain('swarm:relay --type=audit --type=callback');
