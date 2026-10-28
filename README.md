@@ -436,9 +436,11 @@ Schedule::command('swarm:recover')->everyFiveMinutes()->withoutOverlapping(max(1
 Schedule::command('swarm:prune')->daily();         // retention: removes expired persistence rows
 ```
 
-Both operational commands also own a finite atomic lease, so manual and
-supervisor invocations are protected too. The default one-hour lease must exceed
-your worst-case command duration. File-cache locks cover one host only; multi-host
+Both operational commands also own finite atomic leases, so manual and
+supervisor invocations are protected too: `swarm:recover` holds one for its
+sweep, and `swarm:relay` holds one per outbox lane only while that lane drains a
+batch. The default one-hour lease must exceed the worst-case recovery sweep and
+relay drain batch. File-cache locks cover one host only; multi-host
 deployments require a shared atomic default cache store, or must set
 `SWARM_COMMAND_OVERLAP_STORE` when the default is unsuitable. Override the
 duration with `SWARM_COMMAND_OVERLAP_LEASE_SECONDS`. See

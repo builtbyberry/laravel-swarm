@@ -234,23 +234,33 @@ leases aligned and avoids Laravel's 24-hour scheduler default after a hard crash
 Scheduled execution becomes eligible when that rounded-up scheduler mutex
 expires; direct command invocation is eligible at the exact command-lease expiry.
 
-Each command also acquires its own finite atomic lease from
+Each command also acquires finite atomic leases from
 `swarm.commands.overlap.store` (`SWARM_COMMAND_OVERLAP_STORE`; `null` uses the
 default cache store). `swarm.commands.overlap.lease_seconds` defaults to 3600.
-Set it longer than the worst-case invocation: a command that outlives its lease
-is no longer protected from overlap, while a hard-crashed process becomes
-startable when the lease expires. Array, null, failover, and non-lock-capable
+`swarm:recover` holds its lease for the whole sweep, so set the duration longer
+than the worst-case recovery sweep; `swarm:relay` holds a lane's lease for one
+drain batch (below), so it must also exceed the worst-case single batch. Work that
+outlives its lease is no longer protected from overlap, while a hard-crashed
+process becomes startable when the lease expires. Array, null, failover, and non-lock-capable
 stores fail before any sweep. File locks cover processes on one host only;
 multi-host deployments require a shared atomic store such as Redis, Memcached,
-DynamoDB, or database cache. Lock contention warns, records
-`status: skipped_overlap`, exits non-zero, and performs no sweep.
+DynamoDB, or database cache. When `swarm:recover` finds its lease held it warns,
+records `status: skipped_overlap`, exits non-zero, and performs no sweep;
+`swarm:relay` contention is per lane, as described next.
 
 `swarm:relay` takes one lease per outbox lane rather than one for the whole
 command: `durable` (shared by `--type=step`, `branch` and `queued_resume`),
 `audit`, and `callback`. A lane's lease is held only while that lane drains one
 batch, so relays that select different lanes run side by side, and a slow audit
 or callback drain never holds up another relay's step dispatch. Two relays that
-select the same lane still exclude each other. Within one invocation the
+select the same lane still exclude each other. The lane lease keys are
+`swarm:commands:relay:durable`, `swarm:commands:relay:audit` and
+`swarm:commands:relay:callback` (`swarm:recover` uses `swarm:commands:recover`).
+A relay that is hard-killed mid-batch leaves its lane's key held until the lease
+expires; to free it sooner, make sure no relay is running and release that key
+in the overlap store (for example
+`Cache::store(config('swarm.commands.overlap.store'))->lock('swarm:commands:relay:durable')->forceRelease()`).
+These key names are an operational detail, not a stable API. Within one invocation the
 selected lanes still drain one after another: a bare `swarm:relay` waits for its
 own audit batch before its next durable batch, which is why a split schedule
 (below) is the way to keep step dispatch on its own cadence.
@@ -278,7 +288,19 @@ is only ever dispatched by the relay — [eager dispatch](configuration.md#durab
 does not push it — so leaving it out of the fast entry would leave
 `queue()` `multi_worker` joins waiting on the slow cadence, or on nothing at all.
 The scheduler mutex is keyed on the full command string, so the two entries do
-not share one. Do not also schedule a bare `swarm:relay` beside the pair: it
+not share one.
+
+Running the audit/callback entry less often than every minute has two effects
+to plan for. Terminal workflow callbacks are only delivered by the relay, so
+they wait up to that interval. And `swarm:health` warns about callback and audit
+rows that have waited longer than twice the reservation timeout (120 seconds by
+default), so on a five-minute entry it would warn on a healthy relay. Raise
+`SWARM_CALLBACKS_STALE_WARNING_THRESHOLD_SECONDS` above the interval (for
+example `360` for five minutes). The audit staleness warning has no key of its
+own: it reuses `SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS`, which also
+sets the durable outbox aging warning. Either raise that too, accepting a later
+durable warning, or keep `--type=audit` on an every-minute entry and slow only
+`--type=callback`. Do not also schedule a bare `swarm:relay` beside the pair: it
 selects every lane, contends with both entries, and exits non-zero.
 
 #### Rolling deploys
@@ -299,6 +321,12 @@ idempotent under the callback contract. Audit replay is likewise at-least-once
 to the sink. SQLite has no `SKIP LOCKED` and is single-host; do not rely on
 contention-free concurrent drains there.
 
+Rolling back below this release opens the same window in reverse. If you had
+moved to the split-cadence schedule, return to a single bare `swarm:relay` entry
+first: on the old single lease the two entries contend again, and one of them
+records `skipped_overlap` and exits non-zero on every overlapping tick. The
+`contended_lanes` field also disappears from `command.relay` events.
+
 By default `swarm:relay` must run at least as frequently as you want checkpointed
 steps to advance. Do not schedule it more often than every minute to make steps
 start sooner: turn on [eager dispatch](configuration.md#durable-eager-dispatch)
@@ -308,6 +336,10 @@ pass `--limit` to tune, or `--drain-until-empty` to clear a backlog in a single
 invocation. Without the relay scheduled, durable runs stall at the first step
 (with eager dispatch on, only lost pushes and relay-driven work stall, and
 `swarm:health --durable` reports them after twice the reservation timeout).
+A scheduled relay can take a lane between a manual `--drain-until-empty` run's
+batches, which skips that lane for the rest of the run and exits non-zero:
+select the backlogged lane with `--type` or pause its schedule entry, and re-run
+until the command exits 0.
 
 The same `swarm:recover` loop redispatches **coordinated queue hierarchical parallel** joins (`coordination_profile = queue_hierarchical_parallel` on `swarm_durable_runs`): stale `waiting` parents with terminal branch rows release to `pending` and enqueue `ResumeQueuedHierarchicalSwarm`, and branch rows are recovered the same way as durable parallel branches.
 

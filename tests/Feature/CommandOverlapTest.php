@@ -172,9 +172,9 @@ test('swarm relay contention on every lane is observable and never drains any ou
     $output = Artisan::output();
 
     expect($exit)->toBe(1)
-        ->and($output)->toContain('holds the command overlap lease')
-        ->and($output)->toContain('swarm:health')
-        ->and($output)->toContain('--durable')
+        ->and($output)->toContain("Every selected lane's command overlap lease is held")
+        ->and($output)->toContain('nothing was drained')
+        ->and($output)->toContain('contended_lanes')
         ->and($sink->recordsForCategory('command.relay'))->toHaveCount(1)
         ->and($sink->recordsForCategory('command.relay')[0]['status'])->toBe('skipped_overlap')
         ->and($sink->recordsForCategory('command.relay')[0]['attempts'])->toBe(0)
@@ -538,40 +538,46 @@ test('a lane lease is held only while that lane drains', function (RelayLane $dr
     'callback' => [RelayLane::Callback],
 ]);
 
-test('step relay runs while audit and callback lane leases are held by another relay', function (): void {
+test('a relay of one lane set runs while another relay holds the other lanes', function (
+    array $held,
+    array $types,
+    array $draining,
+): void {
     $mocks = relayLaneOutboxMocks();
-    $mocks['durable']->shouldReceive('drain')->once()->andReturn(new DrainResult(2, 0, 0, 2));
-    $mocks['audit']->shouldNotReceive('drain');
-    $mocks['callback']->shouldNotReceive('drain');
+    $results = [
+        'durable' => new DrainResult(2, 0, 0, 2),
+        'audit' => new AuditDrainResult(1, 0, 0, 1),
+        'callback' => new CallbackDrainResult(1, 0, 0, 1),
+    ];
+
+    foreach ($mocks as $lane => $mock) {
+        if (in_array($lane, $draining, true)) {
+            $mock->shouldReceive('drain')->once()->andReturn($results[$lane]);
+        } else {
+            $mock->shouldNotReceive('drain');
+        }
+    }
     $sink = commandOverlapRecordingSink();
 
-    $locks = [holdCommandOverlapLock(RelayLane::Audit->leaseKey()), holdCommandOverlapLock(RelayLane::Callback->leaseKey())];
+    $locks = array_map(static fn (RelayLane $lane): Lock => holdCommandOverlapLock($lane->leaseKey()), $held);
 
     try {
-        $exit = Artisan::call('swarm:relay', ['--type' => ['step', 'branch']]);
+        $exit = Artisan::call('swarm:relay', ['--type' => $types]);
     } finally {
         array_map(static fn (Lock $lock): bool => $lock->release(), $locks);
     }
+    $evidence = lastRelayEvidence($sink);
 
     expect($exit)->toBe(0)
-        ->and(lastRelayEvidence($sink)['dispatched_count'])->toBe(2)
-        ->and(lastRelayEvidence($sink)['contended_lanes'])->toBe([]);
-});
-
-test('audit and callback relay runs while the durable lane lease is held by another relay', function (): void {
-    $mocks = relayLaneOutboxMocks();
-    $mocks['durable']->shouldNotReceive('drain');
-    $mocks['audit']->shouldReceive('drain')->once()->andReturn(new AuditDrainResult(1, 0, 0, 1));
-    $mocks['callback']->shouldReceive('drain')->once()->andReturn(new CallbackDrainResult(1, 0, 0, 1));
-
-    $lock = holdCommandOverlapLock(RelayLane::Durable->leaseKey());
-
-    try {
-        expect(Artisan::call('swarm:relay', ['--type' => ['audit', 'callback']]))->toBe(0);
-    } finally {
-        $lock->release();
-    }
-});
+        ->and($evidence['contended_lanes'])->toBe([])
+        ->and($evidence['status'])->toBe('dispatched')
+        ->and($evidence['dispatched_count'])->toBe(in_array('durable', $draining, true) ? 2 : 0)
+        ->and($evidence['audit_replayed_count'])->toBe(in_array('audit', $draining, true) ? 1 : 0)
+        ->and($evidence['callback_dispatched_count'])->toBe(in_array('callback', $draining, true) ? 1 : 0);
+})->with([
+    'step relay while audit and callback are held' => [[RelayLane::Audit, RelayLane::Callback], ['step', 'branch'], ['durable']],
+    'audit and callback relay while durable is held' => [[RelayLane::Durable], ['audit', 'callback'], ['audit', 'callback']],
+]);
 
 test('a bare relay drains the lanes it can lease and exits non-zero for the contended lane', function (
     DrainResult $durableResult,
@@ -596,10 +602,14 @@ test('a bare relay drains the lanes it can lease and exits non-zero for the cont
 
     expect($exit)->toBe(1)
         ->and($output)->toContain('[audit] lane')
-        ->and($output)->toContain('swarm:health --durable')
+        ->and($output)->not->toContain('No pending outbox entries were found.')
         ->and($evidence['contended_lanes'])->toBe(['audit'])
         ->and($evidence['status'])->toBe($expectedStatus)
         ->and($evidence['attempts'])->toBe(1);
+
+    if ($expectedStatus === 'none_found') {
+        expect($output)->toContain('No pending entries in the lanes this run drained; held lanes [audit] were not drained.');
+    }
 })->with([
     'no pending work' => [new DrainResult(0, 0), new CallbackDrainResult(0), 'none_found'],
     'work dispatched' => [new DrainResult(3, 0, 0, 3), new CallbackDrainResult(1, 0, 0, 1), 'dispatched'],
@@ -753,7 +763,11 @@ test('a lane that becomes contended mid-run is dropped for the rest of the run, 
     $mocks['audit']->shouldReceive('drain')->once()->andReturn(new AuditDrainResult(1, 0, 0, 1));
     $mocks['callback']->shouldReceive('drain')->times(4)->andReturn(new CallbackDrainResult(0));
 
-    $exit = Artisan::call('swarm:relay', ['--drain-until-empty' => true]);
+    try {
+        $exit = Artisan::call('swarm:relay', ['--drain-until-empty' => true]);
+    } finally {
+        $holder?->release();
+    }
     $output = Artisan::output();
     $evidence = lastRelayEvidence($sink);
 

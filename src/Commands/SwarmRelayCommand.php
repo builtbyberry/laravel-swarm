@@ -66,6 +66,12 @@ class SwarmRelayCommand extends Command
             Schedule::command('swarm:relay --type=audit --type=callback')
                 ->everyFiveMinutes()->withoutOverlapping(...);
 
+          A slower audit/callback entry delays terminal callbacks by up to its
+          interval, and swarm:health warns about audit and callback rows waiting
+          longer than twice the reservation timeout (120s by default). Raise the
+          warning thresholds above the interval as described under "Split-cadence
+          relay schedule" in docs/maintenance.md.
+
         EXIT CODES
           0 (success)  All claimed entries were dispatched or permanently removed.
           1 (failure)  Another invocation holds the lease of a selected lane (that lane
@@ -78,6 +84,10 @@ class SwarmRelayCommand extends Command
         --drain-until-empty
           Loops until the outbox is empty. Stops when a batch produces no dispatched or
           skipped rows AND no transient failures, or when --max-attempts is exhausted.
+          Lane leases are released between batches, so a scheduled relay can take a
+          lane mid-run; that lane is then skipped and the command exits 1. To clear a
+          backlog fully, select only the backlogged lane with --type or pause the
+          matching schedule entry, and re-run until the command exits 0.
 
         --max-attempts N
           Limits the number of drain iterations when using --drain-until-empty. Without
@@ -167,7 +177,7 @@ class SwarmRelayCommand extends Command
             if ($result === null) {
                 $live[$lane->value] = false;
                 $contended[$lane->value] = true;
-                $this->components->warn("Another swarm:relay invocation holds the [{$lane->value}] lane's command overlap lease; skipping that lane's remaining batches this run. Run swarm:health --durable.");
+                $this->components->warn("Another swarm:relay invocation holds the [{$lane->value}] lane's command overlap lease; skipping that lane's remaining batches this run.");
 
                 return;
             }
@@ -279,7 +289,7 @@ class SwarmRelayCommand extends Command
                 ...$audit->metadata($actorMetadata),
             ]);
 
-            $this->components->warn('Run swarm:health --durable. Another swarm:relay invocation holds the command overlap lease; this drain was skipped.');
+            $this->components->warn('Every selected lane\'s command overlap lease is held by another swarm:relay invocation; nothing was drained. Look for a competing swarm:relay process or schedule entry selecting the same lanes (see contended_lanes in the command.relay audit event).');
 
             return self::FAILURE;
         }
@@ -314,7 +324,9 @@ class SwarmRelayCommand extends Command
         $totalRemoved = $totalDispatched + $totalSkipped + $totalAuditReplayed + $totalAuditDeadLettered + $totalCallbackDispatched + $totalCallbackDeadLettered;
 
         if ($totalRemoved === 0 && $totalFailed === 0) {
-            $this->components->info('No pending outbox entries were found.');
+            $this->components->info($contended === []
+                ? 'No pending outbox entries were found.'
+                : 'No pending entries in the lanes this run drained; held lanes ['.implode(', ', $this->contendedLanes($contended)).'] were not drained.');
 
             return $exitCode;
         }
@@ -376,7 +388,7 @@ class SwarmRelayCommand extends Command
      * @param  array<string, true>  $contended
      * @return list<string>
      */
-    protected function contendedLanes(array $contended): array
+    private function contendedLanes(array $contended): array
     {
         return array_values(array_filter(
             array_column(RelayLane::cases(), 'value'),

@@ -91,7 +91,7 @@ class SwarmHealthCommand extends Command
                     'driver' => 'n/a',
                     'store' => 'n/a',
                     'status' => 'note',
-                    'details' => 'swarm:relay must run every minute for durable execution to advance — derive withoutOverlapping() minutes from swarm.commands.overlap.lease_seconds',
+                    'details' => 'swarm:relay must drain the durable lane (a bare swarm:relay, or --type=step --type=branch --type=queued_resume) every minute for durable execution to advance — derive withoutOverlapping() minutes from swarm.commands.overlap.lease_seconds',
                 ];
                 $results[] = $this->runOutboxStalenessCheck($config, $connection);
                 $results[] = $this->runQueueRoutingCheck($config, $connection);

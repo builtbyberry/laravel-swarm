@@ -27,6 +27,8 @@ enum RelayLane: string
      *
      * Each lane has its own lease, so relays selecting disjoint lanes never
      * exclude each other; two relays draining the same lane still do.
+     *
+     * @internal The key format is not a public contract.
      */
     public function leaseKey(): string
     {
