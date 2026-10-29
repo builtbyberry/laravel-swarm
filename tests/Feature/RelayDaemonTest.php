@@ -604,8 +604,9 @@ test('reaching the memory limit stops the daemon after the cycle in progress', f
 test('invalid daemon limits fail before anything is drained or audited', function (string $option, string $value): void {
     $sink = relayDaemonRecordingSink();
     $outboxes = relayDaemonOutboxes();
+    Sleep::fake(syncWithCarbon: true);
 
-    $exit = Artisan::call('swarm:relay', ['--daemon' => true, "--{$option}" => $value]);
+    $exit = Artisan::call('swarm:relay', ['--daemon' => true, "--{$option}" => $value, ...($option === 'max-time' ? [] : ['--max-time' => 1])]);
 
     expect($exit)->toBe(1)
         ->and(Artisan::output())->toContain("--{$option} must be a whole number")
@@ -654,8 +655,12 @@ test('max-time and memory without --daemon warn and run a normal one-shot relay'
 test('invalid daemon sleep configuration fails loud before anything is drained', function (string $key, mixed $value, string $message): void {
     $outboxes = relayDaemonOutboxes();
     config()->set("swarm.durable.relay.daemon.{$key}", $value);
+    // Bounded on the real clock, so a regression that starts the daemon (even
+    // with a zero sleep) fails after a second instead of hanging.
+    Carbon::setTestNow();
+    Sleep::fake();
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true]))->toBe(1)
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]))->toBe(1)
         ->and(Artisan::output())->toContain("[swarm.durable.relay.daemon.{$key}] must be {$message}")
         ->and($outboxes['durable']->drains)->toBe(0);
 })->with([
@@ -689,7 +694,9 @@ test('daemon and drain-until-empty cannot be combined', function (): void {
     $sink = relayDaemonRecordingSink();
     $outboxes = relayDaemonOutboxes();
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--drain-until-empty' => true]))->toBe(1)
+    Sleep::fake(syncWithCarbon: true);
+
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--drain-until-empty' => true, '--max-time' => 1]))->toBe(1)
         ->and(Artisan::output())->toContain('--daemon and --drain-until-empty cannot be combined')
         ->and($outboxes['durable']->drains)->toBe(0)
         ->and($sink->recordsForCategory('command.relay'))->toBe([]);
@@ -707,7 +714,9 @@ test('daemon mode refuses to start without pcntl', function (): void {
     $command->setLaravel(app());
     app(ConsoleKernel::class)->registerCommand($command);
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true]))->toBe(1)
+    Sleep::fake(syncWithCarbon: true);
+
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]))->toBe(1)
         ->and(Artisan::output())->toContain('requires the pcntl extension')
         ->and($outboxes['durable']->drains)->toBe(0);
 });
