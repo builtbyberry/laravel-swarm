@@ -27,6 +27,27 @@ Durable real-time dispatch and relay cost — a durable step reaches the queue t
   that does nothing. No data is lost and there is no schema change. See
   [Durable Eager Dispatch](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/configuration.md#durable-eager-dispatch).
 
+- **`swarm:relay --daemon`: one long-lived relay process.** Instead of a
+  framework boot per scheduled tick, the relay can run as one process under a
+  supervisor, in the style of `queue:work`. Each cycle drains every selected
+  lane once, each under its own lane lease taken for that lane's batch and
+  released before any sleep; a lane another relay holds is skipped for that
+  cycle only. Between cycles it sleeps `swarm.durable.relay.daemon.min_sleep_ms`
+  (default 100) after moving durable or callback rows, and otherwise backs off by
+  `backoff_multiplier` (2) up to `max_sleep_ms` (3000), all new config keys.
+  `SIGTERM`/`SIGINT` let the current cycle finish and exit 0; `queue:restart`
+  (read from the default cache store, as `queue:work` does) and the new
+  `--max-time` and `--memory` options also stop it with exit 0, so the
+  supervisor must restart it on any exit (`autorestart=true`). It exits non-zero
+  only on genuine failure: invalid options or configuration, an exception from a
+  drain (audited as `status: error`), or a failure reading the `queue:restart`
+  key (not audited). Requires `pcntl`, and cannot be combined with
+  `--drain-until-empty`. In daemon mode `command.relay` is emitted once per cycle
+  that moved or failed durable or callback rows or found a lane held; idle and
+  audit-only cycles emit nothing, so a failing audit sink cannot keep the daemon
+  replaying its own evidence. Scheduled relays are unchanged. See
+  [Daemon relay](https://github.com/builtbyberry/laravel-swarm/blob/main/docs/maintenance.md#daemon-relay).
+
 ### Changed
 
 - **BREAKING for custom `DurableOutbox` implementations.**

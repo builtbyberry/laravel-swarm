@@ -372,7 +372,7 @@ Settings for `dispatchDurable()` execution. Durable runs are database-backed and
 
 ### Durable Relay
 
-The transactional outbox relay (`swarm:relay`) drains `swarm_durable_outbox` rows and dispatches the corresponding queue jobs. **You must schedule this command for durable execution to advance:**
+The transactional outbox relay (`swarm:relay`) drains `swarm_durable_outbox` rows and dispatches the corresponding queue jobs. **You must schedule this command, or run it as a daemon (`swarm:relay --daemon`, below), for durable execution to advance:**
 
 ```php
 // routes/console.php
@@ -381,10 +381,22 @@ Schedule::command('swarm:relay')->everyMinute()->withoutOverlapping(max(1, (int)
 
 Without the relay, durable runs stall permanently after the first step completes.
 
+To poll faster than once a minute without a framework boot per tick, run
+`swarm:relay --daemon` under a process supervisor instead of the schedule entry:
+one long-lived process that drains every selected lane once per cycle and sleeps
+adaptively between cycles. It requires `pcntl`, stops gracefully on `SIGTERM`,
+`SIGINT` and `queue:restart` (read from the default cache store), and supports
+`--max-time` and `--memory` like `queue:work`. See
+[Daemon relay](maintenance.md#daemon-relay) for choosing between the two, a
+Supervisor example, and deploy guidance.
+
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `swarm.durable.relay.reservation_timeout_seconds` | int | `60` | `SWARM_DURABLE_RELAY_RESERVATION_TIMEOUT_SECONDS` | How long a relay worker's claim on an outbox entry is valid. Entries whose `reserved_at` is older than this are treated as abandoned and become eligible for re-claim by the next relay run. |
-| `swarm.durable.relay.limit` | int | `100` | `SWARM_DURABLE_RELAY_LIMIT` | Maximum outbox entries drained per relay invocation. The `--limit` option on `swarm:relay` overrides this at runtime, capped at 10,000. |
+| `swarm.durable.relay.limit` | int | `100` | `SWARM_DURABLE_RELAY_LIMIT` | Maximum outbox entries drained per relay invocation, or per lane per cycle under `--daemon`. The `--limit` option on `swarm:relay` overrides this at runtime, capped at 10,000. |
+| `swarm.durable.relay.daemon.min_sleep_ms` | int | `100` | `SWARM_DURABLE_RELAY_DAEMON_MIN_SLEEP_MS` | `swarm:relay --daemon` only. Sleep after a cycle that moved durable or callback rows, and the start of idle backoff. Whole milliseconds, at least 1. |
+| `swarm.durable.relay.daemon.max_sleep_ms` | int | `3000` | `SWARM_DURABLE_RELAY_DAEMON_MAX_SLEEP_MS` | `swarm:relay --daemon` only. Ceiling for the idle sleep: the longest a new row waits for the next idle cycle to start, and roughly how long `queue:restart` takes to be noticed. Whole milliseconds, from `min_sleep_ms` to 60000. |
+| `swarm.durable.relay.daemon.backoff_multiplier` | float | `2.0` | `SWARM_DURABLE_RELAY_DAEMON_BACKOFF_MULTIPLIER` | `swarm:relay --daemon` only. Factor the idle sleep grows by after each cycle that moved no durable or callback rows (idle, audit-only, transient failures, or a held lane). From 1 to 10. |
 | `swarm.durable.relay.stale_warning_threshold_seconds` | int | `0` | `SWARM_DURABLE_RELAY_STALE_WARNING_THRESHOLD_SECONDS` | How old an unclaimed outbox row must be before `swarm:health` reports a warning — applies to both the durable outbox (`swarm:health --durable`) and the audit outbox (checked on bare `swarm:health`). `0` uses `2 × reservation_timeout_seconds` as the threshold. |
 
 ### Durable Eager Dispatch
