@@ -53,7 +53,7 @@ function adoptionDependencyErrors(array $manifest, array $lock, array $installed
                 $errors[] = $name.' compatibility lane must execute the supported Pest 4 toolchain.';
             }
         } elseif ($lane === 'moving-dev' && $name === 'laravel/framework') {
-            // Only the framework moves: laravel/ai resolves its latest stable release in every lane.
+            // Only the framework moves: laravel/ai is held to the stable 1.x rule below, as in the current lane.
             $expected = $expectedRefs[$name] ?? '';
             if (! is_string($expected) || ! preg_match('/^[a-f0-9]{40}$/D', $expected) || $ref !== $expected) {
                 $errors[] = $name.' must match the captured official branch reference.';
