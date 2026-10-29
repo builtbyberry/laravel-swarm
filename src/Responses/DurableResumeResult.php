@@ -10,10 +10,10 @@ use BuiltByBerry\LaravelSwarm\Enums\DurableLifecycleStatus;
  * Outcome of a durable resume request.
  *
  * Resuming a paused run either re-dispatches the next step, or — when the run
- * was paused while waiting on a signal boundary — re-arms that waiting boundary
- * instead of dispatching a step. The {@see $status} field reports which state
- * the run resumed into, and {@see $waitingBoundaryDispatched} reports whether a
- * waiting boundary was re-dispatched, so callers never have to guess.
+ * was paused while waiting on branch work, a signal, or a child swarm — re-arms
+ * that waiting boundary instead of dispatching a step. The {@see $status} field
+ * reports which state the run resumed into, and {@see $waitingBoundaryDispatched}
+ * reports whether a waiting boundary was re-armed, so callers never have to guess.
  */
 class DurableResumeResult
 {
