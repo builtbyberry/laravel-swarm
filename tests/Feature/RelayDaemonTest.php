@@ -365,7 +365,7 @@ test('the daemon sleeps short after work, backs off to the ceiling when idle, an
     $outboxes = relayDaemonOutboxes(durable: static fn (int $n): DrainResult => $n === 6 ? new DrainResult(1, 0, 0, 1) : new DrainResult(0, 0));
     $sleeps = relayDaemonFakeSleep();
 
-    $exit = Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 4]);
+    $exit = Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 4]);
 
     // 200+400+800+1000+1000 idle, 100 after work, 200 idle = 3700 ms; the eighth
     // cycle's 400 ms wait is capped to the 300 ms left, and nothing drains after.
@@ -394,7 +394,7 @@ test('a cycle that only failed, only met contention, or only touched the audit l
     }
 
     try {
-        expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 2]))->toBe(0);
+        expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 2]))->toBe(0);
     } finally {
         $holder?->release();
     }
@@ -421,7 +421,7 @@ test('a lane lease is held while its lane drains and no lease is held across a s
         }
     });
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 2]))->toBe(0)
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 2]))->toBe(0)
         ->and($heldWhileDraining)->toBe([true, true, true, true])
         ->and($freeAtEverySleep)->toBeTrue();
 });
@@ -438,7 +438,7 @@ test('a held lane is skipped for that cycle only and drained on the next one', f
     });
 
     try {
-        $exit = Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]);
+        $exit = Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]);
     } finally {
         $holder?->release();
     }
@@ -464,7 +464,7 @@ test('a cycle whose every lane is held reports skipped_overlap with no attempt, 
     Sleep::fake(syncWithCarbon: true);
 
     try {
-        expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]))->toBe(0);
+        expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0);
     } finally {
         foreach ($locks as $lock) {
             $lock->release();
@@ -491,7 +491,7 @@ test('idle and audit-only cycles emit no evidence while a cycle with durable or 
 
     // Cycle 1 idle; 2 audit-only; 3 durable work (with an audit replay); 4 a
     // callback transient failure; then idle until max-time.
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 2]))->toBe(0);
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 2]))->toBe(0);
 
     $events = $sink->recordsForCategory('command.relay');
 
@@ -516,7 +516,7 @@ test('an exception in a later lane reports the earlier lanes and held lanes of t
     Sleep::fake(syncWithCarbon: true);
 
     try {
-        expect(fn () => Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 5]))
+        expect(fn () => Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 5]))
             ->toThrow(RuntimeException::class, 'callback drain failed');
     } finally {
         $holder->release();
@@ -559,7 +559,7 @@ test('a lane lease whose release fails reports the work its drain already did', 
     $outboxes = relayDaemonOutboxes(durable: static fn (): DrainResult => new DrainResult(4, 0, 0, 4));
     Sleep::fake(syncWithCarbon: true);
 
-    expect(fn () => Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 5]))
+    expect(fn () => Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 5]))
         ->toThrow(SwarmException::class, 'could not acquire or release command overlap lease [swarm:commands:relay:durable]');
 
     $events = $sink->recordsForCategory('command.relay');
@@ -579,7 +579,7 @@ test('a lane lease that cannot be acquired fails loud and keeps the earlier lane
     relayDaemonOutboxes(durable: static fn (): DrainResult => new DrainResult(1, 0, 0, 1));
     Sleep::fake(syncWithCarbon: true);
 
-    expect(fn () => Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 5]))
+    expect(fn () => Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 5]))
         ->toThrow(SwarmException::class, 'command overlap lease [swarm:commands:relay:callback]');
 
     $events = $sink->recordsForCategory('command.relay');
@@ -635,7 +635,7 @@ test('zero max-time and zero memory mean no limit', function (): void {
         }
     });
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => '0', '--memory' => '0']))->toBe(0)
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => '0', '--memory' => '0']))->toBe(0)
         ->and($outboxes['durable']->drains)->toBeGreaterThan(1)
         ->and(Artisan::output())->toContain(': restart.');
 });
@@ -660,7 +660,7 @@ test('invalid daemon sleep configuration fails loud before anything is drained',
     Carbon::setTestNow();
     Sleep::fake();
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]))->toBe(1)
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(1)
         ->and(Artisan::output())->toContain("[swarm.durable.relay.daemon.{$key}] must be {$message}")
         ->and($outboxes['durable']->drains)->toBe(0);
 })->with([
@@ -686,7 +686,7 @@ test('environment-style string sleep configuration is accepted', function (): vo
     relayDaemonOutboxes();
     $sleeps = relayDaemonFakeSleep();
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]))->toBe(0)
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0)
         ->and($sleeps->getArrayCopy())->toBe([200, 400, 400]);
 });
 
@@ -716,7 +716,7 @@ test('daemon mode refuses to start without pcntl', function (): void {
 
     Sleep::fake(syncWithCarbon: true);
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]))->toBe(1)
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(1)
         ->and(Artisan::output())->toContain('requires the pcntl extension')
         ->and($outboxes['durable']->drains)->toBe(0);
 });
@@ -755,7 +755,7 @@ test('queue:restart stops the daemon at its next check, with no drain after it',
     // The daemon writes to its own buffer: the nested queue:restart call replaces Artisan::output().
     $output = new BufferedOutput;
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 60], $output))->toBe(0)
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 60], $output))->toBe(0)
         ->and($output->fetch())->toContain('stopping after 3 cycles: restart.')
         ->and($outboxes['durable']->drains)->toBe($drainsAtRestart);
 });
@@ -765,7 +765,7 @@ test('a restart signal already present when the daemon starts does not stop it',
     relayDaemonOutboxes();
     Sleep::fake(syncWithCarbon: true);
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]))->toBe(0)
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0)
         ->and(Artisan::output())->toContain(': max_time.');
 });
 
@@ -780,7 +780,7 @@ test('the restart key is read at start and at each check, and not at all when qu
     relayDaemonOutboxes();
     Sleep::fake(syncWithCarbon: true);
 
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => 1]))->toBe(0);
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => 1]))->toBe(0);
 
     // max-time 1 s: 200 + 400 + 400 ms, so 3 cycles, each checked after the
     // cycle and after the sleep, plus the startup read.
@@ -828,7 +828,7 @@ test('a failing audit sink cannot feed the daemon its own evidence', function ()
     });
 
     // 100 ms after the productive first cycle, then 200, 400 ... while idle.
-    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--type' => ['step', 'audit'], '--max-time' => 30]))->toBe(0);
+    expect(Artisan::call('swarm:relay', ['--daemon' => true, '--type' => ['step', 'audit'], '--memory' => 0, '--max-time' => 30]))->toBe(0);
 
     // One row, the first cycle's own evidence, retried each later cycle until it
     // is dead-lettered at the cap, and never joined by a second row.
@@ -879,7 +879,7 @@ function relayDaemonIdleFootprint(int $cycles, int $sampleAt): array
         }
     });
 
-    $exit = Artisan::call('swarm:relay', ['--daemon' => true, '--max-time' => $cycles, '--memory' => 0]);
+    $exit = Artisan::call('swarm:relay', ['--daemon' => true, '--memory' => 0, '--max-time' => $cycles, '--memory' => 0]);
 
     return ['cycles' => $state->sleeps, 'samples' => $state->samples, 'exit' => $exit];
 }
