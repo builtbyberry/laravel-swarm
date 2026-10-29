@@ -1128,14 +1128,17 @@ class DatabaseDurableRunStore implements ChecksCitationStorage, ChecksNativeStep
             // order every wait release takes (wait UPDATE, then syncRunWaitSummary on the run)
             // — and with a shared lock, which is a current read even inside an older MySQL
             // REPEATABLE READ snapshot and waits for a concurrent release of the same wait to
-            // commit instead of reading it as still open.
-            $hasOpenWait = $this->waitTable()
+            // commit instead of reading it as still open. Every open wait row is read and
+            // locked, not just the first: exists() or first() would stop short of a row
+            // another transaction is releasing.
+            $openWaitIds = $this->waitTable()
                 ->where('run_id', $runId)
                 ->where('status', 'waiting')
                 ->orderBy('id')
                 ->sharedLock()
-                ->get(['id'])
-                ->isNotEmpty();
+                ->pluck('id')
+                ->all();
+            $hasOpenWait = $openWaitIds !== [];
 
             // A paused run's cursor and branch rows do not move: no step runs and joins need
             // a waiting run.
